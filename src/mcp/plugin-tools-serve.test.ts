@@ -272,8 +272,8 @@ describe("plugin tools MCP server", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["profile_plugin_tool"]);
   });
 
-  it.each([undefined, "gpt-5.6"])(
-    "fails closed for provider policy without a qualified ACP model (%s)",
+  it.each([undefined, "gpt-5.6", "openai/   ", "openai/*"])(
+    "fails closed for provider policy without valid recognized ACP identity (%s)",
     async (modelRef) => {
       resolvePluginToolsMock.mockReturnValue([
         {
@@ -314,6 +314,118 @@ describe("plugin tools MCP server", () => {
       expect(tools).toEqual([]);
     },
   );
+
+  it("applies provider-wide policy without applying unrelated provider policy", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [{ providers: ["openai"] }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+      {
+        name: "provider_denied_tool",
+        description: "Provider-denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      models: { providers: { openai: {} } },
+      agents: {
+        list: [
+          {
+            id: "research",
+            tools: {
+              byProvider: {
+                anthropic: { deny: ["*"] },
+                openai: { deny: ["provider_denied_tool"] },
+              },
+            },
+          },
+        ],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+      modelRef: "openai",
+    });
+
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolDenylist).toEqual(["provider_denied_tool"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+  });
+
+  it("fails closed when a known ACP provider has unresolved model-specific policy", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [{ providers: ["openai"] }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      models: { providers: { openai: {} } },
+      agents: {
+        list: [{ id: "research", tools: { byProvider: { "openai/gpt-5.6": { deny: ["*"] } } } }],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+      modelRef: "openai",
+    });
+
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolDenylist).toContain("*");
+    expect(tools).toEqual([]);
+  });
+
+  it("fails closed for an unrecognized qualified ACP provider", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [{ providers: ["openai"] }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      models: { providers: { openai: {} } },
+      agents: {
+        list: [{ id: "research", tools: { byProvider: { openai: { deny: ["*"] } } } }],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+      modelRef: "opneai/gpt-5.6",
+    });
+
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolDenylist).toContain("*");
+    expect(tools).toEqual([]);
+  });
 
   it("applies stored ACP session caps after configured agent policy", async () => {
     const dangerousExecute = vi.fn().mockResolvedValue({ content: "unexpected" });

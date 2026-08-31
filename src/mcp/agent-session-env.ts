@@ -1,3 +1,6 @@
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { isValidExactModelPolicyRef } from "../config/model-policy-ref.js";
+
 export const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 export const OPENCLAW_TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
 
@@ -13,14 +16,26 @@ export function resolveToolsMcpModelRef(env: NodeJS.ProcessEnv = process.env): s
 
 export function parseToolsMcpModelRef(
   raw: string | undefined,
-): { provider: string; modelId: string } | undefined {
+): { provider: string; modelId?: string } | undefined {
   const modelRef = raw?.trim();
-  const separator = modelRef?.indexOf("/") ?? -1;
-  if (!modelRef || separator <= 0 || separator === modelRef.length - 1) {
+  if (!modelRef) {
+    return undefined;
+  }
+  if (!modelRef.includes("/")) {
+    if (!isValidExactModelPolicyRef(`${modelRef}/model`)) {
+      return undefined;
+    }
+    return { provider: modelRef };
+  }
+  if (!isValidExactModelPolicyRef(modelRef)) {
+    return undefined;
+  }
+  const parsed = parseModelCatalogRef(modelRef);
+  if (!parsed) {
     return undefined;
   }
   return {
-    provider: modelRef.slice(0, separator),
-    modelId: modelRef.slice(separator + 1),
+    provider: parsed.provider,
+    modelId: parsed.modelId,
   };
 }

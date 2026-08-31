@@ -1231,7 +1231,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("retries without a model when ACPX reports missing model capability", async () => {
+  it("keeps generic ACP model identity out of the managed MCP child when retrying", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -1241,7 +1241,28 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
         list: () => ["opencode"],
       },
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
     });
+    const resolveDelegateForSession = vi
+      .spyOn(
+        runtime as unknown as {
+          resolveDelegateForSession(params: {
+            command?: string;
+            model?: string;
+            sessionKey: string;
+          }): typeof delegate;
+        },
+        "resolveDelegateForSession",
+      )
+      .mockReturnValue(delegate);
     const ensure = vi
       .spyOn(delegate, "ensureSession")
       .mockRejectedValueOnce(
@@ -1264,6 +1285,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(ensure).toHaveBeenCalledTimes(2);
+    expect(resolveDelegateForSession).toHaveBeenCalledWith({
+      command: "opencode acp",
+      model: undefined,
+      sessionKey: "agent:opencode:acp:test",
+    });
     expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
       model: "openrouter/owl-alpha",
       sessionOptions: { model: "openrouter/owl-alpha" },
@@ -1628,6 +1654,58 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureInput).toMatchObject({
       model: "gpt-5.5",
       sessionOptions: { model: "gpt-5.5" },
+    });
+  });
+
+  it("projects the Codex provider when the managed plugin-tools model is inherited", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const resolveDelegateForSession = vi
+      .spyOn(
+        runtime as unknown as {
+          resolveDelegateForSession(params: {
+            command?: string;
+            model?: string;
+            sessionKey: string;
+          }): typeof delegate;
+        },
+        "resolveDelegateForSession",
+      )
+      .mockReturnValue(delegate);
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(ensure).toHaveBeenCalledOnce();
+    expect(resolveDelegateForSession).toHaveBeenCalledWith({
+      command: CODEX_ACP_COMMAND,
+      model: "openai",
+      sessionKey: "agent:codex:acp:test",
     });
   });
 

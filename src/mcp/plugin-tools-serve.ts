@@ -8,6 +8,10 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveManifestToolProfileNames } from "../agents/conversation-capability-profile.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
@@ -31,6 +35,7 @@ import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { loadManifestContractSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataManifestView } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderRefOwnership } from "../plugins/providers.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -41,6 +46,20 @@ import {
   resolveToolsMcpModelRef,
 } from "./agent-session-env.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
+
+function isKnownModelProvider(params: {
+  config: OpenClawConfig;
+  provider: string | undefined;
+}): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (!provider) {
+    return false;
+  }
+  return Boolean(
+    findNormalizedProviderValue(params.config.models?.providers, provider) ||
+    resolveProviderRefOwnership({ provider, config: params.config }).status !== "unowned",
+  );
+}
 
 function resolvePluginToolPolicy(params: {
   config: OpenClawConfig;
@@ -94,11 +113,19 @@ function resolvePluginToolPolicy(params: {
   const globalProviderPolicy = effective.globalProviderPolicy;
   const agentPolicy = effective.agentPolicy;
   const agentProviderPolicy = effective.agentProviderPolicy;
+  const providerIdentityKnown = isKnownModelProvider({
+    config: params.config,
+    provider: params.modelProvider,
+  });
   const unknownProviderPolicy =
-    !params.modelProvider && effective.providerPolicyConfigured ? { deny: ["*"] } : undefined;
+    effective.providerPolicyConfigured &&
+    (!providerIdentityKnown ||
+      (!params.modelId && effective.unresolvedModelProviderPolicyConfigured))
+      ? { deny: ["*"] }
+      : undefined;
   if (unknownProviderPolicy) {
     logWarn(
-      "plugin tools disabled: provider-specific tool policy requires a qualified ACP model; start the session with provider/model identity",
+      "plugin tools disabled: provider-specific tool policy requires recognized ACP provider/model identity; start a fresh session with a configured provider and model",
     );
   }
   const { subagentPolicy, inheritedToolPolicy } = resolveRequesterToolPolicies({

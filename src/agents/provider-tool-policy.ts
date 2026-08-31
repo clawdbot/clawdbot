@@ -82,3 +82,21 @@ export function resolveProviderToolPolicy(params: {
 }): ToolPolicyConfig | undefined {
   return resolveProviderToolPolicyEntry(params)?.policy;
 }
+
+export function hasModelSpecificProviderToolPolicy(params: {
+  byProvider?: Record<string, unknown>;
+  modelProvider?: string;
+}): boolean {
+  const provider = normalizeToolProviderPolicyKey(params.modelProvider ?? "");
+  if (!provider || !params.byProvider) {
+    return false;
+  }
+  return Object.entries(params.byProvider).some(([key, value]) => {
+    if (!hasRecord(value)) {
+      return false;
+    }
+    const normalized = normalizeToolProviderPolicyKey(key);
+    const slashIndex = normalized.indexOf("/");
+    return slashIndex > 0 && normalized.slice(0, slashIndex) === provider;
+  });
+}

@@ -27,7 +27,10 @@ import {
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import {
+  hasModelSpecificProviderToolPolicy,
+  resolveProviderToolPolicy,
+} from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -460,6 +463,15 @@ export function resolveEffectiveToolPolicy(params: {
     providerPolicyConfigured:
       Object.keys(globalTools?.byProvider ?? {}).length > 0 ||
       Object.keys(agentTools?.byProvider ?? {}).length > 0,
+    unresolvedModelProviderPolicyConfigured:
+      hasModelSpecificProviderToolPolicy({
+        byProvider: globalTools?.byProvider,
+        modelProvider: params.modelProvider,
+      }) ||
+      hasModelSpecificProviderToolPolicy({
+        byProvider: agentTools?.byProvider,
+        modelProvider: params.modelProvider,
+      }),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage to avoid early filtering.

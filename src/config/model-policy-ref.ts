@@ -61,7 +61,7 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
 }
 
 /** True for a syntactically valid exact provider/model policy reference. */
-function isValidExactModelPolicyRef(raw: string): boolean {
+export function isValidExactModelPolicyRef(raw: string): boolean {
   const parsed = parseModelCatalogRef(raw);
   return Boolean(
     parsed &&
