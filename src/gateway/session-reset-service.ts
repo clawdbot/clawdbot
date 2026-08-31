@@ -72,7 +72,10 @@ import {
   hasSessionAutoResetListeners,
   isSessionAutoResetReason,
 } from "../hooks/session-auto-reset.js";
-import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import {
+  getSessionBindingService,
+  isSessionBindingPartialCleanupError,
+} from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -315,10 +318,24 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  await getSessionBindingService().unbind({
-    targetSessionKey: params.targetSessionKey,
-    reason: params.reason,
-  });
+  try {
+    await getSessionBindingService().unbind({
+      targetSessionKey: params.targetSessionKey,
+      reason: params.reason,
+    });
+  } catch (error) {
+    // Session-delete unbind is convergent: it cleans every owner it can and
+    // reports the remainder. The session itself has already been removed, so
+    // failing the whole RPC here would leave the caller without a session and
+    // without a way to retry. Log the partial cleanup and continue.
+    if (isSessionBindingPartialCleanupError(error)) {
+      logVerbose(
+        `session_unbound cleanup incomplete for ${params.targetSessionKey}: ${error.message}`,
+      );
+    } else {
+      throw error;
+    }
+  }
 
   if (params.emitHooks === false) {
     return;

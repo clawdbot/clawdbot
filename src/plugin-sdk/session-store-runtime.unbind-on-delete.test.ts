@@ -5,7 +5,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   getSessionBindingService,
+  isSessionBindingPartialCleanupError,
+  registerSessionBindingAdapter,
   testing as sessionBindingTesting,
+  type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -120,5 +123,92 @@ describe("session-store-runtime deleteSessionEntry unbinds conversation bindings
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
     expect(getSessionBindingService().listBySession(sessionKey)).toEqual([]);
     expect(getSessionBindingService().listBySession(otherSessionKey)).toHaveLength(1);
+  });
+
+  it("converges cleanup and reports partial cleanup when a registered adapter rejects unbind", async () => {
+    const sessionKey = "agent:main:acp:adapter-fail-session";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sdkchat",
+          source: "test",
+          plugin: {
+            id: "sdkchat",
+            meta: { aliases: [] },
+            conversationBindings: {
+              supportsCurrentConversationBinding: true,
+            },
+          },
+        },
+        {
+          pluginId: "otherchat",
+          source: "test",
+          plugin: {
+            id: "otherchat",
+            meta: { aliases: [] },
+            conversationBindings: {
+              supportsCurrentConversationBinding: true,
+            },
+          },
+        },
+      ]),
+    );
+    let adapterBinding: SessionBindingRecord | null = null;
+    registerSessionBindingAdapter({
+      channel: "sdkchat",
+      accountId: "acct-1",
+      bind: async (input) => {
+        adapterBinding = {
+          bindingId: `${input.conversation.accountId}:${input.conversation.conversationId}`,
+          targetSessionKey: input.targetSessionKey,
+          targetKind: input.targetKind,
+          conversation: input.conversation,
+          status: "active",
+          boundAt: 1,
+        };
+        return adapterBinding;
+      },
+      listBySession: (key) => (adapterBinding?.targetSessionKey === key ? [adapterBinding] : []),
+      resolveByConversation: () => null,
+      unbind: async () => {
+        throw new Error("adapter unbind failure");
+      },
+    });
+
+    await seedSessionEntry(sessionKey, {
+      sessionId: "session-adapter-fail",
+      updatedAt: Date.now(),
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: { channel: "sdkchat", accountId: "acct-1", conversationId: "conv-adapter" },
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: { channel: "otherchat", accountId: "acct-1", conversationId: "conv-other" },
+    });
+
+    expect(getSessionBindingService().listBySession(sessionKey)).toHaveLength(2);
+    const deletePromise = deleteSessionEntry({ sessionKey, storePath });
+    await expect(deletePromise).rejects.toSatisfy(isSessionBindingPartialCleanupError);
+    const error = await deletePromise.catch((err: unknown) => err);
+    if (!isSessionBindingPartialCleanupError(error)) {
+      throw new Error("expected SessionBindingPartialCleanupError");
+    }
+    expect(error.removed).toContainEqual(
+      expect.objectContaining({
+        conversation: { channel: "otherchat", accountId: "acct-1", conversationId: "conv-other" },
+      }),
+    );
+    expect(getSessionBindingService().listBySession(sessionKey)).toHaveLength(1);
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "otherchat",
+        accountId: "acct-1",
+        conversationId: "conv-other",
+      }),
+    ).toBeNull();
   });
 });

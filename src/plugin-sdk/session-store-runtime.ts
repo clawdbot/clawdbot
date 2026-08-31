@@ -558,6 +558,10 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
     // the gateway delete path. Unbind conversation records targeting the
     // deleted session so a stale runtime binding cannot keep outranking
     // configured ACP routes for that conversation (issue #115354).
+    // Cleanup is convergent: a rejecting binding adapter does not stop the
+    // remaining owners from being cleaned because the session row has already
+    // been committed deleted, but any failure is surfaced as a structured
+    // partial-cleanup error instead of being silently discarded.
     await getSessionBindingService().unbind({
       targetSessionKey: params.sessionKey,
       reason: "session-delete",

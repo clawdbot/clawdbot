@@ -12,6 +12,7 @@ import {
   getSessionBindingService,
   inspectSessionBindingByConversation,
   isSessionBindingError,
+  isSessionBindingPartialCleanupError,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
@@ -582,6 +583,78 @@ describe("session binding service", () => {
         conversationId: "user:U123",
       }),
     ).toBeNull();
+  });
+
+  it("converges session-delete cleanup and reports partial cleanup when a registered adapter rejects", async () => {
+    const service = getSessionBindingService();
+    const targetSessionKey = "agent:main:acp:converge-session";
+    let failingBinding: SessionBindingRecord | null = null;
+    registerSessionBindingAdapter({
+      channel: "failing-binding",
+      accountId: "default",
+      bind: async (input) => {
+        failingBinding = createRecord(input);
+        return failingBinding;
+      },
+      listBySession: (key) =>
+        failingBinding && failingBinding.targetSessionKey === key ? [failingBinding] : [],
+      resolveByConversation: () => null,
+      unbind: async () => {
+        throw new Error("durable unbind failure");
+      },
+    });
+
+    const genericBound = await service.bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation: { channel: "workspace", accountId: "default", conversationId: "room-ok" },
+    });
+    await service.bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "failing-binding",
+        accountId: "default",
+        conversationId: "room-fail",
+      },
+    });
+
+    const unbindPromise = service.unbind({
+      targetSessionKey,
+      reason: "session-delete",
+    });
+    await expect(unbindPromise).rejects.toSatisfy(isSessionBindingPartialCleanupError);
+    const error = await unbindPromise.catch((err: unknown) => err);
+    if (!isSessionBindingPartialCleanupError(error)) {
+      throw new Error("expected SessionBindingPartialCleanupError");
+    }
+    expect(error.removed).toContainEqual(genericBound);
+    expect(service.resolveByConversation(genericBound.conversation)).toBeNull();
+    expect(service.listBySession(targetSessionKey)).toHaveLength(1);
+  });
+
+  it("still fails fast on adapter errors for non-session-delete unbind", async () => {
+    const service = getSessionBindingService();
+    const targetSessionKey = "agent:main:acp:fail-fast-session";
+    registerSessionBindingAdapter({
+      channel: "failing-binding",
+      accountId: "default",
+      bind: async (input) => createRecord(input),
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      unbind: async () => {
+        throw new Error("durable unbind failure");
+      },
+    });
+    await service.bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation: { channel: "failing-binding", accountId: "default", conversationId: "room-1" },
+    });
+
+    await expect(service.unbind({ targetSessionKey, reason: "manual" })).rejects.toThrow(
+      "durable unbind failure",
+    );
   });
 
   it("supports registered plugin channels through the generic current-conversation path", async () => {

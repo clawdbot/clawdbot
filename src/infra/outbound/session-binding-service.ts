@@ -55,6 +55,29 @@ export function isSessionBindingError(error: unknown): error is SessionBindingEr
   return error instanceof SessionBindingError;
 }
 
+type SessionBindingCleanupFailure = {
+  scope?: SessionBindingScope;
+  error: unknown;
+};
+
+class SessionBindingPartialCleanupError extends SessionBindingError {
+  constructor(
+    public readonly removed: SessionBindingRecord[],
+    public readonly failures: SessionBindingCleanupFailure[],
+  ) {
+    super(
+      "BINDING_PARTIAL_CLEANUP",
+      `Session binding cleanup incomplete: ${failures.length} owner(s) failed.`,
+    );
+  }
+}
+
+export function isSessionBindingPartialCleanupError(
+  error: unknown,
+): error is SessionBindingPartialCleanupError {
+  return error instanceof SessionBindingPartialCleanupError;
+}
+
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
@@ -355,18 +378,43 @@ function createDefaultSessionBindingService(): SessionBindingService {
     },
     unbind: async (input) => {
       const removed: SessionBindingRecord[] = [];
+      const failures: SessionBindingCleanupFailure[] = [];
+      // Session-delete cleanup runs after the session row has already been
+      // removed. A rejecting adapter must not abort cleanup for the remaining
+      // owners, otherwise durable bindings to the deleted session survive.
+      const convergeOnError = input.reason === "session-delete";
       const adapters = getActiveRegisteredAdapters(input.scope);
       for (const adapter of adapters) {
         if (!adapter.unbind) {
           continue;
         }
-        const entries = await adapter.unbind(input);
-        if (entries.length > 0) {
-          removed.push(...entries);
+        try {
+          const entries = await adapter.unbind(input);
+          if (entries.length > 0) {
+            removed.push(...entries);
+          }
+        } catch (error) {
+          if (!convergeOnError) {
+            throw error;
+          }
+          failures.push({
+            scope: { channel: adapter.channel, accountId: adapter.accountId },
+            error,
+          });
         }
       }
       if (!input.scope || adapters.length === 0) {
-        removed.push(...(await unbindGenericCurrentConversationBindings(input)));
+        try {
+          removed.push(...(await unbindGenericCurrentConversationBindings(input)));
+        } catch (error) {
+          if (!convergeOnError) {
+            throw error;
+          }
+          failures.push({ error });
+        }
+      }
+      if (failures.length > 0) {
+        throw new SessionBindingPartialCleanupError(removed, failures);
       }
       return dedupeBindings(removed);
     },

@@ -19,7 +19,8 @@ export type SessionBindingPlacement = "current" | "child";
 export type SessionBindingErrorCode =
   | "BINDING_ADAPTER_UNAVAILABLE"
   | "BINDING_CAPABILITY_UNSUPPORTED"
-  | "BINDING_CREATE_FAILED";
+  | "BINDING_CREATE_FAILED"
+  | "BINDING_PARTIAL_CLEANUP";
 
 /**
  * Channel/account/conversation tuple used to resolve a bound delivery route.
