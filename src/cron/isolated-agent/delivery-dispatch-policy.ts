@@ -190,23 +190,66 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
   return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
 }
 
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
   return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
 }
 
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
   return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+}
+
+/** Closed disposition for a delivery whose run started well past its schedule. */
+export type StaleCronDeliveryAction =
+  | { kind: "fresh" }
+  | { kind: "skip"; deliveryError: string; logMessage: string }
+  | { kind: "deliver-annotated"; notice: string; logMessage: string };
+
+/**
+ * Recurring schedules keep the stale skip: a newer run supersedes the delayed
+ * one, and delivering both would collide (#50092). Nothing supersedes a
+ * one-shot's output, so it delivers with a lateness annotation instead of
+ * being discarded as a false success (#131491).
+ */
+export function resolveStaleCronDeliveryAction(params: {
+  job: CronJob;
+  runStartedAt: number;
+}): StaleCronDeliveryAction {
+  if (!isStaleCronDelivery(params)) {
+    return { kind: "fresh" };
+  }
+  const scheduledAtMs = resolveCronDeliveryScheduledAtMs(params);
+  const scheduledAtIso = new Date(scheduledAtMs).toISOString();
+  const lateMinutes = Math.round(resolveCronDeliveryStartDelayMs(params) / 60_000);
+  const scheduleKind = params.job.schedule.kind;
+  if (scheduleKind !== "at" && scheduleKind !== "on-exit") {
+    const deliveryError = `skipping stale delivery scheduled at ${scheduledAtIso}, started ${lateMinutes}m late, current age ${Math.round((Date.now() - scheduledAtMs) / 60_000)}m`;
+    return { kind: "skip", deliveryError, logMessage: deliveryError };
+  }
+  return {
+    kind: "deliver-annotated",
+    notice: `⏰ Late automation run: scheduled for ${scheduledAtIso}, started ${lateMinutes}m late.`,
+    logMessage: `delivering stale run scheduled at ${scheduledAtIso}, started ${lateMinutes}m late`,
+  };
+}
+
+/** Prepends the lateness notice to the first text payload, or leads with it. */
+export function prependStaleCronDeliveryNotice(
+  payloads: ReplyPayload[],
+  notice: string,
+): ReplyPayload[] {
+  const firstTextIndex = payloads.findIndex((p) => p.text?.trim());
+  const firstTextPayload = payloads[firstTextIndex];
+  return firstTextIndex === -1 || !firstTextPayload
+    ? [{ text: notice }, ...payloads]
+    : payloads.with(firstTextIndex, {
+        ...firstTextPayload,
+        text: `${notice}\n\n${firstTextPayload.text}`,
+      });
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {

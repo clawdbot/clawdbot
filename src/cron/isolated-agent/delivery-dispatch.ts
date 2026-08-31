@@ -41,16 +41,15 @@ import {
   buildDirectCronDeliveryIdempotencyKey,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
-  isStaleCronDelivery,
   logCronDeliveryError,
   logCronDeliveryErrorDeferred,
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   normalizeSilentReplyText,
+  prependStaleCronDeliveryNotice,
   resolveCronDeliveryBestEffort,
-  resolveCronDeliveryScheduledAtMs,
   resolveDescendantSubagentFollowup,
-  resolveCronDeliveryStartDelayMs,
+  resolveStaleCronDeliveryAction,
   retryTransientDirectCronDelivery,
   waitForCompletedDirectCronDelivery,
 } from "./delivery-dispatch-policy.js";
@@ -243,40 +242,36 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      if (
-        params.deliveryRequested &&
-        isStaleCronDelivery({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        })
-      ) {
+      let staleAnnotatedPayloads = normalizedPayloads;
+      const staleAction = params.deliveryRequested
+        ? resolveStaleCronDeliveryAction({ job: params.job, runStartedAt: params.runStartedAt })
+        : ({ kind: "fresh" } as const);
+      if (staleAction.kind !== "fresh") {
+        await logCronDeliveryWarn(`[cron:${params.job.id}] ${staleAction.logMessage}`);
+      }
+      if (staleAction.kind === "skip") {
         deliveryAttempted = true;
-        const nowMs = Date.now();
-        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        });
-        const startDelayMs = resolveCronDeliveryStartDelayMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        });
-        const deliveryError = `skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`;
-        recordDelivery("not-delivered", deliveryError);
-        await logCronDeliveryWarn(`[cron:${params.job.id}] ${deliveryError}`);
+        recordDelivery("not-delivered", staleAction.deliveryError);
         return params.withRunSession({
           status: "ok",
           summary,
           outputText,
           deliveryAttempted,
           delivered: false,
-          deliveryError,
+          deliveryError: staleAction.deliveryError,
           ...params.telemetry,
         });
+      }
+      if (staleAction.kind === "deliver-annotated") {
+        staleAnnotatedPayloads = prependStaleCronDeliveryNotice(
+          normalizedPayloads,
+          staleAction.notice,
+        );
       }
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
           cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
+          payloads: staleAnnotatedPayloads,
           delivery,
           agentId: params.agentId,
           ttsAuto: params.ttsAuto,
