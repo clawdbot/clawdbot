@@ -198,11 +198,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  if (preparedRuntime.workerHostingDisabledReason) {
-    writeStderrLine(
-      `node host worker hosting disabled: ${preparedRuntime.workerHostingDisabledReason}`,
-    );
-  }
   const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({

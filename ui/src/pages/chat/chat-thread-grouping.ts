@@ -19,6 +19,7 @@ import {
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
+  hasForwardedSource,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -49,10 +50,7 @@ function stampReplyAttribution(
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
-    } else if (
-      item.role === "assistant" &&
-      (item.senderSession || assistantGroupIsForwardedBoundary(item))
-    ) {
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
       // Forwarded input starts a turn without a local human reply recipient.
       latestUserSender = undefined;
     } else if (item.role === "assistant" && latestUserSender) {

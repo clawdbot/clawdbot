@@ -798,7 +798,7 @@ jobs:
           set -euo pipefail
           fallback_baseline="$FALLBACK_BASELINE"
           if [[ "$fallback_baseline" == "openclaw@latest" ]]; then
-            fallback_version="$(npm view openclaw@latest version)"
+            fallback_version="$(npm view openclaw@latest version --prefer-online)"
             [[ "$fallback_version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || {
               echo "Could not resolve openclaw@latest to an exact release version." >&2
               exit 1

@@ -114,6 +114,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },

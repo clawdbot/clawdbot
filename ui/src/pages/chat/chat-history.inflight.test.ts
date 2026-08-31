@@ -3,17 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import {
   activeHistory,
   createState,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
-import {
-  isHiddenAssistantStreamText,
-  loadChatHistory,
-  type ChatHistoryResult,
-} from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitInitialUserMessageHandoff,

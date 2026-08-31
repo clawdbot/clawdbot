@@ -298,11 +298,6 @@ export class DraftPlaceState {
       this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
       this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
-      if (groupTarget) {
-        // Group defaults own the initial local/worktree choice. Repository
-        // discovery still rejects worktrees when the selected folder is not Git.
-        this.repositoryState.forceWorktree(groupWorktree);
-      }
       const preferredWhere = groupTarget
         ? { kind: "local" as const }
         : (preference?.where ?? { kind: "local" as const });
@@ -671,7 +666,9 @@ export class DraftPlaceState {
     if (!changed) {
       return;
     }
-    this.repositoryState.load();
+    if (!this.repositoryState.matchesCurrentRepo()) {
+      this.repositoryState.load();
+    }
     this.callbacks.requestUpdate();
   }
 

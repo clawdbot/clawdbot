@@ -11,6 +11,7 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -67,21 +68,6 @@ function resolveConfiguredBindingConversationRef(
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
   };
-}
-
-function resolvePluginOwnedRuntimeBindingPluginId(
-  record: SessionBindingRecord | null,
-): string | undefined {
-  const metadata = record?.metadata;
-  if (!metadata || typeof metadata !== "object") {
-    return undefined;
-  }
-  const pluginId = metadata.pluginId;
-  const isPluginOwned =
-    metadata.pluginBindingOwner === "plugin" &&
-    typeof pluginId === "string" &&
-    typeof metadata.pluginRoot === "string";
-  return isPluginOwned ? pluginId.trim() || undefined : undefined;
 }
 
 /**
@@ -182,7 +168,9 @@ export function resolveRuntimeConversationBindingRoute(
       bindingRecord.conversation,
     );
   }
-  const pluginId = resolvePluginOwnedRuntimeBindingPluginId(bindingRecord);
+  const pluginId = isPluginOwnedBindingMetadata(bindingRecord.metadata)
+    ? bindingRecord.metadata.pluginId.trim()
+    : undefined;
   if (pluginId) {
     // Plugin-owned binding records are observed but not route-rewritten by core; the owning
     // plugin is responsible for its runtime target handoff.

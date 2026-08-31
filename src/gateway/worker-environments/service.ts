@@ -303,6 +303,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
     prepareNodeBootstrap: options.prepareNodeBootstrap,
+    projectNamespace: options.projectNamespace,
+    prepareNodeRuntime: options.prepareNodeRuntime,
+    closeNodeRuntime: options.closeNodeRuntime,
     prepareNodeEnrollment: options.prepareNodeEnrollment,
     closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
@@ -555,6 +558,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -563,6 +567,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },
@@ -571,6 +576,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -581,6 +587,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           },
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },

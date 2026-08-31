@@ -11,6 +11,31 @@ const request = {
 const key = "a".repeat(64);
 
 describe("node workspace seed protocol", () => {
+  const download = {
+    direction: "download",
+    token: "token",
+    manifestRef: `sha256:${key}`,
+    seedKey: key,
+  };
+
+  it("accepts a prepared seed only as part of a workspace download", () => {
+    expect(
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, transfer: download }))
+        .transfer,
+    ).toEqual(download);
+  });
+
+  it.each([
+    { ...download, seedKey: "../outside" },
+    { ...download, seedKey: "A".repeat(64) },
+    { ...download, attachments: true },
+    { direction: "upload", token: "token", baseManifestRef: download.manifestRef, seedKey: key },
+  ])("rejects an invalid prepared seed transfer %#", (transfer) => {
+    expect(() =>
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, transfer })),
+    ).toThrow("INVALID_REQUEST:");
+  });
+
   it.each([
     { action: "apply", key },
     { action: "store", key, maxAgeMs: 0 },

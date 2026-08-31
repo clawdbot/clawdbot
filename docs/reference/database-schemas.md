@@ -272,6 +272,13 @@ When a Gateway runs from a linked source checkout, its status and schema-refusal
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
 
+Config reads also save health fingerprints to this database. If that write fails,
+`Config health-state write failed` reports the first failure for that database
+in the current process. Repeated identical failures are suppressed while writes
+continue to be attempted. A different error, or a failure after a successful
+health-state write, is reported again. Suppressing duplicates does not resolve
+the underlying database error.
+
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.

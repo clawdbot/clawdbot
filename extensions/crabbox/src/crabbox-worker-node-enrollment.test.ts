@@ -10,6 +10,7 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCrabboxNodeEnrollmentSetup,
+  createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
@@ -57,7 +58,9 @@ if (args[0] === "--version") {
   fs.appendFileSync(path.join(state, "enabled"), args[2] + "\\n");
 } else {
   process.title = "openclaw-connect";
-  fs.writeFileSync(path.join(state, "launch.json"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins: fs.readFileSync(path.join(state, "enabled"), "utf8").trim().split("\\n") }));
+  fs.writeFileSync(path.join(state, "launch.json.tmp"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins: fs.readFileSync(path.join(state, "enabled"), "utf8").trim().split("\\n") }));
+  // Existence signals readiness only after the child publishes complete JSON.
+  fs.renameSync(path.join(state, "launch.json.tmp"), path.join(state, "launch.json"));
   setInterval(() => {}, 60000);
 }
 `,
@@ -88,7 +91,10 @@ function testHome() {
   return { home, stateDir, stop };
 }
 
-async function serveArtifact(archive: Buffer, options: { tls?: boolean; redirect?: boolean } = {}) {
+async function serveArtifact(
+  archive: Buffer,
+  options: { tls?: boolean; redirect?: boolean; truncate?: boolean } = {},
+) {
   let tls: { cert: Buffer; key: Buffer } | undefined;
   if (options.tls) {
     const directory = tempDirs.make("crabbox-bootstrap-tls-");
@@ -124,6 +130,10 @@ async function serveArtifact(archive: Buffer, options: { tls?: boolean; redirect
       return;
     }
     response.writeHead(200, { "content-length": archive.length });
+    if (options.truncate) {
+      response.write(archive.subarray(0, 1), () => response.destroy());
+      return;
+    }
     response.end(archive);
   };
   const server = tls ? https.createServer(tls, handle) : http.createServer(handle);
@@ -159,6 +169,7 @@ async function enroll(
   home: string,
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"],
   desktop?: DesktopFixture,
+  runtimeOnly = false,
 ) {
   const bin = path.join(home, "bin");
   const proc = path.join(home, "proc");
@@ -188,19 +199,21 @@ echo 123
       { mode: 0o700 },
     );
   }
-  const setup = createCrabboxNodeEnrollmentSetup({
-    leaseId,
-    desktop: desktop?.enabled,
-    enrollment: {
-      mode: "connect",
-      setupCode,
-      setupId: "bootstrap-test",
-      openclawVersion: "2026.8.1",
-      nodeBootstrap,
-      displayName: "Bootstrap test",
-      waitForDeviceId: async () => "device-test",
-    },
-  });
+  const setup = runtimeOnly
+    ? createCrabboxNodeRuntimeSetup({ leaseId, nodeBootstrap })
+    : createCrabboxNodeEnrollmentSetup({
+        leaseId,
+        desktop: desktop?.enabled,
+        enrollment: {
+          mode: "connect",
+          setupCode,
+          setupId: "bootstrap-test",
+          openclawVersion: "2026.8.1",
+          nodeBootstrap,
+          displayName: "Bootstrap test",
+          waitForDeviceId: async () => "device-test",
+        },
+      });
   expect(setup.command).not.toContain(nodeBootstrap.token);
   expect(setup.command).not.toContain(setupCode);
   const child = spawn("/bin/sh", [], {
@@ -248,9 +261,29 @@ async function readLaunch(stateDir: string) {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
-  it("installs the exact archive with lifecycle scripts and no credentials, then reuses its warm artifact", async () => {
+  it("prepares an exact runtime without node identity, then enrolls and reuses its warm artifact", async () => {
     const { home, stateDir, stop } = testHome();
     const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
+    await expect(enroll(home, nodeBootstrap, undefined, true)).resolves.toEqual({
+      code: 0,
+      output: "",
+    });
+    expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
+    expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
+      nodeBootstrap.sha256,
+    ]);
+    const preparedPackage = path.join(
+      home,
+      ".openclaw-worker",
+      "node-runtimes",
+      nodeBootstrap.sha256,
+      "node_modules",
+      "openclaw",
+    );
+    expect(
+      JSON.parse(fs.readFileSync(path.join(preparedPackage, "installed.json"), "utf8")),
+    ).toEqual({ scriptsRan: true });
+    expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
     await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
     const launch = await readLaunch(stateDir);
     expect(launch).toMatchObject({
@@ -315,28 +348,33 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     30_000,
   );
 
-  it.each(["digest", "length", "redirect"] as const)(
+  it.each([
+    ["digest", "integrity verification"],
+    ["length", "length does not match"],
+    ["redirect", "HTTP 302"],
+    ["truncated", "bootstrap download failed (ECONNRESET): aborted"],
+  ] as const)(
     "rejects a bad archive %s before installing or starting a node",
-    async (failure) => {
+    async (failure, diagnosis) => {
       const { home, stateDir } = testHome();
       const archive = await packageFixture("first");
-      const { nodeBootstrap } = await serveArtifact(archive, { redirect: failure === "redirect" });
+      const { nodeBootstrap, authorizations } = await serveArtifact(archive, {
+        redirect: failure === "redirect",
+        truncate: failure === "truncated",
+      });
       const result = await enroll(home, {
         ...nodeBootstrap,
         ...(failure === "digest" ? { sha256: "f".repeat(64) } : {}),
         ...(failure === "length" ? { bytes: archive.length + 1 } : {}),
       });
       expect(result.code).toBe(1);
-      expect(result.output).toContain(
-        failure === "digest"
-          ? "integrity verification"
-          : failure === "length"
-            ? "length does not match"
-            : "HTTP 302",
-      );
+      expect(result.output).toContain(diagnosis);
       expect(result.output).not.toContain(nodeBootstrap.token);
+      expect(result.output).not.toContain(setupCode);
+      expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
       expect(fs.readdirSync(stateDir)).toEqual([]);
+      expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([]);
     },
   );
 

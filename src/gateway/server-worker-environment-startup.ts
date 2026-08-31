@@ -379,6 +379,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     warn: (message) => workerEnvironmentLog.warn(message),
   });
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+    projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
     executeComputer: computers.execute,
     closeComputers: computers.close,
@@ -393,6 +394,8 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
     prepareNodeBootstrap: nodeEnrollment.prepare,
     prepareNodeEnrollment: nodeEnrollment.begin,
+    prepareNodeRuntime: nodeEnrollment.prepareRuntime,
+    closeNodeRuntime: nodeEnrollment.closeRuntime,
     closeNodeEnrollment: nodeEnrollment.close,
     retireNodeEnrollment: nodeEnrollment.retire,
     stopNodeEnrollmentWaits: nodeEnrollment.stop,

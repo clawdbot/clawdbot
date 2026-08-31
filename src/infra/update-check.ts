@@ -533,26 +533,23 @@ export async function resolveNpmChannelTag(params: {
       ? { tag: resolved.selector, version: resolved.version }
       : { tag: channelTag, version: null, reason: resolved.reason };
   }
-  const channelStatus = await fetchNpmTagVersion({
-    tag: channelTag,
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
+  const fetchTag = (tag: string) =>
+    fetchNpmTagVersion({
+      tag,
+      timeoutMs: params.timeoutMs,
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      runCommand: params.runCommand,
+    });
   if (params.channel !== "beta") {
-    return channelStatus;
+    return await fetchTag(channelTag);
   }
 
-  const latestStatus = await fetchNpmTagVersion({
-    tag: "latest",
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
+  const [channelStatus, latestStatus] = await Promise.all([
+    fetchTag(channelTag),
+    fetchTag("latest"),
+  ]);
   if (!latestStatus.version) {
     return channelStatus;
   }

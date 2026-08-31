@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -125,12 +126,21 @@ function fixtureFiles(): Record<string, string> {
     ].join("\n"),
     // Evaluate the real importer graph, then fail collection. The following
     // file must still apply its mock after onAfterRunFiles cleanup.
-    "01-a-crash.test.ts": 'import "./01-mid.js";\nthrow new Error("synthetic collect failure");\n',
+    "01-a-crash.test.ts": [
+      'import "./01-mid.js";',
+      'import { expect } from "vitest";',
+      'expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);',
+      `await import(${JSON.stringify(path.join(repoRoot, "src/logging/diagnostic-run-activity.ts"))});`,
+      'throw new Error("synthetic collect failure");',
+      "",
+    ].join("\n"),
     "01-b-mock.test.ts": [
       'import { expect, it, vi } from "vitest";',
       'vi.mock("./01-dep.js", () => ({ flavor: () => "mocked" }));',
       'const { describeFlavor } = await import("./01-mid.js");',
       'it("applies mocks after a sibling collection failure", () => {',
+      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(false);',
+      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.diagnosticRunActivityTestApi"))).toBe(false);',
       '  expect(describeFlavor()).toBe("flavor:mocked");',
       "});",
       "",
@@ -455,6 +465,7 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
   };
 }
@@ -486,6 +497,13 @@ it("cleans every shared runner surface between files", async () => {
         "    isolate: false,",
         "    fileParallelism: false,",
         "    maxWorkers: 1,",
+        // This real source uses only type imports; Node can retain its native generation.
+        `    server: { deps: { external: [new RegExp(${JSON.stringify(
+          `^${path
+            .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
+            .replaceAll("\\", "/")
+            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        )})] } },`,
         "    sequence: { sequencer: AlphabeticalSequencer },",
         `    runner: ${JSON.stringify(path.join(root, "runner.ts"))},`,
         "  },",
@@ -506,6 +524,7 @@ it("cleans every shared runner surface between files", async () => {
         path.join(root, "vitest.config.ts"),
         "--configLoader",
         "runner",
+        "--reporter=verbose",
       ],
       { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
     ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
@@ -514,7 +533,12 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 36 passed");
+    expect(output, output).toContain("1 failed | 43 passed | 1 skipped");
+    expect(output, output).toContain("45 passed | 1 skipped");
+    for (const generation of ["producer", "observer"]) {
+      expect(output).toContain(`test API lifecycle: ${generation} afterAll passed`);
+      expect(output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+    }
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });

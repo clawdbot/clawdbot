@@ -1,5 +1,4 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputConsumptions,
   ChatPendingInputsPage,
@@ -15,11 +14,13 @@ import type {
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import {
-  isAssistantHeartbeatAckForDisplay,
-  stripHeartbeatTokenForDisplay,
-} from "../../lib/chat/heartbeat-display.ts";
-import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
+  isHiddenAssistantStreamText,
+  isVisibleChatHistoryMessage,
+  shouldHideAssistantChatMessage,
+  visibleChatHistoryMessages,
+} from "../../lib/chat/message-visibility.ts";
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -108,9 +109,6 @@ import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identi
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
-const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
-  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 export const CHAT_HISTORY_REQUEST_LIMIT = 400;
 // Back-scroll pages are larger than the startup tail: session open stays cheap
 // while older-history reads amortize round trips and prepend/re-anchor cycles.
@@ -266,67 +264,6 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
-}
-
-export function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
-}
-
-/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
-function isAssistantSilentReply(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
-    return false;
-  }
-  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
-  if (typeof entry.text === "string") {
-    return isSilentReplyStream(entry.text);
-  }
-  const text = extractText(message);
-  return typeof text === "string" && isSilentReplyStream(text);
-}
-
-function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "toolresult") {
-    return false;
-  }
-  const text = extractText(message);
-  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
-}
-
-function isHeartbeatAckStream(text: string): boolean {
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
-}
-
-export function isHiddenAssistantStreamText(text: string): boolean {
-  return isSilentReplyStream(text) || isHeartbeatAckStream(text);
-}
-
-export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
-}
-
-function shouldHideHistoryMessage(message: unknown): boolean {
-  return (
-    shouldHideAssistantChatMessage(message) ||
-    isSyntheticTranscriptRepairToolResult(message) ||
-    isEmptyUserTextOnlyMessage(message)
-  );
-}
-
-export function visibleChatHistoryMessages(messages: unknown): unknown[] {
-  return Array.isArray(messages)
-    ? messages.filter((message) => !shouldHideHistoryMessage(message))
-    : [];
 }
 
 export function materializeVisibleAssistantStreamMessages(
@@ -2120,7 +2057,7 @@ async function loadChatHistoryUncached(
       {
         type: "snapshotLoaded",
         messages: authoritativeMessages,
-        options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
+        options: { shouldIncludeMessage: isVisibleChatHistoryMessage },
       },
       {
         scope,

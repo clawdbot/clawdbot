@@ -20,18 +20,14 @@ import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
-import {
-  renderChatAvatar,
-  renderSenderAgentAvatar,
-  type SenderAgentAvatarOptions,
-} from "../chat-avatar.ts";
+import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   persistedMessageEntryId,
   readPendingSendFailure,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
-import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
+import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
@@ -83,7 +79,7 @@ type RenderMessageGroupOptions = Omit<
   | "resolveReplyPreview"
 > &
   ChatSendStatusActions &
-  SenderAgentAvatarOptions & {
+  Parameters<typeof renderForwardedAvatar>[1] & {
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -93,8 +89,6 @@ type RenderMessageGroupOptions = Omit<
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
     onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    assistantName?: string;
-    assistantAvatar?: string | null;
     userId?: string | null;
     userName?: string | null;
     /** Routing for peer sender names; absent leaves them plain text. */
@@ -358,13 +352,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   );
   const assistantName = opts.assistantName ?? "Assistant";
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
-  const isForwarded =
-    normalizedRole === "assistant" &&
-    (Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group));
+  const isForwarded = normalizedRole === "assistant" && hasForwardedSource(group);
   const sourceSessionKey = group.senderSession?.sessionKey;
-  // Only agent-prefixed keys are navigable: the titler, hovercard, and click
-  // handlers all reject other shapes, so a legacy key must stay plain text
-  // instead of becoming a focusable link that goes nowhere.
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
@@ -469,22 +458,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       showAvatarGutter &&
       (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? isForwarded
-          ? // Forwarded rows carry the source agent's identity: another
-            // agent's avatar via the sender map, the current agent's own
-            // avatar for same-agent sessions, and the forward glyph only for
-            // unresolvable or legacy sources.
-            (renderSenderAgentAvatar(group.senderSession?.agentId, opts) ??
-            (group.senderSession?.agentId && group.senderSession.agentId === opts.agentId
-              ? renderChatAvatar(
-                  "assistant",
-                  assistantAvatarIdentity,
-                  undefined,
-                  opts.resourceBasePath,
-                  opts.assistantAttachmentAuthToken,
-                )
-              : html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
-                  ${icons.forward}
-                </div>`))
+          ? renderForwardedAvatar(group.senderSession?.agentId, opts)
           : renderChatAvatar(
               group.role,
               assistantAvatarIdentity,
@@ -581,5 +555,3 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     </div>
   `;
 }
-
-// ── Per-message metadata (tokens, cost, model, context %) ──

@@ -6,14 +6,16 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import {
+  isHiddenAssistantStreamText,
+  isSilentReplyStream,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
   chatScopedEventSessionMatches,
-  isHiddenAssistantStreamText,
-  isSilentReplyStream,
   materializeVisibleAssistantStreamMessages,
-  shouldHideAssistantChatMessage,
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";

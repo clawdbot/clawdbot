@@ -22,7 +22,7 @@ type DraftRepositoryCallbacks = {
   persistPreference: (patch: NewSessionPreference) => void;
 };
 
-type RepositoryRestore = { worktree: boolean; baseRef: string; baseRefEditGeneration: number };
+type RepositoryRestore = { baseRef: string; baseRefEditGeneration: number };
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
 
 function planRepositoryDiscovery(
@@ -89,11 +89,22 @@ export class DraftRepositoryController {
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
-    this.preferredWorktreeRestore = preference?.worktree === true;
+    if (!this.worktreeSelectedByUser) {
+      this.worktreeValue = false;
+      this.preferredWorktreeRestore = preference?.worktree === true;
+    }
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
-    this.worktreeSelectedByUser = false;
     this.detailsSelectedByUser = false;
+    if (!this.matchesCurrentRepo()) {
+      // Retire the old folder's RPC before it can consume the new preference.
+      this.invalidate();
+    } else if (this.repositoryValue.kind !== "checking" && this.repositoryValue.kind !== "idle") {
+      this.adoptResolvedRepository(this.repositoryValue, {
+        baseRef: this.preferredBaseRefRestore,
+        baseRefEditGeneration: this.baseRefEditGeneration,
+      });
+    }
   }
 
   reset() {
@@ -177,18 +188,9 @@ export class DraftRepositoryController {
   }
 
   available(): boolean {
-    const snapshot = this.read();
-    if (snapshot.selectedProject?.repoRoot) {
-      return true;
-    }
     const state = this.repositoryValue;
-    return (
-      state.kind === "git" ||
-      state.kind === "pending-clone" ||
-      (state.kind === "unavailable" &&
-        state.repoRoot === snapshot.workspace &&
-        snapshot.workspaceGit)
-    );
+    // A saved path or .git marker cannot prove that Git has a usable HEAD.
+    return state.kind === "git" || state.kind === "pending-clone";
   }
 
   matchesCurrentRepo(): boolean {
@@ -208,7 +210,6 @@ export class DraftRepositoryController {
   load() {
     const requestId = ++this.requestToken;
     const restore = {
-      worktree: this.preferredWorktreeRestore && !this.worktreeSelectedByUser,
       baseRef: this.preferredBaseRefRestore,
       baseRefEditGeneration: this.baseRefEditGeneration,
     };
@@ -257,11 +258,12 @@ export class DraftRepositoryController {
 
   private adoptResolvedRepository(state: ResolvedRepository, restore: RepositoryRestore) {
     // Discovery owns restore/rejection for both immediate and RPC results;
-    // placement and user edits may have changed while an RPC was pending.
+    // Read the current preference: group defaults and user edits can arrive
+    // while an RPC is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
       if (!this.read().remotePlacement) {
-        const rejectedWorktree = this.worktreeValue || restore.worktree;
+        const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
         this.worktreeValue = false;
         if (rejectedWorktree) {
           this.callbacks.persistPreference({ worktree: false });
@@ -269,7 +271,7 @@ export class DraftRepositoryController {
       }
     } else if (
       state.kind !== "idle" &&
-      restore.worktree &&
+      this.preferredWorktreeRestore &&
       !this.worktreeSelectedByUser &&
       this.available()
     ) {

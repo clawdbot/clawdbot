@@ -78,7 +78,10 @@ describe("Crabbox checkpoint retirement", () => {
         expect(restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(
           allocation === "fork" ? retained.checkpointId : undefined,
         );
-        expect(listCrabboxWarmImages()[0]?.retirement).toEqual(retained.retirement);
+        expect(
+          listCrabboxWarmImages().find((image) => image.profileKey === retained.profileKey)
+            ?.retirement,
+        ).toEqual(retained.retirement);
         expect(resources).toEqual(retainedResources);
 
         stopping = restarted.provider.destroy({ leaseId: lease.leaseId, profile });
@@ -90,7 +93,10 @@ describe("Crabbox checkpoint retirement", () => {
           { timeout: 500 },
         );
         // Teardown retains ownership until the provider acknowledges deletion.
-        expect(listCrabboxWarmImages()[0]?.retirement).toEqual(retained.retirement);
+        expect(
+          listCrabboxWarmImages().find((image) => image.profileKey === retained.profileKey)
+            ?.retirement,
+        ).toEqual(retained.retirement);
         expect(resources).toEqual(retainedResources);
       } finally {
         release.resolve();
@@ -147,7 +153,11 @@ describe("Crabbox checkpoint retirement", () => {
       await captureWarmImage(restarted.provider, PROFILE, "repeat-refresh");
       expect(captures).toBe(2);
       expect(restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe("chk_capture_2");
-      expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
+      const stop = restarted.calls.findLastIndex(({ argv }) => argv[1] === "stop");
+      expect(stop).toBeGreaterThanOrEqual(0);
+      expect(restarted.calls.findLastIndex(({ argv }) => argv[2] === "delete")).toBeGreaterThan(
+        stop,
+      );
       const store = openWarmImageStore();
       const image = store.entries()[0]!;
       if (cleanup === "expiry") {
@@ -158,8 +168,8 @@ describe("Crabbox checkpoint retirement", () => {
       } else if (cleanup === "capacity") {
         for (let index = 0; index < 127; index++) {
           store.register(`reserved-${index}`, {
-            ...image.value,
-            checkpointId: "",
+            version: 2,
+            allocations: {},
             operation: {
               type: "capture",
               id: `claim-${index}`,
@@ -170,18 +180,23 @@ describe("Crabbox checkpoint retirement", () => {
             },
           });
         }
-        await captureWarmImage(restarted.provider, { ...PROFILE, class: "fast" }, "at-capacity");
+        await expect(
+          provisionWarmProfile(restarted.provider, { ...PROFILE, class: "fast" }, "at-capacity"),
+        ).rejects.toThrow("capacity is full");
         expect(store.entries()).toHaveLength(128);
         expect(captures).toBe(2);
       } else {
         // Recheck a pending replacement while its predecessor still needs deletion.
-        store.register(image.key, { ...store.lookup(image.key)!, state: "pending" });
+        store.register(image.key, {
+          ...store.lookup(image.key)!,
+          image: { ...store.lookup(image.key)!.image!, state: "pending" },
+        });
         missing = true;
         await captureWarmImage(restarted.provider, PROFILE, "missing-replacement");
         missing = false;
         expect(captures).toBe(2);
       }
-      expect(store.lookup(image.key)?.checkpointId).toBe("chk_capture_2");
+      expect(store.lookup(image.key)?.image?.checkpointId).toBe("chk_capture_2");
       expect(
         listCrabboxWarmImages().find((entry) => entry.profileKey === image.key)?.retirement
           ?.checkpointId,
@@ -291,8 +306,11 @@ describe("Crabbox checkpoint retirement", () => {
         for (let index = 0; index < 127; index++) {
           store.register(`idle-${index}`, {
             ...image.value,
-            checkpointId: `chk_idle_${index}`,
-            lastUsedAtMs: now + 1,
+            image: {
+              ...image.value.image!,
+              checkpointId: `chk_idle_${index}`,
+              lastUsedAtMs: now + 1,
+            },
           });
         }
       } else if (cleanup === "expiry") {
@@ -305,7 +323,7 @@ describe("Crabbox checkpoint retirement", () => {
         "cleanup",
       );
       expect(store.lookup(image.key)).toMatchObject({
-        checkpointId: "chk_profile_warm",
+        image: { checkpointId: "chk_profile_warm" },
         operation: { type: "retire", checkpointId: "chk_profile_warm" },
       });
       expect(warn).toHaveBeenCalledWith(
@@ -314,7 +332,11 @@ describe("Crabbox checkpoint retirement", () => {
         ),
       );
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("warm image capture failed"));
-      expect(calls.at(-1)?.argv[1]).toBe("stop");
+      const stop = calls.findLastIndex(({ argv }) => argv[1] === "stop");
+      expect(stop).toBeGreaterThanOrEqual(0);
+      if (cleanup !== "capacity") {
+        expect(calls.findLastIndex(({ argv }) => argv[2] === "delete")).toBeGreaterThan(stop);
+      }
     },
   );
 });

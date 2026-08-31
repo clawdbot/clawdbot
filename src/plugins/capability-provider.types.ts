@@ -111,10 +111,9 @@ export type WorkerDesktopEndpoint = {
 /** Placement execution modes a worker provider can carry. */
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
-/** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment = {
-  openclawVersion: string;
-  /** Immutable node distribution prepared by the Gateway for this enrollment only. */
+/** Operation-bound artifact access without a node identity or enrollment credential. */
+export type WorkerNodeRuntimePreparation = {
+  /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
     token: string;
@@ -124,14 +123,19 @@ export type WorkerNodeEnrollment = {
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
   };
-  displayName: string;
-  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  /** Closing the provision operation revokes artifact access. */
   signal?: AbortSignal;
+};
+
+/** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
+export type WorkerNodeEnrollment = WorkerNodeRuntimePreparation & {
+  openclawVersion: string;
+  displayName: string;
   waitForDeviceId: () => Promise<string>;
 } & (
-  | { mode: "connect"; setupCode: string; setupId: string }
-  | { mode: "resume"; deviceId: string }
-);
+    | { mode: "connect"; setupCode: string; setupId: string }
+    | { mode: "resume"; deviceId: string }
+  );
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
@@ -213,6 +217,8 @@ export type WorkerProvider = {
   provisionBeforeInstallation?: boolean;
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
+  /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
+  supportsProjectPreparation?: (profile: WorkerProfile, machineClass?: string) => boolean;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.
    * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
@@ -232,7 +238,19 @@ export type WorkerProvider = {
     options?: {
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+      project?: {
+        key: string;
+        baseCommit: string;
+        signal: AbortSignal;
+        assertCurrent: () => void;
+        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        prepare: (transport: {
+          runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+        }) => Promise<{ seedKey: string; cacheHit: boolean }>;
+      };
     },
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
@@ -251,6 +269,8 @@ export type WorkerProvider = {
   renew?: (leaseId: string) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
+  resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
 /** Speech capability registered by a plugin. */

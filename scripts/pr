@@ -233,10 +233,8 @@ require_cmds() {
       missing+=("$cmd")
     fi
   done
-  if ! OPENCLAW_GH_BIN="$(resolve_plain_gh_bin)"; then
-    missing+=("real-gh")
-  else
-    export OPENCLAW_GH_BIN
+  if ! resolve_plain_gh_bin >/dev/null; then
+    missing+=("gh")
   fi
 
   if [ "${#missing[@]}" -gt 0 ]; then

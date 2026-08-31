@@ -4,6 +4,7 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const REMOTE_PROJECT = {
@@ -11,14 +12,20 @@ const REMOTE_PROJECT = {
   cloneUrl: "https://github.com/openclaw/openclaw.git",
 };
 
-function createRepositoryFixture() {
+function createRepositoryFixture(
+  options: {
+    workspaceGit?: boolean;
+    unavailable?: boolean;
+    data?: NewSessionRouteData;
+  } = {},
+) {
   const requestUpdate = vi.fn();
   const persistPreference = vi.fn();
   const readPreference = vi.fn(() => ({ worktree: true }));
   const request = vi.fn(async (method: string) =>
     method === "fs.listDir"
       ? { path: "/plain", entries: [] }
-      : { repositoryStatus: "not_git", branches: [] },
+      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
@@ -32,7 +39,9 @@ function createRepositoryFixture() {
       state: {
         agentsList: {
           defaultId: "main",
-          agents: [{ id: "main", workspace: "/workspace", workspaceGit: false }],
+          agents: [
+            { id: "main", workspace: "/workspace", workspaceGit: options.workspaceGit ?? false },
+          ],
         },
       },
     },
@@ -69,13 +78,69 @@ function createRepositoryFixture() {
   const state = new DraftPlaceState(
     gateway,
     browser,
-    () => ({ context, data: undefined, submitting: false, pendingPlacementSessionKey: "" }),
+    () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
   return { state, browser, persistPreference, requestUpdate };
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it.each([false, true])(
+    "reconciles group defaults with cached repository discovery (unavailable: %s)",
+    async (unavailable) => {
+      const { state } = createRepositoryFixture({
+        workspaceGit: unavailable,
+        unavailable,
+        data: {
+          agentId: "main",
+          requestedAgentId: "main",
+          catalogId: "",
+          model: "",
+          catalogLabel: "",
+          startTerminal: false,
+          group: "Notes",
+          groupStatus: "resolved",
+          groupCwd: "/workspace",
+          groupWorktree: true,
+        },
+      });
+      state.adoptAgentDefaults();
+      await vi.waitFor(() => expect(state.placementPreferenceReady).toBe(true));
+      expect(state.worktree).toBe(false);
+
+      state.adoptGroupDefaults();
+
+      expect(state.placementPreferenceReady).toBe(true);
+      expect(state.worktree).toBe(false);
+      expect(state.worktreeAvailable()).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "does not offer worktrees for an unverified workspace (project selected: %s)",
+    async (projectSelected) => {
+      const { state, browser } = createRepositoryFixture({ workspaceGit: true, unavailable: true });
+      if (projectSelected) {
+        vi.spyOn(browser, "selectedProject").mockReturnValue({
+          id: "workspace",
+          displayName: "Workspace",
+          repoRoot: "/workspace",
+          source: "workspace",
+        });
+        browser.selectProject({ kind: "local", id: "workspace" });
+      }
+
+      state.adoptAgentDefaults();
+
+      expect(state.repository.kind).toBe("checking");
+      expect(state.worktreeAvailable()).toBe(false);
+      await vi.waitFor(() => expect(state.repository.kind).toBe("unavailable"));
+      expect(state.worktreeAvailable()).toBe(false);
+      expect(state.worktree).toBe(false);
+      expect(state.placementPreferenceReady).toBe(true);
+    },
+  );
+
   it("offers remote-project worktrees locally without resetting the typed base branch on toggle", () => {
     const { state } = createRepositoryFixture();
     state.selectRemoteProject(REMOTE_PROJECT);

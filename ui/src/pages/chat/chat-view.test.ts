@@ -9049,11 +9049,12 @@ describe("right-click Reply", () => {
   });
 
   it("does not open Reply menu when onSetReply is absent", () => {
-    renderChatView({
+    const { bubble } = renderChatBubble({
       messages: [{ role: "user", content: "hello", timestamp: 1 }],
     });
 
     // Without onSetReply, the handler returns early and no menu is created
+    dispatchContextMenu(bubble);
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 

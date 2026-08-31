@@ -156,8 +156,8 @@ suite.define(() => {
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
       await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
-      await page.getByRole("menuitem", { name: "Set icon" }).waitFor();
-      await page.getByRole("menuitem", { name: "Fork" }).waitFor();
+      await page.getByRole("menuitem", { name: "Icon & color" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);

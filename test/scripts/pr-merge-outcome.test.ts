@@ -168,11 +168,15 @@ const out=(value)=>console.log(typeof value==="string"?value:JSON.stringify(valu
 const fail=(text)=>{save();console.error(text);process.exit(1)};
 if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
 s.calls.push([route,...args]);save();
+if(args.some(arg=>arg.includes("{owner}")||arg.includes("{repo}"))) fail("protected unresolved repository placeholder");
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
-else if(args[0]==="api"&&args.includes("user")) out(s.operator);
+else if(args[0]==="api"&&args.includes("user")) out("relay-reader");
+else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {out([{name:"CI",bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
+  const fields=args[args.indexOf("--json")+1].split(",");
+  if(fields.includes("headRefName")&&!fields.includes("headRefOid")) fail("missing live cleanup metadata");
   const pr={...s.pr,changedFiles:0,files:[],headRefName:"topic",headRepository:{name:"repo"},headRepositoryOwner:{login:"fixture"}};
   if(route==="path"&&s.stale) {pr.state="OPEN";pr.mergeCommit=null;}
   if(args.includes("--jq")) {const q=args[args.indexOf("--jq")+1];out(q===".state"?pr.state:q===".mergeCommit.oid"?pr.mergeCommit?.oid??"null":pr.url);}
@@ -246,7 +250,10 @@ else if(args[0]==="pr"&&args[1]==="view") {
     save();
     if(s.comment!=="success") fail("comment response lost");
     out(url);
-  } else out([s.comments]);
+  } else {
+    if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
+    out([s.comments]);
+  }
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
   out({parents:[{sha:git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
@@ -260,6 +267,7 @@ save();
     `#!/usr/bin/env bash
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
+source "$script_parent_dir/lib/plain-gh.sh"
 source "$script_parent_dir/pr-lib/worktree.sh"
 source "$script_parent_dir/pr-lib/operation-lock.sh"
 source "$script_parent_dir/pr-lib/common.sh"
@@ -1336,6 +1344,27 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     f.git(["merge-base", "--is-ancestor", f.head, f.record().landed]);
   });
+  it("audits a confirmed admin landing using the prepared repository", () => {
+    const f = fixture();
+    f.save({ ...f.state(), admin: true, gates: "fail", comment: "rejected" });
+    const result = f.run();
+    expect(result.status, result.output).toBe(1);
+    expect(f.record().phase, result.output).toBe("commenting");
+    expect(f.state().calls).toContainEqual([
+      "direct",
+      "api",
+      `repos/fixture/repo/commits/${f.record().landed}`,
+    ]);
+    expect(
+      JSON.parse(readFileSync(join(f.worktree, ".local/merge-crabbox-parent-audit.json"), "utf8")),
+    ).toMatchObject({
+      status: "match",
+      expectedParentSha: f.base,
+      actualParentSha: f.base,
+    });
+    f.recover();
+  });
+
   it("retains confirmed admin merge before failed post-merge audit", () => {
     const f = fixture();
     f.save({ ...f.state(), admin: true, audit: true, gates: "fail" });

@@ -614,12 +614,6 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
     pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
       JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
     ),
-  isPluginOwnedSessionBindingRecord: (
-    record: SessionBindingRecord | null | undefined,
-  ): record is SessionBindingRecord =>
-    record?.metadata != null &&
-    typeof record.metadata === "object" &&
-    (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
   markPluginBindingFallbackNoticeShown: (
     bindingId: string,
     scope?: { channel: string; accountId: string },
