@@ -108,10 +108,10 @@ function actionContext(
     cfg,
     params,
     accountId: "default",
+    requesterAccountId: "default",
     toolContext: {
       currentChannelProvider: "slack",
       currentChannelId: "team:T123:channel:C123",
-      requesterAccountId: "default",
     },
   };
 }
@@ -126,7 +126,16 @@ async function runBookmarkScenario(params: Record<string, unknown>, cfg = slackC
       normalizeChannelId: (id) => id,
       invoke: async (action, invokeCfg, toolContext) => {
         const { handleSlackAction } = await import("./action-runtime.js");
-        return await handleSlackAction(action, invokeCfg, toolContext);
+        // handleSlackAction's context is SlackActionContext (requesterAccountId +
+        // currentChannelProvider/Id), which channel-actions.ts derives from the
+        // host-owned ctx via resolveSlackActionContext. toolContext here is the
+        // narrower ChannelThreadingToolContext, so forward the trusted fields
+        // the bookmark read-target check needs alongside the threading context.
+        const context = {
+          ...toolContext,
+          requesterAccountId: "default",
+        };
+        return await handleSlackAction(action, invokeCfg, context);
       },
     });
     return { result, calls: [...traceState.calls], error: undefined as Error | undefined };
