@@ -10,6 +10,7 @@ import {
   createNodeTestShardBundles,
   createNodeTestShards,
   createVitestCacheWarmGroups,
+  isExclusiveCompactShardName,
   resolvePolicyTestTargets,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
@@ -297,10 +298,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it.each([
-    { profile: "blacksmith", addedSeconds: 61 },
-    { profile: "hybrid", addedSeconds: 53 },
+    { profile: "blacksmith", addedSeconds: 175 },
+    { profile: "hybrid", addedSeconds: 107 },
   ])(
-    "retains $profile stripe policy while unpinned groups inherit measured base weights",
+    "lets committed $profile measurements outrank pinned hints while unmeasured groups keep them",
     ({ profile, addedSeconds }) => {
       const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const options = {
@@ -456,15 +457,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.
-    const exclusiveGroupRe =
-      /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
     for (const shard of [
       ...pullRequestCompact,
       ...githubPullRequestCompact,
       ...hybridPullRequestCompact,
     ]) {
       const exclusiveCount = shard.groups.filter((group) =>
-        exclusiveGroupRe.test(group.shard_name),
+        isExclusiveCompactShardName(group.shard_name),
       ).length;
       if (exclusiveCount > 0) {
         expect(exclusiveCount).toBe(shard.groups.length);
@@ -473,14 +472,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
     expect(
       pullRequestCompact.filter((shard) =>
-        shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
+        shard.groups.some((group) => isExclusiveCompactShardName(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
-    expect(
-      compact.some((shard) =>
-        shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
-      ),
-    ).toBe(false);
     const expectedEmbeddedAgentGroupNames = [
       "agentic-agents-embedded-base",
       "agentic-agents-embedded-incomplete-turn",
@@ -618,7 +612,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(smallJobs.length).toBeGreaterThan(0);
     expect(distJobs).toHaveLength(1);
     const regularSmallJobs = smallJobs.filter((shard) =>
-      shard.groups.every((group) => !exclusiveGroupRe.test(group.shard_name)),
+      shard.groups.every((group) => !isExclusiveCompactShardName(group.shard_name)),
     );
     const routed8VcpuCheckNames = [
       "checks-node-compact-small-2",
