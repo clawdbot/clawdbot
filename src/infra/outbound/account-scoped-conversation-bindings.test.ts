@@ -172,6 +172,63 @@ describe("account-scoped conversation binding expiry", () => {
     ).toBe(original.targetSessionKey);
   });
 
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      const manager = createManager();
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: "imessage",
+        accountId: manager.accountId,
+        conversationId: "chat:replacement-owner",
+      };
+      const metadata = {
+        pluginBindingOwner: "plugin",
+        pluginId: "owner-plugin",
+        pluginRoot: "/plugins/owner-plugin",
+        agentId: "previous-agent",
+        boundBy: "previous-user",
+        opaque: { runtimeId: "original" },
+      };
+      const originalTarget = "plugin-binding:owner-plugin:original";
+      await service.bind({
+        targetSessionKey: originalTarget,
+        targetKind: "session",
+        conversation,
+        metadata,
+      });
+      const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
+
+      await service.bind({
+        targetSessionKey,
+        targetKind: "session",
+        conversation,
+        metadata: { label: "updated" },
+      });
+      manager.stop();
+      closeOpenClawStateDatabaseForTest();
+      createManager();
+
+      expect(service.resolveByConversation(conversation)).toMatchObject({
+        targetSessionKey,
+        metadata: {
+          agentId: replace ? "main" : "previous-agent",
+          label: "updated",
+        },
+      });
+      const resolvedMetadata = service.resolveByConversation(conversation)?.metadata;
+      for (const key of [
+        "pluginBindingOwner",
+        "pluginId",
+        "pluginRoot",
+        "boundBy",
+        "opaque",
+      ] as const) {
+        expect(resolvedMetadata?.[key]).toEqual(replace ? undefined : metadata[key]);
+      }
+    },
+  );
+
   it("expires idle bindings from both manager and session-service lookups", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const manager = createManager();

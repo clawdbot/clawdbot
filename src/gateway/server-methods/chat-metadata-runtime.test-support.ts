@@ -95,6 +95,9 @@ export function createChatMetadataHarness(
       };
     },
   );
+  const readProjection = vi.fn(
+    (projection: { modelCatalog: ModelCatalogEntry[]; models?: unknown[] }) => projection,
+  );
   const context = {
     getRuntimeConfig: () => config,
     loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
@@ -135,7 +138,8 @@ export function createChatMetadataHarness(
             buildProjection: async (params) => {
               const projection = await buildProjection(params);
               return {
-                read: () => projection,
+                modelCatalog: projection.modelCatalog,
+                read: () => ({ models: readProjection(projection).models }),
                 isCurrent: () => !invalidProjections.has(projection),
               };
             },
@@ -145,6 +149,7 @@ export function createChatMetadataHarness(
   return {
     buildCommands,
     buildProjection,
+    readProjection,
     getPluginRegistryVersion,
     getAuthStoreRevision,
     getPreparedAuthStore,

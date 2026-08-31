@@ -136,6 +136,7 @@ async function updateCommandInternal(
   opts: UpdateCommandOptions,
   recoveryState: UpdateCommandRecoveryState,
 ): Promise<void> {
+  const startedAt = Date.now();
   suppressDeprecations();
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
@@ -208,6 +209,9 @@ async function updateCommandInternal(
     return;
   }
 
+  if (!opts.json) {
+    defaultRuntime.log(theme.muted("Checking for updates..."));
+  }
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
@@ -314,6 +318,7 @@ async function updateCommandInternal(
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
   let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
+  let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
   // Resolved independently of the root redirect so it covers the common case
   // where the package root is the same but the user's PATH-resolved node
@@ -487,6 +492,9 @@ async function updateCommandInternal(
         return;
       }
       packageTargetSchemaVersions = targetMetadata.schemaVersions;
+      // Runtime and schema checks must use the same exact package that will be
+      // installed; rereading a mutable dist-tag can inspect a different release.
+      packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
       // Always install the exact inspected version: a dist-tag can move between
       // this lookup and the install, and an uninspected version would bypass
       // the schema and runtime decisions made here. Missing schema metadata
@@ -509,10 +517,11 @@ async function updateCommandInternal(
   }
 
   if (opts.dryRun) {
-    await printUpdateDryRun({
+    printUpdateDryRun({
       root,
       installKind,
       updateInstallKind,
+      mode: updateInstallKind === "git" ? "git" : (packageInstallTarget?.manager ?? "unknown"),
       switchToGit,
       switchToPackage,
       shouldRestart,
@@ -529,7 +538,6 @@ async function updateCommandInternal(
       managedServiceRootRedirect,
       explicitTag,
       packageSchemaPreflight,
-      timeoutMs: updateStepTimeoutMs,
       opts,
     });
     return;
@@ -576,14 +584,10 @@ async function updateCommandInternal(
       managedServiceNodeRunner !== undefined &&
       (await gatewayServiceCommandUsesRoot({ root })) === true;
     const runtimePreflight = await resolvePackageRuntimePreflight({
-      tag,
-      spec: packageInstallSpec ?? undefined,
+      target: packageRuntimeTarget,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
-      command: packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
-      cwd: packageInstallCwd,
-      env: packageInstallEnv,
     });
     if (!runtimePreflight.ok) {
       defaultRuntime.error(runtimePreflight.error);
@@ -613,14 +617,13 @@ async function updateCommandInternal(
   });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
-  const showProgress = !opts.json && process.stdout.isTTY;
+  const showProgress = !opts.json;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
     defaultRuntime.log("");
   }
 
   const { progress, stop } = createUpdateProgress(showProgress);
-  const startedAt = Date.now();
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   const execution = await executeMutableUpdate({

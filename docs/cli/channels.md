@@ -180,6 +180,24 @@ openclaw channels logout --channel whatsapp
 - After a successful login, the CLI asks a reachable local Gateway to start the account; in remote mode it saves auth locally and notes that the remote runtime was not restarted.
 - Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
+## Per-account recovery (non-destructive)
+
+When one account needs to reconnect while keeping its pairing and credentials, call the `channels.stop` and `channels.start` Gateway RPCs. Both require `operator.admin`. Invoke them through `openclaw gateway call`:
+
+```bash
+# Stop one WhatsApp account without clearing its pairing.
+openclaw gateway call channels.stop --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+# Start the same account again.
+openclaw gateway call channels.start --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+openclaw channels status --channel whatsapp --probe
+```
+
+Use the same `accountId` in both calls. Omit it from both to select the default account.
+
+`channels.stop` returns `{ channel, accountId, stopped }`; `channels.start` returns `{ channel, accountId, started }`. These booleans reflect the account's runtime snapshot after the operation: `started` is true only when `running` is true, and `stopped` is true when `running` is not true. A `started: false` response does not by itself establish that the account is stopped, and `started: true` does not establish that the provider connection is healthy. Check channel status and logs after recovery.
+
+Unlike this recovery path, `openclaw channels logout` clears the account's credentials and requires login again; `openclaw gateway restart` restarts the whole Gateway. See [Restart recovery](/gateway/restart-recovery) for the crash-loop breaker and its manual `channels.start` override.
+
 ## Troubleshooting
 
 - Run `openclaw status --deep` for a broad probe.

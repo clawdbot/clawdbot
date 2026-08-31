@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket, type RawData } from "ws";
+import { WebSocket, type ClientOptions, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import {
@@ -19,12 +19,98 @@ import {
   stopBrowserControlService,
 } from "../../control-service.js";
 import { buildBrowserExtensionPairing } from "../extension-pairing.js";
+import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { getFreePort } from "../test-port.js";
-import { createRelayProof, randomRelayNonce, relayKeyIdFromHex } from "./auth-v2-crypto.js";
-import { BROWSER_RELAY_EXTENSION_SUBPROTOCOL } from "./auth-v2.js";
+import {
+  createRelayProof,
+  randomRelayNonce,
+  relayKeyIdFromHex,
+  verifyRelayProof,
+  type BrowserRelayAuthChallenge,
+} from "./auth-v2-crypto.js";
+import {
+  BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
+  BROWSER_RELAY_AUTH_CHALLENGE_PATH,
+  BROWSER_RELAY_AUTH_COMPLETE_PATH,
+} from "./auth-v2.js";
 import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
+import { RawHttpConnection } from "./relay-http.test-support.js";
 
 const RELAY_KEY = relayTestKey(8);
+const EXTENSION_HELLO = {
+  type: "hello",
+  userAgent: "gateway-wakeup-test",
+  browserVersion: "Chrome/test",
+  extensionVersion: "2",
+  tabs: [],
+};
+
+async function relayInventory(port: number): Promise<unknown> {
+  const connection = await RawHttpConnection.connect(port);
+  try {
+    const request = async (pathname: string, body?: object) => {
+      const response = await connection.request(
+        body ? "POST" : "GET",
+        pathname,
+        body ? JSON.stringify(body) : "",
+      );
+      expect(response.status).toBe(200);
+      return JSON.parse(response.body);
+    };
+    const challenge = (await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
+      v: 2,
+      keyId: relayKeyIdFromHex(RELAY_KEY),
+      clientNonce: randomRelayNonce(),
+      role: "cdp",
+      transport: "connection",
+      method: "GET",
+      resource: "/json/list",
+      flow: "json-list",
+    })) as BrowserRelayAuthChallenge;
+    expect(verifyRelayProof(RELAY_KEY, "server", challenge, challenge.serverProof)).toBe(true);
+    const clientProof = createRelayProof(RELAY_KEY, "client", challenge);
+    const accepted = await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
+      v: 2,
+      sessionId: challenge.sessionId,
+      clientProof,
+    });
+    expect(
+      verifyRelayProof(RELAY_KEY, "accept", challenge, accepted.acceptProof, clientProof),
+    ).toBe(true);
+    return await request("/json/list");
+  } finally {
+    connection.close();
+  }
+}
+
+function upgradeWithFrames(messages: object[]): {
+  bytes: number;
+  finishRequest: NonNullable<ClientOptions["finishRequest"]>;
+} {
+  const frames = messages.map((message) => {
+    const payload = Buffer.from(JSON.stringify(message));
+    const extended = payload.length >= 126;
+    const header = Buffer.alloc(extended ? 8 : 6);
+    header[0] = 0x81;
+    header[1] = 0x80 | (extended ? 126 : payload.length);
+    if (extended) {
+      header.writeUInt16BE(payload.length, 2);
+    }
+    // The fixed zero mask leaves these synthetic payload bytes unchanged.
+    return Buffer.concat([header, payload]);
+  });
+  const finishRequest: NonNullable<ClientOptions["finishRequest"]> = (request) => {
+    request.once("socket", (socket) => {
+      socket.once("connect", () => {
+        socket.cork();
+        request.end();
+        socket.write(Buffer.concat(frames));
+        socket.uncork();
+      });
+    });
+  };
+  return { bytes: frames.reduce((sum, frame) => sum + frame.byteLength, 0), finishRequest };
+}
 
 function rawDataText(data: RawData): string {
   if (Array.isArray(data)) {
@@ -80,9 +166,23 @@ describe.sequential("local Gateway extension relay wakeup", () => {
     });
   });
 
-  it.each([false, true])(
-    "authenticates the extension while a browser request is already waiting: %s",
-    async (browserRequestAlreadyWaiting) => {
+  it.each([
+    { browserRequestAlreadyWaiting: false, standaloneFirst: false, malformedFrame: false },
+    { browserRequestAlreadyWaiting: true, standaloneFirst: false, malformedFrame: false },
+    { browserRequestAlreadyWaiting: true, standaloneFirst: true, malformedFrame: false },
+    { browserRequestAlreadyWaiting: true, standaloneFirst: true, malformedFrame: true },
+    { browserRequestAlreadyWaiting: false, standaloneFirst: false, legacy: "open" },
+    {
+      browserRequestAlreadyWaiting: true,
+      standaloneFirst: true,
+      legacy: "open",
+      malformedFrame: true,
+    },
+    { browserRequestAlreadyWaiting: false, standaloneFirst: false, legacy: "head" },
+    { browserRequestAlreadyWaiting: true, standaloneFirst: true, legacy: "head" },
+  ])(
+    "authenticates Gateway ingress: waiting=$browserRequestAlreadyWaiting standalone=$standaloneFirst malformed=$malformedFrame legacy=$legacy",
+    async ({ browserRequestAlreadyWaiting, standaloneFirst, malformedFrame, legacy }) => {
       const stateDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-relay-wakeup-")),
       );
@@ -106,7 +206,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
           },
           browser: {
             enabled: true,
-            extensionRelay: { allowLegacyAuth: false },
+            extensionRelay: { allowLegacyAuth: Boolean(legacy) },
             profiles: { chrome: { driver: "extension" as const, cdpPort: relayPort } },
           },
         };
@@ -123,10 +223,13 @@ describe.sequential("local Gateway extension relay wakeup", () => {
               res.writeHead(426);
               res.end();
             });
+            let upgradeHeadBytes = 0;
             gatewayServer.on("upgrade", (req, socket, head) => {
+              upgradeHeadBytes = head.byteLength;
               void handleGatewayExtensionUpgrade(req, socket, head);
             });
             let extension: WebSocket | undefined;
+            let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
             const requestController = new AbortController();
             let browserAvailable: Promise<void> | undefined;
             try {
@@ -134,6 +237,9 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                 gatewayServer.listen(gatewayPort, "127.0.0.1", resolve);
               });
               expect(getBrowserControlState()).toBeNull();
+              if (standaloneFirst) {
+                daemon = await runExtensionRelayDaemon({ port: relayPort });
+              }
 
               const pairing = await buildBrowserExtensionPairing({
                 cfg: config,
@@ -152,57 +258,102 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                   .ensureBrowserAvailable({ signal: requestController.signal });
               }
 
-              extension = new WebSocket(parsed.relayUrl, BROWSER_RELAY_EXTENSION_SUBPROTOCOL, {
+              const protocols = legacy
+                ? ["openclaw-extension-relay", `openclaw-extension-token.${RELAY_KEY}`]
+                : BROWSER_RELAY_EXTENSION_SUBPROTOCOL;
+              const inventory = {
+                type: "tabs",
+                tabs: [
+                  {
+                    tabId: 7,
+                    url: "https://example.test/initial",
+                    title: "Coalesced inventory",
+                    active: true,
+                  },
+                ],
+              };
+              const coalesced =
+                legacy === "head" ? upgradeWithFrames([EXTENSION_HELLO, inventory]) : undefined;
+              extension = new WebSocket(parsed.relayUrl, protocols, {
                 origin: "chrome-extension://gateway-wakeup-integration",
+                finishRequest: coalesced?.finishRequest,
               });
               await once(extension, "open");
-              const clientNonce = randomRelayNonce();
-              const challengeMessage = once(extension, "message");
-              extension.send(
-                JSON.stringify({
-                  type: "auth.hello",
-                  v: 2,
-                  keyId: relayKeyIdFromHex(RELAY_KEY),
-                  clientNonce,
-                }),
-              );
-              const [challengeData] = (await challengeMessage) as [RawData];
-              const challenge = JSON.parse(rawDataText(challengeData));
-              const okMessage = once(extension, "message", {
-                signal: AbortSignal.timeout(2_000),
-              });
-              extension.send(
-                JSON.stringify({
-                  type: "auth.response",
-                  v: 2,
-                  sessionId: challenge.sessionId,
-                  clientProof: createRelayProof(RELAY_KEY, "client", challenge),
-                }),
-              );
-              const [okData] = (await okMessage) as [RawData];
-              expect(JSON.parse(rawDataText(okData))).toMatchObject({ type: "auth.ok", v: 2 });
-              extension.send(
-                JSON.stringify({
-                  type: "hello",
-                  userAgent: "gateway-wakeup-test",
-                  browserVersion: "Chrome/test",
-                  extensionVersion: "2",
-                  tabs: [],
-                }),
-              );
+              if (!legacy) {
+                const clientNonce = randomRelayNonce();
+                const challengeMessage = once(extension, "message");
+                extension.send(
+                  JSON.stringify({
+                    type: "auth.hello",
+                    v: 2,
+                    keyId: relayKeyIdFromHex(RELAY_KEY),
+                    clientNonce,
+                  }),
+                );
+                const [challengeData] = (await challengeMessage) as [RawData];
+                const challenge = JSON.parse(rawDataText(challengeData));
+                const okMessage = once(extension, "message", {
+                  signal: AbortSignal.timeout(2_000),
+                });
+                extension.send(
+                  JSON.stringify({
+                    type: "auth.response",
+                    v: 2,
+                    sessionId: challenge.sessionId,
+                    clientProof: createRelayProof(RELAY_KEY, "client", challenge),
+                  }),
+                );
+                const [okData] = (await okMessage) as [RawData];
+                expect(JSON.parse(rawDataText(okData))).toMatchObject({ type: "auth.ok", v: 2 });
+              }
+              if (legacy === "head") {
+                expect(upgradeHeadBytes).toBe(coalesced?.bytes);
+              } else {
+                extension.send(JSON.stringify(EXTENSION_HELLO));
+              }
 
               await expect
-                .poll(
-                  () =>
-                    getBrowserControlState()?.extensionRelays?.get("chrome")?.bridge
-                      .extensionConnected,
-                )
+                .poll(async () => {
+                  const currentRelay = getBrowserControlState()?.extensionRelays?.get("chrome");
+                  return currentRelay?.ownership === "borrowed"
+                    ? (await currentRelay.client.status()).ready
+                    : currentRelay?.bridge.extensionConnected;
+                })
                 .toBe(true);
               await expect(browserAvailable ?? Promise.resolve()).resolves.toBeUndefined();
               const relay = getBrowserControlState()?.extensionRelays?.get("chrome");
               expect(relay?.port).toBe(pairing.relayPort);
               if (!relay) {
                 throw new Error("extension relay did not start");
+              }
+              if (coalesced) {
+                await expect(relayInventory(relayPort)).resolves.toMatchObject(inventory.tabs);
+              }
+              if (standaloneFirst) {
+                expect(relay.ownership).toBe("borrowed");
+                if (relay.ownership !== "borrowed") {
+                  throw new Error("Expected borrowed relay");
+                }
+                await expect(relay.client.status()).resolves.toMatchObject({
+                  ready: true,
+                  identity: { extensionVersion: "2", browserVersion: "Chrome/test" },
+                });
+                const profile = createBrowserControlContext().forProfile("chrome").profile;
+                expect(new URL(profile.cdpUrl).username).toBe("");
+                if (malformedFrame) {
+                  const closed = once(extension, "close");
+                  extension.send("invalid client frame", { mask: false });
+                  const [code] = await closed;
+                  expect(code).toBe(1002);
+                  await expect.poll(async () => (await relay.client.status()).ready).toBe(false);
+                }
+                await stopBrowserControlService();
+                const contender = await runExtensionRelayDaemon({ port: relayPort });
+                await expect(contender.done).resolves.toBe("port-in-use");
+                return;
+              }
+              if (relay.ownership !== "owned") {
+                throw new Error("Expected owned relay");
               }
 
               for (let request = 0; request < 3; request += 1) {
@@ -230,6 +381,8 @@ describe.sequential("local Gateway extension relay wakeup", () => {
               await browserAvailable?.catch(() => {});
               extension?.terminate();
               await stopBrowserControlService();
+              daemon?.stop();
+              await daemon?.done;
               await closeServer(gatewayServer);
             }
           },

@@ -5,6 +5,7 @@ import {
   createSessionManagementE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
+  openSessionMenuSubmenu,
   sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
@@ -50,7 +51,8 @@ suite.define(() => {
       await row.getByRole("button", { name: "Open session menu: Copy session ID proof" }).click();
 
       const menuHost = page.locator("openclaw-session-menu");
-      const copyItem = menuHost.getByRole("menuitem", { name: "Copy session ID" });
+      await openSessionMenuSubmenu(page, "Copy");
+      const copyItem = menuHost.getByRole("menuitem", { name: "Session ID", exact: true });
       await expect.poll(() => copyItem.count()).toBe(1);
       await captureUiProof(page, "copy-session-id-menu.png");
 

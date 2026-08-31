@@ -370,28 +370,40 @@ export async function sendControlUiHtmlBody(
   res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
 }
 
-function readOpenedFile(fd: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(fd, (error, data) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(data);
-    });
-  });
-}
-
-// Compression can wait in zlib's worker queue, so release the pinned file as
-// soon as its bytes are loaded instead of retaining descriptors per request.
-export async function readAndCloseControlUiFile(fd: number): Promise<Buffer> {
+// Reuse the stat captured by safe open: another queued fstat adds a full
+// event-loop wait under load. Keep Node readFile's allocation and chunk limits;
+// this read ends at the pinned size, even if the file subsequently grows.
+export async function readAndCloseControlUiFile(file: {
+  fd: number;
+  size: number;
+}): Promise<Buffer> {
   try {
-    return await readOpenedFile(fd);
+    if (file.size > 2 ** 31 - 1) {
+      throw Object.assign(new RangeError("Control UI file exceeds the 2 GiB read limit"), {
+        code: "ERR_FS_FILE_TOO_LARGE",
+      });
+    }
+    const buffer = Buffer.allocUnsafe(file.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const length = Math.min(512 * 1024, buffer.length - offset);
+      const bytesRead = await new Promise<number>((resolve, reject) => {
+        fs.read(file.fd, buffer, offset, length, null, (error, count) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(count);
+          }
+        });
+      });
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset);
   } finally {
-    fs.closeSync(fd);
+    // Release before compression waits in zlib's worker queue.
+    fs.closeSync(file.fd);
   }
-}
-
-export async function readAndCloseControlUiFileText(fd: number): Promise<string> {
-  return (await readAndCloseControlUiFile(fd)).toString("utf8");
 }

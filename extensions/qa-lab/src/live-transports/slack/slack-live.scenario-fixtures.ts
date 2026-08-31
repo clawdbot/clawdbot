@@ -74,7 +74,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 
 type SlackProgressCommentaryExpectation = {
   commentary: "headline" | "lane" | "standalone";
-  toolProgress: "absent" | "draft" | "standalone" | "standalone-redacted";
+  toolProgress: "absent" | "standalone" | "standalone-redacted";
 };
 
 function observedSlackText(message: { blockText?: string[]; text: string }) {
@@ -285,13 +285,6 @@ export function buildSlackProgressCommentaryRun(
           safeToolTimestamps.has(finalMessage.ts)
         ) {
           fail("expected one safe Exec summary in a standalone verbose message");
-        }
-      } else if (expectation.toolProgress === "draft") {
-        if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
-          fail("expected tool progress on the draft separate from the fresh final");
-        }
-        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
-          fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
         const toolMessages = progressMessages.filter(hasSlackExecHeader);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
@@ -140,6 +141,55 @@ describe("agent harness host capability", () => {
     mockRunBefore.mockClear();
     mockCallGatewayTool.mockReset();
   });
+
+  it.each(["host closure", "authority release", "gateway restart"])(
+    "binds output usage to its original run and rejects reporting after %s",
+    async (revocation) => {
+      const onUsage = vi.fn();
+      const forgedCallback = vi.fn();
+      const { attempt } = await admittedAttempt("run-usage", {
+        onAgentEvent: onUsage,
+      });
+      let host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const events: Array<{ runId: string; sessionKey?: string; outputTokens: unknown }> = [];
+      const stop = onAgentEvent((event) => {
+        if (event.stream === "usage") {
+          events.push({
+            runId: event.runId,
+            sessionKey: event.sessionKey,
+            outputTokens: event.data.outputTokens,
+          });
+        }
+      });
+      try {
+        host.capabilities.reportOutputTokens?.(12);
+        host.close();
+        host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+        attempt.runId = "forged-run";
+        attempt.lifecycleGeneration = "forged-generation";
+        attempt.sessionKey = "forged-session";
+        attempt.onAgentEvent = forgedCallback;
+        host.capabilities.reportOutputTokens?.(8);
+        if (revocation === "host closure") {
+          host.close();
+        } else if (revocation === "authority release") {
+          closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+        } else {
+          rotateAgentRunRegistryLifecycleGeneration();
+        }
+        expect(() => host.capabilities.reportOutputTokens?.(100)).toThrow("no longer active");
+        expect(events).toEqual([
+          { runId: "run-usage", sessionKey: "agent:main:session-1", outputTokens: 12 },
+          { runId: "run-usage", sessionKey: "agent:main:session-1", outputTokens: 20 },
+        ]);
+        expect(onUsage.mock.calls.map(([event]) => event.data.outputTokens)).toEqual([12, 20]);
+        expect(forgedCallback).not.toHaveBeenCalled();
+      } finally {
+        stop();
+        host.close();
+      }
+    },
+  );
 
   it("binds Full node invocation to the exact live admission, session and placement", async () => {
     const previousRegistry = getActivePluginRegistry();

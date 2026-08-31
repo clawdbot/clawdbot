@@ -8,13 +8,31 @@ const getBrowserControlStateMock = vi.fn();
 const startBrowserControlServiceFromConfigMock = vi.fn();
 vi.mock("../../control-service.js", () => ({
   getBrowserControlState: () => getBrowserControlStateMock(),
-  startBrowserControlServiceFromConfig: () => startBrowserControlServiceFromConfigMock(),
+  startBrowserControlServiceFromConfig: async () => {
+    const state = await startBrowserControlServiceFromConfigMock();
+    if (state) {
+      getBrowserControlStateMock.mockReturnValue(state);
+    }
+    return state;
+  },
 }));
 
 const ensureExtensionRelayForProfileMock = vi.fn();
 vi.mock("./relay-lifecycle.js", () => ({
-  ensureExtensionRelayForProfile: (...args: unknown[]) =>
-    ensureExtensionRelayForProfileMock(...args),
+  ensureExtensionRelayForProfile: async (
+    state: ReturnType<typeof stateWithExtensionProfile>,
+    profile: { name: string; cdpPort: number },
+  ) => {
+    const result = await ensureExtensionRelayForProfileMock(state, profile);
+    const relay = {
+      ...result,
+      ownership: "owned",
+      port: profile.cdpPort,
+      token: readExtensionRelayTokenMock(),
+    };
+    state.extensionRelays.set(profile.name, relay);
+    return relay;
+  },
 }));
 
 const resolveProfileMock = vi.fn();
@@ -95,6 +113,10 @@ function v2Req(url = "/browser/extension"): IncomingMessage {
 
 function stateWithExtensionProfile() {
   return {
+    profiles: new Map([
+      ["chrome", { profile: { name: "chrome", driver: "extension", cdpPort: 18799 } }],
+    ]),
+    extensionRelays: new Map(),
     resolved: {
       extensionRelayToken: TOKEN,
       profiles: { chrome: { driver: "extension" } },
@@ -130,7 +152,7 @@ function oversizedMaskedTextFrame(): Buffer {
 
 // Default: the requested profile resolves to a valid extension profile.
 function primeProfile() {
-  resolveProfileMock.mockReturnValue({ name: "chrome", driver: "extension" });
+  resolveProfileMock.mockReturnValue({ name: "chrome", driver: "extension", cdpPort: 18799 });
 }
 
 async function mockSuccessfulUpgrade() {
@@ -140,6 +162,8 @@ async function mockSuccessfulUpgrade() {
     close: vi.fn(),
     terminate: vi.fn(),
     send: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
   });
   vi.spyOn(wsMod.WebSocketServer.prototype, "handleUpgrade").mockImplementation(
     (_req, _socket, _head, cb) => {
@@ -227,7 +251,7 @@ describe("handleGatewayExtensionUpgrade", () => {
     primeProfile();
     const bridge = { id: "fresh-bridge" };
     ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
-    await mockSuccessfulUpgrade();
+    const ws = await mockSuccessfulUpgrade();
 
     const { socket } = fakeSocket();
     const handled = await handleGatewayExtensionUpgrade(
@@ -237,12 +261,12 @@ describe("handleGatewayExtensionUpgrade", () => {
     );
 
     expect(handled).toBe(true);
-    expect(readExtensionRelayTokenMock).toHaveBeenCalledOnce();
+    expect(readExtensionRelayTokenMock).toHaveBeenCalled();
+    expect(() => ws.emit("error", new Error("Invalid WebSocket frame"))).not.toThrow();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("does not lazy-start or attach v2 before the in-band client proof succeeds", async () => {
@@ -274,10 +298,9 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
     expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
     attach();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
@@ -358,10 +381,9 @@ describe("handleGatewayExtensionUpgrade", () => {
     );
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("authenticates against the live relay secret when Browser state is stale", async () => {
@@ -390,9 +412,8 @@ describe("handleGatewayExtensionUpgrade", () => {
 
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 });

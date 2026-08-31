@@ -14,6 +14,8 @@ import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from ".
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
+import type { RelayOperationReference } from "./extension-relay/owner-client.js";
+import { closeRelayOperationConnection } from "./extension-relay/owner-playwright.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -41,8 +43,14 @@ import {
   isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
-import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import {
+  markBackendDomRefsOnPage,
+  readMainFrameDocumentIdentityForPage,
+  withPageScopedCdpClient,
+} from "./pw-session.page-cdp.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
+
+type StoredSnapshotRef = RoleRefMap[string] & { backendDOMNodeId?: number };
 
 function resolveBoundedTimeoutMs(
   timeoutMs: number | undefined,
@@ -98,12 +106,8 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
     : [];
 }
 
-function buildStoredAriaRefs(
-  nodes: AriaSnapshotNode[],
-  markedRefs: Set<string>,
-): Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> {
-  const refs: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> =
-    {};
+function buildStoredAriaRefs(nodes: AriaSnapshotNode[]): Record<string, StoredSnapshotRef> {
+  const refs: Record<string, StoredSnapshotRef> = {};
   const groups = new Map<string, { count: number; firstRef: string }>();
 
   for (const node of nodes) {
@@ -122,7 +126,9 @@ function buildStoredAriaRefs(
       name,
       // Keep index zero for duplicates; only singleton groups can omit nth.
       nth,
-      ...(markedRefs.has(node.ref) ? { domMarker: true } : {}),
+      ...(typeof node.backendDOMNodeId === "number"
+        ? { backendDOMNodeId: node.backendDOMNodeId }
+        : {}),
     };
   }
 
@@ -136,13 +142,16 @@ function buildStoredAriaRefs(
   return refs;
 }
 
-/** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
-export async function storeAriaSnapshotRefsViaPlaywright(opts: {
+/** Publish raw or finalized snapshot refs into the Playwright action cache. */
+export async function storeSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  nodes: AriaSnapshotNode[];
   page?: Page;
+  nodes?: AriaSnapshotNode[];
+  refs?: Record<string, StoredSnapshotRef>;
+  expectedDocumentIdentity?: string;
 }): Promise<void> {
+  const sourceRefs = opts.refs ?? buildStoredAriaRefs(opts.nodes ?? []);
   const page =
     opts.page ??
     (await getPageForTargetId({
@@ -152,17 +161,30 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   ensurePageState(page);
   const markedRefs = await markBackendDomRefsOnPage({
     page,
-    refs: opts.nodes.flatMap((node) =>
-      typeof node.backendDOMNodeId === "number"
-        ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
+    refs: Object.entries(sourceRefs).flatMap(([ref, info]) =>
+      typeof info.backendDOMNodeId === "number"
+        ? [{ ref, backendDOMNodeId: info.backendDOMNodeId }]
         : [],
     ),
   });
+  if (
+    opts.expectedDocumentIdentity &&
+    (await readMainFrameDocumentIdentityForPage(page)) !== opts.expectedDocumentIdentity
+  ) {
+    throw new Error("Frame changed while its browser snapshot refs were being published; retry.");
+  }
+  const refs: RoleRefMap = Object.fromEntries(
+    Object.entries(sourceRefs).map(([ref, info]) => {
+      const storedInfo = { ...info };
+      delete storedInfo.backendDOMNodeId;
+      return [ref, { ...storedInfo, ...(markedRefs.has(ref) ? { domMarker: true } : {}) }];
+    }),
+  );
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
-    refs: buildStoredAriaRefs(opts.nodes, markedRefs),
+    refs,
     mode: "role",
   });
 }
@@ -223,7 +245,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   });
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
   const formatted = formatAriaSnapshot(nodes, limit);
-  await storeAriaSnapshotRefsViaPlaywright({
+  await storeSnapshotRefsViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     nodes: formatted,
@@ -466,7 +488,8 @@ export async function snapshotRoleViaPlaywright(opts: {
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  resolveOperationTarget?: () => string | undefined;
+  resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
+  relayReference?: RelayOperationReference;
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -511,8 +534,8 @@ export async function navigateViaPlaywright(opts: {
       targetId: currentTargetId,
       ...(opts.resolveOperationTarget
         ? {
-            assertPageCurrent: () => {
-              if (opts.resolveOperationTarget?.() !== currentTargetId) {
+            assertPageCurrent: async () => {
+              if ((await opts.resolveOperationTarget?.()) !== currentTargetId) {
                 throw new BrowserTabNotFoundError({ input: currentTargetId });
               }
             },
@@ -573,21 +596,25 @@ export async function navigateViaPlaywright(opts: {
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.
     // Force a clean reconnect, then retry once on the refreshed page handle.
-    await forceDisconnectPlaywrightForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      ssrfPolicy: opts.ssrfPolicy,
-      reason: "retry navigate after detached frame",
-    }).catch(() => {});
+    if (opts.relayReference) {
+      await closeRelayOperationConnection(opts.relayReference);
+    } else {
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+        reason: "retry navigate after detached frame",
+      }).catch(() => {});
+    }
     if (opts.resolveOperationTarget) {
       // Auto-attach completes during reconnect; only then can the same tab owner prove its new ID.
-      await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-      const replacementTargetId = opts.resolveOperationTarget();
+      await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+      const replacementTargetId = await opts.resolveOperationTarget();
       if (!replacementTargetId) {
         throw new BrowserTabNotFoundError({ input: currentTargetId });
       }
       page = await getPageForTargetId({ ...opts, targetId: replacementTargetId });
-      if (opts.resolveOperationTarget() !== replacementTargetId) {
+      if ((await opts.resolveOperationTarget()) !== replacementTargetId) {
         throw new BrowserTabNotFoundError({ input: currentTargetId });
       }
       currentTargetId = replacementTargetId;

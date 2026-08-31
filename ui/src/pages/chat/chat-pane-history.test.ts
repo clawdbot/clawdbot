@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
@@ -24,7 +25,6 @@ import {
   stagedPagesRequest,
 } from "./chat-pane-history.test-support.ts";
 import { ChatPane } from "./chat-pane-render.ts";
-import { nativeHistoryMessageIdentity } from "./chat-pane-shared.ts";
 import {
   createInitializationContext,
   createSessionCapabilityFixture,

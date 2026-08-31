@@ -345,6 +345,11 @@ export function createThreadBindingManager(params: {
       }
 
       const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
+      const previous =
+        existingValue?.targetSessionKey === targetSessionKey &&
+        existingValue.targetKind === targetKind
+          ? existingValue
+          : undefined;
       let webhookId =
         normalizeOptionalString(bindParams.webhookId) ??
         normalizeOptionalString(existingValue?.webhookId) ??
@@ -378,16 +383,15 @@ export function createThreadBindingManager(params: {
         targetSessionKey,
         agentId:
           normalizeOptionalString(bindParams.agentId) ??
-          normalizeOptionalString(existingValue?.agentId) ??
+          normalizeOptionalString(previous?.agentId) ??
           resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey }),
         label:
-          normalizeOptionalString(bindParams.label) ??
-          normalizeOptionalString(existingValue?.label),
+          normalizeOptionalString(bindParams.label) ?? normalizeOptionalString(previous?.label),
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
         boundBy:
           normalizeOptionalString(bindParams.boundBy) ??
-          normalizeOptionalString(existingValue?.boundBy) ??
+          normalizeOptionalString(previous?.boundBy) ??
           "system",
         boundAt: now,
         lastActivityAt: now,
@@ -396,12 +400,7 @@ export function createThreadBindingManager(params: {
             ? existingValue.idleTimeoutMs
             : idleTimeoutMs,
         maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
-        metadata:
-          bindParams.metadata && typeof bindParams.metadata === "object"
-            ? { ...existingValue?.metadata, ...bindParams.metadata }
-            : existingValue?.metadata
-              ? { ...existingValue.metadata }
-              : undefined,
+        metadata: { ...previous?.metadata, ...bindParams.metadata },
       };
 
       setBindingRecord(record);

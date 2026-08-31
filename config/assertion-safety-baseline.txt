@@ -74,7 +74,6 @@ extensions/browser/src/browser/extension-install.ts	3
 extensions/browser/src/browser/extension-native-host.ts	1
 extensions/browser/src/browser/extension-native-protocol.ts	1
 extensions/browser/src/browser/extension-relay/auth-v2.ts	10
-extensions/browser/src/browser/extension-relay/relay-auth.ts	1
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	9
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	4
 extensions/browser/src/browser/output-files.ts	1
@@ -1184,7 +1183,7 @@ extensions/slack/src/native-data-blocks.ts	1
 extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/post-message-identity.ts	1
 extensions/slack/src/probe.ts	2
-extensions/slack/src/progress-blocks.ts	2
+extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
 extensions/slack/src/reply-blocks.ts	9
 extensions/slack/src/resolve-channels.ts	1
@@ -3404,7 +3403,7 @@ src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-live-runtime.ts	2
-src/plugin-sdk/provider-catalog-shared.ts	4
+src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	6
@@ -4022,7 +4021,7 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	5
+ui/src/pages/chat/chat-history.ts	3
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2

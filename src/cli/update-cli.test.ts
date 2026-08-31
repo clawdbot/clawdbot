@@ -34,7 +34,7 @@ import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-captu
 const confirm = vi.fn();
 const select = vi.fn();
 const text = vi.fn();
-const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn() }));
+const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
 
 const readPackageName = vi.fn();
@@ -542,7 +542,7 @@ const {
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
-const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
+const { clearRestartSentinel, readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -3106,11 +3106,13 @@ describe("update-cli", () => {
       return child;
     });
 
-    await expect(updateCommand({ yes: true })).rejects.toThrow(
-      "post-update process exited with code 2",
-    );
+    await updateCommand({ yes: true, json: true });
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(2);
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "post-core-update-failed",
+    });
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
@@ -4019,6 +4021,43 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toContain("openclaw@9999.0.0");
   });
 
+  it.each([true, false])(
+    "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
+    async (compatible) => {
+      mockPackageInstallStatus(createCaseDir("openclaw-runtime-target"));
+      const inspectedEngine = compatible ? ">=22.19.0" : ">=999.0.0";
+      vi.mocked(fetchNpmPackageTargetStatus)
+        .mockResolvedValueOnce(packageTargetStatus({ nodeEngine: inspectedEngine }))
+        .mockResolvedValue(
+          packageTargetStatus({ nodeEngine: compatible ? ">=999.0.0" : ">=22.19.0" }),
+        );
+      nodeVersionSatisfiesEngine.mockImplementation(
+        (_version: string | null, engine: string | null) => engine !== ">=999.0.0",
+      );
+
+      await updateCommand({ yes: true, restart: false });
+
+      if (compatible) {
+        expect(packageInstallCommandCall()?.[0]).toContain("openclaw@9999.0.0");
+      } else {
+        expect(packageInstallCommandCall()).toBeUndefined();
+        expect(getErrorOutput()).toContain("The requested package requires >=999.0.0");
+      }
+      expect(fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("previews the resolved package owner without probing for another manager", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-dry-run-owner"));
+    resolveGlobalManager.mockResolvedValueOnce("npm").mockResolvedValue("bun");
+
+    await updateCommand({ dryRun: true, json: true });
+
+    expect(lastWriteJsonCall()).toMatchObject({ mode: "npm" });
+    expect(resolveGlobalManager).toHaveBeenCalledOnce();
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
   it("reports an incompatible package target during dry-run", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-dry-run"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
@@ -4578,10 +4617,10 @@ describe("update-cli", () => {
     expectPackageInstallSpec("openclaw@9999.0.0");
     const preflightParams = vi
       .mocked(fetchNpmPackageTargetStatus)
-      .mock.calls.find(([params]) => params.target === "latest")?.[0];
+      .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
     expect(preflightParams).toEqual(
       expect.objectContaining({
-        target: "latest",
+        target: "9999.0.0",
         spec: "openclaw@9999.0.0",
         cwd: process.cwd(),
       }),
@@ -5713,11 +5752,15 @@ describe("update-cli", () => {
     });
     const serviceCommand = {
       ...servicePlan,
-      environment: Object.fromEntries(
-        Object.entries(servicePlan.environment).filter(
-          (entry): entry is [string, string] => typeof entry[1] === "string",
+      environment: {
+        ...Object.fromEntries(
+          Object.entries(servicePlan.environment).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
         ),
-      ),
+        // This sealed service deliberately has no CLI on PATH, including host-wide installs.
+        PATH: wrapperDir,
+      },
     };
     serviceReadCommand.mockResolvedValue(serviceCommand);
     serviceLoaded.mockResolvedValue(true);
@@ -7414,7 +7457,7 @@ describe("update-cli", () => {
     const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
     expect(probeCall?.includeDetails).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
     expect(getErrorOutput()).toContain(
       "Gateway version mismatch: expected 2026.4.24, running gateway reported 2026.4.23.",
     );
@@ -7556,25 +7599,42 @@ describe("update-cli", () => {
     expect(sentinel?.payload.continuation).toBeUndefined();
   });
 
-  it("marks the control-plane update sentinel failed when restart health verification fails", async () => {
-    const sentinel = await runControlPlaneUpdate({
-      meta: {
-        sessionKey: "agent:main:webchat:dm:user-123",
-        continuationMessage: "This should not report a successful update.",
-      },
-      options: { yes: true, json: true },
-      beforeUpdate: () => {
-        setupNpmUpdatedRootRefresh();
-        prepareRestartScript.mockResolvedValue(null);
-        serviceLoaded.mockResolvedValue(true);
-        mockGatewayProbe("2026.4.23", "old-gateway");
-      },
-    });
-    expect(sentinel?.payload.status).toBe("error");
-    expect(sentinel?.payload.stats?.reason).toBe("restart-unhealthy");
-    expect(sentinel?.payload.continuation).toBeUndefined();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
+  it.each([false, true])(
+    "preserves control-plane update sentinel consumption on restart health failure (consumed=%s)",
+    async (consumed) => {
+      let sentinelConsumed = false;
+      const sentinel = await runControlPlaneUpdate({
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          continuationMessage: "This should not report a successful update.",
+        },
+        options: { yes: true, json: true },
+        beforeUpdate: async () => {
+          setupNpmUpdatedRootRefresh();
+          prepareRestartScript.mockResolvedValue(null);
+          serviceLoaded.mockResolvedValue(true);
+          mockGatewayProbe("2026.4.23", "old-gateway");
+          if (consumed) {
+            const probeResult = await probeGateway();
+            probeGateway.mockImplementation(async () => {
+              sentinelConsumed = (await clearRestartSentinel()) || sentinelConsumed;
+              return probeResult;
+            });
+          }
+        },
+      });
+      if (consumed) {
+        expect(sentinelConsumed).toBe(true);
+        expect(sentinel).toBeNull();
+      } else {
+        expect(sentinel?.payload.status).toBe("error");
+        expect(sentinel?.payload.stats?.reason).toBe("restart-unhealthy");
+        expect(sentinel?.payload.continuation).toBeUndefined();
+      }
+      expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("fails a package update when the restarted gateway reports activated plugin load errors", async () => {
     setupNpmUpdatedRootRefresh();
@@ -7760,51 +7820,43 @@ describe("update-cli", () => {
   });
 
   it("updateCommand continues after doctor sub-step and clears update flag", async () => {
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
-    try {
-      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
-        mockRunningManagedGateway([
-          "node",
-          path.join(process.cwd(), "dist", "index.js"),
-          "gateway",
-        ]);
-        mockGitUpdateAfterMutation();
-        prepareRestartScript.mockResolvedValue(null);
-        vi.mocked(runDaemonRestart).mockResolvedValue(true);
-        vi.mocked(doctorCommand).mockResolvedValue(undefined);
-        vi.mocked(defaultRuntime.log).mockClear();
+    await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
+      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      mockGitUpdateAfterMutation();
+      prepareRestartScript.mockResolvedValue(null);
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+      vi.mocked(doctorCommand).mockResolvedValue(undefined);
+      vi.mocked(defaultRuntime.log).mockClear();
 
-        await updateCommand({});
+      await updateCommand({});
 
-        const doctorCall = vi.mocked(doctorCommand).mock.calls[0];
-        expect(doctorCall?.[0]).toBe(defaultRuntime);
-        expect(doctorCall?.[1]?.nonInteractive).toBe(true);
-        expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-        const snapshotOrders = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder;
-        expect(createPreUpdateConfigSnapshotMock).toHaveBeenCalledTimes(2);
-        expect(requireValue(snapshotOrders[0], "restart snapshot call order")).toBeLessThan(
-          requireValue(
-            vi.mocked(runDaemonRestart).mock.invocationCallOrder[0],
-            "daemon restart call order",
-          ),
-        );
-        expect(requireValue(snapshotOrders[1], "doctor snapshot call order")).toBeLessThan(
-          requireValue(
-            vi.mocked(doctorCommand).mock.invocationCallOrder[0],
-            "doctor command call order",
-          ),
-        );
+      const doctorCall = vi.mocked(doctorCommand).mock.calls[0];
+      expect(doctorCall?.[0]).toBe(defaultRuntime);
+      expect(doctorCall?.[1]?.nonInteractive).toBe(true);
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+      const snapshotOrders = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder;
+      expect(createPreUpdateConfigSnapshotMock).toHaveBeenCalledTimes(2);
+      expect(requireValue(snapshotOrders[0], "restart snapshot call order")).toBeLessThan(
+        requireValue(
+          vi.mocked(runDaemonRestart).mock.invocationCallOrder[0],
+          "daemon restart call order",
+        ),
+      );
+      expect(requireValue(snapshotOrders[1], "doctor snapshot call order")).toBeLessThan(
+        requireValue(
+          vi.mocked(doctorCommand).mock.invocationCallOrder[0],
+          "doctor command call order",
+        ),
+      );
 
-        const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-        expect(
-          logLines.some((line) =>
-            line.includes("Leveled up! New skills unlocked. You're welcome."),
-          ),
-        ).toBe(true);
-      });
-    } finally {
-      randomSpy.mockRestore();
-    }
+      const successIndex = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.findIndex((call) => String(call[0]).includes("Update Result: OK"));
+      expect(successIndex).toBeGreaterThanOrEqual(0);
+      expect(vi.mocked(defaultRuntime.log).mock.invocationCallOrder[successIndex]).toBeGreaterThan(
+        requireValue(vi.mocked(doctorCommand).mock.invocationCallOrder[0], "doctor call order"),
+      );
+    });
   });
 
   it("marks the whole update command as update-in-progress", async () => {

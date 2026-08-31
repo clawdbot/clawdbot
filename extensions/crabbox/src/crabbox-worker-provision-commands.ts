@@ -1,8 +1,5 @@
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  crabboxCommandError,
-  permanentCrabboxCommandError,
-} from "./crabbox-worker-command-error.js";
+import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
   isUnrecognizedLease,
   runCrabboxCommand,
@@ -231,7 +228,7 @@ export async function runProvisionSetupAndWaitReady(
         }),
     );
     if (result.termination !== "exit" || result.code !== 0) {
-      throw permanentCrabboxCommandError(params.phase, result);
+      throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
     }
   } catch (error) {
     params.signal?.throwIfAborted();
