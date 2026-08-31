@@ -364,7 +364,10 @@ describe("OpenAI Responses continuation", () => {
       id: "resp_expiring",
       output: continuationState().lastResponseItems,
     });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    // Must track HTTP_CONTINUATION_IDLE_TTL_MS in openai-responses-continuation.ts
+    // (a private module constant, not exported) -- this advance needs to
+    // exceed the real idle TTL for the expiry to actually fire.
+    vi.advanceTimersByTime(90 * 60 * 1000 + 1);
 
     const next = claim({ request: nextRequest() });
     expect(next?.request.previous_response_id).toBeUndefined();
