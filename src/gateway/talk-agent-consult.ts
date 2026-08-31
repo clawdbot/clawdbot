@@ -8,6 +8,7 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
 import { abortChatRunById } from "./chat-abort.js";
 import {
@@ -57,10 +58,7 @@ function terminalTalkChatSendAckError(status: TalkChatSendAckStatus): ErrorShape
   return undefined;
 }
 
-/**
- * Starts the agent-consult chat run that backs realtime Talk tool calls.
- */
-export async function startTalkRealtimeAgentConsult(params: {
+type TalkRealtimeAgentConsultParams = {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
@@ -71,9 +69,26 @@ export async function startTalkRealtimeAgentConsult(params: {
   relaySessionId?: string;
   connId?: string;
   onRunStarted?: (runId: string) => void;
-}): Promise<
-  { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
-> {
+};
+
+/**
+ * Starts the agent-consult chat run that backs realtime Talk tool calls.
+ *
+ * Realtime providers invoke the consult long after the request that created
+ * the voice session has released its gateway root admission, and in-process
+ * callbacks still inherit that retired root through async context. Dispatch
+ * outside the inherited root so agent work re-enters admission on its own
+ * instead of being rejected as subordinate work of a closed root.
+ */
+export async function startTalkRealtimeAgentConsult(
+  params: TalkRealtimeAgentConsultParams,
+): Promise<{ ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }> {
+  return runOutsideGatewayRootWorkAdmission(() => startTalkRealtimeAgentConsultDetached(params));
+}
+
+async function startTalkRealtimeAgentConsultDetached(
+  params: TalkRealtimeAgentConsultParams,
+): Promise<{ ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }> {
   let message: string;
   try {
     message = buildRealtimeVoiceAgentConsultChatMessage(params.args);
