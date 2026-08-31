@@ -132,6 +132,66 @@ afterEach(async () => {
 });
 
 describe("node bootstrap distribution", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps concurrent staging private under a restrictive process mask",
+    async () => {
+      const { packageRoot } = await fixture();
+      for (let index = 0; index < 32; index += 1) {
+        await write(packageRoot, `dist/race-${index}.js`, "export {};\n");
+      }
+      const { stdout } = await promisify(execFile)(process.execPath, [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `
+          import * as tar from "tar";
+          import { createNodeBootstrapArtifactProvider } from ${JSON.stringify(new URL("./node-bootstrap-artifact.ts", import.meta.url).href)};
+          process.umask(0o077);
+          const nativeUmask = process.umask.bind(process);
+          // Node's getter sets umask(0), then restores it. Widen that real
+          // interval so concurrent filesystem opens reliably overlap it.
+          process.umask = (mask) => {
+            if (mask !== undefined) return nativeUmask(mask);
+            const previous = nativeUmask(0);
+            const deadline = performance.now() + 5;
+            while (performance.now() < deadline) {}
+            nativeUmask(previous);
+            return previous;
+          };
+          const provider = createNodeBootstrapArtifactProvider(${JSON.stringify({
+            packageRoot,
+            runningBuildId: buildId,
+            plugins: [
+              {
+                id: "remote-runtime",
+                root: path.join(packageRoot, "extensions", "remote-runtime"),
+              },
+            ],
+          })});
+          try {
+            const artifact = await provider.prepare();
+            const modes = {};
+            await tar.list({ file: artifact.tarballPath, onReadEntry(entry) {
+              modes[entry.path] = entry.mode;
+            }});
+            console.log(JSON.stringify(modes));
+          } finally {
+            process.umask = nativeUmask;
+            await provider.close();
+          }
+        `,
+      ]);
+      const modes = JSON.parse(stdout) as Record<string, number>;
+      expect(modes["package/openclaw.mjs"]).toBe(0o700);
+      expect(modes["package/dist/shared.js"]).toBe(0o600);
+      expect(
+        Object.keys(modes).filter((entry) => entry.startsWith("package/dist/race-")),
+      ).toHaveLength(32);
+      expect(Object.values(modes).every((mode) => (mode & 0o077) === 0)).toBe(true);
+    },
+  );
+
   it.each(["source", "package", "external-plugin"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
