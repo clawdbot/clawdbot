@@ -353,8 +353,8 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
 
       await modelSelect.focus();
-      await page.keyboard.type("x");
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("x");
+      await page.keyboard.type("1");
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
     });
   });
 

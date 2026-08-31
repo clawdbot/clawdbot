@@ -272,7 +272,7 @@ const CHAT_DROPDOWN_KEYS = new Set([
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
   return (
     /^[a-z0-9]$/iu.test(key) &&
-    target.matches("wa-dropdown, [data-chat-autotype-shortcuts]") &&
+    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
     target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
   );
 }
@@ -301,6 +301,7 @@ function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
   return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
     (dropdown) =>
       dropdown.open === true &&
+      !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
 }

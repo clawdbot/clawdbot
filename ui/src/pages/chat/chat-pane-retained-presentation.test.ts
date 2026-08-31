@@ -16,6 +16,7 @@ import {
 import {
   clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
+  focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
@@ -185,21 +186,19 @@ describe("chat pane retained presentation lifecycle", () => {
   });
 
   it("ignores an open dropdown in an inactive retained pane", () => {
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    pane.active = true;
-    pane.presented = true;
+    const app = document.body.appendChild(document.createElement("openclaw-app"));
+    const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
     const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
+    activePane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
-    const target = pane.appendChild(document.createElement("main"));
-    target.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-    const retainedPane = document.body.appendChild(document.createElement("div"));
-    retainedPane.inert = true;
+    const target = activePane.appendChild(document.createElement("main"));
+    target.addEventListener("keydown", (event) =>
+      focusChatComposerFromPrintableKeydown(activePane, event),
+    );
+    const retainedPane = app.appendChild(document.createElement("div"));
+    retainedPane.setAttribute("inert", "");
     const retainedDropdown = retainedPane.appendChild(
       document.createElement("wa-dropdown"),
     ) as HTMLElement & { open: boolean };
@@ -212,7 +211,7 @@ describe("chat pane retained presentation lifecycle", () => {
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     } finally {
-      retainedPane.remove();
+      app.remove();
     }
   });
 
