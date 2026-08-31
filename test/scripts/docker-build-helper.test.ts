@@ -31,6 +31,7 @@ const OPENCLAW_E2E_INSTANCE_HELPER_PATH = "scripts/lib/openclaw-e2e-instance.sh"
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
+// Preserve the published 2026.8.1 query; the systemd fixture tests use the current reader.
 const SURVIVOR_SERVICE_SHOW_ARGS = [
   "--user",
   "show",
@@ -2832,26 +2833,20 @@ docker_e2e_docker_run_cmd run demo
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
     expectTextToIncludeAll(publishedRunner, [
-      "park_prepublish_authored_config",
-      "park-prepublish",
+      "park_update_restart_authored_config",
+      "park-restart-probe",
       "assert_prepublish_fixture_idle",
       "assert-no-requests",
-      "restore_prepublish_authored_config",
+      "restore_update_restart_authored_config",
       "config-parking.mjs",
       "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
       "OPENCLAW_CLAWHUB_URL=%s",
     ]);
-    expect(publishedRunner.indexOf("park_prepublish_authored_config")).toBeLessThan(
+    expect(publishedRunner.indexOf("park_update_restart_authored_config")).toBeLessThan(
       publishedRunner.lastIndexOf("assert_prepublish_fixture_idle"),
     );
     expect(publishedRunner.lastIndexOf("assert_prepublish_fixture_idle")).toBeLessThan(
-      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
-    );
-    expect(publishedRunner.lastIndexOf("write_update_restart_service_env")).toBeLessThan(
-      publishedRunner.lastIndexOf("install_update_restart_probe_gateway"),
-    );
-    expect(publishedRunner.lastIndexOf("install_update_restart_probe_gateway")).toBeLessThan(
-      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
+      publishedRunner.lastIndexOf("restore_update_restart_authored_config"),
     );
     for (const script of [runner, updateRestartAuth]) {
       expect(script).not.toContain("assert-no-requests");
@@ -3388,9 +3383,10 @@ fi
     expect(updateRestartAuth).toContain(
       'command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
     );
-    expect(updateRestartAuth).toContain(
-      'openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN',
-    );
+    expectTextToIncludeAll(updateRestartAuth, [
+      "command=(env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json)",
+      'openclaw_e2e_maybe_timeout "$command_timeout" "${command[@]}"',
+    ]);
   });
 
   it.skipIf(process.platform !== "linux").each(["published", "current"])(
@@ -3524,13 +3520,24 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(readFileSync(configPath, "utf8")).toBe(authored);
         const url = `http://127.0.0.1:${readFileSync(portPath, "utf8")}/readyz`;
+        if (lane === "published") {
+          expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(3);
+          expect(records()).toHaveLength(1);
+          expect(isProcessRunning(records()[0]!.pid)).toBe(false);
+          await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+          expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
+          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
+          expect(records()).toHaveLength(2);
+        }
         const initial = (await (
           await fetch(url, { signal: AbortSignal.timeout(1_000) })
         ).json()) as { pid: number; managed: boolean };
         expect(initial.managed).toBe(true);
         expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
-        for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
-        expect(records()).toHaveLength(2);
+        const expectedStarts = lane === "published" ? 3 : 2;
+        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++)
+          await delay(10);
+        expect(records()).toHaveLength(expectedStarts);
         const replacement = (await (
           await fetch(url, { signal: AbortSignal.timeout(1_000) })
         ).json()) as { pid: number; managed: boolean };
@@ -3604,6 +3611,7 @@ printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
 unset OPENCLAW_UPDATE_IN_PROGRESS
 unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
 unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -3756,6 +3764,7 @@ export REAL_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_P
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$TMPDIR/bin/config-parking-wrapper.mjs"
 mkdir -p "$OPENCLAW_STATE_DIR"
 printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -5518,8 +5527,8 @@ if (starts === 1) {
 
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$install_err"');
-    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$install_json"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$result_err"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$result_out"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_err"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_json"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$DOCTOR_LOG"');
@@ -5529,8 +5538,8 @@ if (starts === 1) {
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$log_file"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(updateRestartAuth).not.toContain('cat "$install_err"');
-    expect(updateRestartAuth).not.toContain('cat "$install_json"');
+    expect(updateRestartAuth).not.toContain('cat "$result_err"');
+    expect(updateRestartAuth).not.toContain('cat "$result_out"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_ERR"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_JSON"');
     expect(publishedRunner).not.toContain('cat "$DOCTOR_LOG"');
