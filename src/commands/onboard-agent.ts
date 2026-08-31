@@ -26,11 +26,9 @@ export function validateFirstOnboardingAgentName(value: string | undefined): str
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
   const roster = listAgentEntries(config);
   const entry = roster[0];
+  // Authored bare main entries are distinguished by snapshot provenance below.
   return (
-    roster.length === 1 &&
-    entry?.id === "main" &&
-    entry?.default === true &&
-    Object.keys(entry).every((key) => key === "id" || key === "default")
+    roster.length === 1 && entry?.id === "main" && Object.keys(entry).every((key) => key === "id")
   );
 }
 
