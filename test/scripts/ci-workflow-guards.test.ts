@@ -11638,7 +11638,7 @@ it("pins simple release admission owners before selected checkout and preserves 
       file: ".github/workflows/linux-app-release.yml",
       job: "validate_release",
       checkout: "Checkout selected tag",
-      validation: "Ensure tag commit is reachable from main",
+      validation: "Ensure tag commit is reachable from its release branch",
     },
     {
       file: ".github/workflows/macos-release.yml",
@@ -11665,6 +11665,32 @@ it("pins simple release admission owners before selected checkout and preserves 
   }
 
   const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  const linuxSteps = linux.jobs.validate_release.steps as WorkflowStep[];
+  expect(
+    linuxSteps.find(({ name }) => name === "Checkout trusted release tooling")?.with,
+  ).toMatchObject({
+    ref: "${{ github.workflow_sha }}",
+    path: ".release-tooling",
+    "persist-credentials": false,
+  });
+  const tooling = linuxSteps.find(({ name }) => name === "Verify trusted release tooling identity");
+  expect(tooling?.env).toMatchObject({
+    WORKFLOW_FULL_REF: "${{ github.ref }}",
+    WORKFLOW_REF: "${{ github.ref_name }}",
+    WORKFLOW_SHA: "${{ github.workflow_sha }}",
+  });
+  expect(tooling?.run).toContain(
+    "node .release-tooling/scripts/release-tooling-identity.mjs verify",
+  );
+  expect(tooling?.run).not.toContain("--allow-prevalidated-ref");
+  expect(linuxSteps.indexOf(tooling!)).toBeLessThan(
+    linuxSteps.findIndex(({ id }) => id === "ancestry"),
+  );
+  for (const name of ["build_linux", "build_macos", "build_windows"]) {
+    expect(linux.jobs[name].steps[0].with.ref).toBe(
+      "${{ needs.validate_release.outputs.tag_sha }}",
+    );
+  }
   const linuxBody = expectDefined(
     (linux.jobs.validate_release.steps as WorkflowStep[]).find(
       ({ name }) => name === workflows[0].validation,
@@ -11672,11 +11698,9 @@ it("pins simple release admission owners before selected checkout and preserves 
     "Linux release admission body",
   );
   expect(linuxBody).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
-  expect(linuxBody.match(/timeout=120/gu)).toHaveLength(1);
-  expect(linuxBody).toMatch(/"fetch",\s+"--quiet",\s+"origin",\s+"main",/u);
-  expect(linuxBody).toContain(
-    'run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")',
-  );
+  expect(linuxBody.match(/timeout=120/gu)).toHaveLength(2);
+  expect(linuxBody).toContain('"+refs/heads/main:refs/remotes/origin/main"');
+  expect(linuxBody).toContain('run_git(workspace, "merge-base", "--is-ancestor", sha, ref)');
 
   const macos = parse(readFileSync(workflows[1].file, "utf8"));
   const macosBody = expectDefined(
