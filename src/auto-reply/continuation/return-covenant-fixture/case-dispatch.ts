@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { createContinueDelegateTool } from "../../../agents/tools/continue-delegate-tool.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { deferSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
@@ -83,7 +84,7 @@ export function returnCovenantAuthorityFromDelegate(
 async function invokeReturnCovenantDelegateForm(params: {
   context: ReturnCovenantFixtureContext;
   state: ReturnCovenantCaseState;
-}): Promise<void> {
+}): Promise<{ bracketTokensAccumulated: boolean | null }> {
   const { context, state } = params;
   const task = `Return-covenant held completion for ${state.casePlan.id}/${state.form}`;
   if (state.form === "typed-tool") {
@@ -97,7 +98,7 @@ async function invokeReturnCovenantDelegateForm(params: {
       mode: state.casePlan.returnMode,
       targetSessionKey: state.casePlan.logicalSessionKey,
     });
-    return;
+    return { bracketTokensAccumulated: null };
   }
 
   const raw =
@@ -129,7 +130,7 @@ async function invokeReturnCovenantDelegateForm(params: {
       activeEntry = entry;
     },
   });
-  await handleContinuationSignal({
+  const handled = await handleContinuationSignal({
     cfg: context.config,
     sessionKey: state.casePlan.logicalSessionKey,
     followupRun: makeFollowupRun({
@@ -147,6 +148,7 @@ async function invokeReturnCovenantDelegateForm(params: {
     continuation: controller,
     getActiveSessionEntry: () => activeEntry,
   });
+  return { bracketTokensAccumulated: handled.bracketTokensAccumulated };
 }
 
 export async function enqueueHeldReturnCovenantDelivery(params: {
@@ -199,12 +201,24 @@ export async function dispatchReturnCovenantCase(params: {
   const flowIdsBefore = new Set(
     delegateFlowRecords.listForOwner(state.casePlan.logicalSessionKey).map((flow) => flow.flowId),
   );
-  await invokeReturnCovenantDelegateForm(params);
+  const invocation = await invokeReturnCovenantDelegateForm(params);
   const newFlows = delegateFlowRecords
     .listForOwner(state.casePlan.logicalSessionKey)
     .filter((flow) => !flowIdsBefore.has(flow.flowId));
   if (newFlows.length !== 1) {
-    throw new Error(`delegate form created ${newFlows.length} flow rows instead of one`);
+    throw new Error(
+      `delegate form created ${newFlows.length} flow rows instead of one: ${stableStringify({
+        bracketTokensAccumulated: invocation.bracketTokensAccumulated,
+        ownerFlows: delegateFlowRecords
+          .listForOwner(state.casePlan.logicalSessionKey)
+          .map((flow) => ({
+            controllerId: flow.controllerId,
+            flowId: flow.flowId,
+            revision: flow.revision,
+            status: flow.status,
+          })),
+      })}`,
+    );
   }
   const [flow] = newFlows;
   let delegate: PendingContinuationDelegate | undefined;
