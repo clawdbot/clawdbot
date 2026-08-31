@@ -270,7 +270,8 @@ The slowest Node test families are split or balanced so each job stays small wit
 - On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
 
 The standalone UI suite uses the same group executor and cache leaf as its
-bounded four-file seed in the trusted warmer. It retains three workers, the
+bounded four-file seed in the trusted warmer. It retains the root Node worker
+limit of three; Chromium uses its project default. It preserves the
 complete UI inventory, and each project's isolation and cleanup policy.
 Tooling stripes install Go only when their selected files include the docs
 translation test; historical whole-config plans retain their existing setup.
