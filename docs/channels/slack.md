@@ -73,7 +73,7 @@ One Slack account can receive messages and interactions from every workspace
 covered by an Enterprise Grid org-wide installation. Choose direct Socket Mode
 or HTTP Request URLs; relay mode is not supported for enterprise accounts. Both
 least-privilege manifests below enable the Enterprise message, mention,
-reaction, pin, channel-created, and channel-renamed event paths, immediate
+reaction, pin, bookmark, channel-created, and channel-renamed event paths, immediate
 replies, listener-owned status reactions, Slack interactivity for Block Kit
 actions and modal submissions, and the single `/openclaw` slash command.
 
@@ -112,6 +112,8 @@ actions and modal submissions, and the single `/openclaw` slash command.
         "mpim:history",
         "mpim:read",
         "pins:read",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "users:read"
@@ -210,6 +212,8 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "mpim:history",
         "mpim:read",
         "pins:read",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "users:read"
@@ -1228,8 +1232,11 @@ Existing apps that already use `features.assistant_view` can keep their current 
     - `users:read`
     - `reactions:read`
     - `pins:read`
+    - `bookmarks:read`
     - `emoji:read`
     - `search:read` (if you depend on Slack search reads)
+
+    For user identity (`identity: "user"`), the user token authorizes both reads and writes (`extensions/slack/src/accounts.ts:47-55`), so add `bookmarks:write` (and `pins:write`, `reactions:write`, `chat:write` as needed) for the corresponding write operations.
 
   </Accordion>
 </AccordionGroup>
@@ -1311,7 +1318,7 @@ Use `bookmark` to manage links on a channel's bookmark bar (the channel header s
 }
 ```
 
-`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface, and the app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`.
+`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface, and the app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`. The Recommended bot manifests, the Enterprise Grid org-wide manifests, and the optional user-token scope list above all declare these scopes; existing installations must add them and reinstall the app before using the `bookmark` action.
 
 ## Access control and routing
 

@@ -251,6 +251,19 @@ describe("Slack bookmark action mock-gateway trace", () => {
     expect(calls).toEqual([]);
   });
 
+  it("rejects a bookmark list on a non-allowlisted channel before any wire call", async () => {
+    // The current conversation is C123 (authorized). A delegated read targeting
+    // C999, which the channel policy explicitly disables, must be denied by the
+    // same assertSlackReadTargetAllowed gate the pin/list read path uses before
+    // any bookmarks.* wire call reaches the recording WebClient.
+    const { calls, error } = await runBookmarkScenario(
+      { channelId: "C999" },
+      slackConfig({ channels: { C999: { enabled: false } } }),
+    );
+    expect(error?.message).toBe("Slack read target channel is not allowed.");
+    expect(calls).toEqual([]);
+  });
+
   it("emits a kind=mock-gateway verdict JSON when OPENCLAW_BOOKMARK_PROOF=1", async () => {
     const add = await runBookmarkScenario({
       op: "add",
@@ -276,6 +289,10 @@ describe("Slack bookmark action mock-gateway trace", () => {
       { op: "add", channelId: "C123", title: "Runbook", link: "https://runbook.example" },
       slackConfig({ actions: { bookmarks: false } }),
     );
+    const unauthorized = await runBookmarkScenario(
+      { channelId: "C999" },
+      slackConfig({ channels: { C999: { enabled: false } } }),
+    );
     const verdict = buildBookmarkProofVerdict(
       [
         { name: "add", calls: add.calls, gateDisabled: false },
@@ -287,6 +304,12 @@ describe("Slack bookmark action mock-gateway trace", () => {
           calls: gated.calls,
           gateDisabled: true,
           error: gated.error?.message,
+        },
+        {
+          name: "unauthorized-target",
+          calls: unauthorized.calls,
+          gateDisabled: false,
+          error: unauthorized.error?.message,
         },
       ],
       headSha,
