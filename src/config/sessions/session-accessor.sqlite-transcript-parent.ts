@@ -6,8 +6,8 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-transcript-store.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import {
   isSessionTranscriptLeafControl,
