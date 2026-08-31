@@ -4,18 +4,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
-
-export type WorkerPlacementDispatchAdmission = <T>(
-  request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
-  run: (signal?: AbortSignal) => Promise<T>,
-  authorize?: () => void,
-) => Promise<T>;
-
-/** Canonical admission rejected the session owner, not a caller or process cancellation. */
-export class WorkerPlacementAdmissionTargetError extends Error {
-  readonly code = "invalid_state";
-}
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementDispatchAdmission,
+} from "./service-contract.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,

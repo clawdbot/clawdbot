@@ -1,20 +1,20 @@
-import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 
 type WorkerReclaimStartPlacement = Extract<
-  WorkerDispatchPlacement,
+  WorkerSessionPlacementRecord,
   { state: "draining" | "reclaimed" }
 >;
 export type WorkerReclaimPlacement = Extract<
-  WorkerDispatchPlacement,
+  WorkerSessionPlacementRecord,
   { state: "local" | "reclaimed" }
 >;
 
 export type WorkerPlacementCancellationTarget = Readonly<
-  Pick<WorkerDispatchPlacement, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
+  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
 >;
 
 export function matchesWorkerPlacementTarget(

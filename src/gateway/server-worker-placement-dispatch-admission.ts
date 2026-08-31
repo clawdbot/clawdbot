@@ -4,7 +4,7 @@ import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-re
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
-} from "./worker-environments/placement-dispatch-coordinator.js";
+} from "./worker-environments/service-contract.js";
 
 export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,

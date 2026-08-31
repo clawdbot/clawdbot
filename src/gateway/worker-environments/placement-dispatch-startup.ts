@@ -4,7 +4,6 @@ import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js"
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { WorkerPlacementAdmissionTargetError } from "./placement-dispatch-coordinator.js";
 import type {
   PlacementFailureActions,
   WorkerActivationBarrier,
@@ -15,9 +14,10 @@ import type {
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import type {
-  WorkerPlacementAuthorization,
-  WorkerPlacementDispatchRequest,
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementAuthorization,
+  type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
 import type { WorkerEnvironmentReconcileCore, WorkerEnvironmentService } from "./service.js";
 
