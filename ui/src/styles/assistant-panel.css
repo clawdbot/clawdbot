@@ -113,20 +113,6 @@ openclaw-assistant-panel {
   font-weight: 600;
 }
 
-.cp-agent {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.cp-agent select {
-  min-width: 0;
-  flex: 1;
-}
-
 .cp > openclaw-home-session {
   flex-direction: column;
   min-width: 0;

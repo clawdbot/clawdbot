@@ -81,7 +81,7 @@ describe("assistant panel", () => {
   });
 
   it.each([false, true])(
-    "pins Home independently of work navigation and suppresses only the same conversation (global=%s)",
+    "follows the sidebar agent switcher and suppresses only the selected conversation (global=%s)",
     async (global) => {
       const { context, panel, store } = await mountPanel({ global });
       const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
@@ -102,42 +102,49 @@ describe("assistant panel", () => {
       expect(home()?.agentId).toBe("main");
       expect(refresh).not.toHaveBeenCalled();
       expect(chatInputOwnerForContext(context).current).toBe("dock");
-      expect([...panel.querySelectorAll("option")].map((option) => option.value)).toEqual([
-        "main",
-        "research",
-      ]);
+      // One switcher: the dock renders no agent selector of its own.
+      expect(panel.querySelector("select")).toBeNull();
 
+      // The dock follows the sidebar agent switcher.
       context.agentSelection.state.selectedId = "research";
-      panel.pageSessionKey = global ? "global" : "agent:research:home";
+      panel.pageSessionKey = "agent:research:other-task";
       await panel.updateComplete;
-      expect(home()?.agentId).toBe("main");
+      expect(home()?.agentId).toBe("research");
+      expect(home()?.sessionKey).toBe(global ? "global" : "agent:research:home");
       expect(panel.assistantPanelOpen).toBe(true);
 
-      panel.pageSessionKey = global ? "global" : "agent:main:home";
-      panel.pageAgentId = "main";
+      // System agents stay valid chat targets elsewhere but never become the dock target.
+      context.agentSelection.state.selectedId = "care";
+      panel.pageSessionKey = "agent:research:task";
+      await panel.updateComplete;
+      expect(home()?.agentId).toBe("main");
+      context.agentSelection.state.selectedId = "research";
+
+      // The selected agent's own Home page suppresses the dock; leaving restores it.
+      panel.pageSessionKey = global ? "global" : "agent:research:home";
       await panel.updateComplete;
       expect(home()).toBeNull();
       expect(chatInputOwnerForContext(context).current).toBe("page");
       panel.sessionPage = false;
       await panel.updateComplete;
-      expect(home()?.agentId).toBe("main");
+      expect(home()?.agentId).toBe("research");
 
       context.gateway.snapshot.phase = "offline";
       context.gateway.snapshot.hello = null;
       context.agents.state.agentsList = null;
       panel.pageSessionKey = "agent:research:offline-task";
       await panel.updateComplete;
-      expect(home()?.sessionKey).toBe(global ? "global" : "agent:main:home");
-      expect(home()?.agentId).toBe("main");
+      expect(home()?.sessionKey).toBe(global ? "global" : "agent:research:home");
+      expect(home()?.agentId).toBe("research");
       window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
       await panel.updateComplete;
-      expect(home()?.agentId).toBe("main");
+      expect(home()?.agentId).toBe("research");
       panel.remove();
       expect(chatInputOwnerForContext(context).current).toBe("page");
     },
   );
 
-  it("restores the explicitly selected Home agent after remount and shares one dock with Ask", async () => {
+  it("restores the Home destination after remount and shares one dock with Ask", async () => {
     const { panel } = await mountPanel();
     panel.homeAvailable = true;
     panel.custodianSuppressed = false;
@@ -145,10 +152,7 @@ describe("assistant panel", () => {
     window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
     await vi.dynamicImportSettled();
     await panel.updateComplete;
-    const select = panel.querySelector("select")!;
-    select.value = "research";
-    select.dispatchEvent(new Event("change"));
-    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-home-session")).not.toBeNull();
     panel.remove();
 
     const { panel: replacement } = await mountPanel();
@@ -158,7 +162,7 @@ describe("assistant panel", () => {
     const home = replacement.querySelector<HTMLElement & { agentId: string }>(
       "openclaw-home-session",
     );
-    expect(home?.agentId).toBe("research");
+    expect(home?.agentId).toBe("main");
     expect(replacement.assistantPanelOpen).toBe(true);
     window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
     await replacement.updateComplete;

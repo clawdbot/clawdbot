@@ -32,9 +32,9 @@ coding/CLI sessions under **Coding**.
 
 Select **Talk to your Home agent** in the sidebar footer to open Home beside
 your current page. The assistant sidebar can dock on the right or bottom.
-Choose **Home agent** to pin a different agent; navigating to another task or
-agent does not change that choice. **Ask OpenClaw** remains a separate
-system-care conversation in the same sidebar.
+It follows the agent selected in the sidebar's agent switcher, so there is one
+place to change agents. **Ask OpenClaw** remains a separate system-care
+conversation in the same sidebar.
 
 The dock uses your real Home conversation, including its history, tools,
 approvals, and message queue. **Open Home full page** opens that conversation

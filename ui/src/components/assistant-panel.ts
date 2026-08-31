@@ -73,7 +73,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property() pageAgentId = "";
   @property({ attribute: false }) workContext: ChatWorkContext | undefined;
   @state() private destination: AssistantDestination = "custodian";
-  @state() private pinnedAgentId = "";
   private readonly homeLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
@@ -121,7 +120,16 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const wasOpen = this.dockLayout.open;
     if (changed.has("context") && this.context) {
       this.contextCleanup?.();
-      this.contextCleanup = subscribeChatWorkContext(this.context, () => this.requestUpdate());
+      const cleanups = [
+        subscribeChatWorkContext(this.context, () => this.requestUpdate()),
+        // The sidebar switcher owns agent choice; the dock follows it.
+        this.context.agentSelection.subscribe(() => this.requestUpdate()),
+      ];
+      this.contextCleanup = () => {
+        for (const cleanup of cleanups) {
+          cleanup();
+        }
+      };
     }
     const scope = this.context?.gateway.connection.gatewayUrl ?? "";
     if (scope !== this.targetScope) {
@@ -134,7 +142,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         );
       } catch {}
       this.destination = saved?.destination === "home" ? "home" : "custodian";
-      this.pinnedAgentId = typeof saved?.agentId === "string" ? saved.agentId : "";
     }
     if (this.context?.gateway.snapshot.phase === "connected") {
       // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
@@ -183,7 +190,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     try {
       getSafeLocalStorage()?.setItem(
         this.targetStorageKey,
-        JSON.stringify({ destination: this.destination, agentId: this.homeTarget.agentId }),
+        JSON.stringify({ destination: this.destination }),
       );
     } catch {}
   }
@@ -192,8 +199,12 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const defaults = this.homeDefaults;
     const agents = listSelectableAgents(defaults.agentsList?.agents ?? []);
     const defaultId = resolveUiDefaultAgentId(defaults);
+    // The sidebar switcher (agentSelection) is the only agent chooser; the dock
+    // shows the selected agent's Home and never grows a second switcher.
+    const rawSelectedId = this.context?.agentSelection.state.selectedId;
+    const selectedId = rawSelectedId ? normalizeAgentId(rawSelectedId) : "";
     const agentId =
-      agents.find((agent) => agent.id === this.pinnedAgentId)?.id ??
+      agents.find((agent) => agent.id === selectedId)?.id ??
       agents.find((agent) => agent.id === defaultId)?.id ??
       agents[0]?.id ??
       defaultId;
@@ -236,9 +247,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
 
   private openDestination(destination: AssistantDestination): void {
     this.destination = destination;
-    if (destination === "home") {
-      this.pinnedAgentId = this.homeTarget.agentId;
-    }
     this.dockLayout.setSuppressed(this.suppressed);
     if (this.available) {
       // Keep explicit open intent even when the same Home conversation owns the page.
@@ -333,7 +341,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
     const dock = this.dockLayout.dock;
     const home = this.homeTarget;
-    const agents = listSelectableAgents(this.homeDefaults.agentsList?.agents ?? []);
     const homeState = this.homeLoader.visibleState;
     const workContext =
       this.context && this.workContext
@@ -370,6 +377,16 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             )}
           </div>
           <div class="rail-header__actions cp-actions">
+            ${this.destination === "home"
+              ? html`<button
+                  class="rail-header__action cp-icon"
+                  type="button"
+                  aria-label=${t("assistantPanel.openHome")}
+                  @click=${() => this.openHomePage()}
+                >
+                  ${icons.maximize}
+                </button>`
+              : nothing}
             <button
               class="rail-header__action cp-icon"
               type="button"
@@ -391,48 +408,19 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
           </div>
         </header>
         ${this.destination === "home"
-          ? html` <label class="cp-agent"
-                >${t("assistantPanel.agent")}
-                <select
-                  aria-label=${t("assistantPanel.agent")}
-                  .value=${home.agentId}
-                  @change=${(event: Event) => {
-                    if (!(event.currentTarget instanceof HTMLSelectElement)) {
-                      return;
-                    }
-                    this.pinnedAgentId = event.currentTarget.value;
-                    this.persistTarget();
-                  }}
-                >
-                  ${agents.map(
-                    (agent) =>
-                      html`<option value=${agent.id} ?selected=${agent.id === home.agentId}>
-                        ${agent.identity?.name ?? agent.name ?? agent.id}
-                      </option>`,
-                  )}
-                </select>
-                <button
-                  type="button"
-                  class="rail-header__action"
-                  aria-label=${t("assistantPanel.openHome")}
-                  @click=${() => this.openHomePage()}
-                >
-                  ${icons.maximize}
-                </button>
-              </label>
-              ${isOptionalElementDefined(HOME_SESSION_ELEMENT)
-                ? html`<openclaw-home-session
-                    .sessionKey=${home.sessionKey}
-                    .agentId=${home.agentId}
-                    .workContext=${workContext}
-                  ></openclaw-home-session>`
-                : homeState
-                  ? renderLazyElementState(
-                      homeState,
-                      () => this.homeLoader.retry(),
-                      () => this.setOpen(false),
-                    )
-                  : nothing}`
+          ? html`${isOptionalElementDefined(HOME_SESSION_ELEMENT)
+              ? html`<openclaw-home-session
+                  .sessionKey=${home.sessionKey}
+                  .agentId=${home.agentId}
+                  .workContext=${workContext}
+                ></openclaw-home-session>`
+              : homeState
+                ? renderLazyElementState(
+                    homeState,
+                    () => this.homeLoader.retry(),
+                    () => this.setOpen(false),
+                  )
+                : nothing}`
           : html`<openclaw-custodian-surface
               .store=${this.store}
               .onboarding=${this.store.activeVariant === "onboarding"}
