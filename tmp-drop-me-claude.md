@@ -156,6 +156,7 @@ this evidence commit.
 | Safe lane                       | `codeagent/129388-0ed59cb6-upstream-8e32494f-gates-absorb-20260831`                                                      | `0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` | local = `origin/` tracking = server before this journal commit                                                          |
 | Accepted savegame               | `savegame/129388-semantic-tree-valid-trailer-reemit-0ed59cb6-20260830T1615Z`                                             | `0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` | local `origin/` tracking = server; immutable rollback/loss-traversal anchor                                             |
 | CI/workflow                     | `karmaterminal/openclaw-bootstrap:codeagent/129388-primitive-core-semantic-test-routing-cure-20260830`                   | `3c5acdb72e94755f469fc6cc3276d5b8623d5b49` | bootstrap `origin/` tracking = server; tree `0d3fd64e035e1f812bb8a5c6d8770a848ff23da6`                                  |
+| CI/workflow successor           | `karmaterminal/openclaw-bootstrap:codeagent/129388-primitive-core-routing-gap-cure-20260831`                             | `38a833154cba6a9d562302799bff27941aa39dd3` | local = `origin/` tracking = server; tree `91674b4f43ff18454db3c035e5032cf7bce0894d`; exact Gate 2 routing cure         |
 | Presentation                    | `karmaterminal/openclaw:codeagent/85651-upstream-1ba243c8-gates`                                                         | `00c7f721a55554d0b9228337cc8bc6bec88f9e9f` | local object = `origin/` tracking = server; read-only, no presentation operation authorized                             |
 | Docs/proof corpus               | `karmaterminal/karmaterminal-openclaw-docs:codeagent/129388-0ed59cb6-full-exact-proof-20260830`                          | `ba8d344c1240275a9c54042294b8129eea4e497b` | fetched local object = server branch; tree `ef41579bd847b4da2719b99a229ac66624493bb5`; read-only                        |
 | Reviewed harness implementation | `karmaterminal/karmaterminal-openclaw-docs:savegame/129388-harness-sql-comment-tokenizer-cure-15e47942-20260830T223855Z` | `15e479424518b4831c95511873f5c6b81ad52a79` | fetched local object = server savegame; tree `5b1ccbaed5f5bebb28459680db1c61cd6414a0cb`; read-only                      |
@@ -172,6 +173,9 @@ Pinned GATES and runtime identities:
 | `tools/feature-cores-byte-check.sh`                 | blob `4e86ba83621cec98573c5173d91e426f72e1d321`                 | identical on bootstrap main and reviewed workflow SHA                                                               |
 | `tools/drift-cure-gate.primitive-cores.txt`         | blob `78b89718ca8c2cb18c3f085678c7246049cd69d6`                 | reviewed workflow branch; 35 explicit paths plus 3 tombstones                                                       |
 | `tests/test-drift-cure-primitive-semantic-tests.sh` | blob `0afa2e9b8363eaa70fae25fe2d1fde0cdf174b1a`                 | reviewed workflow branch                                                                                            |
+| Gate 2 successor runbook                            | blob `c1f55f1fd2784b2823f36780ea2e86607e61f67c`                 | bootstrap successor `38a833154cba6a9d562302799bff27941aa39dd3`                                                      |
+| Gate 2 successor primitive inventory                | blob `387ff9ce4e9f3160468a1dfa0eb98e7feddcc976`                 | 33 live paths plus three tombstones; mutable runner test/support rows removed                                       |
+| Gate 2 successor semantic-routing regression        | blob `f1d49236f11124597dee15628192adb7bd56fc4d`                 | four shared test/support surfaces, rejected-inventory negative control, production-primitive negative control       |
 | `.github/workflows/openclaw-local-ci.yml`           | blob `8d9d16d7b6e6c3fb581d7a102003f8c59bee8dc3`                 | identical on bootstrap main and reviewed workflow SHA                                                               |
 | `scripts/prepush-ci.sh`                             | blob `766533b6c57409f939ace2b193c6ddab6b5bd720`                 | accepted product candidate; fallback not authorized for this cycle                                                  |
 | `scripts/run-vitest.mjs`                            | blob `f71cb1c62b4272abac1c7059cb925e4afdbacc97`                 | accepted product candidate                                                                                          |
@@ -317,33 +321,36 @@ ambient OpenClaw fallback.
 
 ### Gate 2 primitive disposition
 
-The reviewed inventory at bootstrap
-`3c5acdb72e94755f469fc6cc3276d5b8623d5b49` reports 38 invariants:
-33 direct byte passes, seven exact upstream projections (overlapping those
-33), three tombstones, and two rejects:
+The original reviewed inventory at bootstrap
+`3c5acdb72e94755f469fc6cc3276d5b8623d5b49` reported two rejects:
 
 | Path                                                                     | Canonical result                                                      | Disposition                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/agents/embedded-agent-runner/run.continuation-opts-forward.test.ts` | Reject: candidate-only test change                                    | Route to semantic Gate 2.5. Its only material delta adopts the state-backed `createOverflowRunParams` API used by 32 current harness consumers. Restoring the old static `/tmp/workspace` fixture would reintroduce leaked shared state.         |
 | `src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts`    | Reject: upstream patch cannot apply cleanly to the accepted candidate | Route to semantic Gate 2.5. The file is test support, and its current composed contract is exercised by continuation integration, overflow, auth, lifecycle, and compaction owners. A whole-file primitive cannot represent a semantic conflict. |
 
-This is the same gate-input class already fixed by the reviewed bootstrap
-commit for `compact-reasons.test.ts` and `compact.hooks.test.ts`. The product
-lane does not duplicate old harnesses, restore stale test-only APIs, or mutate
-the read-only bootstrap workflow. The external prerequisite is a reviewed
-bootstrap successor removing these two mutable test/test-support rows and
-adding them to the existing semantic-routing negative/successor fixture. The
-canonical Gate 2 red remains explicit until that external cure exists.
+Bootstrap successor `38a833154cba6a9d562302799bff27941aa39dd3`
+removes both mutable rows from whole-file enforcement, includes plain
+`.harness.ts` support in Gate 2.5 enumeration, and extends the existing
+semantic-routing fixture to all four shared test/support surfaces. The exact
+`3c5acdb7` inventory is the deterministic negative control: the successor test
+rejects it at `run.continuation-opts-forward.test.ts`. The successor fixture
+then passes its semantic-merge and production-primitive controls.
+
+Canonical Gate 2 against product `f63ff5a87c41d28dadba1b069654d9c66b4c9dee`
+is green: 36 invariants, zero failures, seven exact upstream projections,
+three tombstones, and zero empty patterns. No old harness, stale API, or static
+`/tmp/workspace` state was restored.
 
 ### Gate 2.7 complete mixed-row ledger
 
-The post-merge classifier reports zero `FROZEN-STALE` files and 35
+The repaired classifier reports zero `FROZEN-STALE` files and 36
 `MIXED-CLOBBER` heuristic rows. Every row is dispositioned; none requests an
 upstream restoration.
 
 | Path                                                                                                      | Dropped | Disposition      | Exact reason / owner proof                                                                                                                                                      |
 | --------------------------------------------------------------------------------------------------------- | ------: | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config/assertion-safety-baseline.txt`                                                                    |       1 | KEEP-COMPOSED    | Shrink-only deletion for an assertion removed by typed transcript ownership; assertion ratchet green.                                                                           |
+| `config/assertion-safety-baseline.txt`                                                                    |       2 | KEEP-COMPOSED    | Shrink-only deletions for assertions removed by typed transcript and message-usage ownership; 12,823-entry assertion ratchet green.                                             |
 | `scripts/plugin-sdk-surface-report.mts`                                                                   |       2 | KEEP-COMPOSED    | Numeric budget lines were recomputed from the merged graph; SDK surface check reports the actual 147/4,370/2,596 public surface.                                                |
 | `scripts/protocol-gen.ts`                                                                                 |       1 | KEEP-COMPOSED    | Upstream `ProtocolSchemas` parameter was absorbed into the canonical document-builder owner; protocol generation/checks are drift-free.                                         |
 | `src/agents/apply-patch.test.ts`                                                                          |       1 | KEEP-COMPOSED    | `withTempDir` was renamed consistently to `withTestDir`; behavior and canonical-path cleanup are unchanged.                                                                     |
@@ -365,6 +372,7 @@ upstream restoration.
 | `src/auto-reply/reply/agent-runner-execution.ts`                                                          |       1 | KEEP-COMPOSED    | Abort handling is the current closed outcome path; terminal callback selection was simplified without changing precedence.                                                      |
 | `src/auto-reply/reply/agent-runner-execution-contract.test.ts`                                            |       1 | KEEP-COMPOSED    | Cumulative `agentMeta.compactionCount` remains diagnostic; the fixture now supplies the explicit `contextManagement.lastTurnCompactions` fact owned by current-turn accounting. |
 | `src/auto-reply/reply/agent-runner-result-accounting.test.ts`                                             |       3 | KEEP-COMPOSED    | Generic usage mock was replaced by canonical owner behavior and durable compaction facts; 14/14 pass.                                                                           |
+| `src/auto-reply/reply/session-usage.ts`                                                                   |       2 | KEEP-COMPOSED    | Usage writes retain upstream transaction fencing through the storage-neutral `updateSessionEntry` facade without consuming continuation persistence faults; 97/97 pass.         |
 | `src/auto-reply/reply/session-updates.ts`                                                                 |       2 | KEEP-COMPOSED    | Generic entry spreading moved to exact lifecycle mutation and authoritative timestamps; compaction/accounting tests pass.                                                       |
 | `src/gateway/server-methods/usage.sessions-usage.test.ts`                                                 |      29 | KEEP-COMPOSED    | Fixed-store/detail cases moved to `usage.sessions-usage-details.test.ts` and shared support; aggregate owner remains nonduplicative; 21/21 pass.                                |
 | `src/infra/heartbeat-runner-execution.ts`                                                                 |       1 | KEEP-COMPOSED    | Internal-turn source classification moved to the invoke/run split; heartbeat owner suite passes.                                                                                |
@@ -432,12 +440,115 @@ required behavioral fire.
 Totals: 10 `TRANSPOSE`, 27 `RERUN`, one `BLOCKED-ON-DRIVER`, zero
 `INVALIDATED`. The missing driver blocks covenant proof only; it does not
 erase byte-stable guard credit or the immutable historical corpus.
+The `f63ff5a8` absorb-owner repair changes only owners already classified
+`RERUN`; no `TRANSPOSE` row or immutable input changed.
 
 ### External prerequisite routing
 
-| Prerequisite            | Local state                                                                                                                   | Required owner/action                                                                                                                                                                         |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gate 2 semantic routing | Product behavior is green; canonical inventory rejects two mutable test/test-support rows.                                    | Bootstrap owner publishes and reviews a successor to `3c5acdb7` that routes both rows to Gate 2.5, then reruns its synthetic negative/successor test. Product lane does not modify bootstrap. |
-| Telegram Test Server    | No authenticated `convex` executable and no `OPENCLAW_QA_CONVEX_SITE_URL` / `OPENCLAW_QA_CONVEX_SECRET_CI` pair is available. | Credentialed Telegram QA lane runs doctor and the reaction/system-event recipe against this exact product SHA, preserving `events.ndjson`, summary, gateway log, and provider requests.       |
-| Codex autoreview        | Codex v0.150.1 aborts before pass 1 with `401 invalid_refresh_token`.                                                         | Seat owner reauthenticates Codex and reruns the exact branch review with GPT-5.6 Sol; no alternate engine is substituted.                                                                     |
-| Return covenant         | Product fixture driver absent in both exact parents and successor.                                                            | Product-driver lane adds the accepted `openclaw.k6.return-covenant-fixture-driver.v1` seam, then fires the 12-case typed-tool/bracket matrix.                                                 |
+| Prerequisite            | Local state                                                                                                                   | Required owner/action                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gate 2 semantic routing | Implemented and pushed at bootstrap `38a833154cba6a9d562302799bff27941aa39dd3`; canonical product check is 36/36 green.       | Scribe/cohort reviews and lands the exact bootstrap successor. Until then Mode-B must pin its published branch; no merged-canon claim is made.                                          |
+| Telegram Test Server    | No authenticated `convex` executable and no `OPENCLAW_QA_CONVEX_SITE_URL` / `OPENCLAW_QA_CONVEX_SECRET_CI` pair is available. | Credentialed Telegram QA lane runs doctor and the reaction/system-event recipe against this exact product SHA, preserving `events.ndjson`, summary, gateway log, and provider requests. |
+| Codex autoreview        | A fresh 37,254-byte uncommitted repair bundle aborts before review with Codex v0.150.1 `401 invalid_refresh_token`.           | Seat owner reauthenticates Codex and reruns the exact branch review with GPT-5.6 Sol; no alternate engine is substituted.                                                               |
+| GitNexus                | Fork source is `3c1e686edfc1acaac882927cada121ddd7c47bcc`; the required prebuilt fork CLI is absent.                          | Install the prebuilt `karmaterminal/GitNexus` fork at this exact source identity before any GitNexus result can be credited.                                                            |
+| Return covenant         | Product fixture driver absent in both exact parents and successor.                                                            | Product-driver lane adds the accepted `openclaw.k6.return-covenant-fixture-driver.v1` seam, then fires the 12-case typed-tool/bracket matrix.                                           |
+
+### Mode-B 33374343233 terminal classification and absorb repair
+
+Mode-B run `33374343233` executed product
+`cc513ec0acf81d36dde3f1c86925473f8665469b` with workflow
+`3c5acdb72e94755f469fc6cc3276d5b8623d5b49`. It ended red: 181,239 passed,
+32 failed, three load flakes greened, 29 deterministic failures, 163 shard
+summaries, 58 successful jobs, 12 failed jobs including aggregate, one
+cancelled job, and four skipped jobs. Routing planned all 167 shards across 69
+jobs but validated only 65 receipts.
+
+The four exact receipt gaps are:
+
+| Missing batch      | Classification                                                                                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hosted-batch-009` | Hosted `extensions` shard was repeatedly SIGKILLed on the 2-core/7-GB worker; the job was cancelled after 88 minutes and uploaded no `batch-rc` or routing receipt.                                    |
+| `local-batch-058`  | ARM64 dependency seeding failed before tests: the Matrix native download hit `ECONNREFUSED` / `ETIMEDOUT`, then dependency script 0.6.6 threw `ReferenceError: err is not defined`; no receipt formed. |
+| `dist-batch-068`   | `core-runtime-tui-pty` was skipped because the static gate failed and test fanout after static failure was disabled.                                                                                   |
+| `dist-batch-069`   | `core-support-boundary` was skipped by the same static-gate fanout policy.                                                                                                                             |
+
+The static artifact passed UI raw-window, protocol generation, plugin assets,
+and strict build smoke. Its aggregate `pnpm check` failed only because the
+core Oxlint subprocess returned exit 1 after 205 seconds without emitting a
+diagnostic; exact local `pnpm check` at the product SHA was green. No candidate
+byte is attributed from a diagnostic-free remote exit.
+
+Classification terms:
+
+- `REPAIRED-ABSORB`: deterministic at `cc513ec0`, green at the exact owning
+  parent, and green after the `f63ff5a8` owner repair.
+- `INHERITED-0ED`: the same exact row is already present in accepted-candidate
+  Mode-B `33323536011`; it is not caused by this absorb.
+- `NONREPRO-LOAD` / `NONREPRO-ORDER`: absent from the prior candidate
+  deterministic set and green under an exact-head focused rerun.
+
+|   # | Exact deterministic failure                                                                                                                          | Classification  |
+| --: | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+|   1 | `src/agents/subagents/registry/subagent-control.retirement.test.ts` — retained successor after failed rollback                                       | REPAIRED-ABSORB |
+|   2 | `extensions/diagnostics-otel/src/codex-dynamic-tool-origin.integration.test.ts` — exports Codex dynamic continuation origins                         | INHERITED-0ED   |
+|   3 | `src/gateway/session-utils.queued-collector.test.ts` — second collector create projection remains queued                                             | REPAIRED-ABSORB |
+|   4 | `extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts` — default credential wait without harness cancellation                           | NONREPRO-LOAD   |
+|   5 | `src/gateway/server.chat.acp-completion.test.ts` — runtime timeout completion ownership                                                              | INHERITED-0ED   |
+|   6 | `src/gateway/server.chat.acp-completion.test.ts` — suppressed runtime timeout completion ownership                                                   | INHERITED-0ED   |
+|   7 | `src/auto-reply/reply/agent-runner.continuation-work-span.reservation.test.ts` — preserves concurrent child-token updates                            | REPAIRED-ABSORB |
+|   8 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — failed durable reservation does not arm work                                    | REPAIRED-ABSORB |
+|   9 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — disablement during persistence rolls reservation back                           | REPAIRED-ABSORB |
+|  10 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — hot-reloaded limits after durable reservation                                   | REPAIRED-ABSORB |
+|  11 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — live limit increase cannot exceed durable reservation                           | REPAIRED-ABSORB |
+|  12 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — parked work survives zero new reservation slots                                 | REPAIRED-ABSORB |
+|  13 | `src/auto-reply/reply/agent-runner.continuation-work-span.test.ts` — hedge-fired delegate remains recoverable after persistence failure              | REPAIRED-ABSORB |
+|  14 | `src/auto-reply/reply/agent-runner.media-paths.test.ts` — final MEDIA path normalization                                                             | NONREPRO-LOAD   |
+|  15 | `src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.reasoning-delivery.test.ts` — streamed commentary item identity                | REPAIRED-ABSORB |
+|  16 | `src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.reasoning-delivery.test.ts` — snapshot-only commentary item identity           | REPAIRED-ABSORB |
+|  17 | `src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.reasoning-delivery.test.ts` — equal snapshot-only commentary item identity     | REPAIRED-ABSORB |
+|  18 | `src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts` — unknown streamed cost remains unknown | REPAIRED-ABSORB |
+|  19 | `src/agents/subagent-announce.crosssession-gate.test.ts` — case 7 disabled bracket target                                                            | INHERITED-0ED   |
+|  20 | `src/agents/subagent-announce.crosssession-gate.test.ts` — case 10 enabled bracket fanout                                                            | NONREPRO-ORDER  |
+|  21 | `test/scripts/full-release-validation-state.test.ts` — monotonically newer exact-child attempt                                                       | INHERITED-0ED   |
+|  22 | `test/scripts/full-release-validation-state.test.ts` — preserve snapshot through HTTP 503                                                            | INHERITED-0ED   |
+|  23 | `test/scripts/full-release-validation-state.test.ts` — preserve snapshot through HTTP 429                                                            | INHERITED-0ED   |
+|  24 | `test/scripts/full-release-validation-state.test.ts` — preserve snapshot through HTTP 403                                                            | INHERITED-0ED   |
+|  25 | `test/scripts/full-release-validation-state.test.ts` — preserve snapshot through `ECONNRESET`                                                        | INHERITED-0ED   |
+|  26 | `test/scripts/full-release-validation-state.test.ts` — preserve composite evidence when the run read succeeds but jobs fail                          | INHERITED-0ED   |
+|  27 | `src/infra/state-migrations.media-persistence.historical-v14.test.ts` — historical v14 media migration                                               | INHERITED-0ED   |
+|  28 | `src/infra/state-migrations.media-persistence.historical-v15.test.ts` — historical v15 media migration                                               | INHERITED-0ED   |
+|  29 | `extensions/telegram/src/model-callback.loopback.integration.test.ts` — opaque callback loopback                                                     | INHERITED-0ED   |
+
+The 13 absorb rows share four ownership repairs:
+
+| Owner boundary                  | Root cause and canonical repair                                                                                                                                                                                                                                            | Successor proof                                                                                |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Registration rollback           | Partial-registration ownership was correct, but the aggregate top-level message hid the rollback rejection. Preserve `new-row-survived` and include the rollback diagnostic.                                                                                               | Retirement 26/26; rollback/partial-registration/continuation-drain 23/23.                      |
+| Collector lifecycle publication | The create event ran before scheduler activation established a real capacity wait. Keep session/spawn facts synchronous, then activate and publish within accepted rollback ownership.                                                                                     | Queued projection 34/34; adjacent gateway owners 49/49; nested spawn/scheduler owners 119/119. |
+| Session usage persistence       | Upstream usage accounting called the same low-level patch primitive candidate continuation tests reserve for chain-state commits, consuming continuation faults and reordering config transitions. Route usage through the semantic accessor while retaining commit hooks. | Continuation/accounting 97/97.                                                                 |
+| Commentary and usage projection | Tool handoff reread the cumulative provider message and message-end reread repaired zero usage. Scope commentary to the active item, reset per-item display state, and leave pristine usage recording with the dispatcher.                                                 | Subscriber/lifecycle/accumulator 168/168.                                                      |
+
+The repair commit is
+`f63ff5a87c41d28dadba1b069654d9c66b4c9dee`. Production delta is seven files,
+`+50/-31` (net `+19`) for the accessor contract and three owner-boundary
+repairs; test/ratchet delta is two files, `+2/-2`. Core production types and
+core Oxlint pass. The changed-plan tsgo shard-budget guard remains independently
+red at both `cc513ec0` and `f63ff5a8` (`agents-root` 739 > 720), so it is not
+attributed to this repair.
+
+Fresh Gate 2.5 after the repair enumerates 1,783 upstream-touched test/support
+paths, 98 feature intersections, 94 runnable tests, and four support surfaces.
+All 29 routed shards pass: 7,311 passed, zero failed, seven platform-skipped.
+Support owners pass 304/304 execution, 307/307 gateway, 217/217 embedded, and
+11/11 overflow assertions. Gate 2.7 examines 962 paths: 612 `GENUINE`, 36
+`MIXED-CLOBBER`, 314 `SAFE-NEW`, zero `FROZEN-STALE`. The feature envelope is
+956 to 962 (`+6`): 447 authored feature, 30 required composed owners, 11
+generated outputs, 474 test/proof support, zero unexplained. Exact
+`src/skills/**`, `.github/labeler.yml`, new `skills/**/SKILL.md`, root
+detritus, and unrelated docs/assets counts are all zero; Barnacle Gate 4.8
+passes.
+
+A fresh Mode-B must target the eventual journal successor with workflow branch
+`codeagent/129388-primitive-core-routing-gap-cure-20260831`. Its terminal
+receipt belongs in the external handoff so the tracked journal does not move
+the exact tested product SHA afterward.
