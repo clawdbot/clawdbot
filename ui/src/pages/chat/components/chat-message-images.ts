@@ -379,7 +379,6 @@ export function renderMessageImages(images: ImageBlock[], opts?: ImageRenderOpti
     .filter(Boolean)
     .join(" ");
   const scope = JSON.stringify([
-    opts?.canonicalMessageKey,
     opts?.connectionEpoch,
     opts?.authToken?.trim(),
     opts?.resourceBasePath,
@@ -387,8 +386,10 @@ export function renderMessageImages(images: ImageBlock[], opts?: ImageRenderOpti
   return html`<div class=${layoutClasses}>
     ${repeat(
       images,
+      // Canonical identity scopes persisted slots, not unchanged initial-send
+      // images: adopting their message ID must not remount their inline pixels.
       (img, index) =>
-        `${scope}:${img.factIndex === undefined ? `image:${index}` : `fact:${img.factIndex}`}`,
+        `${scope}:${img.factIndex === undefined ? `image:${index}` : `${opts?.canonicalMessageKey}:fact:${img.factIndex}`}`,
       // The template owns the directive so repeat removal disconnects it.
       (img) => html`${renderMessageImageResource(img, opts)}`,
     )}
