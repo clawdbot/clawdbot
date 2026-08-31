@@ -775,14 +775,23 @@ rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
 projects only the narrow result. It is defense in depth after native isolation,
 not a substitute for removing the native capability surface.
 
-A projection-backed harness must put the complete context on
-`settledAttempt.settledTurnFinalizationContext` with
-`source: "openclaw-transcript"`. It must capture the active branch after the
-settled turn is mirrored, prove that the current prompt and every current tool
-call/result are present through that boundary, and freeze the resulting message
-array before returning the attempt. The finalizer must reject a missing,
+A projection-backed harness must capture the active branch after the settled
+turn is mirrored and prove that the current prompt and every current tool
+call/result are present through that boundary. Put the frozen evidence on
+`settledAttempt.settledTurnFinalizationContext` as either:
+
+- `source: "openclaw-transcript"` with `messages`: the complete application
+  transcript through the boundary.
+- `source: "harness"` with `data`: an immutable, bounded projection interpreted
+  only by the owning harness. Core passes this opaque value through; the
+  finalizer must verify its own context type before using it.
+
+Enforce projection limits while acquiring messages, rather than cloning the
+whole transcript before checking its size. Successful capture must finish all
+identity and source-evidence checks before returning the attempt. Do not retain
+an open transcript reader in `data`. The finalizer must reject a missing,
 unsupported, ambiguous, or oversized context. It must not truncate messages,
-drop earlier history, or describe this application transcript as exact native
+drop earlier history, or describe an application projection as exact native
 history. Harnesses that resume one restricted native session do not need this
 projection field.
 

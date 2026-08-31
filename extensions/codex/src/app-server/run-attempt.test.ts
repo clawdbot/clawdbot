@@ -4854,14 +4854,14 @@ describe("runCodexAppServerAttempt", () => {
       expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
       if (result.settledTurnFinalizationContext) {
         expect(result.settledTurnFinalizationContext).toMatchObject({
-          source: "openclaw-transcript",
-          messages: [
+          source: "harness",
+          data: [
             expect.objectContaining({ role: "user" }),
-            expect.objectContaining({ role: "assistant" }),
-            expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+            expect.objectContaining({ type: "function_call" }),
+            expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
           ],
         });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext.messages)).toBe(true);
+        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
       }
     },
   );
@@ -4933,14 +4933,14 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     expect(result.settledTurnFinalizationContext).toMatchObject({
-      source: "openclaw-transcript",
-      messages: [
+      source: "harness",
+      data: [
         expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+        expect.objectContaining({ type: "function_call" }),
+        expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
+    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
