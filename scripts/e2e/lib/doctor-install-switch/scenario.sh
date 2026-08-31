@@ -9,15 +9,6 @@ export npm_config_fund=false
 export npm_config_audit=false
 export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 
-# Stub the systemd manager and loginctl so doctor + daemon flows work in Docker.
-export PATH="/tmp/openclaw-bin:$PATH"
-mkdir -p /tmp/openclaw-bin
-cp scripts/e2e/lib/doctor-install-switch/shims/systemctl /tmp/openclaw-bin/systemctl
-cp scripts/e2e/lib/doctor-install-switch/shims/loginctl /tmp/openclaw-bin/loginctl
-cp scripts/e2e/lib/doctor-install-switch/shims/busctl /tmp/openclaw-bin/busctl
-cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs /tmp/openclaw-bin/systemd-exec-start.mjs
-chmod +x /tmp/openclaw-bin/systemctl /tmp/openclaw-bin/loginctl /tmp/openclaw-bin/busctl
-
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 git_root="/tmp/openclaw-git"
 mkdir -p "$git_root"
