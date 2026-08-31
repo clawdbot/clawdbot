@@ -2932,6 +2932,75 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(fs.existsSync(targetDir)).toBe(false);
   });
 
+  it("reports deferred cleanup failure without rolling back a persisted runtime install", async () => {
+    const targetDir = tempDirs.make("openclaw-doctor-runtime-commit-failure-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: VERSION,
+      targetDir,
+    });
+    const commit = vi.fn(async () => {
+      throw new Error("backup cleanup failed");
+    });
+    const rollback = vi.fn(async () => {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    });
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        expect(isPluginInstallCommitDeferred(callbacks)).toBe(true);
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir: targetDir,
+            mode: "install",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      env: {},
+    });
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(fs.existsSync(targetDir)).toBe(true);
+    expect(result.records.codex?.installPath).toBe(targetDir);
+    expect(result.warnings).toContain(
+      "Plugin install committed, but backup cleanup failed. Restart is required.",
+    );
+  });
+
   it.each([
     {
       name: "a stale staged payload",
