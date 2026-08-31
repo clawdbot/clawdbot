@@ -749,11 +749,31 @@ describe("plugin publication artifact", () => {
     ).toThrow("producer job did not complete successfully");
   });
 
-  it("accepts an environment-waiting current producer attempt", () => {
+  it.each(["waiting", "queued", "pending", "requested"])(
+    "accepts a null-conclusion %s current producer attempt",
+    (status) => {
+      const fixture = createFixture();
+      const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+      workflowRun.status = status;
+      workflowRun.conclusion = null;
+      writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+
+      expect(
+        verifyFixture(fixture, {
+          consumerRunAttempt: RUN_ATTEMPT,
+          producerJobName: PRODUCER_JOB_NAME,
+          runStatePolicy: "same-run-producer-success",
+          workflowJobsMetadataPath: fixture.workflowJobsPath,
+        }),
+      ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+    },
+  );
+
+  it("accepts a failed current attempt only when its exact producer job succeeded", () => {
     const fixture = createFixture();
     const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
-    workflowRun.status = "waiting";
-    workflowRun.conclusion = null;
+    workflowRun.status = "completed";
+    workflowRun.conclusion = "failure";
     writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
 
     expect(
@@ -764,6 +784,17 @@ describe("plugin publication artifact", () => {
         workflowJobsMetadataPath: fixture.workflowJobsPath,
       }),
     ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+
+    workflowRun.conclusion = "cancelled";
+    writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+    expect(() =>
+      verifyFixture(fixture, {
+        consumerRunAttempt: RUN_ATTEMPT,
+        producerJobName: PRODUCER_JOB_NAME,
+        runStatePolicy: "same-run-producer-success",
+        workflowJobsMetadataPath: fixture.workflowJobsPath,
+      }),
+    ).toThrow("Current producer workflow attempt must still be active or failed.");
   });
 
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {

@@ -1,5 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_RESET_TRIGGERS } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isResetAuthorizedForContext } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -298,4 +300,29 @@ export function resolveSessionResetCommand(params: {
   }
 
   return result;
+}
+
+export function resolveAuthorizedSessionResetCommand(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  commandAuthorized: boolean;
+  ctx: MsgContext;
+  isGroup: boolean;
+}): { resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand } {
+  const resetAuthorized = isResetAuthorizedForContext(params);
+  return {
+    resetAuthorized,
+    resetCommand: resolveSessionResetCommand({
+      commandText: params.ctx.commandText ?? "",
+      rawText: params.ctx.rawText ?? "",
+      resetTriggers: params.cfg.session?.resetTriggers?.length
+        ? params.cfg.session.resetTriggers
+        : DEFAULT_RESET_TRIGGERS,
+      ctx: params.ctx,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      isGroup: params.isGroup,
+      resetAuthorized,
+    }),
+  };
 }

@@ -5,7 +5,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -23,6 +22,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -33,6 +33,7 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   forgetNodeRunnerInventory,
+  invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
   reconcileNodeRunnerAvailability,
@@ -46,6 +47,7 @@ import {
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
+import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -232,7 +234,8 @@ export class NodeRegistry {
       if (
         !node ||
         node.connId !== pending.connId ||
-        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+        (!pending.onProgress &&
+          (!isNodeWorkerHostClientId(node.clientId) || node.clientMode !== "node"))
       ) {
         return;
       }
@@ -1113,12 +1116,19 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id after pairing validation and a successful dispatch. */
-    onDispatchReady?: (invokeId: string) => void;
+    /** Receives the id and armed hard deadline after a successful dispatch. */
+    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     return await invokePublicNodeRegistry(this, params);
+  }
+
+  /** Internal cleanup retains its owner through replies without admitting new root work. */
+  invokeLifecycle(
+    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+  ): Promise<NodeInvokeResult> {
+    return invokeLifecycleNodeRegistry(this, params);
   }
 
   /** Send one ordered input frame to a pending streaming invoke. */
@@ -1128,6 +1138,16 @@ export class NodeRegistry {
 
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
+  }
+
+  /** Continues only the exact live owner of a pending node invocation. */
+  runPendingInvokeContinuation<T>(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> | null {
+    return this.invokeStreams.runPendingContinuation(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -1398,13 +1418,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      node.client.socket.send(
-        JSON.stringify({
-          type: "event",
-          event,
-          payload,
-        }),
-      );
+      node.client.socket.send(serializeNodeEvent(event, payload));
       return true;
     } catch {
       return false;
@@ -1485,6 +1499,7 @@ export class NodeRegistry {
     } catch {
       /* ignore */
     }
+    node.client.socket.terminate();
     return true;
   }
 }

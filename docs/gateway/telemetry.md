@@ -43,8 +43,10 @@ document.
 The output shows whether feature statistics are enabled, why they are enabled
 or disabled, the request endpoint, and the last successful check. When feature
 statistics are enabled, it prints the exact JSON payload the next request would
-send. When they are disabled, it shows the update-only request and its
-`User-Agent` header instead.
+send. When only feature statistics are disabled, it shows the update-only request
+and its `User-Agent` header instead. When automation or update-check policy
+disables all requests, it shows `Request: none` with the reason (`request: null`
+in JSON).
 
 ## Daily update check
 
@@ -164,6 +166,19 @@ Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force feature statistics off,
 even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 feature-statistics body.
+
+## Automated environments
+
+OpenClaw sends nothing when it detects an automated environment, meaning the
+`CI` environment variable is set to a truthy value. Continuous integration jobs
+are not installations: they would outnumber real operators by orders of
+magnitude and make version and platform counts meaningless, and your pipeline
+should not report to us on every job.
+
+This applies to both tiers, so a CI job sends no update check and no feature
+statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
+because a configured endpoint means the run is deliberately exercising this
+path.
 
 ## Disable every automatic update request
 

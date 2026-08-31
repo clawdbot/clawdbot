@@ -9,10 +9,12 @@ import {
   makeTestModel,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectRecordFields,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
@@ -48,7 +50,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -94,7 +96,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -188,7 +190,7 @@ describe("executeAgentTurn: context failures", () => {
   it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("custom", "uncataloged-32k");
+      await params.run("custom", "uncataloged-32k", initialFallbackAttemptOptions(params));
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

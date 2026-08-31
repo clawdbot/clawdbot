@@ -43,7 +43,6 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import {
   listPluginSdkDistArtifacts,
-  listPackagedPrivatePluginSdkRuntimeArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
 import {
@@ -86,7 +85,6 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
-  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -110,6 +108,7 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/agents/prepared-model-catalog.worker.js",
+  "dist/extensions/memory-core/memory-search-knn.child.js",
   "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",

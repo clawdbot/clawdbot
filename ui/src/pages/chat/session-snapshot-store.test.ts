@@ -15,7 +15,10 @@ import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
 } from "./session-snapshot-database.ts";
-import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import {
+  clearStoredChatSnapshots,
+  deleteStoredChatSnapshot,
+} from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 function snapshot(message: unknown, sessionId = "session-1"): ChatSessionSnapshot {
@@ -433,7 +436,7 @@ describe("persistent chat session snapshots", () => {
     database.close();
   });
 
-  it("broadcasts invalidation and clears active memory for a peer-tab signal", async () => {
+  it("broadcasts invalidation and clears active memory for current and legacy peers", async () => {
     const sessionKey = "agent:main:cross-tab";
     const memoryCache: ChatMessageCache = new Map();
     const store = new SessionSnapshotStore(memoryCache);
@@ -450,27 +453,77 @@ describe("persistent chat session snapshots", () => {
 
     try {
       await clearStoredChatSnapshots();
-      expect(setItem).toHaveBeenCalledWith(
-        "openclaw.control.chatSnapshots.invalidate.v1",
-        expect.any(String),
-      );
+      const currentBroadcastValue = setItem.mock.calls.findLast(
+        ([key]) => key === "openclaw.control.chatSnapshots.invalidate.v1",
+      )?.[1];
+      if (currentBroadcastValue === undefined) {
+        throw new Error("expected full-cache invalidation broadcast");
+      }
+      expect(currentBroadcastValue).toBe("{}");
 
+      for (const peerValue of [currentBroadcastValue, "1"]) {
+        cacheChatSessionSnapshot(
+          memoryCache,
+          { assistantAgentId: "main", agentsList: null, hello: null },
+          { sessionKey },
+          snapshot("refilled"),
+        );
+        await store.flush();
+        window.dispatchEvent(
+          new StorageEvent("storage", {
+            key: "openclaw.control.chatSnapshots.invalidate.v1",
+            newValue: peerValue,
+          }),
+        );
+
+        expect(memoryCache.size).toBe(0);
+        expect(store.readSavedAt(sessionKey)).toBeNull();
+      }
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
+  });
+
+  it("keeps unrelated peer-tab memory when one session snapshot is deleted", async () => {
+    const deletedSessionKey = "agent:main:deleted-in-peer";
+    const retainedSessionKey = "agent:main:retained-in-peer";
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    store.connect();
+    observeChatCache(memoryCache, store);
+    const cacheSnapshot = (sessionKey: string) =>
       cacheChatSessionSnapshot(
         memoryCache,
         { assistantAgentId: "main", agentsList: null, hello: null },
         { sessionKey },
-        snapshot("refilled"),
+        snapshot(sessionKey),
       );
+    cacheSnapshot(deletedSessionKey);
+    cacheSnapshot(retainedSessionKey);
+    await store.flush();
+    const setItem = vi.spyOn(localStorage, "setItem");
+
+    try {
+      await deleteStoredChatSnapshot(deletedSessionKey);
+      const broadcastValue = setItem.mock.calls.findLast(
+        ([key]) => key === "openclaw.control.chatSnapshots.invalidate.v1",
+      )?.[1];
+      expect(broadcastValue).toBeDefined();
+
+      cacheSnapshot(deletedSessionKey);
       await store.flush();
       window.dispatchEvent(
         new StorageEvent("storage", {
           key: "openclaw.control.chatSnapshots.invalidate.v1",
-          newValue: "other-tab",
+          newValue: broadcastValue,
         }),
       );
 
-      expect(memoryCache.size).toBe(0);
-      expect(store.readSavedAt(sessionKey)).toBeNull();
+      expect(store.readSavedAt(deletedSessionKey)).toBeNull();
+      expect(store.readSavedAt(retainedSessionKey)).not.toBeNull();
+      expect(memoryCache.has(deletedSessionKey)).toBe(false);
+      expect(memoryCache.has(retainedSessionKey)).toBe(true);
     } finally {
       store.disconnect();
       await store.whenIdle();

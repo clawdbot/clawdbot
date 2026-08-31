@@ -182,9 +182,10 @@ Non-canonical query parameters are ignored except for the first non-empty
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested
-traversal levels for deep JSON paths. Separately, any JSONC/JSON file input
-over 16 MiB is refused with a parse diagnostic instead of being parsed, for
-any verb that loads that file.
+traversal levels for deep JSON paths. Separately, every file input over 16 MiB
+is refused before parsing for any verb that loads the file. JSONC/JSON keeps
+the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
+`OC_PATH_INPUT_TOO_LARGE`.
 
 ## Addressing by file kind
 

@@ -23,8 +23,10 @@ const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
 const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
+const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
+vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
 
 vi.mock("./auth-choice-prompt.js", async (importActual) => ({
   ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
@@ -282,6 +284,7 @@ describe("runGuidedOnboarding", () => {
       issues: [],
       config: localOnboarding.persisted.config ?? {},
     }));
+    launchTuiCli.mockClear();
   });
 
   afterEach(() => {
@@ -406,6 +409,40 @@ describe("runGuidedOnboarding", () => {
 
     expect(runBrowserHandoff).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("launches the guided terminal hatch through the running Gateway", async () => {
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options).toMatchObject({ deliver: false });
+    expect(options).not.toHaveProperty("local");
+  });
+
+  it("keeps the local terminal hatch for configured reruns", async () => {
+    localOnboarding.persisted.config = { gateway: {} };
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
+    expect(deps.applySetup).not.toHaveBeenCalled();
   });
 
   it("uses --skip-ui to skip both browser and terminal handoffs", async () => {
@@ -721,6 +758,8 @@ describe("runGuidedOnboarding", () => {
         ],
       }),
     );
+    expect(activate).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ prompter }));
+    expect(activate).toHaveBeenNthCalledWith(2, expect.objectContaining({ prompter }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(retryNotes).toContain("These didn't work just now:");
@@ -766,6 +805,7 @@ describe("runGuidedOnboarding", () => {
         kind: "api-key",
         authChoice: "apiKey",
         apiKey: enteredValue,
+        prompter,
       }),
     );
     expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));

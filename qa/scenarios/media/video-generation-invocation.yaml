@@ -25,8 +25,8 @@ scenario:
     - src/video-generation/runtime.ts
     - src/video-generation/capability-overlays.ts
     - src/media/store.ts
-    - test/e2e/qa-lab/media/video-generation-invocation.e2e.test.ts
+    - src/agents/tools/video-generate-tool.storage.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/video-generation-invocation.e2e.test.ts
+    path: src/agents/tools/video-generate-tool.storage.test.ts
     summary: Run video_generate through deterministic prepared providers, capability fallback, provider option validation, and real media persistence.

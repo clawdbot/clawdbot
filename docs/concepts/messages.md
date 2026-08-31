@@ -139,7 +139,8 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Outbound prefixes live at `channels.<channel>.responsePrefix` and `channels.<channel>.accounts.<id>.responsePrefix`. Account values win. Doctor copies the global fallback into configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents#messages) and channel docs.
@@ -162,7 +163,8 @@ Bare silent replies are dropped on all surfaces, so parent sessions stay quiet i
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
+- [Channel inbound API](/plugins/sdk-channel-inbound) - receive orchestration and acknowledgment policy
+- [Channel outbound API](/plugins/sdk-channel-outbound) - durable sends and delivery receipts
 - [Streaming](/concepts/streaming) - real-time message delivery
 - [Retry](/concepts/retry) - message delivery retry behavior
 - [Queue](/concepts/queue) - message processing queue

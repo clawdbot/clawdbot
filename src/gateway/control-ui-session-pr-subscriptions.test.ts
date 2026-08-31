@@ -117,6 +117,38 @@ describe("control UI session PR subscriptions", () => {
     ).toEqual(["only-a", "only-b", "shared"]);
   });
 
+  it("limits initial hydration and polling to four simultaneous session loads", async () => {
+    vi.useFakeTimers();
+    const releases: Array<() => void> = [];
+    const load = vi.fn(
+      async () =>
+        await new Promise<ControlUiSessionPullRequests>((resolve) => {
+          releases.push(() => resolve(READY));
+        }),
+    );
+    active = createControlUiSessionPullRequestSubscriptions({
+      broadcastToConnIds: vi.fn(),
+      load,
+    });
+    const sessionKeys = Array.from({ length: 6 }, (_value, index) => `session-${index}`);
+
+    const finishLimitedLoads = async (operation: Promise<void>) => {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+      for (const release of releases.splice(0)) {
+        release();
+      }
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(6));
+      for (const release of releases.splice(0)) {
+        release();
+      }
+      await operation;
+    };
+
+    await finishLimitedLoads(active.replace("conn-a", sessionKeys));
+    load.mockClear();
+    await finishLimitedLoads(active.pollNow());
+  });
+
   it("hydrates and broadcasts only newly added keys across replacement sets", async () => {
     vi.useFakeTimers();
     const load = vi.fn(async () => READY);
@@ -200,7 +232,7 @@ describe("control UI session PR subscriptions", () => {
 
     const poll = active.pollNow();
     const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
-    expect(load).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     resolveNormal({ pullRequests: [], rateLimited: true });
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
     resolveForced(READY);
@@ -275,13 +307,19 @@ describe("control UI session PR subscriptions", () => {
       resolveBlocked = resolve;
     });
     const load = vi.fn(async ({ sessionKey }: { sessionKey: string }) =>
-      sessionKey === "blocked" ? await blocked : READY,
+      sessionKey.startsWith("blocked") ? await blocked : READY,
     );
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
 
-    const oldReplace = active.replace("conn-a", ["blocked", "shared"]);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledWith({ sessionKey: "blocked" }));
+    const oldReplace = active.replace("conn-a", [
+      "blocked-1",
+      "blocked-2",
+      "blocked-3",
+      "blocked-4",
+      "shared",
+    ]);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
     await active.replace("conn-b", ["shared"]);
     broadcastToConnIds.mockClear();
 
@@ -289,7 +327,7 @@ describe("control UI session PR subscriptions", () => {
     resolveBlocked(READY);
     await oldReplace;
 
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(5);
     expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
       CHANGED_EVENT,
       { sessions: { shared: { ...READY, status: "ready" } } },

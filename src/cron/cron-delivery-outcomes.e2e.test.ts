@@ -149,6 +149,31 @@ describe.sequential("cron delivery outcomes", () => {
               deliveryStatus: "delivered",
               delivered: true,
             });
+
+            for (const command of [
+              "process.exit(0)",
+              "process.stdout.write('  \\n')",
+              "process.exit(1)",
+            ]) {
+              await cron.update(job.id, {
+                payload: { kind: "command", argv: [process.execPath, "-e", command] },
+              });
+              await cron.run(job.id, "force");
+              const failed = command === "process.exit(1)";
+              expect(receiver.requests).toHaveLength(failed ? 2 : 1);
+              expect(await persistedJob(storePath, job.id)).toMatchObject({
+                state: {
+                  lastRunStatus: failed ? "error" : "ok",
+                  lastDeliveryStatus: failed ? "delivered" : "not-delivered",
+                },
+              });
+              if (!failed) {
+                expect(
+                  (await persistedJob(storePath, job.id))?.state.deliverySuppressionReason,
+                ).toBe("empty");
+              }
+            }
+            expect(receiver.requests[1]?.body).toMatchObject({ status: "error" });
           } finally {
             cron.stop();
             resetTaskRegistryForTests({ persist: false });
@@ -295,9 +320,11 @@ describe.sequential("cron delivery outcomes", () => {
         async (state) => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
+          let now = Date.now();
           const cron = new CronService({
             storePath,
             cronEnabled: true,
+            nowMs: () => now,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
@@ -350,8 +377,35 @@ describe.sequential("cron delivery outcomes", () => {
                 lastDeliveryError: "primary route rejected",
                 consecutiveErrors: 0,
                 lastFailureNotificationDeliveryStatus: "unknown",
+                lastFailureAlertAtMs: now,
               },
             });
+
+            now += 60_000;
+            await cron.run(job.id, "force");
+            await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+            expect(receiver.requests).toHaveLength(1);
+            const history = readCronTaskRunHistoryPage({
+              storeKey: cronStoreKey(storePath),
+              jobId: job.id,
+              limit: 10,
+            });
+            expect(history.entries).toHaveLength(2);
+            expect(
+              history.entries.every(
+                (entry) =>
+                  entry.completionStatus === "failed" && entry.deliveryStatus === "not-delivered",
+              ),
+            ).toBe(true);
+            expect(
+              history.entries.filter(
+                (entry) => entry.failureNotificationDelivery?.status === "unknown",
+              ),
+            ).toHaveLength(1);
+
+            now += 3_540_000;
+            await cron.run(job.id, "force");
+            await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
 
             const disabled = await cron.add({
               name: "disabled completion failure alert",
@@ -371,7 +425,7 @@ describe.sequential("cron delivery outcomes", () => {
             });
             await cron.run(disabled.id, "force");
             await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-            expect(receiver.requests).toHaveLength(1);
+            expect(receiver.requests).toHaveLength(2);
           } finally {
             cron.stop();
             resetTaskRegistryForTests({ persist: false });
@@ -432,13 +486,13 @@ describe.sequential("cron delivery outcomes", () => {
           await vi.waitFor(() =>
             expect(enqueueSystemEvent).toHaveBeenCalledWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
-              { agentId: "work", sessionKey },
+              { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
             ),
           );
           expect(requestHeartbeat).toHaveBeenCalledWith({
-            source: "cron",
+            source: "notifications-event",
             intent: "immediate",
-            reason: `cron:${job.id}:failure-alert`,
+            reason: "wake",
             agentId: "work",
             sessionKey,
           });

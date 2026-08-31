@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -159,7 +160,14 @@ private object SystemPhotosDataSource : PhotosDataSource {
     }
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    val inSampleSize = computeInSampleSize(bounds.outWidth, maxWidth)
+    val orientation = JpegSizeLimiter.readOrientation { resolver.openInputStream(uri) }
+    val sourceWidth =
+      if (orientation in ExifInterface.ORIENTATION_TRANSPOSE..ExifInterface.ORIENTATION_ROTATE_270) {
+        bounds.outHeight
+      } else {
+        bounds.outWidth
+      }
+    val inSampleSize = computeInSampleSize(sourceWidth, maxWidth)
     val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
     val decoded =
       resolver.openInputStream(uri).use { input ->
@@ -167,14 +175,15 @@ private object SystemPhotosDataSource : PhotosDataSource {
         BitmapFactory.decodeStream(input, null, decodeOptions)
       } ?: return null
 
-    if (decoded.width <= maxWidth) return decoded
+    val oriented = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
+    if (oriented.width <= maxWidth) return oriented
     // Decode sampling is power-of-two only; finish with exact scaling when the
     // sampled bitmap is still wider than the requested max width.
-    val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
+    val targetHeight = max(1, ((oriented.height.toDouble() * maxWidth) / oriented.width).roundToInt())
     return try {
-      decoded.scale(maxWidth, targetHeight, true)
+      oriented.scale(maxWidth, targetHeight, true)
     } finally {
-      decoded.recycle()
+      oriented.recycle()
     }
   }
 

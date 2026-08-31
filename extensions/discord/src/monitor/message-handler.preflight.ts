@@ -31,7 +31,14 @@ import {
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+} from "./message-channel-info.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessage,
+} from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
@@ -64,13 +71,8 @@ import type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
-import {
-  resolveDiscordChannelInfo,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-  resolveForwardedMediaList,
-  resolveMediaList,
-} from "./message-utils.js";
+import { resolveForwardedMediaList, resolveMediaList } from "./message-media.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -650,6 +652,8 @@ export async function preflightDiscordMessage(
           id: sender.id,
           name: sender.name,
           tag: sender.tag,
+          isPluralKit: sender.isPluralKit,
+          authorKind: author.bot ? "bot" : "user",
         },
         memberAccessConfigured: hasAccessRestrictions,
         memberAllowed,
@@ -738,16 +742,24 @@ export async function preflightDiscordMessage(
   }
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  const referencedReply = resolveDiscordReferencedReplyMessage(message);
+  const referencedWebhookId = referencedReply ? resolveDiscordWebhookId(referencedReply) : null;
+  const referencedAuthor = referencedReply?.author;
+  const replyTargetsOtherBot =
+    Boolean(botId) &&
+    Boolean(referencedAuthor?.bot) &&
+    referencedAuthor?.id !== botId &&
+    !referencedWebhookId;
   if (
     isGuildMessage &&
     ignoreOtherMentions &&
-    hasUserOrRoleMention &&
+    (hasUserOrRoleMention || replyTargetsOtherBot) &&
     !wasMentioned &&
     !mentionDecision.implicitMention
   ) {
-    logDebug(`[discord-preflight] drop: other-mention`);
+    logDebug(`[discord-preflight] drop: addressed-to-other`);
     logVerbose(
-      `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
+      `discord: drop guild message (addressed to another identity, ignoreOtherMentions=true, botId=${botId})`,
     );
     await recordDiscordPendingHistoryEntry({
       preflight: params,

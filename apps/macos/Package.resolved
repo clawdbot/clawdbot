@@ -1,13 +1,13 @@
 {
-  "originHash" : "bee9a68d02fcc048ed73cb8cd96636d82cdadb25e1f4be271924d71f7c3c9384",
+  "originHash" : "17b9162713f42b8657499bec84c7caad30103a0379c7b457c25aa3b5fd79699a",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/AXorcist.git",
       "state" : {
-        "revision" : "dba24f0a2dd4a0ccfb285d7e11cf899f8b603ef6",
-        "version" : "0.1.6"
+        "revision" : "bab3f2228bac0ce3a34786b8395b65bb36242221",
+        "version" : "0.1.8"
       }
     },
     {
@@ -47,20 +47,11 @@
       }
     },
     {
-      "identity" : "menubarextraaccess",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/orchetect/MenuBarExtraAccess",
-      "state" : {
-        "revision" : "e93e3a5b814714bf4d4cea67bf63a6b6a8323968",
-        "version" : "1.3.1"
-      }
-    },
-    {
       "identity" : "peekaboo",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "028cd9eb2d7b413c26f02f169c5f6224b2fcb3e0"
+        "revision" : "d80cc3cae6e9f2978b909d65ef1a21f15aed4706"
       }
     },
     {
@@ -68,8 +59,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "79bc9e872948e47877e76f194cb0c8e0412b0b90",
-        "version" : "2.9.5"
+        "revision" : "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
+        "version" : "2.9.6"
       }
     },
     {

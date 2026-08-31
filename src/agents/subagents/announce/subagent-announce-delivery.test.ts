@@ -1,11 +1,21 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import { buildSessionHistorySnapshot } from "../../../gateway/session-history-state.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -59,6 +69,8 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   releaseSessionDeliveryClaim: vi.fn(async () => {}),
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../completion/subagent-completion-delivery.js")>()),
@@ -222,6 +234,41 @@ function createQueueOutcomeSequenceMock(
   });
 }
 
+async function createRequesterTranscriptFixture(sessionId: string) {
+  const dir = tempDirs.make("openclaw-subagent-announce-transcript-");
+  const sessionKey = "agent:main:slack:channel:C123:thread:171.222";
+  const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  const entry: SessionEntry = {
+    sessionId,
+    sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+    updatedAt: Date.now(),
+  };
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
+  return { agentId: "main", entry, sessionId, sessionKey, storePath };
+}
+
+async function readRequesterTranscriptMessages(fixture: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<Array<Record<string, unknown>>> {
+  return (
+    await loadTranscriptEvents({
+      agentId: fixture.agentId,
+      sessionId: fixture.sessionId,
+      sessionKey: fixture.sessionKey,
+      storePath: fixture.storePath,
+    })
+  )
+    .map((event) => (event as { message?: unknown }).message)
+    .filter(
+      (message): message is Record<string, unknown> =>
+        Boolean(message) && typeof message === "object" && !Array.isArray(message),
+    );
+}
+
 const longChildCompletionOutput = [
   "34/34 tests pass, clean build. Now docker repro:",
   "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
@@ -308,22 +355,48 @@ async function deliverSlackThreadAnnouncement(params: {
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceSessionKey?: string;
   sourceTool?: string;
   requesterAbandoned?: boolean;
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
+  requesterSessionActivity?: () => { sessionId: string; isActive: boolean };
+  requesterTranscriptFixture?:
+    | Awaited<ReturnType<typeof createRequesterTranscriptFixture>>
+    | (() => Awaited<ReturnType<typeof createRequesterTranscriptFixture>>);
 }) {
   // Slack thread delivery exercises all origins because direct, session, and
   // completion routing can differ after a child run outlives its requester.
+  const requesterTranscriptFixture = params.requesterTranscriptFixture;
+  const resolveRequesterTranscriptFixture =
+    typeof requesterTranscriptFixture === "function"
+      ? requesterTranscriptFixture
+      : () => requesterTranscriptFixture;
   testing.setDepsForTest({
     callGateway: params.callGateway,
-    getRequesterSessionActivity: () => ({
-      sessionId: params.sessionId ?? "requester-session-4",
-      isActive: params.isActive === true,
-    }),
+    getRequesterSessionActivity:
+      params.requesterSessionActivity ??
+      (() => ({
+        sessionId: params.sessionId ?? "requester-session-4",
+        isActive: params.isActive === true,
+      })),
     isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
+    ...(params.requesterTranscriptFixture
+      ? {
+          loadRequesterSessionEntry: (sessionKey: string) => {
+            const fixture = resolveRequesterTranscriptFixture();
+            return {
+              cfg: {} as never,
+              entry: fixture?.entry,
+              canonicalKey: sessionKey,
+              agentId: fixture?.agentId,
+              storePath: fixture?.storePath,
+            };
+          },
+        }
+      : {}),
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
       : {}),
@@ -344,6 +417,7 @@ async function deliverSlackThreadAnnouncement(params: {
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
+    sourceSessionKey: params.sourceSessionKey,
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
     isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
@@ -1340,8 +1414,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),
@@ -1355,13 +1436,27 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 describe("deliverSubagentAnnouncement completion delivery", () => {
   it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const transcript = await createRequesterTranscriptFixture("requester-session-1");
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn<QueueEmbeddedAgentMessageWithOutcome>(
+      async (sessionId, _text, options) => {
+        await options?.userTurnTranscriptRecorder?.persistApproved();
+        return {
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+          enqueuedAtMs: 4_100,
+          deliveredAtMs: 4_200,
+        };
+      },
+    );
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sessionId: "requester-session-1",
       isActive: true,
       directIdempotencyKey: "announce-1",
       queueEmbeddedAgentMessageWithOutcome,
+      requesterTranscriptFixture: transcript,
     });
 
     expectRecordFields(result, {
@@ -1373,14 +1468,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-1",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(callGateway).not.toHaveBeenCalled();
+
+    const rawMessages = await readRequesterTranscriptMessages(transcript);
+    expect(rawMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "child done",
+        provenance: expect.objectContaining({
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+        }),
+      }),
+    ]);
+    const assistantReply = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Created." },
+        {
+          type: "image" as const,
+          source: { type: "url" as const, url: "/api/chat/media/outgoing/generated.png" },
+        },
+      ],
+      __openclaw: { seq: 2 },
+    };
+    expect(
+      buildSessionHistorySnapshot({ rawMessages: [...rawMessages, assistantReply] }).history
+        .messages,
+    ).toEqual([assistantReply]);
   });
 
   it("waits through compaction on the completion handoff wake (86566)", async () => {
@@ -1830,6 +1953,134 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each(["error", "timeout", "unknown"] as const)(
+    "sends one generic direct notice when requester synthesis repeats a %s child completion",
+    async (status) => {
+      const childSessionKey = `agent:worker:subagent:${status}-child`;
+      const providerFailure = "provider rejected private-model-alias with status 400";
+      const childResult = "private child output must not reach the requester";
+      const callGateway = vi.fn(async () => {
+        throw new Error(providerFailure);
+      }) as unknown as typeof runtimeCallGateway;
+      const sendMessage = createSendMessageMock();
+
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: `${status}-child-session-id`,
+          status,
+          statusLabel: `${status}: ${providerFailure}`,
+          result: childResult,
+        }),
+      });
+
+      expectRecordFields(result, { delivered: true, path: "direct" });
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledOnce();
+      const content = mockCallArg(sendMessage, 0, 0).content;
+      expect(content).toBe(
+        "A delegated task failed before it could report a result. Please retry the task.",
+      );
+      expect(content).not.toContain(providerFailure);
+      expect(content).not.toContain(childResult);
+    },
+  );
+
+  it.each(["cancelled", "source owner changed"] as const)(
+    "stops a failed-child notice when %s at platform dispatch",
+    async (blockedBy) => {
+      const childSessionKey = `agent:worker:subagent:${blockedBy.replaceAll(" ", "-")}`;
+      const controller = new AbortController();
+      let sourceEffectsAllowed = true;
+      const platformSend = vi.fn();
+      const callGateway = vi.fn(async () => {
+        throw new Error("provider rejected requester synthesis");
+      }) as unknown as typeof runtimeCallGateway;
+      const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
+        expect(params.skipQueue).toBe(true);
+        expect(params.abortSignal).toBe(controller.signal);
+        if (blockedBy === "cancelled") {
+          controller.abort();
+        } else {
+          sourceEffectsAllowed = false;
+        }
+        await params.onPlatformSendDispatch?.();
+        platformSend();
+        return {
+          channel: "discord",
+          to: "dm:U123",
+          via: "direct" as const,
+          mediaUrl: null,
+          result: { messageId: "msg-after-stale-dispatch" },
+        };
+      }) as unknown as typeof runtimeSendMessage;
+
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        signal: controller.signal,
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+        isSourceSessionEffectsAllowed: () => sourceEffectsAllowed,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          status: "error",
+          statusLabel: "failed before fallback dispatch",
+          result: "private child output",
+        }),
+      });
+
+      expect(result).toMatchObject(
+        blockedBy === "cancelled"
+          ? { delivered: false, path: "none" }
+          : { delivered: false, path: "none", reason: "source_owner_changed", terminal: true },
+      );
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(platformSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not send a failed-child notice for an untrusted event or non-direct target", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("provider rejected requester synthesis");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+
+    const untrusted = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceSessionKey: "agent:worker:subagent:expected-child",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionKey: "agent:worker:subagent:other-child",
+        status: "error",
+        statusLabel: "failed: provider rejected child run",
+        result: "private child output",
+      }),
+    });
+    const nonDirect = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-failed-thread-child",
+      sourceSessionKey: "agent:worker:subagent:failed-thread-child",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionKey: "agent:worker:subagent:failed-thread-child",
+        status: "error",
+        statusLabel: "failed: provider rejected child run",
+        result: "private child output",
+      }),
+    });
+
+    expectRecordFields(untrusted, { delivered: false, path: "direct" });
+    expectRecordFields(nonDirect, { delivered: false, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("directly delivers unprefixed direct targets recognized by the channel grammar", async () => {
     registerDirectTargetTestChannel("qa-channel");
     const callGateway = createPayloadGatewayMock();
@@ -1989,6 +2240,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       runId: "descendant-wake-run",
     });
+    const resolveGatewayContext: GatewayContextResolver = () => undefined;
     const replaceSubagentRunAfterSteer = vi.fn(async () => true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
@@ -2004,6 +2256,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       isChildSessionEffectsAllowed: () => true,
       hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
         typeof entry === "object" && entry !== null,
+      resolveGatewayContext,
       deps: {
         callGateway: createGatewayMock(),
         dispatchGatewayMethodInProcess,
@@ -2013,6 +2266,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(woke).toBe(true);
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      resolveGatewayContext,
+    });
     expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "nested-parent-run",
@@ -2508,22 +2764,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       1,
       "requester-session-4",
       "child done",
-      {
+      expect.objectContaining({
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
         waitForTranscriptCommit: true,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       2,
       "requester-session-4",
       "child done",
-      {
+      expect.objectContaining({
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -2579,6 +2837,157 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(4);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+    expect(result.terminal).toBeUndefined();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("persists fallback-steered completion provenance after the requester session rotates", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const transcriptA = await createRequesterTranscriptFixture("requester-session-direct");
+      const transcriptB = await createRequesterTranscriptFixture("requester-session-fallback");
+      let currentTranscript = transcriptA;
+      let activityReadCount = 0;
+      const callGateway = vi.fn(async () => {
+        throw new Error("UNAVAILABLE: gateway lost final output");
+      }) as unknown as typeof runtimeCallGateway;
+      let firstRecorder: unknown;
+      let queueCallCount = 0;
+      const queueEmbeddedAgentMessageWithOutcome = vi.fn<QueueEmbeddedAgentMessageWithOutcome>(
+        async (sessionId, _text, options) => {
+          queueCallCount += 1;
+          if (queueCallCount === 1) {
+            expect(sessionId).toBe(transcriptA.sessionId);
+            firstRecorder = options?.userTurnTranscriptRecorder;
+            currentTranscript = transcriptB;
+            return {
+              queued: false,
+              sessionId,
+              reason: "not_streaming",
+              gatewayHealth: "live",
+            };
+          }
+          expect(sessionId).toBe(transcriptB.sessionId);
+          expect(options?.userTurnTranscriptRecorder).not.toBe(firstRecorder);
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          return {
+            queued: true,
+            sessionId,
+            target: "embedded_run",
+            gatewayHealth: "live",
+          };
+        },
+      );
+
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        isActive: true,
+        directIdempotencyKey: "announce-retryable-direct-fallback",
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterSessionActivity: () => ({
+          sessionId: activityReadCount++ === 0 ? transcriptA.sessionId : transcriptB.sessionId,
+          isActive: true,
+        }),
+        requesterTranscriptFixture: () => currentTranscript,
+        internalEvents: taskCompletionEvents({
+          childSessionId: "child-session-id",
+          taskLabel: "fallback persistence smoke",
+        }),
+      });
+
+      expectRecordFields(result, {
+        delivered: true,
+        path: "steered",
+        phases: [
+          {
+            phase: "direct-primary",
+            delivered: false,
+            path: "direct",
+            error: "UNAVAILABLE: gateway lost final output",
+          },
+          {
+            phase: "steer-fallback",
+            delivered: true,
+            path: "steered",
+            error: undefined,
+          },
+        ],
+      });
+      expect(callGateway).toHaveBeenCalledTimes(4);
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+
+      expect(await readRequesterTranscriptMessages(transcriptA)).toEqual([]);
+      const rawMessages = await readRequesterTranscriptMessages(transcriptB);
+      expect(rawMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "child done",
+          provenance: expect.objectContaining({
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+          }),
+        }),
+      ]);
+      const assistantReply = {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "visible final reply" }],
+        __openclaw: { seq: 2 },
+      };
+      const history = buildSessionHistorySnapshot({
+        rawMessages: [...rawMessages, assistantReply],
+      }).history.messages;
+      expect(history).toEqual([assistantReply]);
+      expect(JSON.stringify(history)).not.toContain("child done");
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
   });
 
   it("reports failure for Telegram DMs when announce-agent delivery fails", async () => {
@@ -2665,12 +3074,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-telegram",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 10,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
@@ -4086,7 +4496,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     reason: "visible_reply_missing",
   } as const;
 
-  it.each([
+  const externalRequesterSettleRoute = {
+    name: "Discord",
+    sessionKey: "agent:main:discord:dm:U123",
+    origin: { channel: "discord", to: "dm:U123", accountId: "acct-1" },
+    agentParams: { deliver: true, channel: "discord", accountId: "acct-1", to: "dm:U123" },
+  };
+  const requesterSettleRoutes = [
+    externalRequesterSettleRoute,
+    {
+      name: "no origin",
+      sessionKey: "agent:main:requester-settle",
+      origin: undefined,
+      agentParams: { deliver: false, channel: undefined, accountId: undefined, to: undefined },
+    },
+    {
+      name: "WebChat",
+      sessionKey: "agent:main:webchat:dm:requester-settle",
+      origin: { channel: "webchat" },
+      agentParams: { deliver: false, channel: "webchat", accountId: undefined, to: undefined },
+    },
+    {
+      name: "nested requester with inherited Discord origin",
+      sessionKey: "agent:main:subagent:requester-settle",
+      origin: externalRequesterSettleRoute.origin,
+      requesterIsSubagent: true,
+      agentParams: { deliver: false, channel: undefined, accountId: undefined, to: undefined },
+    },
+  ];
+
+  const requesterSettleCases = [
     {
       name: "preserves an ordinary non-yielded direct settle turn",
       response: {},
@@ -4101,60 +4540,83 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's visible final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: true,
       expected: deliveredRequesterFinal,
     },
     {
+      name: "accepts a yielded requester final already committed by automatic delivery",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects a yielded turn without a result",
+      routes: requesterSettleRoutes,
       response: {},
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn with no response payloads",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only an error",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "tool failed", isError: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only private reasoning",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "thinking", isReasoning: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects pre-tool commentary instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "working on it", isCommentary: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a compaction notice instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "compacting", isCompactionNotice: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a provider-fallback notice instead of a final answer",
-      response: { result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] } },
+      routes: requesterSettleRoutes,
+      response: {
+        result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] },
+      },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a transient status notice instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "still working", isStatusNotice: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects supplemental TTS audio instead of a final answer",
+      routes: requesterSettleRoutes,
       response: {
         result: {
           payloads: [
@@ -4182,22 +4644,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "rejects an explicitly hidden assistant payload",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only the silent reply token",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "NO_REPLY" }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
-      name: "rejects a visible final whose external delivery was suppressed",
+      name: "rejects a visible final whose delivery was suppressed",
+      routes: requesterSettleRoutes,
       response: {
         result: {
           payloads: [{ text: "never delivered" }],
           deliveryStatus: { status: "suppressed", succeeded: true, resultCount: 0 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an empty successful automatic delivery receipt",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: 0 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a malformed automatic delivery receipt",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: "1" },
         },
       },
       requireVisibleReply: true,
@@ -4331,14 +4818,62 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requireVisibleReply: true,
       expected: deliveredRequesterFinal,
     },
-  ])("$name", async ({ response, requireVisibleReply, expected }) => {
+    {
+      name: "rejects terminal text when an external origin cannot be resolved",
+      routes: [
+        {
+          name: "external channel without destination",
+          sessionKey: "agent:main:requester-settle",
+          origin: { channel: "discord" },
+          agentParams: {
+            deliver: false,
+            channel: "discord",
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+        {
+          name: "destination without channel",
+          sessionKey: "agent:main:requester-settle",
+          origin: { to: "dm:U123" },
+          agentParams: {
+            deliver: false,
+            channel: undefined,
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+        {
+          name: "unknown channel",
+          sessionKey: "agent:main:requester-settle",
+          origin: { channel: "unknown-external", to: "dm:U123" },
+          agentParams: {
+            deliver: false,
+            channel: undefined,
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+      ],
+      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+  ];
+
+  it.each(
+    requesterSettleCases.flatMap((testCase) =>
+      (testCase.routes ?? [externalRequesterSettleRoute]).map((route) => ({
+        testCase,
+        route,
+      })),
+    ),
+  )("$route.name: $testCase.name", async ({ testCase, route }) => {
+    const { response, requireVisibleReply, expected } = testCase;
     const callGateway = createGatewayMock(response);
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
-    const origin = {
-      channel: "discord",
-      to: "dm:U123",
-      accountId: "acct-1",
-    };
+    const sendMessage = createSendMessageMock();
+    const origin = route.origin;
     testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
@@ -4347,17 +4882,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
       getRuntimeConfig: () => ({}) as never,
       queueEmbeddedAgentMessageWithOutcome,
+      sendMessage,
     });
 
     const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:main:discord:dm:U123",
-      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      requesterSessionKey: route.sessionKey,
+      targetRequesterSessionKey: route.sessionKey,
       triggerMessage: "all spawned subagents settled",
       steerMessage: "all spawned subagents settled",
       requesterOrigin: origin,
       requesterSessionOrigin: origin,
       directOrigin: origin,
-      requesterIsSubagent: false,
+      requesterIsSubagent: "requesterIsSubagent" in route && route.requesterIsSubagent === true,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
       ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
@@ -4366,14 +4902,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(result).toMatchObject(expected);
+    expect(result.requesterVisibleFinalDelivered).toBeUndefined();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
-    const agentParams = expectGatewayAgentParams(callGateway, {
-      deliver: true,
-      channel: "discord",
-      accountId: "acct-1",
-      to: "dm:U123",
-    });
-    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
+    expect(sendMessage).not.toHaveBeenCalled();
+    const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);
+    expect(agentParams.sourceReplyDeliveryMode).toBe(
+      requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
+    );
   });
 
   it.each([

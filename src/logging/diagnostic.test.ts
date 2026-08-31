@@ -14,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
@@ -39,7 +40,6 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   peekDiagnosticSessionState,
-  pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
@@ -101,6 +101,26 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
     }
   }
   return count;
+}
+
+/** Drives a lane that keeps receiving inbound, the traffic that refreshes lastActivity. */
+function advanceLaneWithInbound(params: {
+  sessionId: string;
+  sessionKey: string;
+  totalMs: number;
+  inboundEveryMs: number;
+  onInbound?: () => void;
+}) {
+  const ticks = Math.floor(params.totalMs / params.inboundEveryMs);
+  for (let i = 0; i < ticks; i += 1) {
+    vi.advanceTimersByTime(params.inboundEveryMs);
+    logMessageQueued({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      source: "dispatch",
+    });
+    params.onInbound?.();
+  }
 }
 
 const requireRecord = createRequireRecord("object", "label-not-object");
@@ -190,21 +210,21 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.size).toBe(1);
   });
 
-  it("caps tracked session states to a bounded max", () => {
-    const now = Date.now();
-    for (let i = 0; i < 2001; i += 1) {
-      diagnosticSessionStates.set(`session-${i}`, {
-        sessionId: `session-${i}`,
-        lastActivity: now + i,
-        generation: 0,
-        state: "idle",
-        queueDepth: 1,
-      });
-    }
-    pruneDiagnosticSessionStates(now + 2002, true);
+  it.each(["session-0", ""])(
+    "caps tracked session states when the oldest key is %j",
+    (oldestKey) => {
+      const now = Date.now();
+      for (let i = 0; i < 2001; i += 1) {
+        vi.setSystemTime(now + i);
+        getDiagnosticSessionState({
+          sessionKey: i === 0 ? oldestKey : `session-${i}`,
+        }).queueDepth = 1;
+      }
 
-    expect(diagnosticSessionStates.size).toBe(2000);
-  });
+      expect(diagnosticSessionStates.size).toBe(2000);
+      expect(diagnosticSessionStates.has(oldestKey)).toBe(false);
+    },
+  );
 
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
@@ -878,6 +898,130 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("reports blocked tool calls on a lane whose inbound keeps refreshing the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const stalled = requireRecord(
+      events.findLast((event) => event.type === "session.stalled"),
+      "stalled event",
+    );
+    expectRecordFields(stalled, {
+      classification: "blocked_tool_call",
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "bash",
+    });
+    // Both the report and the recovery request carry the progress clock, not the
+    // 25s-old session touch: the ownerless-lane release window measures staleness.
+    expect(stalled.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+    const recovery = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recovery.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+  });
+
+  it("keeps a lane with fresh owned progress quiet while inbound keeps arriving", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+        onInbound: () => {
+          markDiagnosticRunProgressForTest({
+            sessionId: "s1",
+            sessionKey: "main",
+            runId: "run-1",
+            reason: "cli_live:stream_progress",
+          });
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves a busy lane with no owned work on the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+      // Terminal-but-unreleased state: the owner is gone, the activity row is not.
+      // Recording that fact belongs to the run lifecycle, not to this gate.
+      markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })
+          .activeWorkKind,
+      ).toBeUndefined();
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("recovers stale model calls through the active embedded-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
@@ -1212,6 +1356,95 @@ describe("stuck session diagnostics threshold", () => {
       "ageMs",
       "stateGeneration",
     ]);
+  });
+
+  it("does not abort a silent local model call whose no-gap stream policy was propagated to diagnostic recovery (#125147)", async () => {
+    // Regression for the subagent-spawn parity bug: a genuinely local model
+    // (e.g. Ollama over loopback) resolves `resolveLlmIdleTimeoutMs` to `0`
+    // (no stream-gap watchdog) because it can legitimately stay silent for
+    // many minutes during prompt evaluation. `attempt-stream.ts` now carries
+    // that resolved policy into the diagnostic model-call-started event as a
+    // generous but finite request-timeout ceiling
+    // (`LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS`, see
+    // attempt.model-diagnostic-events.ts). Diagnostic recovery must honor
+    // that ceiling instead of falling back to the generic stuck-session
+    // threshold and aborting a still-progressing local model call.
+    const recoverStuckSession = vi.fn();
+    const ref = { sessionId: "local-no-gap-session", sessionKey: "agent:jin:subagent:local" };
+    const runId = "local-no-gap-run";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+      },
+      owner.generation,
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Well past the generic stuck-session abort threshold (60s) and past the
+    // previously observed real-world stall (~6.5 minutes, #125147), but
+    // comfortably short of the finite no-gap ceiling — the local no-gap
+    // policy must keep this recovery-ineligible.
+    vi.advanceTimersByTime(15 * 60_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("still recovers a local model call that stays silent past the finite no-gap diagnostic ceiling (regression for #125388 review)", async () => {
+    // ClawSweeper's review of the original #125147 fix caught that mapping
+    // the local no-gap policy straight to MAX_TIMER_TIMEOUT_MS (~24.8 days)
+    // made a genuinely wedged local call unrecoverable by the normal
+    // stuck-session path. This proves the other half of the invariant: once a
+    // silent local call's age exceeds the finite ceiling, normal recovery
+    // still fires.
+    const recoverStuckSession = vi.fn();
+    const ref = {
+      sessionId: "local-no-gap-wedged-session",
+      sessionKey: "agent:jin:subagent:local",
+    };
+    const runId = "local-no-gap-wedged-run";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+      },
+      owner.generation,
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Past both the generic stuck-session abort threshold and the finite
+    // no-gap ceiling — a genuinely wedged local call must be recoverable.
+    vi.advanceTimersByTime(DEFAULT_UNDICI_STREAM_TIMEOUT_MS + 60_000);
+
+    expect(recoverStuckSession).toHaveBeenCalled();
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {

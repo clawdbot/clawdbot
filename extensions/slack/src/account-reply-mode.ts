@@ -1,5 +1,5 @@
 // Slack plugin module implements account reply mode behavior.
-import type { SlackAccountConfig } from "./runtime-api.js";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
 type SlackReplyToMode = "off" | "first" | "all" | "batched";
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -58,6 +59,7 @@ function buildLearnParams(
     },
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
+    agentId: "main",
     sessionKey: "agent:main:webchat:test",
     workspaceDir: "/tmp",
     provider: "openai",
@@ -72,6 +74,67 @@ function buildLearnParams(
 }
 
 describe("learn command", () => {
+  it.each([
+    { agentId: "direct", shouldContinue: true },
+    { agentId: "isolated", shouldContinue: false },
+  ])(
+    "uses $agentId workshop availability in a global session",
+    async ({ agentId, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+      });
+      params.agentId = agentId;
+      params.sessionKey = "global";
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+        expect(params.ctx.BodyForAgent).toBe("/learn");
+      }
+    },
+  );
+
+  it.each([
+    { mode: "off", denyWorkshop: false, shouldContinue: true },
+    { mode: "all", denyWorkshop: false, shouldContinue: false },
+    { mode: "off", denyWorkshop: true, shouldContinue: false },
+  ] as const)(
+    "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
+    async ({ mode, denyWorkshop, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            isolated: {
+              sandbox: { mode },
+              tools: { deny: denyWorkshop ? ["skill_workshop"] : [] },
+            },
+          },
+        },
+      });
+      params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+      }
+    },
+  );
+
   it("rewrites the agent and normalized command bodies and continues", async () => {
     const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
 
@@ -103,8 +166,7 @@ describe("learn command", () => {
       "Revise the best pending proposal or update the best Workshop-owned skill before creating anything new.",
     );
     expect(instruction).toContain("Make at most one proposal mutation.");
-    expect(instruction).toContain("first ~60 characters");
-    expect(instruction).toContain("never invent flags, commands, paths, APIs");
+    expect(instruction).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
 
   it("replies without continuing when the workshop is unavailable", async () => {

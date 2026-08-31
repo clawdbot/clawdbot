@@ -125,6 +125,10 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 }> {
   if (!message || typeof message !== "object") {
     return [];
@@ -132,7 +136,17 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
     const path = fact.path ?? fact.url;
     return path
-      ? [{ path, mediaType: fact.contentType ?? fact.kind, fileName: fact.fileName }]
+      ? [
+          {
+            path,
+            mediaType: fact.contentType ?? fact.kind,
+            fileName: fact.fileName,
+            ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
+            ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
+            ...(fact.width !== undefined ? { width: fact.width } : {}),
+            ...(fact.height !== undefined ? { height: fact.height } : {}),
+          },
+        ]
       : [];
   });
 }

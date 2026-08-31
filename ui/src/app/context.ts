@@ -10,12 +10,14 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
+import type { UiSettings } from "./settings.ts";
 import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
@@ -34,6 +36,7 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly settings: UiSettings;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
@@ -79,6 +82,7 @@ export type ApplicationChatAttachmentHandoff = {
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
   } | null;
+  retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
   dispose(): void;
 };
@@ -92,6 +96,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly agentSelection: AgentSelectionCapability;
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
+  readonly scopeUpgrade: ScopeUpgradeCapability;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;

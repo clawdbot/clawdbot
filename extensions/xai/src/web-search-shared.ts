@@ -9,7 +9,6 @@ import {
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_DEFAULT_WEB_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -37,6 +36,7 @@ export function buildXaiWebSearchPayload(params: {
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
   truncated?: boolean;
+  source?: "web_search" | "x_search";
 }): Record<string, unknown> {
   return {
     query: params.query,
@@ -45,7 +45,7 @@ export function buildXaiWebSearchPayload(params: {
     tookMs: params.tookMs,
     externalContent: {
       untrusted: true,
-      source: "web_search",
+      source: params.source ?? "web_search",
       provider: params.provider,
       wrapped: true,
     },

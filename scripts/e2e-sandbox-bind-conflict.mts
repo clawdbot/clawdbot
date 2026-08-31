@@ -5,7 +5,7 @@
  * Prerequisites: Docker or Podman, Node >=22.19, pnpm install, and the selected image.
  * Usage:
  *   OPENCLAW_SANDBOX_E2E_ENGINE=podman \
- *   OPENCLAW_SANDBOX_E2E_IMAGE=alpine:3.20 \
+ *   OPENCLAW_SANDBOX_E2E_IMAGE=alpine:3.24 \
  *   node --import tsx scripts/e2e-sandbox-bind-conflict.mts
  */
 import { spawnSync } from "node:child_process";
@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatErrorMessage } from "./lib/error-format.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type WorkspaceMountModule = Pick<
@@ -224,7 +225,12 @@ try {
   }
 } catch (err) {
   const engineError = isRecord(err) ? err : {};
-  const msg = engineError.stderr ? String(engineError.stderr) : String(engineError.message ?? err);
+  const msg =
+    typeof engineError.stderr === "string" && engineError.stderr
+      ? engineError.stderr
+      : typeof engineError.message === "string"
+        ? engineError.message
+        : formatErrorMessage(err);
   if (msg.includes("Duplicate mount point") || msg.includes("duplicate mount")) {
     fail(`Duplicate mount point rejected by ${engine}`);
     console.log(msg.slice(0, 500));

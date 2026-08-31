@@ -35,9 +35,39 @@ let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
-import { deliverSlackSlashReplies } from "./replies.js";
+import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+
+describe("sanitizeSlackMonitorReplyPayload", () => {
+  it.each([
+    { name: "drops reasoning", payload: { text: "private", isReasoning: true }, expected: null },
+    { name: "drops internal-only text", payload: { text: "⚠️ 🛠️ Exec failed: " }, expected: null },
+    {
+      name: "preserves visible prose",
+      payload: { text: "The directory is missing.\n⚠️ 🛠️ Exec failed: " },
+      expected: { text: "The directory is missing." },
+    },
+    {
+      name: "preserves media when internal text is removed",
+      payload: { text: "⚠️ 🛠️ Exec failed: ", mediaUrl: "https://example.com/a.png" },
+      expected: { text: undefined, mediaUrl: "https://example.com/a.png" },
+    },
+    {
+      name: "preserves structured content when internal text is removed",
+      payload: {
+        text: "⚠️ 🛠️ Exec failed: ",
+        channelData: { slack: { blocks: [{ type: "divider" }] } },
+      },
+      expected: {
+        text: undefined,
+        channelData: { slack: { blocks: [{ type: "divider" }] } },
+      },
+    },
+  ])("$name", ({ payload, expected }) => {
+    expect(sanitizeSlackMonitorReplyPayload(payload)).toEqual(expected);
+  });
+});
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {

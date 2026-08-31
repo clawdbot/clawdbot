@@ -58,8 +58,9 @@ describe("sessionsCompactCommand", () => {
   it.each([
     { tokensBefore: 20, tokensAfter: 30 },
     { tokensBefore: 36, tokensAfter: 36 },
+    { tokensBefore: -1, tokensAfter: -2 },
   ])(
-    "does not print a growth arrow for $tokensBefore -> $tokensAfter token counts",
+    "does not print a token arrow for non-comparable $tokensBefore -> $tokensAfter counts",
     async ({ tokensBefore, tokensAfter }) => {
       callGatewayCli.mockResolvedValue({
         ok: true,

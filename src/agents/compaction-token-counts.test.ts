@@ -15,6 +15,7 @@ describe("resolveCompactionTokenDecrease", () => {
     [Number.NaN, 36],
     [36, Number.NaN],
     [Number.POSITIVE_INFINITY, 36],
+    [-1, -2],
   ])("rejects non-comparable counts %s -> %s", (before, after) => {
     expect(resolveCompactionTokenDecrease(before, after)).toBeUndefined();
   });

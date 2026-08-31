@@ -28,7 +28,7 @@ export function resolveFeishuCardTemplate(template?: string): string | undefined
   return normalized;
 }
 
-function escapeFeishuCardMarkdownText(text: string): string {
+export function escapeFeishuCardMarkdownText(text: string): string {
   return text.replace(/[&<>]/g, (char) => {
     switch (char) {
       case "&":
@@ -43,11 +43,11 @@ function escapeFeishuCardMarkdownText(text: string): string {
   });
 }
 
-function escapeFeishuCardPlainText(text: string): string {
+export function escapeFeishuCardPlainText(text: string): string {
   return escapeFeishuCardMarkdownText(text).replace(/([\\`*_{}[\]()#+\-!|>~])/g, "\\$1");
 }
 
-function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
+export function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
   if (!trimmed) {
     return undefined;

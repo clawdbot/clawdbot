@@ -1269,7 +1269,7 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
-Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1316,6 +1316,8 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
 
     Multi-account precedence:
 
+    - Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win; with neither scope set, defaults remain `pairing` and `allowlist` respectively.
+    - `userTokenReadOnly` also inherits the channel setting when omitted; its default remains `true`.
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
     - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
     - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
@@ -1334,6 +1336,8 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
     - `disabled`
 
     Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
+
+    When invited into an allowed channel, OpenClaw posts one short introduction grounded in the channel name, purpose or topic, and available recent messages. Set `channels.slack.joinIntro: false` to disable these introductions; `channels.slack.accounts.<accountId>.joinIntro` overrides the channel-wide setting. Introductions are enabled by default and do not require a mention, but they never bypass channel access policy or run in direct messages.
 
     Without a `channels.slack` block, the Gateway does not auto-start Slack from `SLACK_*` environment variables. Once the block exists, those variables remain default-account credential fallbacks. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is set.
 
@@ -1426,7 +1430,19 @@ Slack group DMs, also called multi-person direct messages or MPDMs, are not chan
 To bring the app into a group DM, use one of these Slack-supported paths:
 
 1. Convert the group DM to a private channel, then ask a current member to invite the app with `/invite @YourBot`. An API-based invite must call `conversations.invite` with a token whose actor is already a member and allowed to invite the app.
-2. Have the app open a new MPDM with `conversations.open` using a bot token with `mpim:write`, passing the human recipients in `users`. Slack includes the calling bot user automatically.
+2. Ask the app to use the message tool's `conversation-open` action with the human recipients in `userIds`. It calls `conversations.open` using the configured write identity; bot accounts need `mpim:write`. Slack includes the calling account automatically.
+
+```json
+{
+  "action": "conversation-open",
+  "channel": "slack",
+  "userIds": ["U12345678", "U23456789"]
+}
+```
+
+Provide 1-8 distinct member IDs, excluding the calling account. One recipient opens a 1:1 DM (requiring `im:write`); multiple recipients open or reuse a group DM with that exact audience. The result contains `channelId` and a routable `target`. Send the message with `action: "send"` and that exact `target`.
+
+Use `accountId` to select a configured Slack account and `teamId` for an explicit workspace. The current workspace is inherited only for the same originating account; detached Enterprise operations require `teamId`. Opening is controlled by the `messages` action gate. It does not change DM/read policy, grant history access, or send a message by itself.
 
 ## Threading, sessions, and reply tags
 
@@ -1467,7 +1483,7 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
 
-By default, the acknowledgement stays static while Slack's native agent/assistant thread status shows progress with rotating loading messages. Set `messages.statusReactions.enabled: true` to opt into the queued/thinking/tool/done/error reaction lifecycle instead.
+The acknowledgement stays static during work. With `messages.statusReactions.enabled: true`, actual failures briefly show an error reaction before restoring the acknowledgement. Tool calls, thinking, compaction, and long-running tools do not cycle or accumulate reactions, and successful completion does not flash a separate success emoji.
 
 ### Emoji (`ackReaction`)
 
@@ -1516,10 +1532,10 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
 - `block`: append chunked preview updates.
 - `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
-- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
+- `streaming.preview.toolProgress`: controls tool previews in `partial` and `block` modes (default: `true`). In `progress` mode, ordinary tool activity drives one work summary rather than visible tool rows.
+- `streaming.preview.commandText`: `status` hides command/exec text in tool previews (default); `raw` includes it. Progress summaries do not show ordinary command lines.
 
-Hide raw command/exec text while keeping compact progress lines:
+Use the default quiet progress presentation:
 
 ```json
 {
@@ -1528,8 +1544,7 @@ Hide raw command/exec text while keeping compact progress lines:
       "streaming": {
         "mode": "progress",
         "progress": {
-          "toolProgress": true,
-          "commandText": "status"
+          "nativeTaskCards": true
         }
       }
     }
@@ -1539,9 +1554,9 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan milestones, or one stable work-summary row when no plan exists. It does not turn each tool call into a task. Routine updates coalesce at one-second intervals; approvals, actual failures, and completion bypass that delay. The card appears only once a turn does real work, so a plain question is answered without one.
 
-Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, recent activity, tool/file totals, and elapsed time, and finalizes to success or error.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. With the other progress controls below, commentary appears as italic text only, and an eligible final text answer replaces that same Slack message:
 
@@ -1878,26 +1893,30 @@ Config path:
 - `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
 - `agentFilter`, `sessionFilter`
 
-Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-exec approver resolves. Slack can also handle native plugin approvals through this native-client
-path when Slack plugin approvers resolve and the request matches the native-client filters. Set
-`enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
-force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
-native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
-delivery uses Slack plugin approvers instead.
+Slack native exec approvals require `enabled: true` or `"auto"` and at least one
+resolved exec approver. Leaving `enabled` unset or setting it to `false` disables
+native exec approval delivery. Slack can also handle native plugin approvals
+through this native-client path when Slack plugin approvers resolve and the
+request matches its filters. Disabling Slack exec approvals does not disable
+native plugin approval delivery enabled through `approvals.plugin`, which uses
+Slack plugin approvers instead.
 
-Default behavior with no explicit Slack exec approval config:
+Minimal Slack-native configuration using command owners as approvers:
 
 ```json5
 {
+  channels: {
+    slack: {
+      execApprovals: { enabled: "auto" },
+    },
+  },
   commands: {
     ownerAllowFrom: ["slack:U12345678"],
   },
 }
 ```
 
-Explicit Slack-native config is only needed when you want to override approvers, add filters, or
-opt into origin-chat delivery:
+To override approvers, add filters, or opt into origin-chat delivery:
 
 ```json5
 {
@@ -1926,6 +1945,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- When the bot itself joins an allowed channel, it posts one introduction grounded in the channel name, purpose or topic, and available recent messages. Introductions are enabled by default, never run in direct messages, and can be disabled with `channels.slack.joinIntro: false` or overridden per account with `channels.slack.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for the history limits, once-per-room behavior, and untrusted-content handling.
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
@@ -1983,6 +2003,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
+- group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
@@ -2139,6 +2160,8 @@ When a single Slack message contains multiple file attachments:
 - Downloaded media references are aggregated into the message context.
 - Processing order follows Slack's file order in the event payload.
 - A failure in one attachment's download does not block others.
+- Failed or blocked files remain in the agent context with a bounded reason, and each failed file produces one warning after any URL refresh retry.
+- Files beyond the eight-file limit are not downloaded. Their references carry an `omitted: 8-file limit` reason. Long unavailable-file lists are visibly truncated, while the notice retains the total unavailable attachment count.
 
 ### Size, download, and model limits
 

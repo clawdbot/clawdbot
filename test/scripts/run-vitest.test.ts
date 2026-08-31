@@ -255,6 +255,45 @@ describe("scripts/run-vitest", () => {
     ).toHaveLength(2);
   });
 
+  it("bounds the complete E2E selection without multiplying configured workers", () => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", "--maxWorkers", "2"];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([
+      [...argv, "--shard=1/4"],
+      [...argv, "--shard=2/4"],
+      [...argv, "--shard=3/4"],
+      [...argv, "--shard=4/4"],
+    ]);
+  });
+
+  it.each([
+    ["doctor"],
+    ["src/commands"],
+    ["src/commands/doctor.e2e.test.ts"],
+    ["--", "doctor"],
+    ["--shard=2/3"],
+    ["--shard", "2/3"],
+    ["--watch"],
+    ["--run=false"],
+    ["--no-run"],
+    ["--bail", "1"],
+    ["--coverage"],
+    ["--outputFile", "report.json"],
+    ["--reporter=json"],
+    ["--listTags"],
+    ["--listTags=json"],
+    ["--clearCache"],
+    ["--standalone"],
+    ["--testNamePattern", "doctor"],
+    ["-t", "doctor"],
+    ["--exclude", "src/**"],
+    ["--root", "/other"],
+    ["--project", "other"],
+    ["--help"],
+  ])("preserves explicit E2E selection or execution options %j", (...options) => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", ...options];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
+  });
+
   it.each([
     ["local watch default", ["--config", "test/vitest/vitest.gateway-server.config.ts"]],
     ["explicit watch", ["watch", "--config", "test/vitest/vitest.gateway-server.config.ts"]],
@@ -688,6 +727,17 @@ describe("scripts/run-vitest", () => {
         "--coverage=false",
       ]),
     ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
   });
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {

@@ -3,6 +3,7 @@
  * CLI auth, dynamic model normalization, usage auth, media, and stream wrappers.
  */
 import { formatCliCommand, parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginApi,
@@ -51,12 +52,15 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
-import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_OFF_THINKING_PROFILE,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_OFF_THINKING_PROFILE,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
@@ -128,7 +132,7 @@ const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
-  "OpenClaw prefers Claude CLI reuse when it is available on the host.",
+  "OpenClaw prefers the native Claude CLI runtime when it is available on the host.",
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
@@ -968,8 +972,10 @@ function buildAnthropicAuthDoctorHint(params: {
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
-  if (!credential) {
+  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+    resolveAnthropicCliAuthProbe(ctx.env ?? process.env),
+  );
+  if (authStatus.status !== "available") {
     throw new Error(
       [
         "Claude CLI is not authenticated on this host.",
@@ -977,7 +983,7 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       ].join("\n"),
     );
   }
-  return buildAnthropicCliMigrationResult(ctx.config, credential);
+  return buildAnthropicCliMigrationResult(ctx.config);
 }
 
 async function runAnthropicCliMigrationNonInteractive(ctx: {
@@ -985,13 +991,15 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const credentialResult = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
-  if (credentialResult.status !== "available") {
+  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+    resolveAnthropicCliAuthProbe(process.env),
+  );
+  if (authStatus.status !== "available") {
     const error =
-      credentialResult.status === "unreadable"
+      authStatus.status === "unreadable"
         ? [
-            'Auth choice "anthropic-cli" found Claude CLI credentials on this host, but they could not be read non-interactively.',
-            "Re-run this command without --non-interactive, or use --auth-choice setup-token / --anthropic-api-key <key>.",
+            'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
+            `Run ${formatCliCommand("claude auth status")}, then retry.`,
           ]
         : [
             'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
@@ -1002,7 +1010,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
     return null;
   }
 
-  const result = buildAnthropicCliMigrationResult(ctx.config, credentialResult.credential);
+  const result = buildAnthropicCliMigrationResult(ctx.config);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =
@@ -1034,6 +1042,18 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
+function resolveAnthropicCliAuthProbe(env: NodeJS.ProcessEnv): {
+  command: string;
+  env: NodeJS.ProcessEnv;
+} {
+  const backend = buildAnthropicCliBackend().config;
+  const probeEnv = { ...env, ...backend.env };
+  for (const name of backend.clearEnv ?? []) {
+    delete probeEnv[name];
+  }
+  return { command: backend.command, env: probeEnv };
+}
+
 /** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
@@ -1041,6 +1061,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
   return {
     id: providerId,
     label: "Anthropic",
+    deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
     docsPath: "/providers/models",
     hookAliases: [CLAUDE_CLI_BACKEND_ID],
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -1159,9 +1180,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ provider }) =>
+    resolveSyntheticAuth: ({ config, provider }) =>
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth()
+        ? resolveClaudeCliSyntheticAuth(config)
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
@@ -1200,9 +1221,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   let supportsDynamicSystemPromptSections = false;
-  // Start once at plugin load. The first Claude execution awaits the same promise,
-  // so a post-ready gateway hook cannot race the first session's immutable argv.
-  const dynamicSystemPromptSectionsProbe = (async () => {
+  // Catalog discovery must not materialize the runtime for a CLI-only capability probe.
+  // First CLI executions share and await it before resolving immutable process argv.
+  const ensureDynamicSystemPromptSectionsSupport = createLazyRuntimeModule(async () => {
     try {
       const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
         timeoutMs: 1_500,
@@ -1214,10 +1235,10 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     } catch {
       supportsDynamicSystemPromptSections = false;
     }
-  })();
+  });
   api.registerCliBackend(
     buildAnthropicCliBackend({
-      ensureDynamicSystemPromptSectionsSupport: () => dynamicSystemPromptSectionsProbe,
+      ensureDynamicSystemPromptSectionsSupport,
       supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
     }),
   );

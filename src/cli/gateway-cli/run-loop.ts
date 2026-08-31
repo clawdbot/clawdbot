@@ -12,6 +12,7 @@ import {
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
@@ -175,6 +176,7 @@ export async function runGatewayLoop(params: {
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
+    flushDiagnosticsTimeline();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushed = await Promise.race([
       flushLogger().then(() => true),
@@ -474,7 +476,11 @@ export async function runGatewayLoop(params: {
     }
     return reacquireAndResumeInProcessRestart();
   };
-  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
+  // The managed unit grants this same budget to a graceful SIGTERM.  A plain
+  // supervisor restart does not carry a gateway restart intent, but it can
+  // still interrupt an embedded model/tool turn; leave enough time for that
+  // turn to settle before systemd resorts to SIGKILL.
+  const SUPERVISOR_STOP_TIMEOUT_MS = 330_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const clearPendingStartupForceExitTimer = () => {
     clearTimeout(pendingStartupForceExitTimer ?? undefined);
@@ -570,6 +576,7 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
+      let shutdownFailed = false;
       const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
@@ -600,46 +607,8 @@ export async function runGatewayLoop(params: {
               const {
                 abortEmbeddedAgentRun,
                 createGatewayActiveWorkSnapshot,
-                getRuntimeConfig,
-                listActiveEmbeddedRunSessionIds,
-                listActiveEmbeddedRunSessionKeys,
-                markRestartAbortedMainSessions,
                 waitForGatewayActiveWork,
               } = await loadGatewayLifecycleRuntimeModule();
-              let activeRestartSessionKeysAtDrainStart = new Set<string>();
-              let activeRestartSessionIdsAtDrainStart = new Set<string>();
-              let hasMarkedActiveMainSessionsForRestart = false;
-              const markActiveMainSessionsForRestart = async (reason: string) => {
-                // A second successful mark races recovery claims; failed or empty
-                // attempts must remain retryable at the forced-restart boundary.
-                if (hasMarkedActiveMainSessionsForRestart) {
-                  return;
-                }
-                const sessionKeys = new Set<string>([
-                  ...activeRestartSessionKeysAtDrainStart,
-                  ...listActiveEmbeddedRunSessionKeys(),
-                ]);
-                const sessionIds = new Set<string>([
-                  ...activeRestartSessionIdsAtDrainStart,
-                  ...listActiveEmbeddedRunSessionIds(),
-                ]);
-                if (sessionKeys.size === 0 && sessionIds.size === 0) {
-                  return;
-                }
-                try {
-                  const result = await markRestartAbortedMainSessions({
-                    cfg: getRuntimeConfig(),
-                    sessionKeys,
-                    sessionIds,
-                    reason,
-                  });
-                  hasMarkedActiveMainSessionsForRestart = result.marked > 0;
-                } catch (err) {
-                  gatewayLog.warn(
-                    `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
-                  );
-                }
-              };
               const formatBlockers = (
                 snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>,
               ) => snapshot.blockers.map((blocker) => blocker.message).join("; ");
@@ -650,13 +619,7 @@ export async function runGatewayLoop(params: {
               const initialSnapshot = createGatewayActiveWorkSnapshot();
               activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
               activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
-              activeRestartSessionKeysAtDrainStart = new Set(listActiveEmbeddedRunSessionKeys());
-              activeRestartSessionIdsAtDrainStart = new Set(listActiveEmbeddedRunSessionIds());
-
-              // Best-effort abort for compacting runs so transcript settlement does
-              // not remain pending across restart boundaries.
               if (activeRunsAtDrainStart > 0) {
-                await markActiveMainSessionsForRestart("gateway restart drain");
                 abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
               }
 
@@ -667,10 +630,6 @@ export async function runGatewayLoop(params: {
               }
               if (restartIntent?.force) {
                 gatewayLog.warn("forced restart requested; skipping active work drain");
-                await markActiveMainSessionsForRestart(
-                  restartIntent.reason ?? "forced gateway restart",
-                );
-                abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                 return;
               }
 
@@ -703,8 +662,6 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn(
                 `active-work drain timeout reached; proceeding with restart: ${formatBlockers(drain.snapshot)}`,
               );
-              await markActiveMainSessionsForRestart("gateway restart drain timeout");
-              abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
             },
             () => [
               ["activeWork", activeWorkAtDrainStart],
@@ -780,6 +737,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
+        shutdownFailed = true;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -789,7 +747,9 @@ export async function runGatewayLoop(params: {
         }
         if (isRestart) {
           try {
-            if (handoffClosed) {
+            if (shutdownFailed) {
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
                 managedUpdateCancellation === "restored-in-process",
@@ -1035,7 +995,7 @@ export async function runGatewayLoop(params: {
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
-      // Rotate ownership before reset pumps preserved queue entries.
+      // Rotation aborts rootless stale owners before reset pumps preserved queues.
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();
       abortActiveCronTaskRuns("Gateway restarting.");
@@ -1052,6 +1012,9 @@ export async function runGatewayLoop(params: {
       // suspension admission callback and discards the coordinator entry.
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
+      // resetAllLanes installs the next admission generation. Keep the local
+      // mirror aligned so a restart queued during cleanup closes that generation.
+      restartDrainingMarked = false;
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       // Rent: a failed startup has no server close handle, and restart hooks can
@@ -1069,9 +1032,6 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstIteration = true;
     for (;;) {
-      // The restart hook reopens admission before reloading durable state. Clear
-      // its local mirror first so a failed reload cannot skip the next drain.
-      restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
       const isRestartIteration = !isFirstIteration;
       isFirstIteration = false;

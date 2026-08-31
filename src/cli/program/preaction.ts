@@ -14,6 +14,7 @@ import {
 } from "../command-execution-startup.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
+import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
@@ -130,11 +131,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
-    applyResolvedCommandOutputMode(jsonOutputMode);
+    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
+    applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
       commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
+      machineOutputMode,
       env: process.env,
     });
     await applyCliExecutionStartupPresentation({

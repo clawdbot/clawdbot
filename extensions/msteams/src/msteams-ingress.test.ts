@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";

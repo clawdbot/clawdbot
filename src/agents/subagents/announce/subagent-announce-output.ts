@@ -397,11 +397,9 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
   if (outcome.status === "ok") {
     return "ok";
   }
-  if (outcome.status === "timeout") {
-    return "timeout";
-  }
-  if (outcome.status === "error") {
-    return outcome.error?.trim() ? `error: ${outcome.error.trim()}` : "error";
+  if (outcome.status === "timeout" || outcome.status === "error") {
+    const error = outcome.error?.trim();
+    return error ? `${outcome.status}: ${error}` : outcome.status;
   }
   return "unknown";
 }

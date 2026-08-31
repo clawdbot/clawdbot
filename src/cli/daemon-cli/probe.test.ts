@@ -274,58 +274,63 @@ describe("probeGatewayStatus", () => {
     expect(result.version).toBe("2026.5.6");
   });
 
-  it("uses a real status RPC when requireRpc is enabled", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    callGatewayMock.mockImplementationOnce(async (opts) => {
-      opts.onHelloOk?.({
-        server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
-        auth: { role: "operator", scopes: ["operator.admin"] },
+  it.each([undefined, 19191])(
+    "uses a status RPC with local port override %s when requireRpc is enabled",
+    async (localPortOverride) => {
+      callGatewayMock.mockReset();
+      probeGatewayMock.mockReset();
+      callGatewayMock.mockImplementationOnce(async (opts) => {
+        opts.onHelloOk?.({
+          server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        });
+        return { runtimeVersion: "2026.8.1", status: "ok" };
       });
-      return { runtimeVersion: "2026.8.1", status: "ok" };
-    });
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      token: "temp-token",
-      tlsFingerprint: "abc123",
-      timeoutMs: 5_000,
-      json: true,
-      requireRpc: true,
-      configPath: "/tmp/openclaw-daemon/openclaw.json",
-    });
+      const result = await probeGatewayStatus({
+        url: "ws://127.0.0.1:19191",
+        token: "temp-token",
+        tlsFingerprint: "abc123",
+        timeoutMs: 5_000,
+        json: true,
+        requireRpc: true,
+        localPortOverride,
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+      });
 
-    expect(result).toEqual({
-      ok: true,
-      kind: "read",
-      capability: "admin_capable",
-      auth: {
-        role: "operator",
-        scopes: ["operator.admin"],
+      expect(result).toEqual({
+        ok: true,
+        kind: "read",
         capability: "admin_capable",
-      },
-      server: {
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          capability: "admin_capable",
+        },
+        server: {
+          version: "2026.8.1",
+          buildId: "build-1",
+          connId: "conn-1",
+        },
         version: "2026.8.1",
-        buildId: "build-1",
-        connId: "conn-1",
-      },
-      version: "2026.8.1",
-    });
-    expect(probeGatewayMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledOnce();
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:19191",
-      token: "temp-token",
-      password: undefined,
-      tlsFingerprint: "abc123",
-      preauthHandshakeTimeoutMs: undefined,
-      method: "status",
-      timeoutMs: 5_000,
-      sharedStateMode: "read-only",
-      configPath: "/tmp/openclaw-daemon/openclaw.json",
-      onHelloOk: expect.any(Function),
-    });
-  });
+      });
+      expect(probeGatewayMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).toHaveBeenCalledOnce();
+      expect(callGatewayMock).toHaveBeenCalledWith({
+        url: "ws://127.0.0.1:19191",
+        localPortOverride,
+        token: "temp-token",
+        password: undefined,
+        tlsFingerprint: "abc123",
+        preauthHandshakeTimeoutMs: undefined,
+        method: "status",
+        timeoutMs: 5_000,
+        sharedStateMode: "read-only",
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+        onHelloOk: expect.any(Function),
+      });
+    },
+  );
 
   it("keeps required status to one timeout-bound RPC", async () => {
     callGatewayMock.mockReset();
@@ -351,6 +356,7 @@ describe("probeGatewayStatus", () => {
       tlsFingerprint: undefined,
       preauthHandshakeTimeoutMs: 30_000,
       config,
+      localPortOverride: undefined,
       method: "status",
       timeoutMs: 30_000,
       sharedStateMode: "read-only",
@@ -403,6 +409,7 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
       sharedStateMode: "read-only",
       onHelloOk: expect.any(Function),
+      localPortOverride: undefined,
     });
   });
 

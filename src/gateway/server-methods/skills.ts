@@ -53,9 +53,7 @@ import {
 } from "../../skills/security/clawhub-verdicts.js";
 import {
   getSkillCuratorStatus,
-  pinCuratedSkill,
-  restoreCuratedSkill,
-  unpinCuratedSkill,
+  SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
 } from "../../skills/workshop/curator.js";
 import { assertExpectedRevisionHash } from "../../skills/workshop/service-evaluation.js";
 import {
@@ -117,7 +115,6 @@ function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawH
     params.slug,
     params.version ?? null,
     params.force ?? false,
-    params.acknowledgeClawHubRisk ?? false,
   ]);
   return getOrCreatePromise(clawHubInstallsInFlight, key, () => installSkillFromClawHub(params), {
     evictOnSettled: true,
@@ -143,6 +140,16 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
 
 function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
+}
+
+function respondRetiredSkillCuratorAction(
+  { params, respond }: GatewayRequestHandlerOptions,
+  method: `skills.curator.${"pin" | "restore" | "unpin"}`,
+): void {
+  if (!assertValidParams(params, validateSkillsCuratorActionParams, method, respond)) {
+    return;
+  }
+  respondSkillWorkshopError(respond, new Error(SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE));
 }
 
 function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
@@ -370,47 +377,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     respond(true, getSkillCuratorStatus(), undefined);
   },
-  "skills.curator.pin": async ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.pin", respond)
-    ) {
-      return;
-    }
-    try {
-      respond(true, pinCuratedSkill(params.skill), undefined);
-    } catch (err) {
-      respondSkillWorkshopError(respond, err);
-    }
-  },
-  "skills.curator.unpin": async ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.unpin", respond)
-    ) {
-      return;
-    }
-    try {
-      respond(true, unpinCuratedSkill(params.skill), undefined);
-    } catch (err) {
-      respondSkillWorkshopError(respond, err);
-    }
-  },
-  "skills.curator.restore": async ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSkillsCuratorActionParams,
-        "skills.curator.restore",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      respond(true, restoreCuratedSkill(params.skill), undefined);
-    } catch (err) {
-      respondSkillWorkshopError(respond, err);
-    }
-  },
+  "skills.curator.pin": (options) =>
+    respondRetiredSkillCuratorAction(options, "skills.curator.pin"),
+  "skills.curator.unpin": (options) =>
+    respondRetiredSkillCuratorAction(options, "skills.curator.unpin"),
+  "skills.curator.restore": (options) =>
+    respondRetiredSkillCuratorAction(options, "skills.curator.restore"),
   "skills.proposals.list": async ({ params, respond, context }) => {
     await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.list",
@@ -686,14 +658,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: string;
         version?: string;
         force?: boolean;
-        acknowledgeClawHubRisk?: boolean;
       };
       const result = await installClawHubSkillDeduped({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
-        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         logger: context.logGateway,
         config: cfg,
       });
@@ -788,7 +758,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug?: string;
         all?: boolean;
         force?: boolean;
-        acknowledgeClawHubRisk?: boolean;
       };
       if (!p.slug && !p.all) {
         respond(
@@ -818,7 +787,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
         ...(p.force ? { force: true } : {}),
-        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         logger: context.logGateway,
         config: resolved.cfg,
       });

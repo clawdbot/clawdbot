@@ -143,10 +143,60 @@ describe("buildTelegramPresentationButtons", () => {
         questionButtonOptions([{ questionId, optionValues: ["Staging", "Production"] }]),
       ),
     ).toEqual([
-      [
-        { text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined },
-        { text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined },
-      ],
+      [{ text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined }],
+      [{ text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined }],
+    ]);
+  });
+
+  it("puts full question choices on separate Telegram rows", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const optionValues = ["Use the safe deployment target", "Deploy directly to production"];
+
+    expect(
+      buildTelegramPresentationButtons(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: optionValues.map((optionValue) => ({
+                label: optionValue,
+                action: { type: "question" as const, questionId, optionValue },
+              })),
+            },
+          ],
+        },
+        questionButtonOptions([{ questionId, optionValues }]),
+      )?.map((row) => row.map((button) => button.text)),
+    ).toEqual([[optionValues[0]], [optionValues[1]]]);
+  });
+
+  it("renders the typed custom-input action as a native Other button", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const optionValues = ["Unit", "Lint"];
+
+    expect(
+      buildTelegramPresentationButtons(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Other…",
+                  action: {
+                    type: "question" as const,
+                    questionId,
+                    intent: "custom-input" as const,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        questionButtonOptions([{ questionId, optionValues }]),
+      ),
+    ).toEqual([
+      [expect.objectContaining({ text: "Other…", callback_data: `tgqo1:${questionId}` })],
     ]);
   });
 
@@ -218,9 +268,12 @@ describe("buildTelegramPresentationButtons", () => {
     );
 
     expect(rows?.map((row) => row.map((button) => button.callback_data))).toEqual([
-      [`tgq1:${firstQuestionId}:0`, `tgq1:${firstQuestionId}:1`],
-      [`tgq1:${secondQuestionId}:0`, `tgq1:${secondQuestionId}:1`],
-      [`tgq1:${firstQuestionId}:0`, `tgq1:${firstQuestionId}:2`],
+      [`tgq1:${firstQuestionId}:0`],
+      [`tgq1:${firstQuestionId}:1`],
+      [`tgq1:${secondQuestionId}:0`],
+      [`tgq1:${secondQuestionId}:1`],
+      [`tgq1:${firstQuestionId}:0`],
+      [`tgq1:${firstQuestionId}:2`],
     ]);
   });
 

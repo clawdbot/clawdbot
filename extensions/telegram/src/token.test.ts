@@ -26,6 +26,11 @@ describe("resolveTelegramBotUserIdFromToken", () => {
 
 describe("resolveTelegramToken", () => {
   const tempWorkspaces: TempWorkspaceSync[] = [];
+  const collisionProviders = [
+    { source: "file", path: "/unused" },
+    { source: "exec", command: "/unused" },
+    { source: "store" },
+  ] satisfies NonNullable<NonNullable<OpenClawConfig["secrets"]>["providers"]>[string][];
 
   function createTokenFile(fileName: string, contents = "file-token\n"): string {
     const workspace = tempWorkspaceSync({
@@ -403,57 +408,82 @@ describe("resolveTelegramToken", () => {
     });
   });
 
-  it("does not fall back to TELEGRAM_BOT_TOKEN when an explicit env SecretRef is configured but unavailable", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
-    vi.stubEnv("TELEGRAM_REF_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_REF_TOKEN" },
+  it.each(
+    [undefined, ...collisionProviders].map((declaration) => ({
+      declaration,
+      source: declaration?.source ?? "undeclared",
+    })),
+  )(
+    "does not fall back to TELEGRAM_BOT_TOKEN when a selected ref is unavailable ($source)",
+    ({ declaration }) => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
+      vi.stubEnv("TELEGRAM_REF_TOKEN", "");
+      const cfg = {
+        secrets: { providers: declaration ? { default: declaration } : undefined },
+        channels: {
+          telegram: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_REF_TOKEN" },
+          },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
-    expect(resolveTelegramToken(cfg)).toEqual({
-      token: "",
-      source: "none",
-    });
-  });
+      expect(resolveTelegramToken(cfg)).toEqual({
+        token: "",
+        source: "none",
+      });
+    },
+  );
 
-  it("does not fall through when account-level env SecretRef is configured but unavailable", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
-    vi.stubEnv("TELEGRAM_ACCOUNT_REF_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "channel-token",
-          accounts: {
-            default: {
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "TELEGRAM_ACCOUNT_REF_TOKEN",
+  it.each(
+    [undefined, ...collisionProviders].map((declaration) => ({
+      declaration,
+      source: declaration?.source ?? "undeclared",
+    })),
+  )(
+    "does not fall through when an account-level selected ref is unavailable ($source)",
+    ({ declaration }) => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
+      vi.stubEnv("TELEGRAM_ACCOUNT_REF_TOKEN", "");
+      const cfg = {
+        secrets: {
+          defaults: { env: "selected" },
+          providers: declaration ? { selected: declaration } : undefined,
+        },
+        channels: {
+          telegram: {
+            botToken: "channel-token",
+            tokenFile: createTokenFile("fallback.txt", "channel-file-token"),
+            accounts: {
+              default: {
+                botToken: {
+                  source: "env",
+                  provider: "selected",
+                  id: "TELEGRAM_ACCOUNT_REF_TOKEN",
+                },
               },
             },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
-    expect(resolveTelegramToken(cfg)).toEqual({
-      token: "",
-      source: "none",
-    });
-  });
+      expect(resolveTelegramToken(cfg)).toEqual({
+        token: "",
+        source: "none",
+      });
+    },
+  );
 
-  it("does not bypass env provider allowlists for env-backed SecretRefs", () => {
+  it.each(
+    [[], ["OTHER_TELEGRAM_BOT_TOKEN"], ["TELEGRAM_BOT_TOKEN"]].map((allowlist) => ({ allowlist })),
+  )("honors the selected explicit env provider allowlist $allowlist", ({ allowlist }) => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
     const cfg = {
       secrets: {
+        defaults: { env: "telegram-env" },
         providers: {
           "telegram-env": {
             source: "env",
-            allowlist: ["OTHER_TELEGRAM_BOT_TOKEN"],
+            allowlist,
           },
         },
       },
@@ -464,9 +494,13 @@ describe("resolveTelegramToken", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveTelegramToken(cfg)).toThrow(
-      /not allowlisted in secrets\.providers\.telegram-env\.allowlist/i,
-    );
+    if (allowlist.includes("TELEGRAM_BOT_TOKEN")) {
+      expect(resolveTelegramToken(cfg)).toEqual({ token: "secretref-env-token", source: "config" });
+    } else {
+      expect(() => resolveTelegramToken(cfg)).toThrow(
+        /not allowlisted in secrets\.providers\.telegram-env\.allowlist/i,
+      );
+    }
   });
 
   it("throws when an env SecretRef points at a provider configured with another source", () => {
@@ -505,19 +539,26 @@ describe("resolveTelegramToken", () => {
     );
   });
 
-  it("accepts env SecretRefs that use the configured default env provider alias", () => {
+  it.each(
+    ["default", "telegram-runtime"].flatMap((provider) =>
+      [undefined, ...collisionProviders].map((declaration) => ({
+        provider,
+        declaration,
+        source: declaration?.source ?? "undeclared",
+      })),
+    ),
+  )("accepts env default $provider shadowing $source", ({ provider, declaration }) => {
     vi.stubEnv("TELEGRAM_RUNTIME_TOKEN", "secretref-env-token");
     const cfg = {
       secrets: {
-        defaults: {
-          env: "telegram-runtime",
-        },
+        defaults: provider === "default" ? undefined : { env: provider },
+        providers: declaration ? { [provider]: declaration } : undefined,
       },
       channels: {
         telegram: {
           botToken: {
             source: "env",
-            provider: "telegram-runtime",
+            provider,
             id: "TELEGRAM_RUNTIME_TOKEN",
           },
         },

@@ -84,6 +84,30 @@ private actor VoiceWakeCommandBarrier {
         #expect(await capture.value == "hello")
     }
 
+    @Test @MainActor func `failed Voice Wake delivery replaces the triggered status`() async throws {
+        let appModel = NodeAppModel()
+        let manager = appModel.voiceWake
+        manager.triggerWords = ["openclaw"]
+        manager.isEnabled = true
+
+        let transcript = "openclaw hello"
+        let triggerRange = try #require(transcript.range(of: "openclaw"))
+        let commandRange = try #require(transcript.range(of: "hello"))
+        manager._test_handleRecognitionCallback(
+            transcript: transcript,
+            segments: [
+                WakeWordSegment(text: "openclaw", start: 0, duration: 0.2, range: triggerRange),
+                WakeWordSegment(text: "hello", start: 0.8, duration: 0.2, range: commandRange),
+            ],
+            errorText: nil)
+
+        for _ in 0..<100 where manager.statusText == "Triggered" {
+            await Task.yield()
+        }
+
+        #expect(manager.statusText == "Gateway not connected")
+    }
+
     @Test @MainActor func `suppression cancels an admitted command before dispatch`() async throws {
         let manager = VoiceWakeManager._test_withoutRestartDelays()
         let barrier = VoiceWakeCommandBarrier()
@@ -99,7 +123,11 @@ private actor VoiceWakeCommandBarrier {
         manager.isListening = true
         manager.configure { command in
             await barrier.suspend()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                throw NSError(domain: "VoiceWakeManagerStateTests", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Stale delivery failed",
+                ])
+            }
             await capture.set(command)
         }
 
@@ -126,6 +154,7 @@ private actor VoiceWakeCommandBarrier {
 
         #expect(await barrier.observedCancellation == true)
         #expect(await capture.value == nil)
+        #expect(manager.statusText == "Paused")
     }
 
     @Test @MainActor func `Voice Wake deactivates only its owned audio session`() {

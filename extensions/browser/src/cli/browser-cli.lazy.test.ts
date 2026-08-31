@@ -373,6 +373,36 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
   });
 
+  it.each([
+    ["before", ["browser", "--timeout", "60000", "status"]],
+    ["after", ["browser", "status", "--timeout", "60000"]],
+  ])(
+    "preserves parent timeout %s a lazily loaded leaf in positional mode",
+    async (_place, args) => {
+      const program = new Command().name("openclaw").enablePositionalOptions();
+      registerBrowserCli(program, ["node", "openclaw", ...args]);
+
+      await program.parseAsync(args, { from: "user" });
+
+      const command = requireTrailingCommand(
+        requireFirstCall(manageMocks.statusAction, "status action call"),
+        "status action",
+      );
+      expect(command.parent?.opts().timeout).toBe("60000");
+    },
+  );
+
+  it("preserves parent timeout before a nested lazily loaded storage-family leaf", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const args = ["browser", "--timeout", "60000", "cookies", "set", "session", "abc"];
+    registerBrowserCli(program, ["node", "openclaw", ...args]);
+
+    await program.parseAsync(args, { from: "user" });
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    expect(cookieCall[3]).toMatchObject({ timeout: "60000" });
+  });
+
   it("skips browser option values when selecting the lazy command group", async () => {
     const program = new Command();
     program.name("openclaw");

@@ -198,27 +198,36 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.MessageSidFull).toBe("full-message-guid");
   });
 
-  it("includes reply-to context fields + suffix", async () => {
-    const cfg = baseCfg();
-    const message: IMessagePayload = {
-      id: 5,
-      chat_id: 55,
-      sender: "+15550001111",
-      is_from_me: false,
-      text: "replying now",
-      is_group: false,
-      reply_to_id: 9001,
-      reply_to_text: "original message",
-      reply_to_sender: "+15559998888",
-    };
-    const ctxPayload = await buildDispatchContextPayload({ cfg, message });
+  it.each([
+    { parent: { reply_to_guid: "reply-parent" }, expected: "reply-parent" },
+    { parent: { thread_originator_guid: "thread-parent" }, expected: "thread-parent" },
+    {
+      parent: { thread_originator_guid: "thread-parent", reply_to_guid: "reply-parent" },
+      expected: "thread-parent",
+    },
+  ])(
+    "includes the authoritative reply parent, context fields, and suffix",
+    async ({ parent, expected }) => {
+      const message: IMessagePayload = {
+        id: 5,
+        chat_id: 55,
+        sender: "+15550001111",
+        is_from_me: false,
+        text: "replying now",
+        is_group: false,
+        ...parent,
+        reply_to_text: "original message",
+        reply_to_sender: "+15559998888",
+      };
+      const ctxPayload = await buildDispatchContextPayload({ cfg: baseCfg(), message });
 
-    expect(ctxPayload.ReplyToId).toBe("9001");
-    expect(ctxPayload.ReplyToBody).toBe("original message");
-    expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
-    expect(ctxPayload.Body ?? "").toContain("original message");
-  });
+      expect(ctxPayload.ReplyToId).toBe(expected);
+      expect(ctxPayload.ReplyToBody).toBe("original message");
+      expect(ctxPayload.ReplyToSender).toBe("+15559998888");
+      expect(ctxPayload.Body ?? "").toContain(`[Replying to +15559998888 id:${expected}]`);
+      expect(ctxPayload.Body ?? "").toContain("original message");
+    },
+  );
 
   it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
     const cfg = baseCfg();
@@ -234,7 +243,7 @@ describe("imessage monitor gating + envelope builders", () => {
       is_from_me: false,
       text: "@openclaw replying now",
       is_group: true,
-      reply_to_id: 9001,
+      reply_to_guid: "parent-9001",
       reply_to_text: "blocked quote",
       reply_to_sender: "+15559998888",
     };
@@ -266,7 +275,7 @@ describe("imessage monitor gating + envelope builders", () => {
       is_from_me: false,
       text: "@openclaw replying now",
       is_group: true,
-      reply_to_id: 9001,
+      reply_to_guid: "parent-9001",
       reply_to_text: "quoted context",
       reply_to_sender: "+15559998888",
     };
@@ -278,10 +287,10 @@ describe("imessage monitor gating + envelope builders", () => {
       groupPolicy: "allowlist",
     });
 
-    expect(ctxPayload.ReplyToId).toBe("9001");
+    expect(ctxPayload.ReplyToId).toBe("parent-9001");
     expect(ctxPayload.ReplyToBody).toBe("quoted context");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9001]");
   });
 
   it("keeps group reply context when the group allowlist matches an access group", async () => {
@@ -304,7 +313,7 @@ describe("imessage monitor gating + envelope builders", () => {
       is_from_me: false,
       text: "@openclaw replying now",
       is_group: true,
-      reply_to_id: 9002,
+      reply_to_guid: "parent-9002",
       reply_to_text: "own quoted context",
       reply_to_sender: "+15559998888",
     };
@@ -316,10 +325,10 @@ describe("imessage monitor gating + envelope builders", () => {
       groupPolicy: "allowlist",
     });
 
-    expect(ctxPayload.ReplyToId).toBe("9002");
+    expect(ctxPayload.ReplyToId).toBe("parent-9002");
     expect(ctxPayload.ReplyToBody).toBe("own quoted context");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9002]");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9002]");
   });
 
   it("keeps group reply context in allowlist_quote mode", async () => {
@@ -336,7 +345,7 @@ describe("imessage monitor gating + envelope builders", () => {
       is_from_me: false,
       text: "@openclaw replying now",
       is_group: true,
-      reply_to_id: 9001,
+      reply_to_guid: "parent-9001",
       reply_to_text: "quoted context",
       reply_to_sender: "+15559998888",
     };
@@ -348,10 +357,10 @@ describe("imessage monitor gating + envelope builders", () => {
       groupPolicy: "allowlist",
     });
 
-    expect(ctxPayload.ReplyToId).toBe("9001");
+    expect(ctxPayload.ReplyToId).toBe("parent-9001");
     expect(ctxPayload.ReplyToBody).toBe("quoted context");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9001]");
   });
 
   it("treats configured chat_id as a group session even when is_group is false", async () => {

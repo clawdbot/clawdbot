@@ -4,7 +4,7 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/ind
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   buildGatewayProbeConnectionDetails: vi.fn(),
   callGateway: vi.fn(),
   isGatewayCredentialsRequiredError: vi.fn(),
+  isContainerEnvironment: vi.fn(() => false),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
@@ -56,6 +57,10 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: mocks.readGatewayServiceState,
   resolveGatewayService: mocks.resolveGatewayService,
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -558,6 +563,7 @@ describe("doctor runtime tool schema checks", () => {
 
 describe("doctor gateway runtime checks", () => {
   beforeEach(() => {
+    mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
     });
@@ -818,6 +824,16 @@ describe("doctor gateway runtime checks", () => {
   it("skips daemon findings for remote gateway mode", async () => {
     await expect(
       collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
+    ).resolves.toEqual([]);
+
+    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
+  });
+
+  it("skips host-service findings for a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
     ).resolves.toEqual([]);
 
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();

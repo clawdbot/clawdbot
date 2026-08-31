@@ -1,3 +1,4 @@
+import "../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, svg } from "lit";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
@@ -55,8 +56,6 @@ import {
   SPLIT_HALF,
   TAIL_FAN,
 } from "./lobster-pet-sprites.ts";
-
-export { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
 

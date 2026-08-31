@@ -39,7 +39,6 @@ export async function completeCopilotAttempt(params: {
   resumeFailureRecovered: boolean;
   sdkSessionId: string | undefined;
   sentTurnStarted: boolean;
-  sessionIdUsed: string | undefined;
   settledFinalizationAssistantCompleted: boolean;
   settledToolFinalization: boolean;
   timedOut: boolean;
@@ -68,7 +67,6 @@ export async function completeCopilotAttempt(params: {
     resumeFailureRecovered,
     sdkSessionId,
     sentTurnStarted,
-    sessionIdUsed,
     settledFinalizationAssistantCompleted,
     settledToolFinalization,
     timedOut,
@@ -129,7 +127,6 @@ export async function completeCopilotAttempt(params: {
     promptError,
     resumeFailureRecovered,
     sdkSessionId,
-    sessionIdUsed,
     timedOut,
     timedOutDuringCompaction,
     toolMetas: snap ? [...snap.toolMetas] : [],

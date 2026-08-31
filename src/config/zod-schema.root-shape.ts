@@ -214,19 +214,26 @@ export const OpenClawSchemaShape = {
   ui: z
     .strictObject({
       seamColor: HexColorSchema.optional(),
-      assistant: z
-        .strictObject({
-          name: z.string().max(50).optional(),
-          avatar: z.string().max(2_000_000).optional(),
-        })
-        .optional(),
       // Operator display prefs. Canonical here (agent-writable via approval,
       // synced across devices); the Control UI mirrors them into local
       // storage for instant boot and offline fallback.
       prefs: z
         .strictObject({
           theme: z
-            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
+            .union([
+              z.literal("claw"),
+              z.literal("knot"),
+              z.literal("dash"),
+              z.literal("absolutely"),
+              z.literal("tide"),
+              z.literal("beacon"),
+              z.literal("phosphor"),
+              z.literal("crt"),
+              z.literal("manuscript"),
+              z.literal("rose"),
+              z.literal("miami"),
+              z.literal("custom"),
+            ])
             .optional(),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])

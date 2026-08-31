@@ -28,6 +28,24 @@ describe("session snapshot merge", () => {
     });
   });
 
+  it.each([undefined, "inherit"] as const)(
+    "preserves a required creation sandbox against a %s patch",
+    (sandbox) => {
+      const existing: SessionEntry = {
+        ...initial,
+        sandbox: "required",
+      };
+      const patch: Partial<SessionEntry> = {};
+      Object.assign(patch, { sandbox });
+
+      expect(mergeSessionEntry(existing, patch)).toMatchObject({ sandbox: "required" });
+    },
+  );
+
+  it("does not add a creation sandbox to an existing unstamped session", () => {
+    expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
+  });
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {
@@ -362,6 +380,29 @@ describe("session snapshot merge", () => {
     };
 
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
+  });
+
+  it("projects a runtime admission without losing its refreshed recovery budget", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 4, chargedAttempts: 3 },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 5,
+        startedAttempt: 3,
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next,
+      current: initialRecovery,
+    });
+
+    expect(merged.mainRestartRecovery).toEqual(next.mainRestartRecovery);
   });
 
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {

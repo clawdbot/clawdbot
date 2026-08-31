@@ -7,7 +7,6 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
   resolveSandboxContext,
-  resolveSessionAgentIds,
   registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
@@ -17,6 +16,8 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -210,15 +211,17 @@ export async function runCodexAppServerSideQuestion(
   }
   if (isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)) {
     throw new Error(
-      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
+      "Normal Codex turns are supported on nodes, but /btw is not yet bound to the active placement.",
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: params.sessionKey,
     config: params.cfg,
     agentId: params.agentId,
   });
+  const agentWorkspaceDir =
+    params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     permissionMode: params.sessionEntry.permissionMode,
     execOverrides: params.sessionEntry.permissionMode
@@ -305,6 +308,7 @@ export async function runCodexAppServerSideQuestion(
       appServer: connection.appServer,
       permissionMode: params.sessionEntry.permissionMode,
       sessionRoot: params.sessionEntry.sessionRoot,
+      defaultRoot: agentWorkspaceDir,
       pluginConfig,
       canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel(reviewerContext),
       requirementsToml: readCodexRequirementsToml({}),
@@ -318,12 +322,14 @@ export async function runCodexAppServerSideQuestion(
     appServer,
     permissionMode: params.sessionEntry.permissionMode,
     sessionRoot: params.sessionEntry.sessionRoot,
+    defaultRoot: agentWorkspaceDir,
   });
   const cwd = resolveCodexSessionPermissionCwd({
     permissionMode: params.sessionEntry.permissionMode,
     sessionRoot: params.sessionEntry.sessionRoot,
+    defaultRoot: agentWorkspaceDir,
     requestedCwd: binding.cwd,
-    fallbackCwd: params.workspaceDir || process.cwd(),
+    fallbackCwd: agentWorkspaceDir,
   });
   const runId = params.opts?.runId ?? randomUUID();
   // Side runs inherit private-binding capabilities, not outer model metadata.
@@ -750,7 +756,7 @@ export async function runCodexAppServerSideQuestion(
               ephemeral: true,
               threadSource: "user",
             },
-            requestOptions,
+            requestOptions(),
           );
         },
         onClientChange: rebindClientHandlers,

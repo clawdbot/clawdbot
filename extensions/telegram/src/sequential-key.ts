@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
+  getCachedTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageForumFlagHint,
   resolveTelegramMessageThreadSpec,
@@ -214,7 +215,26 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   // Raw durable-ingress fixtures and malformed updates can carry a partial
   // message. Treat missing chat identity as an unknown lane instead of
   // crashing before the queue records the update.
-  const threadSpec = msg?.chat ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  //
+  // General forum topic (topic:1) messages lack both `is_topic_message` and
+  // `is_forum` in the payload, so the forum flag hint is undefined. Fall back
+  // to the in-memory cache (populated by earlier messages or getChat calls)
+  // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
+  // base lane, preventing a cross-lane session-init race.
+  const forumHint = msg?.chat
+    ? resolveTelegramMessageForumFlagHint({
+        chatType: msg.chat.type,
+        isForum: msg.chat.is_forum,
+        isTopicMessage: msg.is_topic_message,
+      })
+    : undefined;
+  const cachedForumFlag =
+    forumHint === undefined && msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
+      ? getCachedTelegramForumFlag(msg.chat.id)
+      : undefined;
+  const threadSpec = msg?.chat
+    ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
+    : undefined;
   const threadId =
     threadSpec?.scope === "dm"
       ? shouldUseTelegramDmThreadSession({

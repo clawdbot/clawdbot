@@ -11,7 +11,7 @@
     "@pierre/diffs": "1.3.5",
     "@shikijs/langs": "4.4.3",
     "playwright-core": "1.62.1",
-    "typebox": "1.3.14",
+    "typebox": "1.3.16",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -23,7 +23,7 @@
     ],
     "install": {
       "npmSpec": "@openclaw/diffs",
-      "localPath": "extensions/diffs",
+      "clawhubSpec": "clawhub:@openclaw/diffs",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.30"
     },
@@ -34,6 +34,7 @@
       "build": "node --import tsx ../../scripts/build-diffs-viewer-runtime.mts curated"
     },
     "build": {
+      "bundledDist": false,
       "openclawVersion": "2026.8.1",
       "staticAssets": [
         {

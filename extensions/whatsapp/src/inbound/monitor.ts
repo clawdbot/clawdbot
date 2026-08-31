@@ -1,8 +1,8 @@
 // Whatsapp plugin module composes the inbound socket, metadata, and delivery owners.
 import type { WAMessageKey, WASocket } from "baileys";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSubsystemLogger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "../socket-timing.js";
 import {

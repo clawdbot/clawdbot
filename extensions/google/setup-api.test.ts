@@ -7,19 +7,20 @@ import setupEntry from "./setup-api.js";
 describe("google setup entry", () => {
   it("registers setup runtime providers declared by the manifest", () => {
     const providerIds: string[] = [];
-    const cliBackendIds: string[] = [];
+    const cliBackends: CliBackendPlugin[] = [];
 
     setupEntry.register({
       registerProvider(provider: ProviderPlugin) {
         providerIds.push(provider.id);
       },
       registerCliBackend(backend: CliBackendPlugin) {
-        cliBackendIds.push(backend.id);
+        cliBackends.push(backend);
       },
     } as never);
 
     expect(providerIds).toEqual(["google-vertex"]);
-    expect(cliBackendIds).toEqual(["google-gemini-cli"]);
+    expect(cliBackends.map((backend) => backend.id)).toEqual(["google-gemini-cli"]);
+    expect(cliBackends[0]?.config.reliability?.watchdog?.resume).toBeUndefined();
   });
 });
 

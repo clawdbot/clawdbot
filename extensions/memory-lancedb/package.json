@@ -10,8 +10,8 @@
   "dependencies": {
     "@lancedb/lancedb": "0.37.1",
     "apache-arrow": "18.1.0",
-    "openai": "7.4.0",
-    "typebox": "1.3.14"
+    "openai": "7.5.0",
+    "typebox": "1.3.16"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

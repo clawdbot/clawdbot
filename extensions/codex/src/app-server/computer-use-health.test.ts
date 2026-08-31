@@ -24,6 +24,15 @@ describe("Codex Computer Use periodic health", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000);
 
     expect(client.request).toHaveBeenCalledWith(
+      "thread/start",
+      {
+        input: [],
+        developerInstructions: "OpenClaw Computer Use readiness probe",
+        ephemeral: true,
+      },
+      { timeoutMs: 60_000 },
+    );
+    expect(client.request).toHaveBeenCalledWith(
       "mcpServer/tool/call",
       {
         threadId: "health-probe-thread-1",
@@ -41,15 +50,9 @@ describe("Codex Computer Use periodic health", () => {
     ).toHaveLength(1);
   });
 
-  it("repairs stale CUA children and retries once after a failed probe", async () => {
+  it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
     vi.useFakeTimers();
     const client = createClient({ liveTestFailures: 1 });
-    const repairComputerUseMcpChildren = vi.fn(async () => ({
-      attempted: true,
-      killedPids: [1234],
-      warnings: [],
-      message: "Terminated 1 stale Computer Use MCP child process.",
-    }));
 
     startCodexComputerUseHealthMonitor({
       client: client.client,
@@ -58,7 +61,6 @@ describe("Codex Computer Use periodic health", () => {
         healthCheckEnabled: true,
         healthCheckIntervalMinutes: 30,
       }),
-      repairComputerUseMcpChildren,
     });
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -66,7 +68,9 @@ describe("Codex Computer Use periodic health", () => {
     expect(
       client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
     ).toHaveLength(2);
-    expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
+      timeoutMs: 60_000,
+    });
   });
 
   it("stops an existing monitor when health checks are disabled", async () => {
@@ -187,6 +191,9 @@ function createClient(options: { liveTestFailures?: number } = {}) {
         throw new Error("hung");
       }
       return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "config/mcpServer/reload") {
+      return undefined;
     }
     if (method === "thread/unsubscribe" || method === "thread/archive") {
       expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });

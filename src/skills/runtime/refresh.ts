@@ -11,8 +11,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import {
-  resolvePluginSkillDirs,
-  resolvePluginSkillDirsFromMetadata,
+  resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata,
 } from "../loading/plugin-skills.js";
 import {
   resolveAllowedSkillSymlinkTargetRealPaths,
@@ -128,13 +128,14 @@ function resolveWatchTargets(
     .map((d) => normalizeOptionalString(d) ?? "")
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
-  const pluginSkillDirs = pluginMetadataSnapshot
-    ? resolvePluginSkillDirsFromMetadata({
+  const pluginSkillRoots = pluginMetadataSnapshot
+    ? resolvePluginSkillRootsFromMetadata({
         workspaceDir,
         config,
         metadataSnapshot: pluginMetadataSnapshot,
       })
-    : resolvePluginSkillDirs({ workspaceDir, config });
+    : resolvePluginSkillRoots({ workspaceDir, config });
+  const pluginSkillDirs = pluginSkillRoots.map((root) => root.dir);
   const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(config);
   const signature = JSON.stringify({
     basePaths: baseRoots.map((root) => toWatchRoot(root.path)),

@@ -2,15 +2,21 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import {
+  getConfigResolutionFacts,
+  serializeConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type {
-  PreparedModelRuntimeAuth,
-  PreparedModelRuntimeAuthScope,
+import {
+  setPreparedModelFullCatalogAuth,
+  type PreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -22,8 +28,12 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   kind: "catalog";
   generationFingerprint: string;
   input: PreparedModelRuntimeInput;
+  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
+  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
 export type PreparedModelWorkerRequest =
@@ -62,22 +72,6 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{ status: "failed"; requestId: number; error: string }>;
 
-const authByFullCatalog = new WeakMap<
-  object,
-  Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>
->();
-
-function setPreparedModelFullCatalogAuth(
-  modelCatalog: object,
-  auth: Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>,
-): void {
-  authByFullCatalog.set(modelCatalog, auth);
-}
-
-export function getPreparedModelFullCatalogAuth(modelCatalog: object) {
-  return authByFullCatalog.get(modelCatalog);
-}
-
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
@@ -95,12 +89,18 @@ function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot
 
 export function fingerprintPreparedModelCatalogGeneration(params: {
   input: PreparedModelRuntimeInput;
+  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
+  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
+  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
   pluginMetadataSnapshot: PluginMetadataSnapshot;
 }): string {
   return fingerprintPreparedRuntimeFacts({
     input: params.input,
+    sourceConfigForSecrets: params.sourceConfigForSecrets,
+    configResolutionFacts: params.configResolutionFacts,
+    sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
     authStore: params.authStore,
     providerIds: params.providerIds,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
@@ -117,7 +117,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const input: PreparedModelRuntimeInput = {
     ...(source.agentId ? { agentId: source.agentId } : {}),
     agentDir: source.agentDir,
-    inheritedAuthDir: source.inheritedAuthDir ?? source.agentDir,
+    ...(source.inheritedAuthDir ? { inheritedAuthDir: source.inheritedAuthDir } : {}),
     ...(source.workspaceDir ? { workspaceDir: source.workspaceDir } : {}),
     ...(source.readOnly ? { readOnly: true } : {}),
     skipCredentials: true,
@@ -128,19 +128,35 @@ export function createPreparedModelCatalogWorkerInput(params: {
       : {}),
     config: source.config,
   };
+  // Capture the authored pair now; structured cloning cannot carry process-local Ref provenance.
+  const sourceConfigForSecrets = projectConfigOntoRuntimeSourceSnapshot(source.config);
+  const configResolutionFacts = serializeConfigResolutionFacts(source.config);
+  const sourceConfigResolutionFacts =
+    getConfigResolutionFacts(source.config) === getConfigResolutionFacts(sourceConfigForSecrets)
+      ? configResolutionFacts
+      : serializeConfigResolutionFacts(sourceConfigForSecrets);
   const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
   const providerIds = [...params.agentFacts.providerIds];
+  const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
+    params.pluginMetadataSnapshot;
   return {
     kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
       input,
+      sourceConfigForSecrets,
+      configResolutionFacts,
+      sourceConfigResolutionFacts,
       authStore,
       providerIds,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     }),
     input,
+    sourceConfigForSecrets,
+    configResolutionFacts,
+    sourceConfigResolutionFacts,
     authStore,
     providerIds,
+    pluginMetadataSnapshot,
   };
 }
 

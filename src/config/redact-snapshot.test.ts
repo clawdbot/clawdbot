@@ -658,7 +658,7 @@ describe("redactConfigSnapshot", () => {
       },
     } satisfies OpenClawConfig;
     const raw = JSON.stringify(sourceConfig);
-    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig), "snapshot");
+    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig));
     const snapshot = {
       ...makeSnapshot(sourceConfig, raw),
       config: runtimeConfig,

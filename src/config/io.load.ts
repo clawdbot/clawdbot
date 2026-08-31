@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { materializeConfigForLoad } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { maybeRecoverSuspiciousConfigReadSync } from "./io.observe-recovery.js";
 import {
@@ -22,6 +21,7 @@ import {
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
 import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -39,12 +39,17 @@ export function loadConfigFromContext(
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
+      const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
+      const metadata = context.createValidationPluginMetadataSnapshotLoader({
+        effectiveConfigRaw: config,
+        env: deps.env,
+      });
       return context.finalizeLoadedRuntimeConfig(
-        materializeConfigForLoad(
-          context,
-          coerceConfig(migratePersistedImplicitMainRoster({}).config),
-          {},
-          undefined,
+        materializeRuntimeConfig(
+          config,
+          context.options.pluginValidation === "core-only"
+            ? { manifestRegistry: { plugins: [] } }
+            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry },
         ),
       );
     }
@@ -151,12 +156,9 @@ export function loadConfigFromContext(
         return loadConfigFromContext(context, { skipSuspiciousRecovery: true });
       }
     }
-    const cfg = materializeConfigForLoad(
-      context,
-      validated.config,
-      effectiveConfigRaw,
-      pluginMetadata.getManifestRegistry(),
-    );
+    const cfg = materializeRuntimeConfig(validated.config, {
+      manifestRegistry: pluginMetadata.getManifestRegistry(),
+    });
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({
         path: configPath,

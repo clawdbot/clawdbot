@@ -52,6 +52,22 @@ export function createChatFlowE2eSuite() {
   });
 }
 
+export async function buildLocalWebchatAudioMessage(source: string) {
+  const { buildWebchatAssistantMessageFromReplyPayloads } =
+    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
+  const audioPath = new URL(source).pathname;
+  const localRoot = path.dirname(audioPath);
+  await mkdir(localRoot, { recursive: true });
+  await writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  return expectDefined(
+    await buildWebchatAssistantMessageFromReplyPayloads(
+      [{ mediaUrl: source, trustedLocalMedia: true }],
+      { localRoots: [localRoot] },
+    ),
+    "Gateway-produced WebChat audio message",
+  );
+}
+
 export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export function requireString(value: unknown, label: string): string {
@@ -228,4 +244,53 @@ export async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .map((row) => row.getAttribute("data-session-key") ?? "")
         .filter((key) => key.startsWith("agent:main:session-")),
     );
+}
+
+/** Read native queued Blobs without going through a credential-filtered UI projection. */
+export async function readOutboxPayloadAttachments(page: Page, key: string) {
+  return page.evaluate(async (payloadKey) => {
+    type StoredPayload = {
+      attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
+    };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-control-ui");
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("IDB open failed")),
+        { once: true },
+      );
+    });
+    try {
+      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
+        const request = database
+          .transaction("outboxPayloads")
+          .objectStore("outboxPayloads")
+          .get(payloadKey);
+        request.addEventListener(
+          "success",
+          () => resolve(request.result as StoredPayload | undefined),
+          { once: true },
+        );
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("IDB read failed")),
+          { once: true },
+        );
+      });
+      return payload
+        ? Promise.all(
+            payload.attachments.map(async ({ blob, fileName, mimeType }) => {
+              let binary = "";
+              for (const byte of new Uint8Array(await blob.arrayBuffer())) {
+                binary += String.fromCharCode(byte);
+              }
+              return { fileName, mimeType, base64: btoa(binary) };
+            }),
+          )
+        : null;
+    } finally {
+      database.close();
+    }
+  }, key);
 }

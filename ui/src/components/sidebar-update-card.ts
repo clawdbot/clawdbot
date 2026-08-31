@@ -18,6 +18,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) compact = false;
@@ -339,6 +340,23 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
     const actionable = isUpdateActionable(update, this.updateSchedule, this.updateBusy);
+    const updateAction = html`<button
+      class="sidebar-update-card__action ${busy ? "sidebar-update-card__action--busy" : ""}"
+      type="button"
+      aria-disabled=${this.canUpdate ? nothing : "true"}
+      ?disabled=${busy}
+      @click=${this.startUpdate}
+    >
+      <span class="sidebar-update-card__icon" aria-hidden="true"
+        >${busy ? icons.refresh : icons.download}</span
+      >
+      <span
+        class="sidebar-update-card__text"
+        role=${countdownActive ? "timer" : nothing}
+        aria-live=${countdownActive ? "off" : nothing}
+        >${text}</span
+      >
+    </button>`;
     return html`
       <div
         class="sidebar-update-card"
@@ -348,25 +366,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         ${this.renderStatus()}
         ${actionable
           ? html`<div class="sidebar-update-card__actions">
-              <button
-                class="sidebar-update-card__action ${busy
-                  ? "sidebar-update-card__action--busy"
-                  : ""}"
-                type="button"
-                title=${this.canUpdate ? nothing : t("updates.adminRequired")}
-                ?disabled=${busy || !this.canUpdate}
-                @click=${this.startUpdate}
-              >
-                <span class="sidebar-update-card__icon" aria-hidden="true"
-                  >${busy ? icons.refresh : icons.download}</span
-                >
-                <span
-                  class="sidebar-update-card__text"
-                  role=${countdownActive ? "timer" : nothing}
-                  aria-live=${countdownActive ? "off" : nothing}
-                  >${text}</span
-                >
-              </button>
+              ${this.canUpdate
+                ? updateAction
+                : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                    ${updateAction}
+                  </openclaw-tooltip>`}
               ${showHold && campaign
                 ? html`
                     <button

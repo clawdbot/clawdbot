@@ -32,7 +32,13 @@ describe("createHeartbeatResponseTool", () => {
 
     const outcome = readSchemaProperty(tool.parameters, "outcome");
     const priority = readSchemaProperty(tool.parameters, "priority");
+    const scratch = readSchemaProperty(tool.parameters, "scratch");
 
+    expect(tool.catalogMode).toBe("direct-only");
+    expect(tool.description).toContain("Scratch is monitor prose only.");
+    expect(tool.description).not.toMatch(/\b(?:cron|automations)\b/);
+    expect(JSON.stringify(tool.parameters)).not.toMatch(/\b(?:cron|automations)\b/);
+    expect(scratch.description).toContain("not a recurring schedule");
     expect(outcome.type).toBe("string");
     expect(outcome.enum).toEqual(["no_change", "progress", "done", "blocked", "needs_attention"]);
     expect(priority.type).toBe("string");

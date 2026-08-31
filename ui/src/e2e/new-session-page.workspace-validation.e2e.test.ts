@@ -4,6 +4,7 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SOURCE_REPO,
   TARGET_REPO,
@@ -100,7 +101,7 @@ async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
 }
 
 suite.define(() => {
-  it("preserves a selected workspace worktree when branch rediscovery is unavailable", async () => {
+  it("blocks a selected workspace worktree when branch rediscovery is unavailable until cleared", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
@@ -141,13 +142,20 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("keep this task isolated");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const start = page.getByRole("button", { name: "Start session" });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await trigger.click();
+      await worktree.click();
+      await expect.poll(() => trigger.count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
         message: "keep this task isolated",
-        worktree: true,
       });
+      expect(create.params).not.toHaveProperty("worktree");
     });
   });
 
@@ -231,9 +239,9 @@ suite.define(() => {
       await trigger.click();
       const worktree = place.getByRole("button", { name: "Worktree" });
       expect(await worktree.isEnabled()).toBe(true);
-      expect(await worktree.getAttribute("title")).toBe(
-        "Couldn't verify Git for this folder. Choose it again to retry.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(worktree))
+        .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await worktree.click();
       await expect.poll(() => trigger.count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
@@ -289,9 +297,9 @@ suite.define(() => {
       await whereTrigger.click();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe(
-        "Couldn't verify Git for this folder. Choose it again to retry.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(cloud))
+        .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await page.keyboard.press("Escape");
       await projectTrigger.click();
       await project.getByText("Advanced", { exact: true }).click();
@@ -415,7 +423,7 @@ suite.define(() => {
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
         const message = page.locator(".new-session-page__message");
         const projectTrigger = page.locator("#new-session-project-trigger");
-        const start = page.locator("button.chat-send-btn");
+        const start = page.locator("button.new-session-page__start-submit");
         await message.fill("retry this draft after reconnect");
         await gateway.deferNext("sessions.create");
         await start.click();

@@ -1,5 +1,7 @@
 // Feishu plugin module implements presentation card behavior.
 import {
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
@@ -8,11 +10,52 @@ import {
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  escapeFeishuCardMarkdownText,
+  escapeFeishuCardPlainText,
+  resolveSafeFeishuButtonUrl,
+} from "./native-card.js";
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
+type FeishuPresentationTextFormat = "plain" | "markdown";
 
 const FEISHU_CARD_MAX_BYTES = 30 * 1024;
 const FEISHU_CARD_MAX_ELEMENTS = 200;
+
+export function resolveFeishuRichReply(payload: { interactive?: unknown; presentation?: unknown }) {
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
+  return {
+    interactive,
+    presentation:
+      normalizeMessagePresentation(payload.presentation) ??
+      (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined),
+  };
+}
+
+export function buildFeishuPresentationFallback(params: {
+  text?: string;
+  presentation?: NormalizedMessagePresentation;
+  fallbackHasCommand?: boolean;
+  textFormat?: FeishuPresentationTextFormat;
+}) {
+  const fallbackText = renderFeishuPresentationFallbackText(params, params.textFormat);
+  // Only warn when the rendered fallback exposes a command the user can copy.
+  const fallbackHasCommand =
+    params.fallbackHasCommand === true ||
+    params.presentation?.blocks.some((block) =>
+      block.type === "select"
+        ? block.options.some(({ action }) => action?.type === "command")
+        : block.type === "buttons" &&
+          block.buttons.some(({ action, disabled }) => !disabled && action?.type === "command"),
+    ) === true;
+  return {
+    fallbackText,
+    fallbackHasCommand,
+    commentText: fallbackHasCommand
+      ? `${fallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
+      : fallbackText,
+  };
+}
 
 function countFeishuCardElements(value: unknown, ancestors = new Set<object>()): number {
   if (Array.isArray(value)) {
@@ -57,34 +100,6 @@ export function assertFeishuCardWithinEnvelope(
   }
 }
 
-function escapeFeishuCardMarkdownText(text: string): string {
-  return text.replace(/[&<>]/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      default:
-        return char;
-    }
-  });
-}
-
-function resolveSafeFeishuButtonUrl(url: string | undefined): string | undefined {
-  const trimmed = url?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {
   if (button.action?.type === "url" || button.action?.type === "web-app") {
     return button.action.url;
@@ -105,6 +120,37 @@ function resolveFeishuCommandButtonValue(button: MessagePresentationButton): str
   return button.value;
 }
 
+export function renderFeishuPresentationFallbackText(
+  params: Parameters<typeof renderMessagePresentationFallbackText>[0],
+  textFormat: FeishuPresentationTextFormat = "plain",
+): string {
+  const presentation = params.presentation;
+  return renderMessagePresentationFallbackText({
+    ...params,
+    presentation: presentation && {
+      ...presentation,
+      blocks: presentation.blocks.map((block) =>
+        block.type === "buttons"
+          ? {
+              type: block.type,
+              buttons: block.buttons.map((button) => {
+                const url = resolveFeishuButtonUrl(button);
+                // Reject the same targets everywhere; only Markdown transports escape labels.
+                return {
+                  ...button,
+                  ...(textFormat === "markdown"
+                    ? { label: escapeFeishuCardPlainText(button.label) }
+                    : {}),
+                  ...(url && !resolveSafeFeishuButtonUrl(url) ? { disabled: true } : {}),
+                };
+              }),
+            }
+          : block,
+      ),
+    },
+  });
+}
+
 function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   if (style === "primary" || style === "success") {
     return "primary";
@@ -115,26 +161,17 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   return "default";
 }
 
-function buildFeishuPayloadButton(
-  button: MessagePresentationButton,
-): Record<string, unknown> | undefined {
-  const behaviors: Record<string, unknown>[] = [];
-  const rendered: Record<string, unknown> = {
-    tag: "button",
-    text: {
-      tag: "plain_text",
-      content: button.label,
-    },
-    type: mapFeishuButtonType(button.style),
-  };
-  const url = resolveFeishuButtonUrl(button);
-  if (url) {
-    const safeUrl = resolveSafeFeishuButtonUrl(url);
-    if (safeUrl) {
-      behaviors.push({ type: "open_url", default_url: safeUrl });
-    }
-  }
+function buildFeishuPayloadButton(button: MessagePresentationButton): Record<string, unknown> {
+  const url = resolveSafeFeishuButtonUrl(resolveFeishuButtonUrl(button));
   const value = resolveFeishuCommandButtonValue(button);
+  if (button.disabled || (!url && !value)) {
+    // Keep each unavailable control visible without exposing rejected URLs or opaque values.
+    return { tag: "markdown", content: `- ${escapeFeishuCardPlainText(button.label)}` };
+  }
+  const behaviors: Record<string, unknown>[] = [];
+  if (url) {
+    behaviors.push({ type: "open_url", default_url: url });
+  }
   if (value) {
     behaviors.push({
       type: "callback",
@@ -145,11 +182,12 @@ function buildFeishuPayloadButton(
       }),
     });
   }
-  if (behaviors.length === 0) {
-    return undefined;
-  }
-  rendered.behaviors = behaviors;
-  return rendered;
+  return {
+    tag: "button",
+    text: { tag: "plain_text", content: button.label },
+    type: mapFeishuButtonType(button.style),
+    behaviors,
+  };
 }
 
 function buildFeishuCardElementsForBlock(
@@ -170,9 +208,7 @@ function buildFeishuCardElementsForBlock(
     return [{ tag: "hr" }];
   }
   if (block.type === "buttons") {
-    return block.buttons
-      .map((button) => buildFeishuPayloadButton(button))
-      .filter((button): button is Record<string, unknown> => Boolean(button));
+    return block.buttons.map(buildFeishuPayloadButton);
   }
   if (block.type === "chart") {
     return [
@@ -190,13 +226,12 @@ function buildFeishuCardElementsForBlock(
       },
     ];
   }
-  const labels = block.options.map((option) => `- ${option.label}`).join("\n");
   return [
     {
       tag: "markdown",
-      content: `${escapeFeishuCardMarkdownText(
-        block.placeholder?.trim() || "Options",
-      )}:\n${escapeFeishuCardMarkdownText(labels)}`,
+      content: escapeFeishuCardMarkdownText(
+        renderMessagePresentationFallbackText({ presentation: { blocks: [block] } }),
+      ),
     },
   ];
 }
@@ -234,20 +269,7 @@ export function buildFeishuPresentationCardElements(params: {
   if (elements.length > 0) {
     return elements;
   }
-  return [
-    {
-      tag: "markdown",
-      content: renderMessagePresentationFallbackText({
-        text: params.fallbackText,
-        presentation: params.presentation.title
-          ? {
-              ...(params.presentation.tone ? { tone: params.presentation.tone } : {}),
-              blocks: params.presentation.blocks,
-            }
-          : params.presentation,
-      }),
-    },
-  ];
+  return [{ tag: "markdown", content: "" }];
 }
 
 export function buildFeishuPresentationCard(params: {

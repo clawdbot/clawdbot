@@ -35,7 +35,6 @@ describe("buildSubagentInitialUserMessage", () => {
     const task = "UNIQUE_SUBAGENT_TASK_TOKEN\n  preserve indentation";
     const system = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:test",
-      task,
       childDepth: 1,
       maxSpawnDepth: 2,
     });

@@ -912,6 +912,117 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
+  it("keeps clients-only requests pending for approval clients without chat delivery", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo cron",
+        turnSourceChannel: "discord",
+        turnSourceAccountId: "default",
+      },
+      60_000,
+      "approval-clients-only-pending",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+    const publishRequested = vi.fn(() => 1);
+
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        hasExecApprovalClients: () => true,
+        approvalEvents: { publishRequested, publishResolved: vi.fn() },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverToApprovalClientsOnly: true,
+      deliverRequest,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: record.id }),
+      expect.objectContaining({ dropIfSlow: true }),
+    );
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(publishRequested).not.toHaveBeenCalled();
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: "allow-once" }),
+      undefined,
+    );
+  });
+
+  it("expires clients-only requests as no-route when no approval client is connected", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo cron",
+        turnSourceChannel: "discord",
+        turnSourceAccountId: "default",
+      },
+      60_000,
+      "approval-clients-only-no-route",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+    const publishRequested = vi.fn(() => 1);
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+        approvalEvents: { publishRequested, publishResolved: vi.fn() },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverToApprovalClientsOnly: true,
+      deliverRequest,
+    });
+
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(publishRequested).not.toHaveBeenCalled();
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(manager.getSnapshot(record.id)).toMatchObject({
+      resolvedBy: "no-approval-route",
+      terminalReason: "no-route",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: null }),
+      undefined,
+    );
+  });
+
   it("does not target no-device browser UI approvals to unrelated approval-scoped clients", async () => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = new ExecApprovalManager();

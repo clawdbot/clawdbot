@@ -18,6 +18,79 @@ const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
+  it("shows rejected initial configuration loads and recovers when reloaded", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const config = { agents: { entries: { main: { default: true } } } };
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          methodResponses: {
+            "agents.list": {
+              agents: [{ id: "main", name: "Main agent" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "config.get": {
+              __mockError: {
+                code: "INTERNAL_ERROR",
+                message: "Agent configuration unavailable; retry Reload Config",
+                retryable: true,
+              },
+            },
+          },
+        });
+
+        expect(
+          (await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`))?.status(),
+        ).toBe(200);
+        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("config.get");
+        const agentsPage = page.locator("openclaw-agents-page");
+        const reload = agentsPage.getByRole("button", { name: "Reload Config" });
+        await reload.waitFor();
+        if (captureUiProof) {
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              proofDir,
+              `agent-config-load-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "failed"}.png`,
+            ),
+          });
+        }
+
+        const error = agentsPage
+          .getByRole("alert")
+          .filter({ hasText: "Agent configuration unavailable" });
+        await expect.poll(() => error.isVisible()).toBe(true);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .not.toBeNull();
+
+        await gateway.setMethodResponse("config.get", {
+          config,
+          sourceConfig: config,
+          runtimeConfig: config,
+          hash: "recovered-agent-config",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        });
+        const readsBefore = (await gateway.getRequests("config.get")).length;
+        await reload.click();
+        await gateway.waitForRequest("config.get", { after: readsBefore });
+        await expect.poll(() => error.count()).toBe(0);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .toBeNull();
+      },
+    );
+  });
+
   it("submits keyed entries and surfaces Gateway validation failures", async () => {
     await suite.withPage(
       {

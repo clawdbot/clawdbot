@@ -1,3 +1,5 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
@@ -64,7 +66,7 @@ export type SidebarRecentSession = {
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
-  participants?: SessionCreatedActor[];
+  participants?: SessionParticipant[];
   participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
@@ -92,6 +94,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  color?: string;
   channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
@@ -102,6 +105,8 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   execNode?: string;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
@@ -138,13 +143,21 @@ export type SidebarRecentSession = {
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
+  | "boardFace"
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
+  | "color"
+  | "endedAt"
+  | "hasAutomation"
   | "label"
   | "lastMessagePreview"
   | "participantCount"
   | "participants"
+  | "placementProviderId"
+  | "placementProfileId"
+  | "status"
+  | "startedAt"
   | "updatedAt"
   | "workContext"
 >;
@@ -184,6 +197,10 @@ export type SidebarSessionGroupMenuState = {
 
 export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
+export type SidebarSessionOwnerFilter = {
+  ownerId: string | null;
+  involvingMe: boolean;
+};
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
 export function resolveSidebarSessionsScrollState(
@@ -228,10 +245,10 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
 };
 
-export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 
@@ -248,30 +265,16 @@ const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:
 const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show-preview";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
+const SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY = "openclaw:sidebar:sessions:hide-empty-groups";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
+const SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX =
+  "openclaw.control.sidebarSessionOwnerFilter.v1:";
 export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
   "openclaw:sidebar-hidden-catalogs-changed";
-
-export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  // Active and pinned sessions remain reachable without changing their
-  // relative order, even when their sort position falls outside the page.
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
 
 export function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
@@ -290,16 +293,43 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
 }
 
 export function loadStoredSidebarSessionsShowPreview(): boolean {
-  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) !== "false";
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) === "true";
 }
 
 export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionsHideEmptyGroups(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY) === "true";
+}
+
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
+}
+
+function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: string): string {
+  return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
+}
+
+export function loadStoredSidebarSessionOwnerFilter(
+  gatewayUrl: string,
+  selfUserId: string,
+): SidebarSessionOwnerFilter {
+  try {
+    const stored = getSafeLocalStorage()?.getItem(
+      sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
+    );
+    const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
+    return {
+      ownerId: stored === "involving-me" ? null : ownerId || null,
+      involvingMe: stored === "involving-me",
+    };
+  } catch {
+    // Privacy mode or a disabled store should not break sidebar rendering.
+    return { ownerId: null, involvingMe: false };
+  }
 }
 
 export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
@@ -363,8 +393,35 @@ export function storeSidebarSessionsShowSystem(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
 }
 
+export function storeSidebarSessionsHideEmptyGroups(hide: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY, String(hide));
+}
+
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
+export function storeSidebarSessionOwnerFilter(
+  gatewayUrl: string,
+  selfUserId: string,
+  filter: SidebarSessionOwnerFilter,
+): void {
+  try {
+    const storage = getSafeLocalStorage();
+    const key = sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId);
+    const value = filter.involvingMe
+      ? "involving-me"
+      : filter.ownerId
+        ? `owner:${filter.ownerId}`
+        : null;
+    if (value === null) {
+      storage?.removeItem(key);
+    } else {
+      storage?.setItem(key, value);
+    }
+  } catch {
+    // Keep the in-memory filter when persistence is unavailable.
+  }
 }
 
 /** People collapses to Created only where the gateway has authoritatively

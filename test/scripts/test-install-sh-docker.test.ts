@@ -568,10 +568,15 @@ function extractInstallSmokePackHelper(name: string, nextName: string): string {
   return script.slice(start, end);
 }
 
-function runInstallSmokePackHelpers(packJson: unknown, budgetBytes = 204 * 1024 * 1024) {
+function runInstallSmokePackHelpers(packJson: unknown, budgetBytes?: number) {
   const root = tempDirs.make("openclaw-install-pack-helper-");
   const packJsonPath = join(root, "pack.json");
   writeFileSync(packJsonPath, JSON.stringify(packJson), "utf8");
+  const env: NodeJS.ProcessEnv = { ...process.env, PACK_JSON_PATH: packJsonPath };
+  delete env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
+  if (budgetBytes !== undefined) {
+    env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES = String(budgetBytes);
+  }
   const result = spawnSync(
     "bash",
     [
@@ -586,11 +591,7 @@ assert_pack_unpacked_size_budget "fixture" "$PACK_JSON_PATH"`,
     ],
     {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES: String(budgetBytes),
-        PACK_JSON_PATH: packJsonPath,
-      },
+      env,
     },
   );
   return { normalized: JSON.parse(readFileSync(packJsonPath, "utf8")), result };
@@ -1243,15 +1244,31 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain("normalize_npm_pack_json_file");
     expect(script).toContain('normalize_npm_pack_json_file "$pack_json_file"');
     expect(script).toContain('normalize_npm_pack_json_file "$baseline_pack_json_file"');
+    expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
   });
 
-  it("fails the update smoke when the candidate npm pack exceeds the release budget", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it.each([
+    { label: "required native payload", unpackedSize: 243_066_603, exitCode: 0 },
+    { label: "exact budget", unpackedSize: 235 * 1024 * 1024, exitCode: 0 },
+    { label: "one byte over budget", unpackedSize: 235 * 1024 * 1024 + 1, exitCode: 1 },
+  ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode }) => {
+    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz", unpackedSize }]);
 
-    expect(script).toContain("assert_pack_unpacked_size_budget");
-    expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
-    expect(script).toContain("204 * 1024 * 1024");
-    expect(script).toContain("install smoke cannot verify pack budget");
+    expect(result.status).toBe(exitCode);
+    if (exitCode === 0) {
+      expect(result.stderr).toBe("");
+    } else {
+      expect(result.stderr).toContain(
+        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 246415360 bytes`,
+      );
+    }
+  });
+
+  it("fails closed when install smoke pack metadata has no size", () => {
+    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz" }]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("install smoke cannot verify pack budget");
   });
 
   it("normalizes npm 12 pack output and enforces the budget without tsx", () => {
@@ -1826,7 +1843,116 @@ describe("install-sh smoke runner", () => {
 });
 
 describe("bun global install smoke", () => {
-  it("packs the current tree and verifies image-provider discovery through Bun", () => {
+  const runForceKillOrderingFixture = (
+    first: "timer" | "drain",
+    failure?: "permission" | "uncleared",
+  ) => {
+    const tempDir = tempDirs.make("openclaw-bun-global-force-kill-");
+    const preloadPath = path.join(tempDir, "lifecycle.mjs");
+    // Drive both native-observed callback orders at the real CLI boundary.
+    // Only the child and clock are simulated; the helper owns all cleanup logic.
+    writeFileSync(
+      preloadPath,
+      `import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+let now = 0;
+let alive = true;
+let forceKills = 0;
+const timers = [];
+process.on("exit", () => console.log("force-kill-attempts=" + forceKills));
+process.kill = (pid, signal) => {
+  if (pid !== -1234) throw new Error("unexpected fixture signal target");
+  if (signal === "SIGKILL") {
+    forceKills++;
+    if (${JSON.stringify(failure)} === "permission" ||
+        (forceKills > 1 && ${JSON.stringify(failure)} !== "uncleared")) {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    }
+  }
+  if (signal === 0 && !alive) {
+    throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+  }
+  return true;
+};
+childProcess.spawn = () => {
+  const stream = () => Object.assign(new EventEmitter(), { setEncoding() {} });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 1234, stdout: stream(), stderr: stream(),
+  });
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => {
+    const timer = { callback, delay, cleared: false, unref() {} };
+    timers.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => { if (timer) timer.cleared = true; };
+  const fire = async (delay, at) => {
+    now = at;
+    const timer = timers.find((entry) => !entry.cleared && entry.delay === delay);
+    if (!timer) throw new Error("missing fixture timer: " + delay);
+    timer.cleared = true;
+    timer.callback();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  process.nextTick(async () => {
+    process.emit("SIGTERM");
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    if (${JSON.stringify(first)} === "timer") {
+      await fire(100, 100);
+      await fire(25, 100);
+    } else {
+      await fire(25, 100);
+      if (${JSON.stringify(failure)} === "permission") return;
+      await fire(100, 100);
+    }
+    alive = ${JSON.stringify(failure)} === "uncleared";
+    await fire(25, 200);
+  });
+  return child;
+};
+syncBuiltinESMExports();
+`,
+    );
+    return spawnSync(
+      process.execPath,
+      ["--import", preloadPath, BUN_GLOBAL_ASSERTIONS_PATH, "run-with-timeout", "60000", "fixture"],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "100" },
+      },
+    );
+  };
+
+  it.runIf(process.platform !== "win32").each(["timer", "drain"] as const)(
+    "force-kills Bun descendants once when the %s callback runs first",
+    (first) => {
+      const result = runForceKillOrderingFixture(first);
+      expect(result.status, result.stderr).toBe(143);
+      expect(result.stdout).toContain("force-kill-attempts=1");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("propagates Bun force-kill permission failures", () => {
+    const result = runForceKillOrderingFixture("drain", "permission");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("kill EPERM");
+    expect(result.stdout).toContain("force-kill-attempts=1");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails when a Bun process group remains after force-kill cleanup",
+    () => {
+      const result = runForceKillOrderingFixture("timer", "uncleared");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("command process group remained active after SIGKILL");
+      expect(result.stdout).toContain("force-kill-attempts=1");
+    },
+  );
+
+  it("packs the current tree and verifies the installed package runtime through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
@@ -1841,11 +1967,15 @@ describe("bun global install smoke", () => {
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
-    expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
+    expect(script).toContain('"$bun_path" install -g --trust "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain('"$openclaw_bin" --help');
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH");
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
+    expect(script).toContain("assert-openclaw-trusted");
+    expect(script).toContain("agent --local");
+    expect(script).toContain("gateway health");
+    expect(script).toContain("openclaw_e2e_wait_gateway_ready");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
@@ -1944,6 +2074,77 @@ describe("bun global install smoke", () => {
     );
   });
 
+  it("requires Bun 1.4 or newer", () => {
+    const supported = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-bun-version", "1.4.0"],
+      { encoding: "utf8" },
+    );
+    expect(supported.status, supported.stderr).toBe(0);
+
+    const unsupported = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-bun-version", "1.3.14"],
+      { encoding: "utf8" },
+    );
+    expect(unsupported.status).not.toBe(0);
+    expect(unsupported.stderr).toContain("Bun 1.4 or newer is required; found 1.3.14");
+  });
+
+  it("requires Bun to trust and execute OpenClaw lifecycle scripts", () => {
+    const tempDir = tempDirs.make("openclaw-bun-trusted-lifecycle-");
+    const packageRoot = join(tempDir, "node_modules", "openclaw");
+    const globalManifestPath = join(tempDir, "package.json");
+    const untrustedOutputPath = join(tempDir, "untrusted.txt");
+    mkdirSync(join(packageRoot, "dist"), { recursive: true });
+    writeFileSync(globalManifestPath, JSON.stringify({ trustedDependencies: ["openclaw"] }));
+    writeFileSync(untrustedOutputPath, "./node_modules/koffi [install]\n");
+
+    const trusted = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(trusted.status, trusted.stderr).toBe(0);
+
+    writeFileSync(untrustedOutputPath, "./node_modules/openclaw [preinstall, postinstall]\n");
+    const blocked = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stderr).toContain("OpenClaw lifecycle scripts remain blocked by Bun");
+
+    writeFileSync(untrustedOutputPath, "");
+    writeFileSync(join(packageRoot, "dist", "openclaw-install-guard"), "pending\n");
+    const skipped = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(skipped.status).not.toBe(0);
+    expect(skipped.stderr).toContain("OpenClaw preinstall lifecycle did not remove");
+  });
+
   it.runIf(process.platform !== "win32")(
     "uses bundled AI bytes when a prebuilt tarball is provided",
     () => {
@@ -1979,25 +2180,77 @@ describe("bun global install smoke", () => {
         `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "--version" ]; then
-  echo "1.3.14"
+  echo "1.4.0"
   exit 0
 fi
+if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; then
+  echo './node_modules/koffi [install]'
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "--bun" ]; then
+  echo "OpenClaw 2026.6.17"
+  exit 0
+fi
+if [[ "\${1:-}" == */openclaw.mjs ]]; then
+  shift
+  if [ "\${1:-}" = "--version" ]; then
+    echo "OpenClaw 2026.6.17"
+  elif [ "\${1:-}" = "--help" ]; then
+    echo "Usage: openclaw"
+  elif [ "\${1:-}" = "infer" ]; then
+    printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
+  elif [ "\${1:-}" = "status" ] || { [ "\${1:-}" = "plugins" ] && [ "\${2:-}" = "list" ]; }; then
+    echo '{}'
+  elif [ "\${1:-}" = "agent" ]; then
+    printf '{"path":"/v1/responses"}\n' >>"$MOCK_REQUEST_LOG"
+    printf '{"payloads":[{"text":"%s"}]}\n' "$SUCCESS_MARKER"
+  elif [ "\${1:-}" = "gateway" ] && [ "\${2:-}" = "health" ]; then
+    echo '{"ok":true}'
+  elif [ "\${1:-}" = "gateway" ]; then
+    port=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--port" ]; then
+        port="$2"
+        break
+      fi
+      shift
+    done
+    exec node -e 'const http=require("node:http"); const port=Number(process.argv[1]); http.createServer((req,res)=>{res.writeHead(200,{"content-type":"text/plain"});res.end("ok")}).listen(port,"127.0.0.1",()=>console.log("[gateway] ready at http://127.0.0.1:"+port))' "$port"
+  else
+    echo "unsupported fake OpenClaw command: $*" >&2
+    exit 1
+  fi
+  exit 0
+fi
+test "\${1:-}" = "install"
+case " $* " in
+  *' --trust '*) ;;
+  *) echo 'missing --trust' >&2; exit 1 ;;
+esac
 override="$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.overrides["@openclaw/ai"])' "$BUN_INSTALL/install/global/package.json")"
 case "\${override#file:}" in
   *.tgz) ;;
   *) exit 1 ;;
 esac
 test -f "\${override#file:}"
-mkdir -p "$BUN_INSTALL/bin"
-cat >"$BUN_INSTALL/bin/openclaw" <<'OPENCLAW'
-#!/usr/bin/env bash
-if [ "\${1:-}" = "--version" ]; then
-  echo "OpenClaw 2026.6.17"
-else
-  printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
-fi
+package_root="$BUN_INSTALL/install/global/node_modules/openclaw"
+mkdir -p "$BUN_INSTALL/bin" "$package_root/dist"
+cat >"$package_root/openclaw.mjs" <<'OPENCLAW'
+#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("OpenClaw 2026.6.17");
+} else if (args[0] === "--help") {
+  console.log("Usage: openclaw");
+} else if (args[0] === "infer") {
+  console.log(JSON.stringify([{ id: "google" }, { id: "openai" }, { id: "xai" }]));
+} else {
+  process.exit(1);
+}
 OPENCLAW
-chmod +x "$BUN_INSTALL/bin/openclaw"
+chmod +x "$package_root/openclaw.mjs"
+ln -s "$package_root/openclaw.mjs" "$BUN_INSTALL/bin/openclaw"
+node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.parse(fs.readFileSync(p,"utf8"));value.trustedDependencies=["openclaw"];fs.writeFileSync(p,JSON.stringify(value))' "$BUN_INSTALL/install/global/package.json"
 `,
       );
       chmodSync(bunPath, 0o755);
@@ -2015,6 +2268,9 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
+      expect(result.stdout).toContain(
+        "bun-global-install-smoke: Bun 1.4.0 package, CLI, local agent, and Gateway runtime OK",
+      );
     },
   );
 
@@ -2105,9 +2361,13 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      let runnerStderr = "";
+      runner.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr = `${runnerStderr}${chunk}`.slice(-16_384);
+      });
       const runnerExit = new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(
         (resolve) => {
-          runner.once("exit", (status, signal) => resolve({ status, signal }));
+          runner.once("close", (status, signal) => resolve({ status, signal }));
         },
       );
 
@@ -2130,9 +2390,11 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
         expect(descendantPid).toBeGreaterThan(0);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
-        runner.kill("SIGTERM");
+        const signalSent = runner.kill("SIGTERM");
+        const result = await runnerExit;
 
-        await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+        expect(signalSent, runnerStderr).toBe(true);
+        expect(result, runnerStderr).toEqual({ status: 143, signal: null });
         await waitForCondition(
           () => !isProcessAlive(descendantPid),
           "Bun global smoke descendant cleanup",
@@ -2171,7 +2433,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup trusted release harness for Bun smoke");
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
-    expect(workflow).toContain("npm install -g bun@1.3.14");
+    expect(workflow).toContain("npm install -g bun@1.4.0");
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install candidate-payload smoke");
     expect(workflow).toContain("working-directory: .release-harness");

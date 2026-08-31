@@ -1,0 +1,160 @@
+/* Manuscript palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="manuscript-light"] {
+  /*
+   * Accent — lapis blue with gold leaf on aged paper; vermilion stays in the
+   * rubric role (--destructive). The only light-first family: light is the
+   * home mode and dark is the reading-room variant below.
+   *
+   * WCAG 2.1 AA audit (bg = #f6f1e4, relative luminance ≈ 0.881):
+   *   --accent #31549b  contrast ≈ 6.5:1 AA ✓
+   *   --primary-foreground #ffffff on #31549b button: 7.3:1 ✓
+   *   body text --text #322d22: 10.7:1 on --bg-muted ✓
+   *   worst text pairing --muted on --bg-muted: 4.8:1 ✓
+   */
+  --ring: #31549b;
+  --accent: #31549b;
+  --accent-hover: #274279;
+  --accent-muted: #31549b;
+  --accent-subtle: rgba(49, 84, 155, 0.09);
+  --accent-glow: rgba(49, 84, 155, 0.14);
+  --primary: #31549b;
+  --primary-foreground: #ffffff;
+
+  --bg: #f6f1e4;
+  --bg-accent: #efe8d6;
+  --bg-elevated: #fdfbf3;
+  --bg-hover: #e7ddc4;
+  --bg-muted: #ece3cf;
+  --bg-content: #f1ebd9;
+
+  --card: #fdfbf3;
+  --card-foreground: #1d1a12;
+  --card-highlight: rgba(50, 40, 20, 0.02);
+  --popover: #fdfbf3;
+  --popover-foreground: #1d1a12;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f6f1e4;
+  --panel-strong: #ece3cf;
+  --panel-hover: #e2d6b8;
+  --chrome: rgba(246, 241, 228, 0.96);
+  --chrome-strong: rgba(246, 241, 228, 0.98);
+
+  --text: #322d22;
+  --text-strong: #1d1a12;
+  --chat-text: #322d22;
+  --muted: #6a604e;
+  --muted-strong: #55503e;
+  --muted-foreground: #6a604e;
+
+  --border: #ddd2b8;
+  --border-strong: #c0b28a;
+  --border-hover: #9a8c62;
+  --input: #ddd2b8;
+
+  --secondary: #ece3cf;
+  --secondary-foreground: #322d22;
+  --accent-2: #7d6118;
+  --accent-2-muted: rgba(125, 97, 24, 0.75);
+  --accent-2-subtle: rgba(125, 97, 24, 0.09);
+
+  --destructive: #bc2f26;
+  --destructive-hover: #a52922;
+
+  --shadow-sm: 0 1px 2px rgba(60, 45, 20, 0.06);
+  --shadow-md: 0 4px 12px rgba(60, 45, 20, 0.08);
+  --shadow-lg: 0 12px 28px rgba(60, 45, 20, 0.1);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(60, 45, 20, 0.05);
+
+  /* The manuscript reads as a document: the serif is the body voice, not a
+     chat garnish. Same opt-in character decision as Phosphor's all-mono. */
+  --font-body: "Lora", Georgia, "Times New Roman", serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+}
+
+:root[data-theme="manuscript"] {
+  /*
+   * Accent — lapis and gold in the candlelit reading room; iron-gall charcoal
+   * base, vermilion kept for the rubric role (--destructive).
+   *
+   * WCAG 2.1 AA audit (bg = #211e18, relative luminance ≈ 0.013):
+   *   --accent #8fa8e0  contrast ≈ 7.0:1 AA ✓
+   *   --primary-foreground #101c33 on #8fa8e0 button: 7.2:1 ✓
+   *   --destructive-foreground #ffffff on #c93a30 button: 5.1:1 ✓
+   *   body text --text #d8d0bc: 10.8:1 ✓
+   *   worst text pairing --muted on --bg-muted: 4.7:1 ✓
+   */
+  --ring: #8fa8e0;
+  --accent: #8fa8e0;
+  --accent-hover: #a8bce9;
+  --accent-muted: #8fa8e0;
+  --accent-subtle: rgba(143, 168, 224, 0.12);
+  --accent-glow: rgba(143, 168, 224, 0.2);
+  --primary: #8fa8e0;
+  --primary-hover: #a8bce9;
+  --primary-foreground: #101c33;
+
+  --destructive: #c93a30;
+  --destructive-hover: #b3332a;
+  --destructive-foreground: #ffffff;
+
+  --focus: rgba(207, 125, 116, 0.18);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg: #211e18;
+  --bg-accent: #262218;
+  --bg-elevated: #2a271f;
+  --bg-hover: #363126;
+  --bg-muted: #363126;
+
+  --card: #2a271f;
+  --card-foreground: #efe8d6;
+  --card-highlight: rgba(240, 230, 205, 0.04);
+  --popover: #2f2b22;
+  --popover-foreground: #efe8d6;
+
+  --panel: #211e18;
+  --panel-strong: #2a271f;
+  --panel-hover: #363126;
+  --chrome: rgba(33, 30, 24, 0.96);
+  --chrome-strong: rgba(33, 30, 24, 0.98);
+
+  --text: #d8d0bc;
+  --text-strong: #efe8d6;
+  --chat-text: #d8d0bc;
+  --muted: #ab9f84;
+  --muted-strong: #bcb096;
+  --muted-foreground: #ab9f84;
+
+  --border: #3b3527;
+  --border-strong: #4f4732;
+  --border-hover: #6a6045;
+  --input: #3b3527;
+
+  --secondary: #2a271f;
+  --secondary-foreground: #efe8d6;
+  --accent-2: #cfa85e;
+  --accent-2-muted: rgba(207, 168, 94, 0.7);
+  --accent-2-subtle: rgba(207, 168, 94, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(8, 6, 2, 0.4);
+  --shadow-md: 0 4px 16px rgba(8, 6, 2, 0.5);
+  --shadow-lg: 0 12px 32px rgba(8, 6, 2, 0.6);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(240, 230, 205, 0.04);
+
+  --font-body: "Lora", Georgia, "Times New Roman", serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+}

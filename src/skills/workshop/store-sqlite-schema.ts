@@ -13,7 +13,6 @@ import {
 export type SkillWorkshopDatabase = Pick<
   OpenClawStateDatabase,
   | "skill_workshop_proposal_events"
-  | "skill_workshop_proposal_origin_runs"
   | "skill_workshop_proposal_rollbacks"
   | "skill_workshop_proposals"
   | "skill_workshop_collection_reviews"
@@ -59,15 +58,6 @@ CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
   ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
-
-CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
-  proposal_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
-  PRIMARY KEY (proposal_id, run_id),
-  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
   proposal_id TEXT NOT NULL PRIMARY KEY,

@@ -23,6 +23,7 @@ function createProjectorHarness(
     shouldSendToolSummaries?: boolean;
     shouldSendToolSummariesNow?: () => boolean;
     shouldSendFullToolDetails?: boolean;
+    getConversationContext?: () => string | undefined;
   },
 ) {
   const deliveries: Delivery[] = [];
@@ -35,6 +36,7 @@ function createProjectorHarness(
       deliveries.push({ kind, text: payload.text });
       return true;
     },
+    getConversationContext: opts?.getConversationContext,
     onProgress: opts?.onProgress,
   });
   return { deliveries, projector };
@@ -200,6 +202,32 @@ describe("createAcpReplyProjector", () => {
 
     expect(deliveries).toEqual([{ kind: "final", text: "a".repeat(70) }]);
   });
+
+  it.each(["live", "final_only"] as const)(
+    "uses finalized and refreshed owner context to redact split private prompts in %s mode",
+    async (deliveryMode) => {
+      const marker = "[Current message - respond to this]";
+      let conversationContext = "";
+      const { deliveries, projector } = createStreamHarness(
+        deliveryMode,
+        {},
+        {
+          getConversationContext: () => conversationContext,
+        },
+      );
+      conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
+
+      await emitText(projector, "Visible answer before. ");
+      conversationContext = `${marker}\nPrivate updated context. Keep hidden.`;
+      await emitText(projector, `${marker}\nPrivate updated context. `);
+      await emitText(projector, "Keep hidden. Visible answer after.");
+      await projector.flush(true);
+
+      expect(deliveries.map((delivery) => delivery.text).join("")).toBe(
+        "Visible answer before.  Visible answer after.",
+      );
+    },
+  );
 
   it("rechecks the dynamic tool-summary gate for each ACP event", async () => {
     let allowToolSummaries = false;

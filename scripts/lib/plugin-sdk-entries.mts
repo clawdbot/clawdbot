@@ -46,6 +46,7 @@ export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 const nonProductionPluginSdkSubpathSet = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
@@ -159,7 +160,7 @@ export function buildPluginSdkPackageExports() {
 }
 
 /**
- * List public plugin SDK dist artifacts expected in package output.
+ * List all packaged plugin SDK dist artifacts, including production-private runtime JS.
  * @internal Shared repository-script contract.
  */
 export function listPluginSdkDistArtifacts() {

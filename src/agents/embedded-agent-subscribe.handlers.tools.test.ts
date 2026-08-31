@@ -3,6 +3,7 @@ import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 // messaging tool capture, approvals, and emitted summaries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
@@ -20,6 +21,9 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -32,12 +36,14 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
 import {
   createAskUserTool,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -189,6 +195,7 @@ function createTestContext(): {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
+      toolAutoDeliveryMediaUrls: new Set(),
       pendingToolAudioAsVoice: false,
       deterministicApprovalPromptPending: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -427,6 +434,14 @@ describe("handleToolExecutionStart read path checks", () => {
                   optionValue: "Production",
                 },
               },
+              {
+                label: "Other…",
+                action: {
+                  type: "question",
+                  questionId,
+                  intent: "custom-input",
+                },
+              },
             ],
           },
         ],
@@ -437,39 +452,179 @@ describe("handleToolExecutionStart read path checks", () => {
 
   it.each([
     {
-      name: "multi-question",
-      questions: [
-        {
-          id: "target",
-          header: "Target",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-        {
-          id: "region",
-          header: "Region",
-          question: "Which region?",
-          options: [{ label: "EU" }, { label: "US" }],
-        },
-      ],
+      name: "public Control UI",
+      messageChannel: "telegram",
+      publicOrigin: "https://console.example.test",
+      enabled: true,
+      available: true,
     },
     {
-      name: "multi-select",
-      questions: [
-        {
-          id: "targets",
-          header: "Targets",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-          multiSelect: true,
-        },
-      ],
+      name: "missing public origin",
+      messageChannel: "discord",
+      publicOrigin: undefined,
+      enabled: true,
+      available: false,
     },
-  ])("keeps $name ask_user prompts text-only", async ({ questions }) => {
+    {
+      name: "disabled Control UI",
+      messageChannel: "telegram",
+      publicOrigin: "https://console.example.test",
+      enabled: false,
+      available: false,
+    },
+    {
+      name: "native webchat without public origin",
+      messageChannel: "webchat",
+      publicOrigin: undefined,
+      enabled: true,
+      available: true,
+    },
+    {
+      name: "native app with disabled Control UI",
+      messageChannel: "webchat",
+      publicOrigin: undefined,
+      enabled: false,
+      available: true,
+    },
+  ])(
+    "delivers a credential link or native prompt or visible blocker for $name",
+    async ({ messageChannel, publicOrigin, enabled, available }) => {
+      vi.useFakeTimers();
+      const { ctx } = createTestContext();
+      const delivered = createDeferred();
+      const answer = createDeferred<unknown>();
+      const onToolResult = vi.fn<NonNullable<ToolHandlerContext["params"]["onToolResult"]>>(
+        async () => delivered.promise,
+      );
+      ctx.params.onToolResult = onToolResult;
+      ctx.params.messageChannel = messageChannel;
+      // A destination id must not be mistaken for the channel family.
+      ctx.params.currentChannelId = "telegram";
+      ctx.params.config = {
+        gateway: { publicOrigin, controlUi: { basePath: "/control", enabled } },
+      };
+      const args = { action: "request", name: "TEST_API_KEY", kind: "secret" };
+      let questionId = "";
+      const gatewayCall = vi.fn(async (method: string, _options: unknown, params: unknown) => {
+        if (method === "question.request") {
+          questionId = String(requireRecord(params, "question request").id);
+          return { id: questionId };
+        }
+        if (method === "question.waitAnswer") {
+          return await answer.promise;
+        }
+        if (method === "question.resolve") {
+          answer.resolve({ status: "cancelled" });
+          return { ok: true };
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      const tool = createSecretsTool({
+        agentId: ctx.params.agentId,
+        sessionKey: ctx.params.sessionKey,
+        runId: ctx.params.runId,
+        gatewayCall,
+      });
+
+      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+      // Attach rejection handling before any assertion, and always retire both waits.
+      const outcome = tool.execute("secret-call-1", args).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(50);
+        expect(gatewayCall.mock.calls.some(([method]) => method === "question.waitAnswer")).toBe(
+          true,
+        );
+        expect(gatewayCall.mock.calls.some(([method]) => method === "question.resolve")).toBe(
+          false,
+        );
+        await expect(
+          claimPendingAgentQuestionAnswer({
+            sessionKey: ctx.params.sessionKey!,
+            text: "not-a-credential",
+          }),
+        ).resolves.toBe(false);
+        if (messageChannel === "webchat") {
+          expect(onToolResult).not.toHaveBeenCalled();
+        } else {
+          await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+          const payload = onToolResult.mock.calls[0]?.[0];
+          if (available) {
+            expect(payload?.text).toBe(
+              `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+            );
+          } else {
+            expect(payload?.text).toContain("Credential request unavailable here");
+            expect(payload?.text).toContain("Control UI or native app");
+            expect(payload?.text).toContain("retry");
+            expect(payload?.text).toContain("Never send credentials in chat");
+            expect(payload?.text).not.toMatch(/https?:/);
+          }
+          expect(payload?.channelData).toEqual({ askUser: { questionId } });
+          expect(payload).not.toHaveProperty("presentation");
+          expect(payload).not.toHaveProperty("interactive");
+          expect(payload?.text).not.toContain("Reply with your answer");
+        }
+        // A blocker must finish delivery while its question is still pending.
+        expect(gatewayCall.mock.calls.some(([method]) => method === "question.resolve")).toBe(
+          false,
+        );
+        delivered.resolve();
+        if (available) {
+          answer.resolve({
+            status: "answered",
+            answers: { answers: { secret_value: ["stored"] } },
+          });
+          await expect(outcome).resolves.toMatchObject({
+            result: { details: { status: "stored" } },
+          });
+          expect(gatewayCall.mock.calls.some(([method]) => method === "question.resolve")).toBe(
+            false,
+          );
+        } else {
+          await expect(outcome).resolves.toMatchObject({
+            error: new Error("credential-request prompt delivery failed"),
+          });
+          expect(gatewayCall).toHaveBeenCalledWith(
+            "question.resolve",
+            { timeoutMs: 10_000 },
+            {
+              id: questionId,
+              cancel: true,
+              resolvedBy: "prompt-delivery-failed",
+            },
+          );
+        }
+      } finally {
+        delivered.resolve();
+        answer.resolve({ status: "cancelled" });
+        await outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps multi-question ask_user prompts text-only", async () => {
+    const questions = [
+      {
+        id: "target",
+        header: "Target",
+        question: "Where next?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+      {
+        id: "region",
+        header: "Region",
+        question: "Which region?",
+        options: [{ label: "EU" }, { label: "US" }],
+      },
+    ];
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
-    const toolCallId = `ask-${questions[0]?.id ?? "unknown"}`;
+    const toolCallId = "ask-multi-question";
 
     await startTool(ctx, {
       toolName: "ask_user",
@@ -481,12 +636,37 @@ describe("handleToolExecutionStart read path checks", () => {
 
     const payload = onToolResult.mock.calls[0]?.[0];
     expect(payload?.text).toContain(
-      questions.length > 1
-        ? "Reply by number or question id. Use a declared option where choices are fixed."
-        : "Reply with the number, the option text, or your own answer.",
+      "Reply by number or question id. Use a declared option where choices are fixed.",
     );
     expect(payload).not.toHaveProperty("presentation");
     expect(payload).not.toHaveProperty("presentationTextMode");
+    await activation.finish();
+  });
+
+  it("keeps a multi-select ask_user prompt readable without partial native state", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const questions = [
+      {
+        id: "checks",
+        header: "Checks",
+        question: "Which checks should run?",
+        options: [{ label: "Unit" }, { label: "Lint" }],
+        multiSelect: true,
+      },
+    ];
+
+    await startTool(ctx, { toolName: "ask_user", toolCallId: "ask-checks", args: { questions } });
+    const activation = await activateAskUserPrompt("ask-checks", { questions });
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(
+      "Reply with comma-separated option numbers or text, or your own answer.",
+    );
+    expect(payload).not.toHaveProperty("presentation");
+    expect(payload?.channelData).toEqual({ askUser: { questionId: activation.questionId } });
     await activation.finish();
   });
 
@@ -2158,6 +2338,27 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
+  it("marks a parked Code Mode exec only when the tool is the marked control tool", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.codeModeExecToolNames = new Set(["exec"]);
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-waiting",
+      isError: false,
+      result: { details: { status: "waiting", runId: "cm_parked", reason: "pending_tools" } },
+    });
+    ctx.params.codeModeExecToolNames = new Set();
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-plain-exec-waiting",
+      isError: false,
+      result: { details: { status: "waiting", runId: "cm_impostor" } },
+    });
+
+    expect(ctx.state.toolMetas.map((entry) => entry.codeModeSuspended)).toEqual([true, undefined]);
+  });
+
   it("records intentional termination with its exact tool call id", async () => {
     const { ctx } = createTestContext();
 
@@ -2267,19 +2468,42 @@ describe("handleToolExecutionEnd timeout metadata", () => {
   }
 
   it.each(["poll", "log"])(
-    "projects a structured terminal process diagnostic from %s",
+    "projects a structured diagnostic from the real terminal process %s result",
     async (action) => {
       const { ctx } = createTestContext();
-      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
-
-      expect(ctx.state.lastToolError).toMatchObject({
-        toolName: "process",
-        terminalDiagnostic: {
-          kind: "process",
-          sessionId: "wild-lagoon",
-          reason: { kind: "exit", exitCode: 7 },
-        },
+      const sessionId = `wild-lagoon-${action}`;
+      const session = createProcessSessionFixture({
+        id: sessionId,
+        command: "test",
+        backgrounded: true,
       });
+      addSession(session);
+      markExited(session, 0, null, "failed", "overall-timeout", false);
+
+      try {
+        const args = { action, sessionId } as Parameters<
+          ReturnType<typeof createProcessTool>["execute"]
+        >[1];
+        const result = await createProcessTool().execute(`tool-real-process-${action}`, args);
+        await executeTool(ctx, {
+          toolName: "process",
+          toolCallId: `tool-process-${action}`,
+          args,
+          isError: false,
+          result,
+        });
+
+        expect(ctx.state.lastToolError).toMatchObject({
+          toolName: "process",
+          terminalDiagnostic: {
+            kind: "process",
+            sessionId,
+            reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+          },
+        });
+      } finally {
+        deleteSession(sessionId);
+      }
     },
   );
 
@@ -2786,7 +3010,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
         ?.successfulToolNames,
     ).toEqual([]);
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("emits the shared approver-DM notice when another approval client received the request", async () => {
@@ -2811,7 +3035,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(requireMockCallArg(onToolResult, 0, "tool result").text).toBe(
       "Approval required. I sent approval DMs to the approvers for this account.",
     );
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("records an actionable failure when deterministic approval delivery rejects", async () => {
@@ -3361,6 +3585,57 @@ describe("messaging tool media URL tracking", () => {
       threadId: "171.222",
       threadImplicit: true,
     });
+  });
+
+  it.each([
+    { label: "suppressed adapter thread", currentThreadId: undefined },
+    { label: "prepared native topic", currentThreadId: "42" },
+  ])("keeps the $label independent from scoped session identity", async ({ currentThreadId }) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: { currentThreadTs?: string };
+              }) => toolContext?.currentThreadTs,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      sessionKey: "agent:main:main:thread:1234:42",
+      messageChannel: "telegram",
+      currentChannelId: "1234",
+      currentMessagingTarget: "1234",
+      currentThreadId,
+      replyToMode: "all",
+    });
+    const toolCallId = `tool-message-scoped-thread-${currentThreadId ?? "none"}`;
+
+    await startTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      args: { action: "send", to: "1234", message: "thread ownership" },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get(toolCallId)?.threadId).toBe(currentThreadId);
+
+    await endTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      isError: false,
+      result: { details: { messageId: "message-scoped-thread" } },
+    });
+
+    expect(requireSingleMessagingTarget(ctx).threadId).toBe(currentThreadId);
   });
 
   it("preserves the pre-send reply state when committing implicit thread evidence", async () => {

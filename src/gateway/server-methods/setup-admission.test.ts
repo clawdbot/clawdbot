@@ -102,21 +102,22 @@ describe("setup admission", () => {
     const continueAfterStart = createDeferred();
     let runner: Promise<void> | undefined;
 
-    await runWithGatewayIndependentRootWorkAdmission(async () => {
-      await createAdmittedWizardSession(() => {
+    const session = await runWithGatewayIndependentRootWorkAdmission(async () =>
+      createAdmittedWizardSession(() => {
         runner = (async () => {
           await continueAfterStart.promise;
           await enqueueCommandInLane("setup-post-start-proof", async () => undefined);
         })();
         return { whenSettled: () => runner! };
-      });
-    });
+      }),
+    );
 
     const activeAfterStart = getActiveGatewayRootWorkCount();
     continueAfterStart.resolve();
     await expect(runner).resolves.toBeUndefined();
     expect(activeAfterStart).toBe(1);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await whenAdmittedWizardSessionSettled(session!);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("releases an admitted session lease when construction fails", async () => {

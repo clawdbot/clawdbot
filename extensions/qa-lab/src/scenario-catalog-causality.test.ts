@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { assertNoGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -79,10 +80,13 @@ describe("qa scenario catalog causality", () => {
       readFlowAssertExpression(action).includes("finalMatches.length === 1"),
     );
     expect(liveMultiRestart.execution.retryCount).toBe(0);
+    expect(liveMultiRestart.execution.runtime).toBe("openclaw");
+    expect(liveMultiRestart.runtimePairLane).toBeUndefined();
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
       '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("pendingCodeModeExecNeedle");
+    expect(liveMultiRestartContract).toContain("summary.hasPendingCodeModeWait");
     expect(liveMultiRestartContract).toContain("checkpoint");
     expect(liveMultiRestartContract).toContain("restarts=3");
     for (const fixturePath of [
@@ -94,16 +98,23 @@ describe("qa scenario catalog causality", () => {
     ]) {
       expect(liveMultiRestartPrompt).toContain(fixturePath);
     }
-    expect(liveMultiRestartPrompt).toContain("your only work in this turn is the next checkpoint");
     expect(liveMultiRestartPrompt).toContain(
-      "Make exactly one `exec` call with `restartSafe: true`",
+      "On this original user turn, perform only checkpoint 1",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      "After the third Gateway-recovery system message, perform the audit and final report",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      "make exactly one `exec` call with `restartSafe: true`",
     );
     expect(liveMultiRestartPrompt).toContain(
       "expired, or aborted `wait` result after restart is expected",
     );
-    expect(liveMultiRestartPrompt).toContain("`CHECKPOINT-N` is internal tool output");
     expect(liveMultiRestartPrompt).toContain(
-      "Do not send any assistant text before the final audit report",
+      "Do not issue another `exec` until a new Gateway-recovery system message arrives",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      '.some(candidate => candidate.toolName === "qa_restart_unsafe_probe")',
     );
     expect(liveMultiRestartPrompt).toContain("Do not read the `restart-audit/` directory path");
     expect(liveMultiRestartContract).toContain("sendInbound");
@@ -113,6 +124,9 @@ describe("qa scenario catalog causality", () => {
     expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
     expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
     expect(liveMultiRestartContract).toContain(
+      "pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}`",
+    );
+    expect(liveMultiRestartContract).not.toContain(
       "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
     );
     expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);
@@ -246,6 +260,35 @@ describe("qa scenario catalog causality", () => {
     });
     expect(actions.some((action) => (action as { call?: string }).call === "sleep")).toBe(false);
   });
+
+  it.each(["gateway-restart-inflight-run", "gateway-restart-multi-live"] as const)(
+    "ignores pre-scenario gateway sentinel logs during %s recovery",
+    async (scenarioId) => {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions) ?? [];
+      const gatewayActions = actions.filter(
+        (action) =>
+          (action as { set?: string }).set === "gatewayLogCursor" ||
+          (action as { call?: string }).call === "assertNoGatewayLogSentinels",
+      );
+      expect(gatewayActions).toHaveLength(2);
+      const priorLogs = "codex_app_server progress stalled before this scenario\n";
+
+      await expect(
+        runLoadedScenarioFlow(scenarioId, {
+          flow: {
+            steps: [{ name: "ignores prior sentinels", actions: gatewayActions }],
+          },
+          api: {
+            markGatewayLogCursor: () => priorLogs.length,
+            assertNoGatewayLogSentinels: (
+              options?: Parameters<typeof assertNoGatewayLogSentinels>[1],
+            ) => assertNoGatewayLogSentinels(`${priorLogs}gateway recovered cleanly`, options),
+          },
+        }),
+      ).resolves.toMatchObject({ status: "pass" });
+    },
+  );
 
   it("scopes prompt diagnostics to requests after each scenario cursor", () => {
     for (const scenarioId of [

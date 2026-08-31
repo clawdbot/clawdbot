@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
@@ -21,6 +22,9 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { SessionManager } from "./sessions/session-manager.js";
+import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
+import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 const retryingCompactionEnd = () =>
@@ -323,12 +327,53 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "generated-malformed-metadata",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["music_generate"]),
+    });
+    const mediaPath = "/tmp/generated-song.mp3";
+
+    emitToolRun({
+      emit,
+      toolName: "music_generate",
+      toolCallId: "music-tool",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated media." }],
+        details: {
+          media: {
+            mediaUrls: [mediaPath],
+            attachments: [
+              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
+            ],
+          },
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Here is your generated song.",
+      mediaUrls: [mediaPath],
+      attachments: [{ type: "audio", path: mediaPath }],
+    });
+  });
+
+  it("does not double-count usage or cost when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
       input: 100,
       output: 20,
       totalTokens: 120,
+      cost: { total: 0.125, totalOrigin: "provider-billed" },
     };
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -357,12 +402,171 @@ describe("subscribeEmbeddedAgentSession", () => {
       cacheRead: undefined,
       cacheWrite: undefined,
       total: 120,
+      cost: { total: 0.125 },
     });
     expect(subscription.getLastAssistantUsage()).toEqual({
       input: 100,
       output: 20,
       total: 120,
+      cost: { total: 0.125, totalOrigin: "provider-billed" },
     });
+  });
+
+  it.each([
+    { costTotal: 0, source: "done" },
+    { costTotal: 0.125, source: "done" },
+    { costTotal: undefined, source: "done" },
+    { costTotal: 0, source: "text_end" },
+    { costTotal: 0.125, source: "text_end" },
+    { costTotal: undefined, source: "text_end" },
+  ])(
+    "preserves pending streamed cost $costTotal from $source when terminal usage is zeroed",
+    ({ costTotal, source }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-pending-cost" });
+      const usage = {
+        input: 100,
+        output: 20,
+        cacheWrite: 40,
+        cacheWrite1h: 30,
+        totalTokens: 160,
+        ...(costTotal !== undefined
+          ? { cost: { total: costTotal, totalOrigin: "provider-billed" as const } }
+          : {}),
+      };
+      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: source, usage },
+      });
+      emit({ type: "message_end", message });
+
+      expect(subscription.getUsageTotals()?.cost).toEqual(
+        costTotal !== undefined ? { total: costTotal } : undefined,
+      );
+      expect(subscription.getLastAssistantUsage()).toMatchObject({
+        input: 100,
+        output: 20,
+        cacheWrite: 40,
+        cacheWrite1h: 30,
+      });
+      if (costTotal !== undefined) {
+        expect(message.usage.cost).toMatchObject({
+          total: costTotal,
+          totalOrigin: "provider-billed",
+        });
+      }
+      subscription.unsubscribe();
+    },
+  );
+
+  it.each([
+    { costTotal: 0, priorCall: false },
+    { costTotal: 0.125, priorCall: false },
+    { costTotal: 0, priorCall: true },
+    { costTotal: 0.125, priorCall: true },
+  ])(
+    "retains billed cost-only $costTotal with prior call $priorCall",
+    ({ costTotal, priorCall }) => {
+      const { emit, session, subscription } = createSubscribedSessionHarness({
+        runId: "run-cost-only",
+        sessionExtras: { sessionManager: SessionManager.inMemory() },
+      });
+      const previousUsage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.25 } };
+      if (priorCall) {
+        emit({ type: "message_start", message: { role: "assistant" } });
+        emit({ type: "message_end", message: { role: "assistant", usage: previousUsage } });
+      }
+      const lastCallUsage = subscription.getLastAssistantUsage();
+      const usage = makeZeroUsageSnapshot();
+      usage.cost.total = costTotal;
+      usage.cost.totalOrigin = "provider-billed";
+      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "done", usage },
+      });
+      emit({ type: "message_end", message });
+
+      const priorCost = priorCall ? 0.25 : 0;
+      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
+      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
+      expect(message.usage.cost).toMatchObject({
+        total: costTotal,
+        totalOrigin: "provider-billed",
+      });
+      recordSessionModelUsage(session.sessionManager, usage);
+      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal * 2 });
+      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
+      subscription.unsubscribe();
+    },
+  );
+
+  it.each([
+    { costTotal: 0, terminalTokens: false },
+    { costTotal: 0.125, terminalTokens: false },
+    { costTotal: 0, terminalTokens: true },
+    { costTotal: 0.125, terminalTokens: true },
+  ])(
+    "merges cost-only billing $costTotal with terminal tokens $terminalTokens",
+    ({ costTotal, terminalTokens }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-late-billing" });
+      const tokens = { input: 100, output: 20 };
+      const message = {
+        role: "assistant",
+        usage: { ...makeZeroUsageSnapshot(), ...(terminalTokens ? tokens : {}) },
+      };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_end", usage: tokens },
+      });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "done",
+          usage: { cost: { total: costTotal, totalOrigin: "provider-billed" } },
+        },
+      });
+      emit({ type: "message_end", message });
+
+      expect(subscription.getUsageTotals()).toMatchObject({
+        ...tokens,
+        cost: { total: costTotal },
+      });
+      expect(subscription.getLastAssistantUsage()).toMatchObject(tokens);
+      expect(message.usage.cost).toMatchObject({
+        total: costTotal,
+        totalOrigin: "provider-billed",
+      });
+      subscription.unsubscribe();
+    },
+  );
+
+  it("sums per-call prices without selecting a tier from the tool-loop token total", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-loop-cost" });
+    for (const total of [0.125, 0.5]) {
+      const message = {
+        role: "assistant",
+        usage: { input: 150_000, output: 100, totalTokens: 0, cost: { total } },
+      };
+      emit({ type: "message_start", message });
+      emit({ type: "message_end", message });
+    }
+
+    expect(subscription.getUsageTotals()).toMatchObject({
+      input: 300_000,
+      output: 200,
+      total: 300_200,
+      cost: { total: 0.625 },
+    });
+    expect(subscription.getLastAssistantUsage()?.cost).toEqual({ total: 0.5 });
+    subscription.unsubscribe();
   });
 
   it("retains the last nonzero call when a later aborted message reports zero usage", () => {
@@ -382,6 +586,72 @@ describe("subscribeEmbeddedAgentSession", () => {
       output: 66,
       cacheRead: 120_320,
       total: 158_719,
+    });
+  });
+
+  it("keeps a successful retry call when later post-call processing fails", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 240, output: 30, totalTokens: 270 },
+      },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 240,
+      output: 30,
+      total: 270,
+    });
+  });
+
+  it("restores the previous call when a retry fails before recording usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
     });
   });
 
@@ -483,7 +753,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("delivers generated image media once in markdown verbose output", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -531,7 +801,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [{ type: "text", text: "Here is the image." }],
       },
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here is the image.",
@@ -539,10 +809,77 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it.each([
+    {
+      toolName: "image_generate",
+      type: "image",
+      mimeType: "image/png",
+      metadata: { width: 640, height: 480 },
+    },
+    {
+      toolName: "music_generate",
+      type: "audio",
+      mimeType: "audio/mpeg",
+      metadata: { durationMs: 2_000 },
+    },
+    {
+      toolName: "video_generate",
+      type: "video",
+      mimeType: "video/mp4",
+      metadata: { durationMs: 5_000, width: 1280, height: 720 },
+    },
+  ] as const)(
+    "delivers generated $type attachment metadata with the assistant reply",
+    async ({ toolName, type, mimeType, metadata }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: `generated-${type}`,
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        builtinToolNames: new Set([toolName]),
+      });
+      const attachment = {
+        type,
+        path: `/tmp/generated-${type}`,
+        name: `friendly-${type}`,
+        mimeType,
+        sizeBytes: 137,
+        ...metadata,
+      };
+
+      emitToolRun({
+        emit,
+        toolName,
+        toolCallId: `${type}-tool`,
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Generated media." }],
+          details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(subscription.getPendingToolMediaReply()).toMatchObject({
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+
+      emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+        text: "Here is your generated file.",
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+    },
+  );
+
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -584,7 +921,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [{ type: "text", text: "Here is the selected image.\nMEDIA:./selected.png" }],
       },
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here is the selected image.",
@@ -631,6 +968,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Generated 1 image.",
@@ -662,7 +1000,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emit({ type: "agent_end" });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     const mediaPayloads = onBlockReply.mock.calls
       .map(([payload]) => payload)
@@ -863,10 +1201,11 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it("keeps orphaned tool media available for non-block final payload assembly", () => {
+  it("keeps orphaned tool media available for non-block final payload assembly", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       builtinToolNames: new Set(["tts"]),
+      coreBuiltinToolNames: new Set(["tts"]),
     });
 
     emit({
@@ -874,21 +1213,29 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolName: "tts",
       toolCallId: "tc-1",
       isError: false,
-      result: {
-        details: {
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            audioAsVoice: true,
+      result: markCoreTtsToolResult(
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              audioAsVoice: true,
+              trustedLocalMedia: true,
+            },
           },
         },
-      },
+        ["/tmp/reply.opus"],
+      ),
     });
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getPendingToolMediaReply()).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
+      attachments: [{ trustedLocalMedia: true }],
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
+    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual(["/tmp/reply.opus"]);
   });
 
   it("counts orphaned tool media emitted through block replies", async () => {
@@ -896,6 +1243,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       builtinToolNames: new Set(["tts"]),
+      coreBuiltinToolNames: new Set(["tts"]),
+      sourceReplyDeliveryMode: "message_tool_only",
       onBlockReply,
     });
 
@@ -904,25 +1253,36 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolName: "tts",
       toolCallId: "tc-1",
       isError: false,
-      result: {
-        details: {
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            audioAsVoice: true,
+      result: markCoreTtsToolResult(
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              audioAsVoice: true,
+              trustedLocalMedia: true,
+            },
           },
         },
-      },
+        ["/tmp/reply.opus"],
+      ),
     });
     emit({ type: "agent_end" });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      attachments: [{ trustedLocalMedia: true }],
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual([]);
     expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+    expect(getReplyPayloadMetadata(onBlockReply.mock.calls[0]?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it.each(THINKING_TAG_CASES)(
@@ -1458,7 +1818,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {
+  it("keeps unresolved mutating failure when an unrelated tool succeeds", async () => {
     const { emit, subscription } = createWriteFailureHarness({
       runId: "run-tools-1",
       path: "/tmp/demo.txt",
@@ -1474,10 +1834,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { text: "ok" },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()?.toolName).toBe("write");
   });
 
-  it("clears unresolved mutating failure when the same action succeeds", () => {
+  it("clears unresolved mutating failure when the same action succeeds", async () => {
     const { emit, subscription } = createWriteFailureHarness({
       runId: "run-tools-2",
       path: "/tmp/demo.txt",
@@ -1493,10 +1854,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("preserves distinct mutation failures through compaction until each action recovers", () => {
+  it("preserves distinct mutation failures through compaction until each action recovers", async () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-compaction-retry");
 
     for (const [toolCallId, filePath] of [
@@ -1523,6 +1885,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
 
     emitToolRun({
@@ -1534,10 +1897,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("clears a failure when the same tool succeeds on a different target", () => {
+  it("clears a failure when the same tool succeeds on a different target", async () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
     emitToolRun({
@@ -1558,6 +1922,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
@@ -1620,7 +1985,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     );
   });
 
-  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
@@ -1645,6 +2010,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getReplayState()).toEqual({
       replayInvalid: true,
@@ -1692,7 +2058,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+  it("preserves accepted session spawn terminal evidence across compaction retries", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1717,6 +2083,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getAcceptedSessionSpawns()).toEqual([
       {
@@ -1726,6 +2093,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     ]);
 
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expectLifecyclePayload(payloads, {
@@ -1777,7 +2145,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result,
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getHeartbeatToolResponse()).toEqual({
       outcome: "no_change",

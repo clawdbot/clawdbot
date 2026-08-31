@@ -81,6 +81,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"
+  | "supportsProviderExecutionMode"
 >;
 
 export type WorkerActivationBarrier = (params: {
@@ -114,6 +115,7 @@ export function isCurrentActiveWorkerEnvironment(
   return Boolean(
     environment &&
     environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
     placement.environmentId &&
     environment.environmentId === placement.environmentId &&
     placement.activeOwnerEpoch !== null &&

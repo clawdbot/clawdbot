@@ -228,7 +228,7 @@ export function findQaSuiteSummaryAccountingError(summary: unknown): string | un
   }
 
   const counts = { total, passed, failed, skipped };
-  if (Array.isArray(summary.scenarios) && summary.scenarios.length > 0) {
+  if (Array.isArray(summary.scenarios)) {
     const statuses = summary.scenarios.map((scenario) =>
       isRecord(scenario) ? scenario.status : undefined,
     );

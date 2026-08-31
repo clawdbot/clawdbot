@@ -1,6 +1,6 @@
 // Google tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./api.js";
+import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 
 describe("google model id helpers", () => {
   it.each(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"])(

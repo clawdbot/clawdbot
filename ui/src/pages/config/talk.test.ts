@@ -26,7 +26,7 @@ type TalkMutationHarnessOptions = {
   openAIProviderModel?: string;
   provider?: string | null;
   transport?: string | null;
-  transports?: string[];
+  transports?: TalkCatalogResult["transports"];
   unavailable?: boolean;
 };
 
@@ -37,6 +37,11 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       })
     : vi.fn(async () => {
         return {
+          modes: ["realtime"],
+          transports: ["gateway-relay", "webrtc"],
+          brains: ["agent-consult"],
+          speech: { providers: [] },
+          transcription: { providers: [] },
           realtime: {
             ready: true,
             activeProvider: options.activeProvider ?? "openai",
@@ -48,6 +53,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
                 aliases: options.aliases ?? [],
                 models: ["gpt-live-1-boulder-alpha"],
                 voices: ["marin"],
+                voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
                 transports: options.transports ?? ["gateway-relay"],
                 defaultModel: options.defaultModel ?? "gpt-live-1-boulder-alpha",
               },
@@ -63,7 +69,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
               },
             ],
           },
-        } as TalkCatalogResult;
+        } satisfies TalkCatalogResult;
       });
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as GatewayBrowserClient,
@@ -322,6 +328,28 @@ describe("renderTalk", () => {
 });
 
 describe("TalkSettingsPage realtime transport mutation", () => {
+  it.each([
+    ["gpt-live-1-codex", null, ["", "cove", "spruce"]],
+    [null, null, ["", "cove", "spruce"]],
+    ["gpt-realtime-2.1", null, ["", "marin"]],
+    ["gpt-live-1-codex", "custom-voice", ["", "cove", "spruce", "custom-voice"]],
+  ])("uses the draft model's voice catalog (%s, %s)", async (model, speakerVoice, expected) => {
+    const { page, request } = createTalkMutationHarness({ defaultModel: "gpt-live-1-codex" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await page.updateComplete;
+    expect(
+      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
+    ).toEqual(["", "marin"]);
+
+    page.configObject = { talk: { realtime: { provider: "openai", model, speakerVoice } } };
+    await page.updateComplete;
+
+    expect(
+      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
+    ).toEqual(expected);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
     const removeFormValue = await selectModel("gpt-live-1-boulder-alpha", {
       consultRouting: " Force-Agent-Consult ",

@@ -24,6 +24,8 @@ the most recently updated thread first. Open any row to go directly to that
 thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
 as threads are renamed, archived, deleted, or switched between Chat and
 Dashboard, including after a Gateway reconnect.
+If a refresh fails, the page keeps the last loaded dashboards visible with a
+stale-data warning. Choose **Retry** to load the list again.
 
 Use **Open dashboard in focus mode** on a row to open its board as a standalone
 browser document at `/focus/dashboard/<agent>/<sessionRef>`, with no sidebar,
@@ -91,8 +93,11 @@ never needs the agent.
 A widget that only renders needs no approval — it appears instantly, exactly
 like inline chat widgets, and its network access is fully disabled.
 
-Widgets that want **reach** must declare it, and you grant it once per widget
-with one tap:
+Widgets that want **reach** must declare it. An explicit [session permission mode](/gateway/permission-modes)
+decides what happens: **Full access** grants immediately; **Workspace** uses an
+AI reviewer and rejects anything it does not allow; **Guarded** shows an
+**Allow** / **Reject** card; **Read only** rejects the request. Without an
+explicit session mode, the equivalent configured exec approval policy applies.
 
 - **Network** (`net`): fetch declared HTTPS origins directly from the sandbox —
   a weather card that refreshes itself from an API, for example.
@@ -106,9 +111,10 @@ with one tap:
 
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
-Grants are bound to the exact widget bytes and revision you reviewed. If the
-agent changes the widget and asks for _more_ than you approved, it goes back
-to pending; refreshing content within the same permissions keeps the grant.
+Grants are bound to the exact widget bytes and revision approved by your session
+policy. If the agent changes the widget and asks for _more_ than was approved,
+OpenClaw applies that policy again; refreshing content within the same
+permissions keeps the grant.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.
@@ -117,9 +123,9 @@ being interrupted.
 
 If your gateway has MCP servers configured, interactive MCP apps that appear
 in chat can be pinned like any widget. Pinned apps come back to life on the
-board with fresh sessions; by default they are display-only, and granting the
-widget its declared server tools makes it fully interactive — with the same
-one-tap, revision-bound approval as everything else.
+board with fresh sessions. By default they render without server tools or
+same-server resource access. Granting the widget its declared server tools
+enables both bridges while that revision-bound grant remains active.
 
 ## A2UI widgets
 

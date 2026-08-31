@@ -290,7 +290,6 @@ describe("historical transcript directive migration", () => {
       content: [{ type: "text", text: "Final answer" }],
       openclawDelivery: {
         audioAsVoice: true,
-        replyToCurrent: true,
         replyToId: "message-7",
       },
     });

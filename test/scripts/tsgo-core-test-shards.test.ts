@@ -9,7 +9,7 @@ import {
 
 describe("tsgo core test shards", () => {
   it("stripes partition the full shard list exactly once", () => {
-    for (const stripeCount of [1, 2, 3]) {
+    for (const stripeCount of [1, 2, 3, 5]) {
       const striped = Array.from(
         { length: stripeCount },
         (_, index) => selectTsgoCoreTestStripe(`${index + 1}/${stripeCount}`) ?? [],

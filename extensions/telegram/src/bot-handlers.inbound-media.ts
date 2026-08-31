@@ -354,16 +354,13 @@ export function createTelegramInboundMedia({
           }
           // Classic polling cannot replay a failed album; retain its existing partial-delivery path.
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
-          allMedia.push({ kind: nativeKind, sourceMessageId });
-          selection.set(sourceMessageId, "exclude");
-          skippedCount++;
-          continue;
         }
         if (media) {
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
+            ...(media.fileName ? { fileName: media.fileName } : {}),
             kind: media.kind,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
@@ -371,7 +368,11 @@ export function createTelegramInboundMedia({
           materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
-          allMedia.push({ kind: nativeKind, sourceMessageId });
+          allMedia.push({
+            kind: nativeKind,
+            sourceMessageId,
+            unavailable: { reason: "download-failed" },
+          });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
         }

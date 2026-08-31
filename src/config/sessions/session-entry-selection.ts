@@ -1,4 +1,5 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
+import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.js";
 import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -62,16 +63,22 @@ export function inheritSessionSelection(
     return {};
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
+  const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
+  const inheritAuthProfile = inheritModelSelection || authProfileOverrideSource === "user";
   return {
-    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
-    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
-    ...(parentEntry.modelOverrideSource
+    ...(inheritModelSelection && parentEntry.providerOverride
+      ? { providerOverride: parentEntry.providerOverride }
+      : {}),
+    ...(inheritModelSelection && parentEntry.modelOverride
+      ? { modelOverride: parentEntry.modelOverride }
+      : {}),
+    ...(inheritModelSelection && parentEntry.modelOverrideSource
       ? { modelOverrideSource: parentEntry.modelOverrideSource }
       : {}),
-    ...(parentEntry.modelOverrideRouteResolution
+    ...(inheritModelSelection && parentEntry.modelOverrideRouteResolution
       ? { modelOverrideRouteResolution: parentEntry.modelOverrideRouteResolution }
       : {}),
-    ...(parentEntry.agentRuntimeOverride
+    ...(inheritModelSelection && parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
     ...(parentEntry.contextWindow ? { contextWindow: parentEntry.contextWindow } : {}),
@@ -82,10 +89,10 @@ export function inheritSessionSelection(
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
     ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(authProfileOverrideSource && parentEntry.authProfileOverride
+    ...(inheritAuthProfile && authProfileOverrideSource && parentEntry.authProfileOverride
       ? { authProfileOverride: parentEntry.authProfileOverride }
       : {}),
-    ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+    ...(inheritAuthProfile && authProfileOverrideSource ? { authProfileOverrideSource } : {}),
   };
 }
 

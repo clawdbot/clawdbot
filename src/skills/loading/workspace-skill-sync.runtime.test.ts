@@ -10,10 +10,12 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
-const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
+const mockResolvePluginSkillRoots = vi.hoisted(() =>
+  vi.fn(() => [] as Array<{ dir: string; rejectHardlinks: boolean }>),
+);
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: mockResolvePluginSkillDirs,
+  resolvePluginSkillRoots: mockResolvePluginSkillRoots,
 }));
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -758,7 +760,9 @@ describe("syncWorkspaceSkills for plugin skills", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    mockResolvePluginSkillDirs.mockReturnValueOnce([realPluginSkillDir]);
+    mockResolvePluginSkillRoots.mockReturnValueOnce([
+      { dir: realPluginSkillDir, rejectHardlinks: true },
+    ]);
 
     const skillUsagePaths = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
@@ -827,7 +831,10 @@ describe("syncWorkspaceSkills for plugin skills", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    mockResolvePluginSkillDirs.mockReturnValueOnce([realSkillA, realSkillB]);
+    mockResolvePluginSkillRoots.mockReturnValueOnce([
+      { dir: realSkillA, rejectHardlinks: true },
+      { dir: realSkillB, rejectHardlinks: true },
+    ]);
 
     await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
@@ -870,7 +877,7 @@ describe("syncWorkspaceSkills for plugin skills", () => {
 
     // Mock returns an allowed root that doesn't include the escaped skill
     const allowedRoot = await createCaseDir("allowed-root");
-    mockResolvePluginSkillDirs.mockReturnValueOnce([allowedRoot]);
+    mockResolvePluginSkillRoots.mockReturnValueOnce([{ dir: allowedRoot, rejectHardlinks: true }]);
 
     await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,

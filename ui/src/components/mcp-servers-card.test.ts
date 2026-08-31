@@ -224,6 +224,10 @@ describe("openclaw-mcp-servers-card", () => {
   it("renders the empty state when no servers are configured", async () => {
     const { card } = await mountCard();
 
+    const sectionLink = card.querySelector<HTMLAnchorElement>(".settings-section__desc a");
+    expect(sectionLink?.textContent?.trim()).toBe("Learn more");
+    expect(sectionLink?.classList.contains("learn-more-link")).toBe(true);
+    expect(sectionLink?.getAttribute("href")).toBe("/settings/plugins");
     expect(card.querySelector(".settings-empty")?.textContent).toContain(
       "No MCP servers configured.",
     );

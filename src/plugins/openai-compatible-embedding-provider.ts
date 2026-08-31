@@ -1,8 +1,8 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -247,31 +247,6 @@ function malformedEmbeddingResponse(): Error {
   return new Error("openai-compatible embeddings failed: malformed JSON response");
 }
 
-function readEmbeddingVector(value: unknown): number[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw malformedEmbeddingResponse();
-  }
-  for (const entry of value) {
-    if (typeof entry !== "number" || !Number.isFinite(entry)) {
-      throw malformedEmbeddingResponse();
-    }
-  }
-  return value;
-}
-
-function readEmbeddingVectors(data: unknown[], expectedCount: number): number[][] {
-  if (data.length !== expectedCount) {
-    throw malformedEmbeddingResponse();
-  }
-  return data.map((entry) => {
-    const record = asRecord(entry);
-    if (!record) {
-      throw malformedEmbeddingResponse();
-    }
-    return readEmbeddingVector(record.embedding);
-  });
-}
-
 async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
   if (!response.body || response.bodyUsed) {
     return undefined;
@@ -337,6 +312,7 @@ async function postEmbeddingRequest(params: {
           "data",
         ),
         input.length,
+        "openai-compatible embeddings failed",
       );
     } finally {
       await release();

@@ -2,7 +2,6 @@
   --session-progress-neutral: var(--muted);
   --session-progress-marker-size: 14px;
 
-  box-sizing: border-box;
   min-width: 0;
   color: var(--text);
 }
@@ -193,7 +192,6 @@
 .session-hovercard__creator-avatar,
 .session-hovercard__creator-avatar .viewer-avatar {
   display: block;
-  box-sizing: border-box;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
   aspect-ratio: 1;
@@ -232,10 +230,9 @@
   place-items: center;
 }
 
-.session-hovercard__pr-row,
 .session-hovercard__branch-row {
   display: grid;
-  grid-template-columns: var(--session-hovercard-context-icon-size) auto minmax(0, 1fr);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-2);
   min-width: 0;
@@ -246,14 +243,20 @@
 }
 
 .session-hovercard__pr-row {
+  display: grid;
+  /* The author cell is always present (empty when unknown) so every row shares
+     one geometry and the diff stats stay in the trailing 1fr column. */
+  grid-template-columns: var(--session-hovercard-context-icon-size) auto auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  /* The row is an anchor: without these it falls back to default link styling. */
+  color: var(--muted);
+  text-decoration: none;
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
-}
-
-.session-hovercard__branch-row {
-  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
 .session-hovercard__pr-state-icon,
@@ -312,6 +315,15 @@
 
 .session-hovercard__pr-state-icon {
   color: var(--session-pr-state-color, var(--muted));
+}
+
+.session-hovercard__pr-author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+  color: var(--muted);
 }
 
 .session-hovercard__pr-row .session-hovercard__diff {
@@ -400,11 +412,23 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-.session-progress-card--rail {
-  flex: 0 0 auto;
-  margin: 10px 14px 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
+/* Docked in the conversation's right gutter, below any suggestion tray sharing
+   .chat-gutter-stack. The width is fixed rather than derived from the gutter:
+   the pane only renders this placement once it has measured a gutter wide
+   enough for this card plus the stack's insets, so the clearance is already
+   guaranteed and a stable card beats one that grows with the window.
+   Top-anchored by the stack, so appended steps extend downward instead of
+   shifting the rows already being read. */
+.session-progress-card--dock {
+  width: var(--chat-progress-dock-width);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  box-shadow: var(--shadow-sm);
+  animation: fade-in 0.2s var(--ease-out);
 }
 
 .session-progress-card--board {
@@ -474,12 +498,10 @@
 .session-progress-card__current-marker,
 .session-progress-card__step-marker {
   display: inline-flex;
-  box-sizing: border-box;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
   align-items: center;
   justify-content: center;
-  align-self: start;
   flex: none;
   padding: 0;
   margin: 0;
@@ -517,13 +539,6 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-progress-card__count {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
 }
 
 .session-progress-card__dismiss {
@@ -610,12 +625,14 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__step--pending .session-progress-card__step-marker {
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-progress-card--composer {
+  .session-progress-card--composer,
+  .session-progress-card--dock {
     animation: none;
     transition: none;
   }

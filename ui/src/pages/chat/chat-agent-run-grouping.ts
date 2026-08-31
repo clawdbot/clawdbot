@@ -47,11 +47,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
   if (item.kind === "stream-run") {
     return item.runId;
   }
-  const runIds = itemGroups(item).map((group) => group.runId);
-  const uniqueRunIds = new Set(runIds.filter((value) => value !== undefined));
-  return runIds.length > 0 && uniqueRunIds.size === 1 && runIds.every(Boolean)
-    ? uniqueRunIds.values().next().value
-    : undefined;
+  const groups = itemGroups(item);
+  const runId = groups[0]?.runId;
+  return runId && groups.every((group) => group.runId === runId) ? runId : undefined;
 }
 
 function messageIsInterrupted(message: unknown): boolean {
@@ -81,30 +79,14 @@ function itemIsActive(item: AgentRunFramePart): boolean {
   return itemGroups(item).some((group) => group.isStreaming);
 }
 
-function itemBoundaryId(item: AgentRunFramePart): string | undefined {
-  return item.kind === "stream-run" ? item.boundaryId : undefined;
-}
-
 function groupBoundaryId(group: MessageGroup): string | undefined {
   const firstMessage = group.messages[0]?.message;
   const identity = readSessionMessageIdentity(firstMessage);
-  if (!chatItemStartsUserTurn(group)) {
-    return undefined;
-  }
   const runId = identity?.runId;
   if (runId) {
     return `send:${runId}`;
   }
   return identity?.id ? `entry:${identity.id}` : undefined;
-}
-
-function isExternalBoundary(group: MessageGroup): boolean {
-  return group.role === "user" || assistantGroupIsForwardedBoundary(group);
-}
-
-function itemBoundaryGroup(item: AgentRunFramePart): MessageGroup | undefined {
-  const first = itemGroups(item)[0];
-  return first && chatItemStartsUserTurn(first) ? first : undefined;
 }
 
 function frameKey(runId: string, boundaryId: string, segmentId: string | undefined): string {
@@ -235,36 +217,28 @@ export function coalesceAgentRunFrames(
       segmentId = boundaryId ? undefined : item.key;
       continue;
     }
-    const candidate = item;
-    const boundaryGroup = itemBoundaryGroup(candidate);
-    if (boundaryGroup) {
+    const boundaryGroup = itemGroups(item)[0];
+    if (boundaryGroup && chatItemStartsUserTurn(boundaryGroup)) {
       flush();
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (isExternalBoundary(boundaryGroup) || !nextBoundaryId) {
+      if (
+        boundaryGroup.role === "user" ||
+        assistantGroupIsForwardedBoundary(boundaryGroup) ||
+        !nextBoundaryId
+      ) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;
       }
       boundaryId = nextBoundaryId;
     }
-    const candidateBoundaryId = itemBoundaryId(candidate);
+    const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
     if (candidateBoundaryId && candidateBoundaryId !== boundaryId) {
       flush();
       boundaryId = candidateBoundaryId;
     }
-    const candidateRunId = itemRunId(candidate);
-    if (boundaryId && candidateRunId && itemFailsFrame(candidate)) {
-      if (runId && runId !== candidateRunId) {
-        flush();
-      }
-      runId = candidateRunId;
-      parts.push(candidate);
-      flush(true);
-      boundaryId = undefined;
-      segmentId = item.key;
-      continue;
-    }
+    const candidateRunId = itemRunId(item);
     if (!boundaryId || !candidateRunId) {
       flush();
       result.push(item);
@@ -272,11 +246,17 @@ export function coalesceAgentRunFrames(
       segmentId = item.key;
       continue;
     }
+    const failed = itemFailsFrame(item);
     if (runId && runId !== candidateRunId) {
       flush();
     }
     runId = candidateRunId;
-    parts.push(candidate);
+    parts.push(item);
+    if (failed) {
+      flush(true);
+      boundaryId = undefined;
+      segmentId = item.key;
+    }
   }
   flush();
   return result;

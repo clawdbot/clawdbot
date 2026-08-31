@@ -16,8 +16,8 @@ function isSameOriginMediaRoute(value: string): boolean {
   );
 }
 
-/** Returns a lowercase extension without the leading dot. */
-export function getMediaFileExtension(value: string): string | undefined {
+/** Returns the final filename after decoding one URL path-segment layer. */
+export function getMediaFileName(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
@@ -40,6 +40,15 @@ export function getMediaFileExtension(value: string): string | undefined {
     }
   } catch {
     filename = trimmed.split(/[\\/]/).pop() ?? trimmed;
+  }
+  return filename || undefined;
+}
+
+/** Returns a lowercase extension without the leading dot. */
+export function getMediaFileExtension(value: string): string | undefined {
+  const filename = getMediaFileName(value);
+  if (!filename) {
+    return undefined;
   }
   return /\.([a-zA-Z0-9]+)$/.exec(filename)?.[1]?.toLowerCase();
 }

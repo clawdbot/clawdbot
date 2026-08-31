@@ -1,5 +1,6 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -30,6 +31,7 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiPluginFrameGrantAck,
@@ -75,14 +77,8 @@ vi.mock("../media/media-probe.js", () => ({
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -123,7 +119,10 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
-  resolvePlaybackModeForSourceMock.mockClear();
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
@@ -208,6 +207,7 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
     rootKind?: "resolved" | "bundled";
+    retainedAssets?: ControlUiAssetRetention;
     headers?: IncomingMessage["headers"];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
@@ -216,7 +216,14 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
+        root:
+          params.rootKind === "bundled"
+            ? {
+                kind: "bundled",
+                path: params.rootPath,
+                ...(params.retainedAssets ? { retainedAssets: params.retainedAssets } : {}),
+              }
+            : { kind: "resolved", path: params.rootPath },
       },
     );
     return { res, end, setHeader, handled };
@@ -1519,8 +1526,15 @@ describe("handleControlUiHttpRequest", () => {
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [
+                  {
+                    id: "main",
+                    identity: { name: "</script><script>alert(1)//", avatar: "evil.png" },
+                  },
+                ],
+              },
             },
           },
         );
@@ -1714,12 +1728,19 @@ describe("handleControlUiHttpRequest", () => {
             config: {
               agents: {
                 defaults: { workspace: tmp },
-                list: [{ id: "roboclaw", default: true, workspace: tmp }],
+                list: [
+                  {
+                    id: "roboclaw",
+                    default: true,
+                    workspace: tmp,
+                    identity: {
+                      name: "</script><script>alert(1)//",
+                      avatar: "</script>.png",
+                    },
+                  },
+                ],
               },
-              ui: {
-                seamColor: "#1A2b3C",
-                assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
-              },
+              ui: { seamColor: "#1A2b3C" },
               gateway: {
                 cliAgents: { enabled: true },
                 controlUi: { environment: { label: "edge", color: "amber" } },
@@ -2065,8 +2086,10 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
           config: {
-            agents: { defaults: { workspace: tmp } },
-            ui: { assistant: { avatar: "avatar.png" } },
+            agents: {
+              defaults: { workspace: tmp },
+              list: [{ id: "main", identity: { avatar: "avatar.png" } }],
+            },
           },
           rateLimiter,
         });
@@ -2651,8 +2674,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/openclaw",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2683,8 +2708,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/__openclaw__",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2717,8 +2744,10 @@ describe("handleControlUiHttpRequest", () => {
             // No basePath: simulates the default deployment from the issue report.
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2767,8 +2796,10 @@ describe("handleControlUiHttpRequest", () => {
             // and served the single-underscore endpoint.
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2803,8 +2834,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/openclaw",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -3198,6 +3231,60 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each(["/", "/settings", "/assets/actual.txt"])(
+    "serves a pinned small file in one asynchronous filesystem operation at %s",
+    async (url) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+          const requestScope = new AsyncLocalStorage<boolean>();
+          let filesystemOperations = 0;
+          const hook = createHook({
+            init(_id, type) {
+              if (type === "FSREQCALLBACK" && requestScope.getStore()) {
+                filesystemOperations += 1;
+              }
+            },
+          }).enable();
+          try {
+            const { res, end, handled } = await requestScope.run(true, () =>
+              runControlUiRequest({ url, method: "GET", rootPath: tmp }),
+            );
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(responseBody(end)).toContain(url.startsWith("/assets/") ? "inside-ok" : "<html");
+            // Safe open already captured stat; a second queued metadata read adds
+            // another event-loop wait before these bytes can reach the browser.
+            expect(filesystemOperations).toBe(1);
+          } finally {
+            hook.disable();
+          }
+        },
+      });
+    },
+  );
+
+  it("bounds a static response by the size captured with its pinned descriptor", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "actual.txt", "original");
+        const fstat = fsSync.fstatSync;
+        vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+          const stat = fstat(fd);
+          fsSync.appendFileSync(filePath, "-appended-after-open");
+          return stat;
+        });
+        const { res, end } = await runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(responseBody(end)).toBe("original");
+      },
+    });
+  });
+
   it("serves static assets without synchronous file reads", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -3308,6 +3395,42 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
         expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("serves a missing bundled asset from an exact retained generation", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const retainedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-retained-"));
+        try {
+          const source = "console.log('retained');\n".repeat(200);
+          const { filePath } = await writeAssetFile(retainedRoot, "panel-OldBuild.js", source);
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const retainedAssets = {
+            prepare: vi.fn(async () => {}),
+            resolveAsset: vi.fn(() => ({
+              filePath,
+              rootPath: retainedRoot,
+              rootRealPath: fsSync.realpathSync(retainedRoot),
+            })),
+          } satisfies ControlUiAssetRetention;
+
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/panel-OldBuild.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            retainedAssets,
+            headers: { "accept-encoding": "br, identity;q=0" },
+          });
+
+          expect(retainedAssets.resolveAsset).toHaveBeenCalledWith("assets/panel-OldBuild.js");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+          expect(brotliDecompressSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        } finally {
+          await fs.rm(retainedRoot, { recursive: true, force: true });
+        }
       },
     });
   });
@@ -3447,6 +3570,115 @@ describe("handleControlUiHttpRequest", () => {
         expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
         expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
         expect(responseBody(end)).toBe(source);
+      },
+    });
+  });
+
+  it("serves theme fonts with the woff2 content type and a validator", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "font/woff2");
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(responseBody(end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("answers conditional revalidation with 304 instead of a re-download", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const fresh = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs).toUTCString() },
+        });
+        expect(fresh.res.statusCode).toBe(304);
+        expect(fresh.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(fresh.setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(firstEndCallLength(fresh.end)).toBe(0);
+
+        const stale = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs - 5_000).toUTCString() },
+        });
+        expect(stale.res.statusCode).toBe(200);
+        expect(responseBody(stale.end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("clamps future filesystem mtimes so validators cannot postdate the response", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const future = new Date(Date.now() + 60 * 60 * 1000);
+        await fs.utimes(fontPath, future, future);
+
+        const { res, setHeader } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(res.statusCode).toBe(200);
+        const lastModified = setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1];
+        expect(typeof lastModified).toBe("string");
+        const emitted = Date.parse(lastModified as string);
+        // A future validator would 304 later replacements; it must never
+        // postdate the response, only trail it by clock/floor slack.
+        expect(emitted).toBeLessThanOrEqual(Date.now());
+        expect(emitted).toBeLessThan(future.getTime());
+      },
+    });
+  });
+
+  it("returns 404 for missing font files instead of the SPA index", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/fonts/missing.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+        expectNotFoundResponse({ handled, res, end });
       },
     });
   });

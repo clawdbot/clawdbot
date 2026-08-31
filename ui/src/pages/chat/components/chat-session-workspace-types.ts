@@ -19,7 +19,6 @@ export type SessionWorkspaceProps = {
   onSetDock: (dock: ChatWorkspaceDock) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
-  onCopyPath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;

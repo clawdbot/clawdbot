@@ -65,6 +65,13 @@ export async function saveBrowserDownload(
       opts.signal?.throwIfAborted();
       onReadyToPublish?.();
     },
+  }).catch((error: unknown) => {
+    // Admission failures can belong to a superseded waiter. Only failed saves
+    // cancel here; an aborted capture already owns its cancellation.
+    if (!opts.signal?.aborted) {
+      void download.cancel?.().catch(() => {});
+    }
+    throw error;
   });
   return { ...candidate, path: savedPath };
 }
@@ -91,6 +98,7 @@ export function createDownloadCaptureForPage(
   }
 
   state.downloadWaiterDepth += 1;
+  const operation = new AbortController();
   let done = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
@@ -103,6 +111,9 @@ export function createDownloadCaptureForPage(
       page.off("download", handler);
       handler = undefined;
     }
+  };
+
+  const retireDeadline = () => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -112,20 +123,31 @@ export function createDownloadCaptureForPage(
   const cleanup = () => {
     done = true;
     releaseWaiter();
+    retireDeadline();
     opts.signal?.removeEventListener("abort", abort);
   };
 
   const promise = new Promise<BrowserDownloadResult>((resolve, reject) => {
+    const rejectCapture = (reason: Error) => {
+      if (done) {
+        return;
+      }
+      operation.abort(reason);
+      cleanup();
+      void activeDownload?.cancel?.().catch(() => {});
+      reject(reason);
+    };
     handler = (download: unknown) => {
       if (done) {
         return;
       }
       activeDownload = download as PlaywrightDownload;
       releaseWaiter();
-      void saveBrowserDownload(activeDownload, opts, () => {
+      void saveBrowserDownload(activeDownload, { ...opts, signal: operation.signal }, () => {
         // Atomic publication cannot be revoked, so a later abort must not
         // report cancellation while its completed file is being published.
         opts.signal?.removeEventListener("abort", abort);
+        retireDeadline();
       })
         .finally(cleanup)
         .then(resolve, reject);
@@ -133,23 +155,14 @@ export function createDownloadCaptureForPage(
     page.on("download", handler);
     timer = setTimeout(
       () => {
-        if (done) {
-          return;
-        }
-        cleanup();
-        reject(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
+        rejectCapture(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
       },
       Math.max(1, timeoutMs),
     );
     timer.unref?.();
     abort = () => {
-      if (done) {
-        return;
-      }
-      cleanup();
-      void activeDownload?.cancel?.().catch(() => {});
       const reason = opts.signal?.reason;
-      reject(reason instanceof Error ? reason : new Error("Download wait was cancelled"));
+      rejectCapture(reason instanceof Error ? reason : new Error("Download wait was cancelled"));
     };
     opts.signal?.addEventListener("abort", abort, { once: true });
     if (opts.signal?.aborted) {

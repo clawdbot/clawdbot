@@ -3,6 +3,8 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -14,6 +16,7 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -33,15 +36,21 @@ import {
   findTaskByRunId,
   getTaskById,
   listFreshTasksForOwnerKey,
+  listTaskRecords,
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
+  getInspectableActiveTaskRestartBlockers,
+  resetTaskRegistryMaintenanceRuntimeForTests,
+} from "./task-registry.maintenance.js";
+import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import {
+  bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
   loadTaskRegistryStateFromSqliteReadOnlyResult,
@@ -185,6 +194,7 @@ describe("task-registry store runtime", () => {
     testState.applyEnv();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    resetTaskRegistryMaintenanceRuntimeForTests();
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     resetLogger();
@@ -385,6 +395,61 @@ describe("task-registry store runtime", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("does not clone non-blocker details when inspecting restart blockers", () => {
+    const now = Date.now();
+    const active: TaskRecord = {
+      ...createStoredTask(),
+      runtime: "cli",
+      createdAt: now,
+      lastEventAt: now,
+      detail: ["active detail"],
+    };
+    const nonBlockerDetail = { history: "not needed for restart inspection" };
+    const storedTasks: TaskRecord[] = [
+      { ...active, taskId: "older", createdAt: now - 1_000 },
+      { ...active, taskId: "tie-first" },
+      ...(["queued", "succeeded", "failed", "timed_out", "cancelled", "lost"] as const).map(
+        (status) => Object.assign({}, active, { taskId: status, status, detail: nonBlockerDetail }),
+      ),
+      { ...active, taskId: "running-ended", endedAt: now, detail: nonBlockerDetail },
+      { ...active, taskId: "tie-last" },
+    ];
+    const saveSnapshot = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot,
+      },
+    });
+    // Restore before measuring: the hot query, not startup hydration, owns this assertion.
+    expect(getTaskById("older")?.taskId).toBe("older");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const blockers = getInspectableActiveTaskRestartBlockers();
+      expect(blockers.map((task) => task.taskId)).toEqual(["tie-last", "tie-first", "older"]);
+      expect(clone).not.toHaveBeenCalledWith(nonBlockerDetail);
+      blockers[0]!.title = "caller mutation";
+      expect(getInspectableActiveTaskRestartBlockers()[0]?.title).toBe(active.task);
+      expect(saveSnapshot).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+
+    const allTasks = listTaskRecords();
+    expect(allTasks).toHaveLength(storedTasks.length);
+    expect(allTasks[0]?.taskId).toBe("tie-last");
+    const returnedDetail = allTasks[0]?.detail;
+    expect(returnedDetail).toEqual(["active detail"]);
+    if (!Array.isArray(returnedDetail)) {
+      throw new Error("expected array task detail");
+    }
+    returnedDetail.push("caller mutation");
+    expect(listTaskRecords()[0]?.detail).toEqual(["active detail"]);
+  });
+
   it("rejects invalid persisted task enum values", () => {
     expect(parseTaskRuntime("cron")).toBe("cron");
     expect(parseTaskScopeKind("system")).toBe("system");
@@ -411,7 +476,7 @@ describe("task-registry store runtime", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-task-invalid-notify-" },
         async () => {
-          resetTaskRegistryForTests();
+          resetTaskRegistryForTests({ persist: false });
           const created = createTaskRecord({
             runtime: "acp",
             ownerKey: "agent:main:main",
@@ -488,7 +553,7 @@ describe("task-registry store runtime", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-task-valid-notify-" },
         async () => {
-          resetTaskRegistryForTests();
+          resetTaskRegistryForTests({ persist: false });
           const created = createTaskRecord({
             runtime: "acp",
             ownerKey: "agent:main:main",
@@ -515,7 +580,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "cron",
           ownerKey: "agent:main:main",
@@ -544,7 +609,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-invalid-origin-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",
@@ -625,7 +690,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-read-snapshot-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",
@@ -681,7 +746,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-owner-index-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const ownerKey = "agent:main:main";
         const target = createTaskRecord({
           runtime: "cron",
@@ -1249,6 +1314,15 @@ describe("task-registry store runtime", () => {
         }
 
         saveTaskRegistryStateToSqlite({ tasks, deliveryStates });
+        const admitted: AdmittedRunContext = {
+          operationalRunInstance: { instanceId: "instance-task-prune", runId: "run-task-prune" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-prune", {
+            contextId: "context-task-prune",
+            executionId: "execution-task-prune",
+          }),
+        };
+        expect(bindTaskRunExecution({ admitted, taskId: "task-large-0" })).toBe("bound");
+        expect(bindTaskRunExecution({ admitted, taskId: "task-large-1199" })).toBe("bound");
         const retainedTasks = new Map([...tasks].slice(100));
         const retainedDeliveryStates = new Map([...deliveryStates].slice(100));
         saveTaskRegistryStateToSqlite({
@@ -1261,6 +1335,81 @@ describe("task-registry store runtime", () => {
         expect(restored.deliveryStates.size).toBe(1_100);
         expect(restored.tasks.has("task-large-0")).toBe(false);
         expect(restored.tasks.has("task-large-1199")).toBe(true);
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT owner_id
+               FROM execution_owner_lifecycle_bindings
+               WHERE owner_kind = 'task'
+               ORDER BY owner_id`,
+            )
+            .all(),
+        ).toEqual([{ owner_id: "task-large-1199" }]);
+      },
+    );
+  });
+
+  it("binds only live task owners and retains their metadata after terminalization", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-binding-owner-" },
+      async () => {
+        const active = { ...createStoredTask(), taskId: "task-binding-active" };
+        const terminal: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-binding-terminal",
+          status: "succeeded",
+          endedAt: 200,
+        };
+        const stale: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-binding-stale",
+          endedAt: 199,
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [active.taskId, active],
+            [terminal.taskId, terminal],
+            [stale.taskId, stale],
+          ]),
+          deliveryStates: new Map(),
+        });
+        const admitted: AdmittedRunContext = {
+          operationalRunInstance: { instanceId: "instance-task-owner", runId: "run-task-owner" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-owner", {
+            contextId: "context-task-owner",
+            executionId: "execution-task-owner",
+          }),
+        };
+
+        expect(
+          tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+        ).toBe(false);
+        expect(bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
+        expect(bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
+        expect(
+          tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+        ).toBe(false);
+        expect(bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
+
+        const finished = { ...active, status: "succeeded" as const, endedAt: 210 };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [finished.taskId, finished],
+            [terminal.taskId, terminal],
+            [stale.taskId, stale],
+          ]),
+          deliveryStates: new Map(),
+        });
+        expect(bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT owner_id
+               FROM execution_owner_lifecycle_bindings
+               WHERE owner_kind = 'task'`,
+            )
+            .all(),
+        ).toEqual([{ owner_id: active.taskId }]);
       },
     );
   });

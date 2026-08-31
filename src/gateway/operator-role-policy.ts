@@ -3,11 +3,17 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import {
+  resolveOperatorSessionCreation,
+  type TrustedSessionCreation,
+} from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
@@ -51,6 +57,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
+  bumpGatewayAccessRevision();
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
     if (reported.startsWith(`${profileId}:`)) {
@@ -87,6 +94,19 @@ export function resolveOperatorRolePolicyForProfile(
     }
   }
   return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
+}
+
+/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+export function resolveCreatorSandbox(
+  cfg: OpenClawConfig,
+  creation: { actor?: SessionCreatedActor } | undefined,
+): "required" | undefined {
+  const actor = creation?.actor;
+  return actor?.type === "human" &&
+    actor.id &&
+    resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
+    ? "required"
+    : undefined;
 }
 
 /** Resolves the current named policy from the connection's verified profile identity. */
@@ -140,4 +160,15 @@ export function authorizeGatewaySessionCreation(
     ErrorCodes.FORBIDDEN,
     `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
   );
+}
+
+/** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
+export function resolveSandboxedSessionCreation(
+  client: Parameters<typeof resolveOperatorSessionCreation>[0],
+  cfg: OpenClawConfig,
+): TrustedSessionCreation | undefined {
+  const creation = resolveOperatorSessionCreation(client);
+  return resolveCreatorSandbox(cfg, creation) === "required"
+    ? { ...creation, sandbox: "required" }
+    : undefined;
 }

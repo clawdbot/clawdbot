@@ -21,15 +21,21 @@ import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-s
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
+  controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import {
+  buildChatAttachmentHistory,
+  createChatAttachmentFixturePlugin,
+} from "./control-ui-mock-attachments.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
@@ -37,15 +43,21 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
-import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import {
+  buildPluginCatalogMock,
+  buildPluginInspectMock,
+  buildPluginSetEnabledMock,
+} from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
   fixture?:
     | "approval"
+    | "attachments"
     | "board"
     | "code-fences"
+    | "goal"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -346,8 +358,10 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   }
   if (
     value !== "approval" &&
+    value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -379,23 +393,15 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
   const { model, modelProvider, ...extra } = options;
-  return {
+  return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    kind: "direct",
-    label,
     model: (model as string | undefined) ?? "gpt-5.6-luna",
     modelProvider: (modelProvider as string | undefined) ?? "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
     ...extra,
-  };
+  });
 }
 
-function sessionsListResponse(sessions: unknown[], options: SessionListOptions) {
+function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
   return {
     count: sessions.length,
     defaults: {
@@ -409,14 +415,15 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     ...(options.owners ? { owners: options.owners } : {}),
     offset: options.offset ?? 0,
     path: "",
-    sessions,
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: sessions.map(({ key }) => ({ key })),
     totalCount: options.totalCount,
     ts: Date.now(),
   };
 }
 
 function pagedSessionsListResponse(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   offset: number,
   owners?: readonly SessionActorFixture[],
 ) {
@@ -453,7 +460,7 @@ function buildSessionRows(params: {
 }
 
 function buildSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   matchBase: Record<string, unknown> = {},
   owners?: readonly SessionActorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
@@ -472,7 +479,7 @@ function buildSessionListCases(
 }
 
 function buildSearchSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
@@ -919,6 +926,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
     agents: { defaults: { thinkingDefault: "medium" } },
     commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
+    ui: { prefs: { locale: "en" } },
     ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     ...(options.workboardEnabled ? { plugins: { entries: { workboard: { enabled: true } } } } : {}),
     channels: {
@@ -1687,7 +1695,22 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
-  const activitySessions = buildActivitySessionRows(Date.now());
+  const activityTime = Date.now();
+  const activitySessions = buildActivitySessionRows(activityTime);
+  const activeGoal = {
+    schemaVersion: 1 as const,
+    id: "goal-mobile-parity",
+    objective:
+      "Make Goal work on mobile exactly as it does on desktop while preserving action access, progress visibility, timing, token usage, and composer space across narrow viewports. Keep the collapsed state compact enough for active conversations, while making the expanded state comfortable to scan and operate with one hand. Preserve clear hierarchy between the objective, elapsed time, token budget, and available actions without letting long content push the composer out of reach. Ensure the full objective remains readable when it contains detailed constraints, acceptance criteria, rollout notes, and operational context that cannot be reduced to a short summary. Account for long-running sessions whose goals accumulate multiple requirements, edge cases, validation steps, ownership notes, and deployment considerations. The operator should be able to review all of that context without losing access to the Goal controls or forcing the message composer below the visible viewport.",
+    status: "active" as const,
+    createdAt: activityTime - 14 * 60_000,
+    updatedAt: activityTime - 30_000,
+    tokenStart: 120_000,
+    tokenStartFresh: true,
+    tokensUsed: 127_000,
+    tokenBudget: 300_000,
+    continuationTurns: 3,
+  };
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -1702,6 +1725,9 @@ async function createChatPickerScenario(
       activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
       hasActiveRun: true,
+      totalTokens: 170_000,
+      totalTokensFresh: true,
+      ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1730,6 +1756,32 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
+    }),
+    sessionRow("agent:main:cloud-refactor", "Cloud refactor worker", baseTime - 70_000, {
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 3_500_000,
+      execCwd: "/workspace/openclaw",
+      placement: {
+        state: "active",
+        generation: 3,
+        createdAtMs: baseTime - 3_600_000,
+        updatedAtMs: baseTime - 20_000,
+        stateChangedAtMs: baseTime - 3_500_000,
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        activeOwnerEpoch: 4,
+        workerBundleHash: "b".repeat(64),
+        workspaceBaseManifestRef: "sha256:cloud-refactor-base",
+        remoteWorkspaceDir: "/workspace/openclaw",
+        diskSpace: {
+          status: "ok",
+          availableBytes: 61 * 1024 ** 3,
+          totalBytes: 100 * 1024 ** 3,
+          observedAtMs: baseTime - 20_000,
+        },
+      },
     }),
     sessionRow(
       "agent:main:production-export",
@@ -1785,6 +1837,18 @@ async function createChatPickerScenario(
         branch: "claude/sidebar-agent-zones",
         repoRoot: "~/Projects/openclaw",
       },
+    }),
+    // Second repo plus a spawned worktree checkout so the sidebar's
+    // Project grouping shows several sections and the worktree fold.
+    sessionRow("agent:main:clawdbot-vite", "Vite upgrade spike", baseTime - 160_000, {
+      worktree: {
+        id: "wt-clawdbot-vite",
+        branch: "openclaw/vite-upgrade",
+        repoRoot: "~/Projects/clawdbot",
+      },
+    }),
+    sessionRow("agent:main:project-grouping", "Sidebar project grouping", baseTime - 170_000, {
+      spawnedCwd: "~/Projects/openclaw/.claude/worktrees/groups-c7c338",
     }),
     ...buildSessionRows({
       baseTime: baseTime - 400_000,
@@ -1878,13 +1942,16 @@ async function createChatPickerScenario(
     workboardEnabled: fixture === "workboard",
   });
   const historyMessages =
-    fixture === "code-fences"
-      ? buildCodeFenceChatHistory(baseTime)
-      : buildScrollableChatHistory(baseTime);
+    fixture === "attachments"
+      ? buildChatAttachmentHistory(baseTime)
+      : fixture === "code-fences"
+        ? buildCodeFenceChatHistory(baseTime)
+        : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
     key: "agent:main:main",
+    ...(fixture === "goal" ? { goal: activeGoal } : {}),
   };
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
@@ -1902,7 +1969,7 @@ async function createChatPickerScenario(
   };
   const planChatHistory = {
     messages: historyMessages,
-    sessionId: "control-ui-e2e-session",
+    sessionId: "session:agent:main:main",
     sessionInfo: planSessionInfo,
     inFlightRun: planInFlightRun,
     thinkingLevel: null,
@@ -2044,8 +2111,38 @@ async function createChatPickerScenario(
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
       },
-      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
-      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
+      },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review"],
+      },
+      {
+        id: "presence-patricia",
+        email: "patricia.erichsen@example.com",
+        onlineSince: activityTime - 12 * 60_000,
+        lastActivityAt: activityTime - 30_000,
+        deviceFamily: "iPhone",
+        platform: "iOS",
+        timeZone: "Europe/Stockholm",
+        watchedSessions: ["agent:activity:support-handoff"],
+      },
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
@@ -2466,6 +2563,8 @@ async function createChatPickerScenario(
         ],
       },
       "plugins.list": buildPluginCatalogMock(),
+      "plugins.inspect": buildPluginInspectMock(),
+      "plugins.setEnabled": buildPluginSetEnabledMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {
@@ -2991,6 +3090,7 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
+    sessions: [...sessions, ...archivedSessions, mainChildRow, taxChildRow],
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
@@ -3159,10 +3259,50 @@ function createStatefulMockInitScript(): string {
   return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
-function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
+function createMockGatewayPlugin(
+  scenario: ControlUiMockGatewayScenario,
+  fixture?: CliOptions["fixture"],
+): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
   const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const attachmentThemeToggle =
+    fixture === "attachments"
+      ? `    <style data-openclaw-control-ui-mock-theme-toggle>
+      .control-ui-mock-theme-toggle { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card); box-shadow: var(--shadow-md); }
+      .control-ui-mock-theme-toggle button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+      .control-ui-mock-theme-toggle button[aria-pressed="true"] { color: var(--text); background: var(--bg-hover); }
+    </style>
+    <script data-openclaw-control-ui-mock-theme-toggle>
+      addEventListener("DOMContentLoaded", () => {
+        const control = document.createElement("div");
+        control.className = "control-ui-mock-theme-toggle";
+        control.setAttribute("aria-label", "Theme");
+        const apply = (mode) => {
+          const root = document.documentElement;
+          root.dataset.themeMode = mode;
+          root.dataset.themeResolved = mode;
+          root.classList.toggle("wa-light", mode === "light");
+          root.classList.toggle("wa-dark", mode === "dark");
+          root.style.colorScheme = mode;
+          for (const button of control.querySelectorAll("button")) {
+            button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+          }
+        };
+        for (const mode of ["dark", "light"]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.mode = mode;
+          button.textContent = mode === "dark" ? "Dark" : "Light";
+          button.addEventListener("click", () => apply(mode));
+          control.append(button);
+        }
+        document.body.append(control);
+        apply(document.documentElement.dataset.themeMode === "light" ? "light" : "dark");
+      });
+    </script>
+`
+      : "";
   return {
     configureServer(server) {
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
@@ -3179,7 +3319,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3259,7 +3399,11 @@ const server = await createServer({
       : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
+  plugins: [
+    createMockGatewayPlugin(scenario, options.fixture),
+    createBoardFixturePlugin(),
+    ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+  ],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
@@ -3278,7 +3422,9 @@ const server = await createServer({
 });
 
 await server.listen();
-console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+);
 console.log(
   `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
 );

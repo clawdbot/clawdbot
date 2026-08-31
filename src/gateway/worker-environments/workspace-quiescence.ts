@@ -21,8 +21,13 @@ export function createWorkerWorkspaceQuiescence(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
 }): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
   return async (remoteWorkspaceDir) => {
-    if (!path.posix.isAbsolute(remoteWorkspaceDir)) {
+    const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
+    const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
+    if (!posixAbsolute && !windowsAbsolute) {
       throw new Error("Worker workspace quiescence path must be absolute");
+    }
+    if (!posixAbsolute && windowsAbsolute && !params.sharedHost) {
+      throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
     const run = async (argv: string[]) => {
@@ -45,11 +50,10 @@ export function createWorkerWorkspaceQuiescence(params: {
       throw new Error("Worker workspace quiescence returned an invalid acknowledgement");
     }
     const nonce = acknowledgement[1]!;
-    let resumed = false;
+    let releasePromise: Promise<void> | undefined;
     let renewalFailure: unknown;
     const renewalAbort = new AbortController();
-    const abortRenewal = () => renewalAbort.abort(params.ownerSignal.reason);
-    params.ownerSignal.addEventListener("abort", abortRenewal, { once: true });
+    const renewalSignal = AbortSignal.any([params.ownerSignal, renewalAbort.signal]);
     let renewalQueue = Promise.resolve();
     const renew = (validationMode: "heartbeat" | "final") => {
       const operation = renewalQueue.then(async () => {
@@ -73,12 +77,9 @@ export function createWorkerWorkspaceQuiescence(params: {
       return operation;
     };
     const renewalLoop = (async () => {
-      while (!renewalAbort.signal.aborted) {
+      while (!renewalSignal.aborted) {
         if (
-          !(await waitForQuiescenceRenewal(
-            renewalAbort.signal,
-            WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS,
-          ))
+          !(await waitForQuiescenceRenewal(renewalSignal, WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS))
         ) {
           return;
         }
@@ -92,7 +93,7 @@ export function createWorkerWorkspaceQuiescence(params: {
     })();
     return {
       assertActive: async () => {
-        if (resumed) {
+        if (renewalSignal.aborted) {
           throw new Error("Worker workspace quiescence was already released");
         }
         if (renewalFailure) {
@@ -103,14 +104,23 @@ export function createWorkerWorkspaceQuiescence(params: {
         await renew("final");
       },
       resume: async () => {
-        if (resumed) {
-          return;
-        }
-        params.ownerSignal.removeEventListener("abort", abortRenewal);
-        renewalAbort.abort();
-        await renewalLoop;
-        await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
-        resumed = true;
+        releasePromise ??= (async () => {
+          renewalAbort.abort();
+          await renewalLoop;
+          await renewalQueue;
+          // Teardown can retain an attached row after fencing the tunnel. Recheck after
+          // draining renewals: a closed owner releases only local state, never remote work.
+          if (!params.ownerSignal.aborted) {
+            await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
+          }
+        })().catch((error: unknown) => {
+          if (params.ownerSignal.aborted) {
+            return;
+          }
+          releasePromise = undefined;
+          throw error;
+        });
+        await releasePromise;
       },
     };
   };

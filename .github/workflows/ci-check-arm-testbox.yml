@@ -82,6 +82,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
@@ -125,7 +126,7 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
         if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

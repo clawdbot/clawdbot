@@ -406,6 +406,7 @@ export async function sendDiscordVoiceMessage(
   silent?: boolean,
   token?: string,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
@@ -482,6 +483,7 @@ export async function sendDiscordVoiceMessage(
     return (await request(
       async () => {
         await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
         try {
           return (await rest.post(`/channels/${channelId}/messages`, {
             body: messagePayload,

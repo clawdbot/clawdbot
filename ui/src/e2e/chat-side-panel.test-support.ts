@@ -56,16 +56,13 @@ export async function activateChatHeaderPanelAction(page: Page, label: string): 
     }
   }
   await action.waitFor({ state: "visible" });
-  const afterHide = menu.locator("wa-dropdown").evaluate(
-    (dropdown) =>
-      new Promise<void>((resolve) => {
-        dropdown.addEventListener("wa-after-hide", () => resolve(), { once: true });
-      }),
-  );
   await action.click();
-  await afterHide;
   await page.waitForFunction(() => {
     const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
-    return !dropdown || Reflect.get(dropdown, "open") !== true;
+    // Web Awesome clears `open` before its hide animation; reopening while the popup is active
+    // skips showMenu setup and can let the previous close hide the newly opened submenu.
+    const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
+    return (!dropdown || Reflect.get(dropdown, "open") !== true) && !popup?.active;
   });
+  await action.waitFor({ state: "hidden" });
 }

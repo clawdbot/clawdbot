@@ -54,6 +54,9 @@ omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+Version-bound runtime plugins converge to the base release cohort when the
+core is a correction release (for example, `YYYY.M.P-2` uses plugin
+`YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
 OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
@@ -101,6 +104,11 @@ installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
 
+Dev updates build the complete runtime, including plugins and the Control UI,
+without generating TypeScript declarations. Preflight still validates the
+candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
+`pnpm build` and package builds continue to generate declarations.
+
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
 from a different install, the updater prints both roots and the managed
@@ -111,10 +119,38 @@ service's Node path, and checks that Node version against the target release's
 
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
-for an efficient source-server update: it restores tracked build outputs that
-`pnpm build` rewrites, fails closed on any other local changes, fast-forwards
-`main` (or rebases a local server branch onto `origin/main`), installs
-dependencies, builds clean, and restarts the gateway.
+for a source-server update: it fails closed on all tracked local changes,
+including build outputs, fast-forwards `main` (or rebases a local server branch
+onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
+and restarts the gateway only after the build succeeds.
+
+This reference script requires **Corepack** and creates temporary shims without
+global activation before fetching. After fetching, it freezes the target commit
+and checks that its exact pnpm pin can run through those shims in a private probe
+workspace. The probe contains only package-manager metadata, not the target's
+dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
+failure, or a version mismatch stops before checkout update or restart; repair
+the target pin or install a compatible Corepack, then retry.
+
+The same fetched commit is used for fast-forward or rebase. This is a fetched-target
+toolchain preflight, not a complete preflight of a rebased local branch or its
+build, and the script does not roll back later install or build failures. Local
+branch overrides remain in effect: install and build resolve the resulting
+checkout's pin, which may differ from the probed target pin. Operators must verify
+those overrides and maintain a recovery path. The same shim directory leads
+nested commands' `PATH`, and child workspace and lockfile roots follow each
+operation's directory. Bootstrap, install, or build failure prevents restart.
+The hosted [installers](/install/installer) also support npm-owned temporary provisioning
+when Corepack is unavailable; this server script deliberately requires Corepack.
+
+<Warning>
+A running older updater or server script keeps its old bootstrap code even if it
+checks out files containing this repair. If that older entry point invokes
+ambient pnpm, the operator must select a target-compatible pnpm launcher before
+the first update across the pin change. Validate that launcher against both the
+intended target and the known-good rollback ref before starting the update.
+Updating target files alone does not repair an older running binary.
+</Warning>
 
 Generated output roots such as `dist`, `dist-runtime`, and package-local
 `dist` directories must be real directories. Builds refuse symbolic-link roots
@@ -229,11 +265,14 @@ release predates pnpm 11's isolated global-package layout, so its updater can
 mistake another npm installation for the running CLI. Later releases retain
 pnpm ownership and follow the replacement package root during updates. They
 also use the owning manager's reported global bin directory and stop before
-mutation when the available pnpm command reports another global root or major,
+mutation when the available pnpm command reports another global root,
 or when the invoking package is orphaned or not the only active OpenClaw
 install there.
 
-If OpenClaw shares a pnpm 11 global install group with another package, the
+pnpm 12 retains the `global/v11` layout; the layout number does not need to match
+the pnpm CLI major version.
+
+If OpenClaw shares a pnpm global install group with another package, the
 automatic updater stops before changing the group. Update the original
 comma-separated group manually so its sibling packages and build policy stay
 intact.
@@ -384,6 +423,10 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
 
+If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
+For a version-mismatch warning, reload the extension from `chrome://extensions`;
+fully restart Chrome if the warning remains.
+
 ### Restart the gateway
 
 ```bash
@@ -477,13 +520,23 @@ from immediately applying a newer release by setting
 
 ### Roll back a source checkout
 
-Use a clean checkout and select a known-good tag or commit:
+Use a clean checkout and select a known-good tag or commit. First verify that
+your Corepack bootstrap supports that ref's pnpm pin as described in
+[Source-checkout servers](#source-checkout-servers-reference-script):
 
 ```bash
 git fetch --all --tags
 git checkout --detach <known-good-tag-or-commit>
-pnpm install && pnpm build
-openclaw gateway restart
+(
+  pnpm_shims="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || exit
+  trap 'rm -rf "$pnpm_shims"' EXIT
+  corepack enable --install-directory "$pnpm_shims" pnpm || exit
+  export PATH="$pnpm_shims:$PATH"
+  export NPM_CONFIG_WORKSPACE_DIR="$PWD" npm_config_workspace_dir="$PWD"
+  export PNPM_CONFIG_LOCKFILE_DIR="$PWD" pnpm_config_lockfile_dir="$PWD"
+  "$pnpm_shims/pnpm" install --frozen-lockfile || exit
+  "$pnpm_shims/pnpm" build
+) && openclaw gateway restart
 ```
 
 To return to latest: `git checkout main && git pull`.

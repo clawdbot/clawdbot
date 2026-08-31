@@ -10,6 +10,7 @@ import { QaSuiteInfraError } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   inspectLinuxProcessGroup,
+  isQaPosixProcessGroupAlive,
   type QaLinuxProcessGroupInspector,
 } from "./posix-process-group.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
@@ -160,10 +161,6 @@ export function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, log
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
-function isProcessAlreadyExitedError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
-}
-
 function boundQaGatewayProcessTreeDiagnostics(details: string) {
   if (details.length <= 2_048) {
     return details;
@@ -181,20 +178,7 @@ function isQaGatewayChildProcessTreeAlive(
   if (process.platform === "win32") {
     return !hasQaGatewayChildExited(child);
   }
-  try {
-    process.kill(-child.pid, 0);
-    if (process.platform === "linux") {
-      // Linux can retain zombie-only process groups after SIGKILL while Node's
-      // child metadata is still unsettled. Runnable /proc members are the owner.
-      return inspectLinuxProcessGroupFn(child.pid)?.alive ?? true;
-    }
-    return true;
-  } catch (error) {
-    if (!isProcessAlreadyExitedError(error) && !hasQaGatewayChildExited(child)) {
-      return true;
-    }
-  }
-  return false;
+  return isQaPosixProcessGroupAlive(child.pid, inspectLinuxProcessGroupFn);
 }
 
 function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {

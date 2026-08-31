@@ -7,9 +7,9 @@ import {
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
-import type { DiscordConfig } from "./runtime-api.js";
 
 function normalizeDiscordSlug(value?: string | null) {
   return normalizeAtHashSlug(value);

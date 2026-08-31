@@ -6,7 +6,6 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -20,10 +19,10 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { resolveHealthAccountContext } from "../gateway/health/account-context.js";
 import {
-  buildHealthSessionSummary as buildSessionSummary,
+  buildHealthAgentSummaries,
   resolveHealthAgentOrder as resolveAgentOrder,
 } from "../gateway/health/collector.js";
-import type { AgentHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import type { HealthSummary } from "../gateway/health/types.js";
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -31,7 +30,6 @@ import {
   formatDurationCompact,
   formatDurationHuman,
 } from "../infra/format-time/format-duration.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -232,9 +230,6 @@ export function formatConfigReloadHealthLine(summary: HealthSummary): string | n
   return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
-const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
-  resolveHeartbeatSummaryForAgent(cfg, agentId);
-
 /** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
   opts: {
@@ -322,22 +317,7 @@ export async function healthCommand(
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const resolvedAgents =
-      agents.length > 0
-        ? agents
-        : await Promise.all(
-            localAgents.ordered.map(async (entry) => {
-              const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-                agentId: entry.id,
-              });
-              return {
-                agentId: entry.id,
-                name: entry.name,
-                isDefault: entry.id === localAgents.defaultAgentId,
-                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-                sessions: await buildSessionSummary(storePath, entry.id),
-              } satisfies AgentHealthSummary;
-            }),
-          );
+      agents.length > 0 ? agents : await buildHealthAgentSummaries(cfg, localAgents);
     const displayAgents =
       opts.verbose || !defaultAgentId
         ? resolvedAgents
@@ -394,24 +374,6 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
-    const channelAccountFallbacks = Object.fromEntries(
-      displayPlugins.map((plugin) => {
-        const accountIds = plugin.config.listAccountIds(cfg);
-        const defaultAccountId = resolveChannelDefaultAccountId({
-          plugin,
-          cfg,
-          accountIds,
-        });
-        const preferred = resolvePreferredAccountId({
-          accountIds,
-          defaultAccountId,
-          boundAccounts: defaultAgentId
-            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
-            : [],
-        });
-        return [plugin.id, [preferred] as string[]] as const;
-      }),
-    );
     const accountIdsByChannel = (() => {
       const entries = displayAgents.length > 0 ? displayAgents : resolvedAgents;
       const byChannel: Record<string, string[]> = {};
@@ -427,11 +389,6 @@ export async function healthCommand(
         }
         if (accountIds.length > 0) {
           byChannel[channelId] = accountIds;
-        }
-      }
-      for (const [channelId, fallbackIds] of Object.entries(channelAccountFallbacks)) {
-        if (!byChannel[channelId] || byChannel[channelId].length === 0) {
-          byChannel[channelId] = fallbackIds;
         }
       }
       return byChannel;

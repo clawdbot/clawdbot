@@ -6,11 +6,14 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { NodeRegistry } from "../../node-registry.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
-import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "./authenticated-request-dispatch.test-support.js";
 
 const handleGatewayRequest = vi.hoisted(() => vi.fn());
 
@@ -30,6 +33,12 @@ afterEach(() => {
 
 function createPairedNode() {
   const frames: string[] = [];
+  let frameArrived = createDeferredCore();
+  const waitForFrameCount = async (count: number) => {
+    while (frames.length < count) {
+      await frameArrived.promise;
+    }
+  };
   const registry = new NodeRegistry();
   activeRegistries.add(registry);
   registry.register(
@@ -41,6 +50,8 @@ function createPairedNode() {
         send(frame: unknown) {
           if (typeof frame === "string") {
             frames.push(frame);
+            frameArrived.resolve();
+            frameArrived = createDeferredCore();
           }
         },
       },
@@ -66,49 +77,31 @@ function createPairedNode() {
     } as GatewayWsClient,
     { pairingIdentity: "paired-node-identity" },
   );
-  return { registry, frames };
+  return { registry, frames, waitForFrameCount };
 }
 
 function createDispatcher(
   socket: EventEmitter,
-  clientIdentity: Pick<GatewayWsClient["connect"]["client"], "id" | "mode"> = {
+  clientInfo: Pick<GatewayWsClient["connect"]["client"], "id" | "mode"> = {
     id: GATEWAY_CLIENT_IDS.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   },
 ) {
-  const client = {
-    socket: socket as unknown as WebSocket,
+  const client = createOperatorWsClient({
     connId: "operator-connection",
-    usesSharedGatewayAuth: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { ...clientIdentity, version: "1.0.0", platform: "linux" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-  } as GatewayWsClient;
-  const dispatcher = createGatewayAuthenticatedRequestDispatcher({
-    handler: {
-      connId: client.connId,
-      extraHandlers: {},
-      buildRequestContext: () => ({}) as never,
-      send: vi.fn((_frame: unknown) => ({ kind: "sent" }) as const),
-      close: vi.fn(),
-      isClosed: () => false,
-      setCloseCause: vi.fn(),
-      logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    } as unknown as GatewayWsMessageHandlerParams,
-    isWebchatConnect: () => false,
+    socket,
+    clientInfo,
+    scopes: ["operator.write"],
   });
-  return { client, dispatcher };
+  const harness = createDispatchTestHarness({ connId: client.connId });
+  return { client, ...harness };
 }
 
 describe("authenticated WebSocket request cancellation", () => {
   it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
     const socket = new EventEmitter();
-    const { registry, frames } = createPairedNode();
-    const { client, dispatcher } = createDispatcher(socket);
+    const { registry, frames, waitForFrameCount } = createPairedNode();
+    const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
     handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
       const result = await registry.invoke({
         nodeId: "paired-node",
@@ -141,17 +134,19 @@ describe("authenticated WebSocket request cancellation", () => {
       },
       client,
     );
-    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    await waitForFrameCount(1);
     expect(socket.listenerCount("close")).toBe(1);
 
     socket.emit("close", 1000, Buffer.alloc(0));
 
-    await vi.waitFor(() => expect(frames).toHaveLength(2));
+    await waitForFrameCount(2);
     const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
     expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
       event: "node.invoke.cancel",
       payload: { invokeId: request.payload?.id, nodeId: "paired-node" },
     });
+    await awaitResponseFrame("paired-node-cli-inference");
+    // Listener removal is the dispatch finally block, a microtask after the response.
     await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
   });
 
@@ -159,14 +154,13 @@ describe("authenticated WebSocket request cancellation", () => {
     "keeps authenticated %s work alive after its socket disconnects",
     async (method) => {
       const socket = new EventEmitter();
-      const { client, dispatcher } = createDispatcher(socket);
-      let finish!: () => void;
-      const completion = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
+      const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
+      const invoked = createDeferredCore();
+      const completion = createDeferredCore();
       let completed = false;
       handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-        await completion;
+        invoked.resolve();
+        await completion.promise;
         completed = true;
         options.respond(true, { ok: true });
       });
@@ -175,15 +169,17 @@ describe("authenticated WebSocket request cancellation", () => {
         { type: "req", id: "ordinary-request", method, params: {} },
         client,
       );
-      await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
+      await invoked.promise;
+      expect(handleGatewayRequest).toHaveBeenCalledOnce();
 
       expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
       expect(socket.listenerCount("close")).toBe(0);
       socket.emit("close", 1006, Buffer.alloc(0));
       expect(completed).toBe(false);
 
-      finish();
-      await vi.waitFor(() => expect(completed).toBe(true));
+      completion.resolve();
+      await awaitResponseFrame("ordinary-request");
+      expect(completed).toBe(true);
     },
   );
 
@@ -193,15 +189,17 @@ describe("authenticated WebSocket request cancellation", () => {
       id: GATEWAY_CLIENT_IDS.CONTROL_UI,
       mode: GATEWAY_CLIENT_MODES.UI,
     });
+    const invoked = createDeferredCore();
+    const abortObserved = createDeferredCore();
     let observedSignal: AbortSignal | undefined;
     handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
       observedSignal = options.signal;
-      await new Promise<void>((resolve) => {
-        options.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
+      options.signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+      invoked.resolve();
+      await abortObserved.promise;
     });
 
-    const request = dispatcher.dispatch(
+    await dispatcher.dispatch(
       {
         type: "req",
         id: "session-companion",
@@ -210,13 +208,16 @@ describe("authenticated WebSocket request cancellation", () => {
       },
       client,
     );
-    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(1));
+    // Emitting close before the handler registers its abort listener would leave
+    // the already-aborted signal unobserved; wait for the handler first.
+    await invoked.promise;
+    expect(socket.listenerCount("close")).toBe(1);
 
     socket.emit("close", 1000, Buffer.alloc(0));
 
-    await request;
+    await abortObserved.promise;
     expect(observedSignal?.aborted).toBe(true);
-    expect(socket.listenerCount("close")).toBe(0);
+    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
   });
 
   it.each([
@@ -239,7 +240,7 @@ describe("authenticated WebSocket request cancellation", () => {
     "does not cancel an authenticated $label node invocation on socket close",
     async (identity) => {
       const socket = new EventEmitter();
-      const { registry, frames } = createPairedNode();
+      const { registry, frames, waitForFrameCount } = createPairedNode();
       const { client, dispatcher } = createDispatcher(socket, identity);
       handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
         const result = await registry.invoke({
@@ -264,7 +265,7 @@ describe("authenticated WebSocket request cancellation", () => {
         },
         client,
       );
-      await vi.waitFor(() => expect(frames).toHaveLength(1));
+      await waitForFrameCount(1);
       expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
       expect(socket.listenerCount("close")).toBe(0);
 

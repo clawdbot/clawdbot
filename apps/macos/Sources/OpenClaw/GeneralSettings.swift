@@ -26,7 +26,10 @@ struct GeneralSettings: View {
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
-    @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
+    private var gatewayStatus: GatewayEnvironmentStatus {
+        self.gatewayManager.environmentStatus
+    }
+
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
     @State private var cookieSyncManager = CookieSyncManager.shared
@@ -253,7 +256,7 @@ struct GeneralSettings: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 18)
-                Button("Quit") { NSApp.terminate(nil) }
+                Button("Quit") { AppDelegate.requestTermination() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -443,7 +446,9 @@ struct GeneralSettings: View {
         if let failure = self.localGatewayFailure { return failure }
         switch self.state.connectionMode {
         case .local:
-            return "OpenClaw starts and monitors the Gateway on this Mac."
+            return self.gatewayManager.installation == .external
+                ? "OpenClaw connects to an independently managed Gateway on this Mac."
+                : "OpenClaw starts and monitors the Gateway on this Mac."
         case .remote:
             let target = self.state.remoteTransport == .ssh ? self.state.remoteTarget : self.state.remoteUrl
             let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -496,7 +501,21 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsCardGroup("Local Gateway") {
                 if !self.isNixMode {
-                    self.gatewayInstallerCard
+                    switch self.gatewayManager.installation {
+                    case .managed:
+                        self.gatewayInstallerCard
+                    case .external:
+                        SettingsCardRow(
+                            title: "Independently managed Gateway",
+                            subtitle: "This app connects without installing or updating its CLI runtime.")
+                        {
+                            Text(self.gatewayManager.status.label).font(.caption)
+                        }
+                    case .unreadable:
+                        Text(GatewayProcessManager.Installation.ownershipFailure)
+                            .foregroundStyle(.orange)
+                            .padding(14)
+                    }
                 }
                 self.healthRow
                     .padding(.horizontal, 14)
@@ -829,10 +848,8 @@ struct GeneralSettings: View {
     }
 
     private func refreshGatewayStatus() {
-        Task {
-            let status = await GatewayEnvironment.check()
-            self.gatewayStatus = status
-        }
+        guard self.state.connectionMode == .local, self.gatewayManager.installation == .managed else { return }
+        self.gatewayManager.refreshEnvironmentStatus(force: true)
     }
 
     private var gatewayStatusColor: Color {

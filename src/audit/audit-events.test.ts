@@ -88,6 +88,7 @@ function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
     },
     recordExecutionIdentity: () => true,
     recordExecutionDecision: () => true,
+    recordExecutionDecisionWork: () => true,
     stop: async () => {},
   };
 }
@@ -698,16 +699,7 @@ describe("agent activity audit projection", () => {
 
   it("settles an error followed by a cleanup end as one failed outcome", async () => {
     const inputs: AuditEventInput[] = [];
-    const writer: AuditEventWriter = {
-      ready: Promise.resolve(),
-      record: (input) => {
-        inputs.push(input);
-        return true;
-      },
-      recordExecutionIdentity: () => true,
-      recordExecutionDecision: () => true,
-      stop: async () => {},
-    };
+    const writer = captureAuditWriter(inputs);
     const recorder = createAgentEventAuditRecorder({ writer });
     const lifecycleGeneration = "gateway-1";
 
@@ -730,16 +722,7 @@ describe("agent activity audit projection", () => {
 
   it("keeps one start when a retry cancels a pending terminal", async () => {
     const inputs: AuditEventInput[] = [];
-    const writer: AuditEventWriter = {
-      ready: Promise.resolve(),
-      record: (input) => {
-        inputs.push(input);
-        return true;
-      },
-      recordExecutionIdentity: () => true,
-      recordExecutionDecision: () => true,
-      stop: async () => {},
-    };
+    const writer = captureAuditWriter(inputs);
     const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
     const lifecycleGeneration = "gateway-retry";
 
@@ -761,16 +744,7 @@ describe("agent activity audit projection", () => {
 
   it("persists definitive successful terminals immediately in source order", async () => {
     const inputs: AuditEventInput[] = [];
-    const writer: AuditEventWriter = {
-      ready: Promise.resolve(),
-      record: (input) => {
-        inputs.push(input);
-        return true;
-      },
-      recordExecutionIdentity: () => true,
-      recordExecutionDecision: () => true,
-      stop: async () => {},
-    };
+    const writer = captureAuditWriter(inputs);
     const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
 
     recorder.record(agentEvent({ seq: 1 }));
@@ -793,16 +767,7 @@ describe("agent activity audit projection", () => {
 
   it("merges multiple terminal observations through the canonical outcome contract", async () => {
     const inputs: AuditEventInput[] = [];
-    const writer: AuditEventWriter = {
-      ready: Promise.resolve(),
-      record: (input) => {
-        inputs.push(input);
-        return true;
-      },
-      recordExecutionIdentity: () => true,
-      recordExecutionDecision: () => true,
-      stop: async () => {},
-    };
+    const writer = captureAuditWriter(inputs);
     const recorder = createAgentEventAuditRecorder({ writer });
 
     recorder.record(agentEvent({ seq: 1 }));

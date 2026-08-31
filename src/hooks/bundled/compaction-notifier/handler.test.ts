@@ -27,8 +27,9 @@ describe("compaction notifier", () => {
   it.each([
     { tokensBefore: 20, tokensAfter: 30 },
     { tokensBefore: 36, tokensAfter: 36 },
+    { tokensBefore: -1, tokensAfter: -2 },
   ])(
-    "does not include a growth arrow for $tokensBefore -> $tokensAfter token counts",
+    "does not include a token arrow for non-comparable $tokensBefore -> $tokensAfter counts",
     async ({ tokensBefore, tokensAfter }) => {
       const event = createAfterEvent(tokensBefore, tokensAfter);
 

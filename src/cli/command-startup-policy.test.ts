@@ -36,6 +36,7 @@ describe("command-startup-policy", () => {
       ["uninstall"],
       ["agent", "exec"],
       ["status"],
+      ["triage"],
       ["agents", "bindings"],
       ["approvals", "pending"],
       ["skills"],
@@ -49,6 +50,7 @@ describe("command-startup-policy", () => {
       ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
+      ["gateway", "stop"],
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
@@ -327,6 +329,9 @@ describe("command-startup-policy", () => {
       }).hideBanner,
     ).toBe(true);
     expect(resolvePolicy({ commandPath: ["status"], env: {} }).hideBanner).toBe(false);
+    expect(
+      resolvePolicy({ commandPath: ["status"], jsonOutputMode: true, env: {} }).hideBanner,
+    ).toBe(true);
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
@@ -365,7 +370,7 @@ describe("command-startup-policy", () => {
       }),
     ).toEqual({
       suppressDoctorStdout: true,
-      hideBanner: false,
+      hideBanner: true,
       skipConfigGuard: true,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
@@ -389,6 +394,9 @@ describe("command-startup-policy", () => {
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
     expect(policy.suppressDoctorStdout).toBe(true);
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+    expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
   });
 
   it("isolates cloud worker startup", () => {

@@ -71,6 +71,8 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
+      toolAutoDeliveryMediaUrls: new Set(),
+      messagingToolSentMediaUrls: [],
       pendingToolAudioAsVoice: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -186,9 +188,10 @@ describe("handleAgentEnd", () => {
     );
   });
 
-  it("keeps explicit session and agent identity on lifecycle start events", () => {
+  it("keeps identity and the same observed start time on the bus and callback", () => {
     emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
     ctx.params.sessionId = "session-1";
     ctx.params.agentId = "main";
 
@@ -201,6 +204,12 @@ describe("handleAgentEnd", () => {
       agentId: "main",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "start" }),
+    });
+    const event = emitAgentEventMock.mock.calls[0]?.[0];
+    expect(event.data.startedAt).toEqual(expect.any(Number));
+    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+      stream: "lifecycle",
+      data: event.data,
     });
   });
 

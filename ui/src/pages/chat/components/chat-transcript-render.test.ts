@@ -3,7 +3,10 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -39,11 +42,153 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
-    const sessionKey = "agent:main:archived-notice";
-    const archivedSession: GatewaySessionRow = {
+  it("keeps exact-run usage visible through final event batching and later corrections", async () => {
+    const runId = "watched-run";
+    const sessionKey = "global";
+    const host = createHost({ sessionKey, chatRunId: runId });
+    const props = threadProps("pane-run-usage", sessionKey, [
+      {
+        role: "user",
+        content: "Check the workspace",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+      { role: "assistant", content: "Workspace checked", timestamp: 2_000, runId },
+    ]);
+    props.gatewayClient = createTestGatewayClient(() => null);
+    props.currentAgentId = "first";
+    props.runId = runId;
+    props.runWorking = true;
+    props.selectedSession = {
       key: sessionKey,
       kind: "direct",
+      updatedAt: 1,
+      status: "done",
+      lastRunId: "previous-run",
+      endedAt: 1,
+      runtimeMs: 1,
+      outputTokens: 10,
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      props.runUsageById = host.chatRunUsageById;
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 1, "usage", { outputTokens: 900 }, sessionKey),
+    );
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+
+    handleAgentEvent(host, agentEvent(runId, 1, "usage", { outputTokens: 6_900 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
+      "6,900 output tokens",
+    );
+    // Final usage and lifecycle can share one browser render; neither may discard the count.
+    handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
+    handleAgentEvent(host, agentEvent(runId, 3, "lifecycle", { phase: "end" }, sessionKey));
+    props.runId = null;
+    props.runWorking = false;
+    props.selectedSession = {
+      ...props.selectedSession,
+      lastRunId: runId,
+      endedAt: 16_000,
+      runtimeMs: 14_000,
+    };
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,950 output tokens",
+    );
+    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 6_951 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,951 output tokens",
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 2, "usage", { outputTokens: 1_000 }, sessionKey),
+    );
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,951 output tokens",
+    );
+    for (const replaceOwner of [
+      () => {
+        props.currentAgentId = "second";
+      },
+      () => {
+        props.gatewayClient = createTestGatewayClient(() => null);
+      },
+    ]) {
+      replaceOwner();
+      rerender();
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      props.currentAgentId = "first";
+      props.runId = runId;
+      props.runWorking = true;
+      rerender();
+      props.runId = null;
+      props.runWorking = false;
+      rerender();
+      expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+        "6,951 output tokens",
+      );
+    }
+    props.messages = [
+      ...props.messages,
+      { role: "assistant", content: "Background reply", timestamp: 20_000, runId: "sibling-run" },
+    ];
+    rerender();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it.each([true, false])(
+    "keeps browser cards visible with capture limited to the active pane (%s)",
+    async (active) => {
+      const messages = [
+        { role: "user", content: "Open the example", timestamp: 1_000 },
+        {
+          role: "toolResult",
+          toolCallId: "browser-call",
+          toolName: "browser",
+          timestamp: 2_000,
+          content: "Opened",
+          details: {
+            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+          },
+        },
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+      ];
+      const props = {
+        ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
+        browserTabPreviewsActive: active,
+        showToolCalls: true,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-work-group")).not.toBeNull();
+      expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+      expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(active);
+      transcript.hostDisconnected();
+    },
+  );
+
+  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
+    const sessionKey = "agent:work:main";
+    const archivedSession: GatewaySessionRow = {
+      key: "global",
+      kind: "global",
       updatedAt: 2_000,
       archived: true,
       archivedAt: 2_000,
@@ -63,6 +208,7 @@ describe("chat transcript rendering", () => {
         { role: "user", content: "Before archive", timestamp: 1_000 },
         { role: "assistant", content: "After archive", timestamp: 3_000 },
       ]),
+      selectedSession: archivedSession,
       sessions,
     };
     const rerender = () => {
@@ -88,12 +234,14 @@ describe("chat transcript rendering", () => {
       ...archivedSession,
       archivedBy: { type: "human", id: "profile-bob" },
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(requireElement(container, ".chat-notice").textContent).toContain(
       "Archived by profile-bob",
     );
 
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
 
@@ -103,12 +251,74 @@ describe("chat transcript rendering", () => {
       archivedAt: undefined,
       archivedBy: undefined,
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
     transcript.hostDisconnected();
   });
 
-  it("reveals touched metadata across stored and live groups within one transcript", async () => {
+  it("leaves interrupted status to the composer after a partial assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted", "agent:main:main", [
+        {
+          role: "user",
+          content: "Start the task",
+          timestamp: 1_000,
+          __openclaw: { idempotencyKey: "run-1:user" },
+        },
+        { role: "assistant", content: "Partial response", timestamp: 2_000 },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        occurredAt: 3_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted-empty", "agent:main:main", [
+        { role: "user", content: "Earlier task", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+        {
+          role: "user",
+          content: "Stop this task",
+          timestamp: 3_000,
+          __openclaw: { idempotencyKey: "run-2:user" },
+        },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        occurredAt: 4_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it("keeps live metadata absent while revealing stored metadata within each transcript", async () => {
     const firstTranscript = createTestTranscript();
     const secondTranscript = createTestTranscript();
     const firstContainer = document.body.appendChild(document.createElement("div"));
@@ -146,6 +356,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);

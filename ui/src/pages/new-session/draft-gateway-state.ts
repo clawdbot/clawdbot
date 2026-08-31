@@ -65,7 +65,6 @@ type DraftGatewayCallbacks = {
 };
 
 export class DraftGatewayState {
-  private gatewayNameValue = "";
   private cloudProfilesValue: DraftCloudProfile[] = [];
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
@@ -110,10 +109,6 @@ export class DraftGatewayState {
         ] as const,
       task: ([client, advertised, _connectionEpoch], { signal }) =>
         discoverGatewayName(client, advertised, signal),
-      onComplete: (name) => {
-        this.gatewayNameValue = name;
-        this.callbacks.requestUpdate();
-      },
     });
     this.cloudProfileTask = new Task(host, {
       args: () =>
@@ -134,9 +129,7 @@ export class DraftGatewayState {
         this.callbacks.requestUpdate();
       },
       onError: () => {
-        // Keep the last environment catalog across a transient client refresh on this Gateway.
-        this.cloudProfilesValue = [];
-        this.cloudProfilesReadyValue = false;
+        // A failed refresh cannot invalidate this Gateway's last successful place catalog.
         this.scheduleCloudProfileRetry();
         this.callbacks.requestUpdate();
       },
@@ -144,7 +137,10 @@ export class DraftGatewayState {
   }
 
   get gatewayName(): string {
-    return this.gatewayNameValue;
+    // Recovery-scope discovery does not retire this connection's machine identity.
+    return this.gatewayNameTask.status === TaskStatus.COMPLETE
+      ? (this.gatewayNameTask.value ?? "")
+      : "";
   }
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
@@ -161,6 +157,13 @@ export class DraftGatewayState {
 
   get cloudProfilesPending(): boolean {
     return this.cloudProfileTask.status === TaskStatus.PENDING;
+  }
+
+  get deviceCatalogDisabledReason(): string | undefined {
+    // Cached cloud profiles survive refresh failures; live node capacity does not.
+    return this.cloudProfilesReadyValue && this.cloudProfileTask.status === TaskStatus.COMPLETE
+      ? undefined
+      : t("newSession.placementNotReady");
   }
 
   get catalogRetrying(): boolean {
@@ -291,7 +294,6 @@ export class DraftGatewayState {
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
-    this.gatewayNameValue = "";
     this.cloudProfilesValue = [];
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
@@ -497,8 +499,10 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      this.applyCloudProfiles([]);
-      this.cloudProfilesReadyValue = true;
+      if (!this.cloudProfilesReadyValue) {
+        this.applyCloudProfiles([]);
+        this.cloudProfilesReadyValue = true;
+      }
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];

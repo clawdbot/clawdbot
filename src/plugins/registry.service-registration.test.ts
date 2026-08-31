@@ -43,6 +43,51 @@ function createRegistrationFixture() {
 
 describe("plugin service registration identity", () => {
   it.each([
+    { surface: "service", id: "" },
+    { surface: "service", id: "   " },
+    { surface: "service", id: "\t\n" },
+    { surface: "discovery", id: "" },
+    { surface: "discovery", id: "   " },
+    { surface: "discovery", id: "\t\n" },
+  ] as const)("reports a blank $surface service id ($id)", async ({ surface, id }) => {
+    const { builder, createRecord } = createRegistrationFixture();
+    const record = createRecord("invalid-service-owner");
+    const api = builder.createApi(record, { config: {} });
+    const service = new ClassBackedLifecycleService(id);
+
+    if (surface === "service") {
+      api.registerService(service);
+    } else {
+      api.registerGatewayDiscoveryService(service);
+    }
+
+    const registrations =
+      surface === "service" ? builder.registry.services : builder.registry.gatewayDiscoveryServices;
+    const recordIds = surface === "service" ? record.services : record.gatewayDiscoveryServiceIds;
+    expect(registrations).toEqual([]);
+    expect(recordIds).toEqual([]);
+    expect(builder.registry.diagnostics).toEqual([
+      {
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          surface === "service"
+            ? "service registration missing id"
+            : "gateway discovery service registration missing id",
+      },
+    ]);
+
+    if (surface === "service") {
+      const handle = await startPluginServices({ registry: builder.registry, config: {} });
+      expect(service.starts).toBe(0);
+      await handle.stop();
+    } else {
+      expect(service.advertisements).toBe(0);
+    }
+  });
+
+  it.each([
     { surface: "service", sameOwner: false, paddedFirst: true },
     { surface: "service", sameOwner: false, paddedFirst: false },
     { surface: "service", sameOwner: true, paddedFirst: true },

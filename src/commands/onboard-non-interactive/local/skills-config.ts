@@ -21,8 +21,8 @@ export function applyNonInteractiveSkillsConfig(params: {
     return nextConfig;
   }
 
-  const nodeManager = opts.nodeManager ?? "npm";
-  if (!["npm", "pnpm", "bun"].includes(nodeManager)) {
+  const nodeManager = opts.nodeManager;
+  if (nodeManager !== undefined && !["npm", "pnpm", "bun"].includes(nodeManager)) {
     runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
     runtime.exit(1);
     return nextConfig;
@@ -33,7 +33,7 @@ export function applyNonInteractiveSkillsConfig(params: {
       ...nextConfig.skills,
       install: {
         ...nextConfig.skills?.install,
-        nodeManager,
+        nodeManager: nodeManager ?? nextConfig.skills?.install?.nodeManager ?? "npm",
       },
     },
   };

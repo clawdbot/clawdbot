@@ -1021,31 +1021,6 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("readSessionMessagesAsync recent mode honors byte caps", async () => {
-    const sessionId = "test-session-async-recent-mode";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "older" } },
-      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
-      { message: { role: "user", content: "latest" } },
-    ]);
-    const openSpy = vi.spyOn(fs.promises, "open");
-
-    try {
-      const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
-        mode: "recent",
-        maxMessages: 1,
-        maxBytes: 2048,
-      });
-      expect(messages).toHaveLength(1);
-      expectMessageFields(messages[0], { role: "user", content: "latest" });
-      expect(JSON.stringify(messages)).not.toContain("older");
-      expect(openSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
   test("reads only the active branch when transcript rewrites abandon older entries", async () => {
     const sessionId = "test-session-active-branch";
     const recordTimestamp = (second: number) => ({
@@ -1532,6 +1507,23 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test.each([
+    { name: "an unattributed assistant", identity: {} },
+    {
+      name: "a delivery mirror",
+      identity: { provider: "openclaw", model: "delivery-mirror" },
+    },
+  ])("retains a meaningful zero-cost artifact snapshot for $name", async ({ identity }) => {
+    const sessionId = "usage-zero-cost-artifact";
+    writeTranscript(tmpDir, sessionId, [
+      { message: { role: "assistant", ...identity, usage: { cost: { total: 0 } } } },
+    ]);
+
+    await expect(
+      readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath),
+    ).resolves.toEqual({ costUsd: 0 });
   });
 
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {

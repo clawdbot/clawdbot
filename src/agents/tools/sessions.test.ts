@@ -368,10 +368,9 @@ async function executeFireAndForgetA2AFrom(
   expect(requireDetails(result).status).toBe("accepted");
   expect(recordParticipantMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      actor: { type: "agent", id: "main" },
+      identity: { type: "agent", id: "main" },
       agentId: "other",
       sessionKey: targetSessionKey,
-      source: "agent",
     }),
   );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];

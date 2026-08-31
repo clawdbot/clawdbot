@@ -197,6 +197,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   private readonly cellCallbacks: BoardWidgetCellCallbacks = {
+    appViewGeneration: () => this.callbacks?.appViewGeneration ?? 0,
     grant: async (name: string, decision: BoardGrantDecision) => {
       if (!this.callbacks) {
         return;

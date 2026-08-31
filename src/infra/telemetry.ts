@@ -54,6 +54,7 @@ type TelemetryPayload = {
 
 type TelemetryStatusReason =
   | "enabled"
+  | "automated-environment"
   | "do-not-track"
   | "config-disabled"
   | "never-asked"
@@ -73,10 +74,24 @@ const TelemetryResponseSchema = z.object({
 let lastFailedAttempt: { at: number; endpoint: string; stateDirectory?: string } | undefined;
 let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
 
+/**
+ * CI jobs are not installs. Left unchecked they outnumber operators by orders of
+ * magnitude and make version and platform counts meaningless, and someone else's
+ * pipeline should not report to us on every job either. A configured endpoint
+ * means the caller is deliberately exercising this path, so it still reports.
+ */
+function isAutomatedEnvironment(): boolean {
+  if (process.env.OPENCLAW_TELEMETRY_ENDPOINT?.trim()) {
+    return false;
+  }
+  return isTruthyEnvValue(process.env.CI);
+}
+
 function isUpdateCheckDisabled(config: OpenClawConfig): boolean {
   return (
     config.update?.checkOnStart === false ||
     isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) ||
+    isAutomatedEnvironment() ||
     resolveIsNixMode()
   );
 }
@@ -132,7 +147,9 @@ export function resolveTelemetryStatus(config: OpenClawConfig): {
   lastPingAt?: number;
 } {
   let reason: TelemetryStatusReason;
-  if (isUpdateCheckDisabled(config)) {
+  if (isAutomatedEnvironment()) {
+    reason = "automated-environment";
+  } else if (isUpdateCheckDisabled(config)) {
     reason = "update-disabled";
   } else if (isDoNotTrackEnabled()) {
     reason = "do-not-track";

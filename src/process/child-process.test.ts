@@ -18,33 +18,35 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
     vi.useRealTimers();
   });
 
-  it("drains active descendant output after the parent exits", async () => {
-    const command = 'printf "HEAD\\n"; ( sleep 0.05; printf "TAIL\\n" ) &';
-    child = execa("/bin/sh", ["-c", command], {
-      buffer: false,
-      detached: true,
-      reject: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-    let output = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-
-    // Simulate a contended worker after the direct child exits. The descendant
-    // writes while JS is parked, so its pipe data and the idle timer are both
-    // ready when the event loop resumes.
-    await new Promise<void>((resolve) => {
-      child?.nodeChildProcess.once("exit", () => {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-        resolve();
+  it.each([250, 1_250])(
+    "drains descendant output across a %ims event-loop stall",
+    async (stallMs) => {
+      const command =
+        'printf "HEAD\\n"; printf "HEAD\\n" >&2; ( sleep 0.05; printf "TAIL\\n"; printf "TAIL\\n" >&2 ) &';
+      child = execa("/bin/sh", ["-c", command], {
+        detached: true,
+        reject: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        stripFinalNewline: false,
       });
-    });
-    await child.finally(releaseOutput);
-    expect(output).toContain("HEAD");
-    expect(output).toContain("TAIL");
-  });
+      const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+
+      // Simulate a contended worker after the direct child exits. The descendant
+      // writes while JS is parked past the idle or hard deadline, so buffered
+      // pipe data and release timers are ready when the event loop resumes.
+      await new Promise<void>((resolve) => {
+        child?.nodeChildProcess.once("exit", () => {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallMs);
+          resolve();
+        });
+      });
+      expect(await child.finally(releaseOutput)).toMatchObject({
+        exitCode: 0,
+        stdout: "HEAD\nTAIL\n",
+        stderr: "HEAD\nTAIL\n",
+      });
+    },
+  );
 
   it("releases a quiet inherited pipe after the idle grace", async () => {
     child = execa("/bin/sh", ["-c", 'printf "DONE\\n"; ( sleep 30 ) &'], {
@@ -77,13 +79,38 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
     fakeChild.emit("exit", 0);
     const writer = setInterval(() => stdout.write("TICK\n"), 30);
 
-    await vi.advanceTimersByTimeAsync(999);
-    expect(stdout.destroyed).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(stdout.destroyed).toBe(true);
-    expect(stderr.destroyed).toBe(true);
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(stdout.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stdout.destroyed).toBe(false);
+      stdout.write("AFTER DEADLINE\n");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stdout.destroyed).toBe(true);
+      expect(stderr.destroyed).toBe(true);
+    } finally {
+      clearInterval(writer);
+      cleanup();
+    }
+  });
 
-    clearInterval(writer);
+  it.each(["idle", "hard"])("cancels pending %s release when cleaned up", async (deadline) => {
+    vi.useFakeTimers();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const fakeChild = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+    }) as unknown as ChildProcess;
+    const cleanup = releaseChildProcessOutputAfterExit(fakeChild);
+    fakeChild.emit("exit", 0);
+    const writer = deadline === "hard" ? setInterval(() => stdout.write("TICK\n"), 30) : undefined;
+
+    await vi.advanceTimersByTimeAsync(deadline === "hard" ? 1_000 : 100);
     cleanup();
+    clearInterval(writer);
+    await vi.runAllTimersAsync();
+    expect(stdout.destroyed).toBe(false);
+    expect(stderr.destroyed).toBe(false);
   });
 });

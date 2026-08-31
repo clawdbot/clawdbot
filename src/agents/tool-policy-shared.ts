@@ -55,6 +55,15 @@ export function readToolAllowlistIntersection(
 }
 
 /** Normalizes a tool name or alias to the policy id used for matching. */
+/** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
+export const TOOL_EXECUTION_GATED_MESSAGE =
+  "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.";
+
+export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
+  const target = normalizeToolPolicyName(toolName);
+  return allowNames.some((name) => normalizeToolPolicyName(name) === target);
+}
+
 export function normalizeToolPolicyName(name: string) {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
