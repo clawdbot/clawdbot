@@ -786,6 +786,7 @@ Behavior:
 - A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
 - Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
+- Channel health and status keep cold accounts visible as configured but unavailable, alongside healthy accounts. Read-only inspection does not resolve inactive credentials or probe cold accounts. `/healthz` still reports Gateway liveness; `/readyz` may report the affected channel as failing until it recovers. Restore the secret, then run `openclaw secrets reload`.
 
 ## Command-path resolution
 
