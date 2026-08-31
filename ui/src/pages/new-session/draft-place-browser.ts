@@ -337,6 +337,8 @@ export class DraftPlaceBrowser {
   }
 
   resetProjects() {
+    // Retire the old request and refetch even when the connection has not changed.
+    void this.projectsTask.run([null, false, -1]);
     this.projectsValue = [];
     this.projectRecentsValue = undefined;
     this.clearProjectSelection();

@@ -105,6 +105,30 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
 }
 
 describe("DraftPlaceBrowser", () => {
+  it.each(["loaded", "pending"])(
+    "reloads the project catalog after an owner reset without reconnecting (%s)",
+    async (initial) => {
+      const retired = { id: "retired", displayName: "Retired", repoRoot: "/retired" };
+      const current = { id: "current", displayName: "Current", repoRoot: "/current" };
+      const pending = createDeferred<{ projects: (typeof retired)[] }>();
+      const request = vi.fn(() => pending.promise);
+      const fixture = createBrowser(request);
+      const previous = fixture.browser.refreshProjects();
+      if (initial === "loaded") {
+        pending.resolve({ projects: [retired] });
+        await previous;
+      }
+
+      request.mockResolvedValue({ projects: [current] });
+      fixture.browser.resetProjects();
+      fixture.update();
+      await waitForFast(() => expect(fixture.browser.projects).toEqual([current]));
+      pending.resolve({ projects: [retired] });
+      await previous;
+      expect(fixture.browser.projects).toEqual([current]);
+    },
+  );
+
   it.each(["disconnect", "failure"])(
     "retains the selected project until a catalog confirms its removal (%s)",
     async (unavailable) => {
