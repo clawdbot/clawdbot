@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseArgs,
   resolveDefaultReleaseUpgradeBaseline,
+  resolveFrozenExtendedStableUpgradeBaseline,
 } from "../../scripts/lib/release-upgrade-baseline.mts";
 
 describe("release upgrade baseline resolver", () => {
@@ -50,5 +51,70 @@ describe("release upgrade baseline resolver", () => {
     expect(() => resolveDefaultReleaseUpgradeBaseline(candidate, versions)).toThrow(
       "no published stable OpenClaw baseline",
     );
+  });
+
+  it("selects an older final release from the frozen extended-stable line", () => {
+    expect(
+      resolveFrozenExtendedStableUpgradeBaseline(
+        "2026.6.35",
+        ["2026.6.34", "2026.6.33", "2026.6.35", "2026.7.1", "2026.6.34-1"],
+        {
+          targetContextRef: "extended-stable/2026.6.33",
+        },
+      ),
+    ).toBe("openclaw@2026.6.34");
+  });
+
+  it("honors an explicit published predecessor from the frozen extended-stable line", () => {
+    expect(
+      resolveFrozenExtendedStableUpgradeBaseline(
+        "2026.6.35",
+        ["2026.6.33", "2026.6.34", "2026.6.35"],
+        {
+          previousVersion: "2026.6.33",
+          targetContextRef: "extended-stable/2026.6.33",
+        },
+      ),
+    ).toBe("openclaw@2026.6.33");
+  });
+
+  it.each(["2026.6.35", "2026.6.34-1", "2026.7.1", "2026.6.32", "2026.6.31"])(
+    "rejects an incompatible explicit frozen baseline %s",
+    (previousVersion) => {
+      expect(() =>
+        resolveFrozenExtendedStableUpgradeBaseline(
+          "2026.6.35",
+          ["2026.6.33", "2026.6.34", "2026.6.35"],
+          {
+            previousVersion,
+            targetContextRef: "extended-stable/2026.6.33",
+          },
+        ),
+      ).toThrow("previous_version");
+    },
+  );
+
+  it.each([
+    ["2026.7.1", "extended-stable/2026.6.33"],
+    ["2026.6.35-beta.1", "extended-stable/2026.6.33"],
+    ["2026.6.33", "extended-stable/2026.6.33"],
+    ["2026.6.35", "extended-stable/2026.6.34"],
+  ])(
+    "rejects incompatible frozen extended-stable targets",
+    (candidateVersion, targetContextRef) => {
+      expect(() =>
+        resolveFrozenExtendedStableUpgradeBaseline(candidateVersion, ["2026.6.34", "2026.6.33"], {
+          targetContextRef,
+        }),
+      ).toThrow();
+    },
+  );
+
+  it("leaves non-extended-stable contexts on their latest baseline policy", () => {
+    expect(
+      resolveFrozenExtendedStableUpgradeBaseline("2026.6.35", ["2026.6.34"], {
+        targetContextRef: "release/2026.6.35",
+      }),
+    ).toBeUndefined();
   });
 });

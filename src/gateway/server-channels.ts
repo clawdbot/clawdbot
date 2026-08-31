@@ -1,6 +1,7 @@
 // Gateway channel manager.
 // Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
+import { isChannelAccountExplicitlyDisabled } from "../channels/account-config-enabled.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../channels/account-summary.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
@@ -378,22 +379,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return channelOverride;
     }
 
-    const registration = resolveChannelPluginRegistration(channelId);
-    const plugin = registration?.plugin;
-    if (!plugin) {
-      return true;
-    }
-    try {
-      // Probe only: health-monitor config is read directly from raw channel config above.
-      // This call exists solely to fail closed if resolver-side config loading is broken.
-      plugin.config.resolveAccount(cfg, accountId);
-    } catch (err) {
-      ensureChannelLog(channelId).warn?.(
-        `[${channelId}:${accountId}] health-monitor: failed to resolve account; skipping monitor (${formatErrorMessage(err)})`,
-      );
-      return false;
-    }
-
     return true;
   };
 
@@ -665,12 +650,32 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             log.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
           }
         };
+        const skipDisabledAccount = () => {
+          setRuntime(channelId, id, {
+            accountId: id,
+            enabled: false,
+            running: false,
+            restartPending: false,
+          });
+          startOutcomes.set(id, { status: "skipped", reason: "disabled" });
+        };
 
         try {
-          // Reject the account before plugin resolution so an explicit failed SecretRef cannot
+          // Reject active accounts before plugin resolution so an explicit failed SecretRef cannot
           // drift into a channel-specific environment or file fallback.
           const secretOwnerId = `${channelId}:${normalizeAccountId(id)}`;
           clearActiveCredentialDegradedOwner("account", secretOwnerId);
+          // Explicitly disabled accounts need no credentials. Unlisted requests still go
+          // through the plugin resolver so a disable cannot hide account-selection errors.
+          if (
+            isChannelAccountExplicitlyDisabled({ cfg, channel: channelId, accountId: id }) &&
+            plugin.config
+              .listAccountIds(cfg)
+              .some((listed) => normalizeAccountId(listed) === normalizeAccountId(id))
+          ) {
+            skipDisabledAccount();
+            return;
+          }
           try {
             assertSecretOwnerAvailable("account", secretOwnerId);
           } catch (error) {
@@ -692,13 +697,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
           if (!enabled) {
-            setRuntime(channelId, id, {
-              accountId: id,
-              enabled: false,
-              running: false,
-              restartPending: false,
-            });
-            startOutcomes.set(id, { status: "skipped", reason: "disabled" });
+            skipDisabledAccount();
             return;
           }
 

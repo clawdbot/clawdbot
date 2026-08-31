@@ -90,6 +90,7 @@
   "message-tool-delivery-hints",
   "migration",
   "migration-runtime",
+  "model-catalog-pricing",
   "model-ref-parse",
   "music-generation",
   "node-host",

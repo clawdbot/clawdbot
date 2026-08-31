@@ -1297,6 +1297,8 @@ Provider fields:
 
 | Field        | Type              | What it means                                                                                   |
 | ------------ | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `cerebras`   | `false \| object` | Explicit mapping to the public Cerebras `/public/v1/models` catalog. Never enabled implicitly.  |
+| `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
 | `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
@@ -1331,15 +1333,21 @@ For authoritative native source mappings, use:
 }
 ```
 
-The publisher fetches the fixed OpenCode or Venice public endpoint without
-credentials only when its source is declared, and publishes native prices only
-in explicitly mapped owner namespaces. Venice's lightweight public
-`pricing-api.ts` keeps its payload parsing in the plugin and shares the complete
-schedule parser with runtime discovery. Fetch failure, malformed response
-bodies, or missing or invalid pricing for a paid bundled model stops
-publication, leaving the previous hosted catalog intact rather than publishing
-stale seed rates with a new timestamp. This authoring metadata does not add an
-operator setting or change the Gateway's existing refresh and restart lifecycle.
+The publisher fetches a fixed public endpoint without credentials only when its
+source is declared, and publishes native prices only in explicitly mapped owner
+namespaces. Cerebras and Chutes use the same shape with their respective source
+and provider IDs. Lightweight plugin-owned `pricing-api.ts` artifacts share
+payload parsing with runtime discovery without importing provider runtimes.
+
+An opted-in native source owns the complete provider schedule, including missing
+prices: generic sources cannot fill its gaps. A successful feed with no price for
+a bundled model preserves that model's metadata, omits its cost, and emits a
+publication warning. Missing pricing is not evidence of model retirement or free
+usage. Explicit native zero prices remain known-free estimates. Fetch failure,
+malformed response bodies or declared prices, and feeds with no usable prices
+stop publication, leaving the previous hosted catalog intact. Explicit operator
+rates remain unchanged. This authoring metadata adds no operator setting and does
+not change the Gateway's existing refresh and restart lifecycle.
 
 ### OpenClaw Provider Index
 

@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { resolveChannelAuthorization } from "./monitor/authorization.js";
 import {
   extractCites,
   resolveTlonCommandAuthorizationWithIngress,
@@ -349,53 +350,62 @@ describe("Security: Message Text Extraction", () => {
 });
 
 describe("Security: Channel Authorization Logic", () => {
-  /**
-   * These tests document the expected behavior of channel authorization.
-   * The actual resolveChannelAuthorization function is internal to monitor/index.ts
-   * but these tests verify the building blocks and expected invariants.
-   */
+  const channelNest = "chat/~zod/test";
 
-  it("default mode should be restricted (not open)", () => {
-    // This is a critical security invariant: if no mode is specified,
-    // channels should default to RESTRICTED, not open.
-    // If this test fails, someone may have changed the default unsafely.
-
-    // The logic in resolveChannelAuthorization is:
-    // const mode = rule?.mode ?? "restricted";
-    // We verify this by checking undefined rule gives restricted
-    type ModeRule = { mode?: "restricted" | "open" };
-    const rule = undefined as ModeRule | undefined;
-    const mode = rule?.mode ?? "restricted";
-    expect(mode).toBe("restricted");
+  it("defaults an unconfigured channel to restricted with no authorized ships", () => {
+    expect(resolveChannelAuthorization({}, channelNest)).toEqual({
+      mode: "restricted",
+      allowedShips: [],
+    });
   });
 
-  it("empty allowedShips with restricted mode should block all", () => {
-    const allowedShips: string[] = [];
-    const sender = "~random-ship";
-
-    const isAllowed = allowedShips.some((ship) => normalizeShip(ship) === normalizeShip(sender));
-    expect(isAllowed).toBe(false);
+  it("keeps an explicit empty channel allowlist instead of inheriting defaults", () => {
+    expect(
+      resolveChannelAuthorization(
+        {
+          channels: {
+            tlon: {
+              defaultAuthorizedShips: ["~zod"],
+              authorization: { channelRules: { [channelNest]: { allowedShips: [] } } },
+            },
+          },
+        },
+        channelNest,
+      ),
+    ).toEqual({ mode: "restricted", allowedShips: [] });
   });
 
-  it("open mode should not check allowedShips", () => {
-    // In open mode, any ship can send regardless of allowedShips
-    const mode: "open" | "restricted" = "open";
-    // The check in monitor/index.ts is:
-    // if (mode === "restricted") { /* check ships */ }
-    // So open mode skips the ship check entirely
-    expect(mode).not.toBe("restricted");
+  it("preserves explicit open channel policy", () => {
+    expect(
+      resolveChannelAuthorization(
+        {
+          channels: {
+            tlon: {
+              authorization: { channelRules: { [channelNest]: { mode: "open" } } },
+            },
+          },
+        },
+        channelNest,
+      ),
+    ).toEqual({ mode: "open", allowedShips: [] });
   });
 
-  it("settings should override file config for channel rules", () => {
-    // Documented behavior: settingsRules[nest] ?? fileRules[nest]
-    // This means settings take precedence
-    type ChannelRule = { mode: "restricted" | "open" };
-    const fileRules: Record<string, ChannelRule> = { "chat/~zod/test": { mode: "restricted" } };
-    const settingsRules: Record<string, ChannelRule> = { "chat/~zod/test": { mode: "open" } };
-    const nest = "chat/~zod/test";
-
-    const effectiveRule = settingsRules[nest] ?? fileRules[nest];
-    expect(effectiveRule?.mode).toBe("open"); // settings wins
+  it("prefers settings channel rules over conflicting file configuration", () => {
+    expect(
+      resolveChannelAuthorization(
+        {
+          channels: {
+            tlon: {
+              authorization: {
+                channelRules: { [channelNest]: { mode: "restricted", allowedShips: ["~zod"] } },
+              },
+            },
+          },
+        },
+        channelNest,
+        { channelRules: { [channelNest]: { mode: "open", allowedShips: ["~bus"] } } },
+      ),
+    ).toEqual({ mode: "open", allowedShips: ["~bus"] });
   });
 });
 

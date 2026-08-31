@@ -391,7 +391,8 @@
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
-    "scripts/windows-cmd-helpers.mjs"
+    "scripts/windows-cmd-helpers.mjs",
+    "!dist/plugin-sdk/model-catalog-pricing.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -424,6 +425,9 @@
     },
     "./plugin-sdk/model-ref-parse": {
       "default": "./dist/plugin-sdk/model-ref-parse.js"
+    },
+    "./plugin-sdk/model-catalog-pricing": {
+      "default": "./dist/plugin-sdk/model-catalog-pricing.js"
     },
     "./plugin-sdk/outbound-echo-runtime": {
       "default": "./dist/plugin-sdk/outbound-echo-runtime.js"

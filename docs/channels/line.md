@@ -43,8 +43,10 @@ https://gateway-host/line/webhook
 ```
 
 The Gateway answers LINE's signed webhook verification request: a `POST` with an
-empty `events` list. For signed inbound events, it writes each event to the durable
-ingress queue before returning `200`; agent processing continues asynchronously.
+empty `events` list. Signed events in LINE's `standby` mode are acknowledged without
+queueing or replying, because another channel holds chat control. Other signed
+inbound events enter the durable ingress queue before `200`; agent processing
+continues asynchronously.
 Failed delivery is retried from the queue, including after a Gateway restart, and
 poison events become failed queue records after bounded retries. If durable
 persistence fails, the request returns
@@ -66,7 +68,8 @@ Security notes:
 
 The [Setup](#setup) webhook contract acknowledges an event only after it is durably
 queued. The durable `200` carries `x-openclaw-delivery-accepted: durable`; signed
-verification pings (empty event lists) and error responses omit the marker, so
+verification pings (empty event lists), standby-only batches, and error responses
+omit the marker, so
 reverse proxies can require it to distinguish durable acceptance from a generic
 `200`. From there, delivery runs through the core channel-ingress drain with
 LINE-specific settings:
@@ -257,7 +260,8 @@ as untrusted.
   cards when possible.
 - Streaming responses are buffered; LINE receives full chunks. The loading
   animation runs only in one-to-one chats — LINE's loading API accepts a user id
-  and rejects group and room ids — so a group reply arrives without one.
+  and rejects group and room ids — so a group reply arrives without one. Heartbeat
+  turns also show the loading animation while the reply is generated.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.

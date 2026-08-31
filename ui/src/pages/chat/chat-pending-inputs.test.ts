@@ -51,6 +51,7 @@ const input: ChatPendingInputsPage["items"][number] = {
   message: {
     role: "user",
     content: "Keep my accepted input",
+    timestamp: 100,
     __openclaw: { id: "pending:input-1" },
   },
 };
@@ -785,6 +786,34 @@ describe("server-owned pending input display", () => {
       role: "user",
       messages: [{ message: promoted }],
     });
+  });
+
+  it("places accepted input at its acceptance time instead of after newer history", () => {
+    const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
+    const later = { role: "assistant", content: "Later reply", timestamp: 150 };
+    const items = buildChatItems({
+      paneId: "chronological-pending-pane",
+      sessionKey,
+      messages: [earlier, later],
+      pendingInputs: page.items,
+      queue: [],
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "assistant", messages: [{ message: earlier }] },
+      {
+        kind: "group",
+        role: "user",
+        messages: [{ message: { content: "Keep my accepted input" } }],
+      },
+      { kind: "notice", timestamp: input.acceptedAt },
+      { kind: "group", role: "assistant", messages: [{ message: later }] },
+    ]);
   });
 
   it.each(["user", "assistant"])(
