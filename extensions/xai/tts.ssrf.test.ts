@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn(async () => {
+  postJsonRequestMock: vi.fn(async (_params: { ssrfPolicy?: { allowedHostnames?: string[] } }) => {
     throw new Error("stop after the request is built");
   }),
 }));
@@ -28,9 +28,7 @@ describe("xaiTTS network allowance", () => {
       }),
     ).rejects.toThrow(/stop after the request is built/);
 
-    const params = postJsonRequestMock.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: { allowedHostnames?: string[] } }
-      | undefined;
+    const params = postJsonRequestMock.mock.calls[0]?.[0];
     expect(params?.ssrfPolicy).toBeDefined();
     expect(params?.ssrfPolicy?.allowedHostnames).toEqual(["tts.example.com"]);
   });
