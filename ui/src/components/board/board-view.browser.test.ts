@@ -103,6 +103,22 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(second?.top).toBeGreaterThanOrEqual((first?.bottom ?? 0) + BOARD_GRID_GAP - 1);
   });
 
+  it("keeps a zero-height persisted widget visible when stacking", async () => {
+    const view = await mount();
+    view.style.width = "354px";
+    const snapshot = structuredClone(source);
+    snapshot.widgets[0]!.sizeH = 0;
+    view.snapshot = snapshot;
+    await view.updateComplete;
+    const grid = view.querySelector<HTMLElement>(".board-grid");
+    const first = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const gridBounds = grid!.getBoundingClientRect();
+    const firstBounds = first!.getBoundingClientRect();
+
+    expect(Math.round(firstBounds.width)).toBe(Math.round(gridBounds.width));
+    expect(firstBounds.height).toBeGreaterThanOrEqual(BOARD_GRID_ROW_HEIGHT);
+  });
+
   it("hides widget chrome by default on fine-pointer devices", async () => {
     const view = await mount();
     const bar = view.querySelector<HTMLElement>(".board-widget__bar");
