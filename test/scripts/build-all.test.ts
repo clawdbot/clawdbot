@@ -1057,6 +1057,51 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildStepCacheState", () => {
+  it("lists large nested inventories without an argument-count limit", () => {
+    withBuildCacheFixture(({ rootDir }) => {
+      // Builds run on the main Node thread; Vitest workers have a different stack budget.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "--input-type=module",
+          "-e",
+          `
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import path from "node:path";
+            import { listCacheFiles } from "./scripts/lib/build-artifact-cache.mts";
+            const root = process.argv[1];
+            const directory = path.join(root, "src");
+            const [template] = fs.readdirSync(directory, { withFileTypes: true });
+            const entries = Array.from({ length: 200_000 }, (_, index) =>
+              new Proxy(template, {
+                get(target, key, receiver) {
+                  return key === "name" ? index + ".ts" : Reflect.get(target, key, receiver);
+                },
+              }),
+            );
+            const wideFs = new Proxy(fs, {
+              get(target, key, receiver) {
+                return key === "readdirSync"
+                  ? (file, options) => file === directory ? entries : fs.readdirSync(file, options)
+                  : Reflect.get(target, key, receiver);
+              },
+            });
+            assert.deepEqual(
+              listCacheFiles(root, [{ path: ".", extensions: [".ts"] }], wideFs),
+              entries.map((entry) => path.join(directory, entry.name)).toSorted(),
+            );
+          `,
+          rootDir,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+    });
+  });
+
   it("rejects a snapshot replaced after lookup without changing live outputs", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
       const state = resolveBuildStepCacheState(step, { rootDir });
@@ -1183,6 +1228,7 @@ describe("resolveBuildStepCacheState", () => {
       ["packages/ai/dist/index.d.ts", "export declare const ai = 1;"],
       ["packages/net-policy/dist/index.d.ts", "export declare const net = 1;"],
       ["dist/index.d.ts", "export declare const core = 1;"],
+      [".worktrees/pr-123/src/index.ts", "export const otherCheckout = 1;"],
     ] as const;
 
     try {
@@ -1197,6 +1243,13 @@ describe("resolveBuildStepCacheState", () => {
           rootDir,
         });
       }
+
+      const signature = resolveBuildStepCacheState(unified, { rootDir }).signature;
+      fs.writeFileSync(
+        path.join(rootDir, ".worktrees/pr-123/src/index.ts"),
+        "export const otherCheckout = 2;",
+      );
+      expect(resolveBuildStepCacheState(unified, { rootDir }).signature).toBe(signature);
 
       fs.writeFileSync(sourcePath, "export const core = 2;");
       expect(resolveBuildStepCacheState(ai, { rootDir }).fresh).toBe(true);

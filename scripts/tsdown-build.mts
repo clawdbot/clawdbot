@@ -147,6 +147,8 @@ export const TSDOWN_UNIFIED_CACHE_INPUTS = [
       ".local",
       ".agents",
       ".claude",
+      // Other checkouts cannot invalidate this checkout's declaration generation.
+      ".worktrees",
     ],
   },
 ];

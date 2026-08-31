@@ -26,24 +26,27 @@ function cacheEntryIncludesFile(entry: BuildCachePath, filePath: string) {
   return entry.extensions.some((extension) => filePath.endsWith(extension));
 }
 
-function listFilesRecursively(
+function collectCacheFiles(
   rootPath: string,
   fsImpl: typeof fs,
-  cacheEntry: BuildCachePath = { path: rootPath },
+  cacheEntry: BuildCachePath,
+  out: string[],
 ) {
   let stat;
   try {
     stat = fsImpl.statSync(rootPath);
   } catch {
-    return [];
+    return;
   }
   if (stat.isFile()) {
-    return cacheEntryIncludesFile(cacheEntry, rootPath) ? [rootPath] : [];
+    if (cacheEntryIncludesFile(cacheEntry, rootPath)) {
+      out.push(rootPath);
+    }
+    return;
   }
   if (!stat.isDirectory()) {
-    return [];
+    return;
   }
-  const out: string[] = [];
   const entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   const recursive = cacheEntry.recursive !== false;
   for (const dirent of entries) {
@@ -55,19 +58,21 @@ function listFilesRecursively(
       continue;
     }
     if (dirent.isDirectory() && recursive) {
-      out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
+      collectCacheFiles(entryPath, fsImpl, cacheEntry, out);
     } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
       out.push(entryPath);
     }
   }
-  return out;
 }
 
 export function listCacheFiles(rootDir: string, entries: BuildCacheEntry[], fsImpl: typeof fs) {
-  return entries
-    .map((entry) => (typeof entry === "string" ? { path: entry } : entry))
-    .flatMap((entry) => listFilesRecursively(path.resolve(rootDir, entry.path), fsImpl, entry))
-    .toSorted();
+  // One inventory avoids copying each subtree and spreading unbounded argument lists.
+  const files: string[] = [];
+  for (const entry of entries) {
+    const cacheEntry = typeof entry === "string" ? { path: entry } : entry;
+    collectCacheFiles(path.resolve(rootDir, cacheEntry.path), fsImpl, cacheEntry, files);
+  }
+  return files.toSorted();
 }
 
 export function portableRelativePath(rootDir: string, filePath: string) {
