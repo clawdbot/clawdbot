@@ -235,12 +235,12 @@ export function createDiscordDraftPreviewController(params: {
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     pushToolEvent: progressDraft.pushToolEvent,
     pushItemEvent: progressDraft.pushItemEvent,
-    pushApprovalEvent: progressDraft.pushApprovalEvent,
+    pushApprovalEvent: progressDraft.pushApprovalEvent.bind(progressDraft),
     pushCommandOutputEvent: progressDraft.pushCommandOutputEvent,
     pushPatchEvent: progressDraft.pushPatchEvent,
-    pushPlanProgress: progressDraft.pushPlanProgress,
-    pushReasoningProgress: progressDraft.pushReasoningProgress,
-    pushNarrationProgress: progressDraft.pushNarrationProgress,
+    pushPlanProgress: progressDraft.pushPlanProgress.bind(progressDraft),
+    pushReasoningProgress: progressDraft.pushReasoningProgress.bind(progressDraft),
+    pushNarrationProgress: progressDraft.pushNarrationProgress.bind(progressDraft),
     async pushPreambleItemEvent(payload: { itemId?: string; progressText?: string }) {
       const headlineAccepted = await progressDraft.pushPreambleHeadline(payload.progressText, {
         itemId: payload.itemId,
