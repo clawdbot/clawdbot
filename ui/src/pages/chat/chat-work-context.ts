@@ -98,6 +98,8 @@ export function buildHomeWorkContext(
 
 /** A small quoted reference block, never an authorization or instruction channel. */
 export function formatChatWorkContext(context: ChatWorkContext): string {
+  // Exhaustive by construction: a new ChatWorkContext field cannot reach the
+  // model without an explicit bound here.
   const limits = {
     page: 64,
     title: 96,
@@ -107,10 +109,10 @@ export function formatChatWorkContext(context: ChatWorkContext): string {
     workspace: 224,
     file: 224,
     selection: 640,
-  } as const;
+  } as const satisfies Record<keyof ChatWorkContext, number>;
   const snapshot = Object.fromEntries(
     Object.entries(limits).flatMap(([key, limit]) => {
-      // SAFETY: limits is a closed local object whose keys are all ChatWorkContext fields.
+      // SAFETY: the satisfies clause above proves every limits key is a ChatWorkContext field.
       let value = truncateUtf16Safe(context[key as keyof ChatWorkContext]?.trim() ?? "", limit);
       // Bound the serialized form too: quotes/control characters can expand sixfold.
       while (JSON.stringify(value).length > limit) {

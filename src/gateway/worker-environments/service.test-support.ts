@@ -202,6 +202,8 @@ export function createService(
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "maintainProviders"
+      | "logger"
       | "now"
       | "nodeTunnelManager"
       | "nodeDesktopCarrier"

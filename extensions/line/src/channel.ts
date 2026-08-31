@@ -113,6 +113,17 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    heartbeat: {
+      sendTyping: async ({ cfg, to, accountId }) => {
+        const chatId = normalizeLineMessagingTarget(to);
+        // LINE's loading indicator accepts user IDs only; group and room requests fail.
+        if (!chatId || inferLineTargetChatType(chatId) !== "direct") {
+          return;
+        }
+        const { showLoadingAnimation } = await loadLineChannelRuntime();
+        await showLoadingAnimation(chatId, { cfg, accountId: accountId ?? undefined });
+      },
+    },
     message: lineMessageAdapter,
     actions: lineMessageActions,
     bindings: lineBindingsAdapter,

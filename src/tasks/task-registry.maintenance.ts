@@ -1032,7 +1032,7 @@ function startScheduledSweep() {
     // Reversing this order can preserve phantom active work for another sweep.
     await sweepTaskRegistry();
     await runTaskFlowRegistryMaintenance();
-  }).then(clearSweepInProgress, clearSweepInProgress);
+  }, "tasks:maintenance").then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

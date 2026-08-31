@@ -328,14 +328,19 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  const survivingNodes = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["current_session_id", "entry_json", "session_key"])
-      .where("session_key", "!=", sessionKey)
-      .orderBy("session_key", "asc"),
-  ).rows;
+  // Maintenance may have reclaimed every window already. Only scan surviving
+  // prompts when a retained window needs an owner; otherwise each deletion reads the whole store.
+  const survivingNodes =
+    windows.length > 0
+      ? executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["current_session_id", "entry_json", "session_key"])
+            .where("session_key", "!=", sessionKey)
+            .orderBy("session_key", "asc"),
+        ).rows
+      : [];
   for (const window of windows) {
     const survivingNode = survivingNodes.find((node) => {
       if (node.current_session_id === window.session_id) {

@@ -24,10 +24,8 @@ const WALLPAPER_PATH = fileURLToPath(
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
 const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
-afterEach(() => {
-  for (const provider of providers) {
-    provider.dispose();
-  }
+afterEach(async () => {
+  await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();

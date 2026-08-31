@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export function toWatchRoot(raw: string): string {
+  const normalized = raw.replaceAll("\\", "/");
+  const root = path.parse(normalized).root;
+  const trimmed = normalized.replace(/\/+$/, "");
+  // A missing path can anchor at a drive root; C: would watch the drive's cwd.
+  return trimmed.length < root.length ? root : trimmed;
+}
+
 export function resolveSkillsWatchPath(raw: string): string {
   if (process.platform !== "win32") {
     return raw;

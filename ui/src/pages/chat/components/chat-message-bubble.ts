@@ -88,7 +88,6 @@ function canonicalImageMessageKey(message: unknown, sessionKey: string | undefin
 function renderInlineToolCards(
   toolCards: ToolCard[],
   opts: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
-    messageKey: string;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   },
@@ -258,7 +257,7 @@ export function renderGroupedMessage(
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   const hasToolCards = toolCards.length > 0;
   schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = extractImages(message);

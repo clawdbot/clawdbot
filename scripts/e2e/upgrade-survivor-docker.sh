@@ -581,6 +581,9 @@ else
   openclaw_test_state_create upgrade-survivor upgrade-survivor
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "cron-scheduled-authority" ]; then
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron
+fi
 
 CURRENT_PHASE="install-candidate"
 openclaw_e2e_install_package "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/install.log" "upgrade survivor package" "$npm_config_prefix"

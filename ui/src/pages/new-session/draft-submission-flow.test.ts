@@ -17,6 +17,7 @@ import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
@@ -40,6 +41,68 @@ function stubObjectUrls(...urls: string[]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("keeps a direct background completion watch through a Gateway reconnect", async () => {
+    vi.useFakeTimers();
+    const { context, flow, request } = createDraftFixture();
+    request.mockImplementation(async (method) => {
+      if (method !== "agent.wait") {
+        return {};
+      }
+      if (
+        request.mock.calls.filter(([calledMethod]) => calledMethod === "agent.wait").length === 1
+      ) {
+        context.gateway.snapshot.phase = "reconnecting";
+        throw new Error("gateway closed");
+      }
+      return { status: "ok", endedAt: 1 };
+    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:dashboard:background",
+      initialRun: { status: "started", runId: "run-background" },
+    });
+    flow.setMessage("start this in the background");
+
+    await flow.submit(undefined, true);
+    await Promise.resolve();
+    context.gateway.snapshot.phase = "connected";
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        message: "start this in the background",
+      }),
+      { reconciliation: "background" },
+    );
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "agent.wait",
+      { runId: "run-background", timeoutMs: 30_000 },
+      { timeoutMs: null },
+    );
+    expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
+    expect(flow.message).toBe("");
+    expect(flow.submitting).toBe(false);
+  });
+
+  it("stops a direct background watch when the exact run is unobservable", async () => {
+    vi.useFakeTimers();
+    const { context, flow, request } = createDraftFixture({
+      request: async (method) => (method === "agent.wait" ? { status: "timeout" } : {}),
+    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:dashboard:unobservable",
+      initialRun: { status: "started", runId: "run-unobservable" },
+    });
+    flow.setMessage("start this in the background");
+
+    await flow.submit(undefined, true);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(1);
+  });
+
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
     const { context, flow, place } = createDraftFixture({
       methods: ["sessions.create", "sessions.dispatch"],
@@ -522,7 +585,13 @@ describe("DraftSubmissionFlow", () => {
       navigationError: "Placement chat route failed to load",
       canonicalSessionKey: null,
     },
-  ])("$scenario", async ({ canonicalSessionKey, navigationError }) => {
+    {
+      scenario: "keeps a background placement on New Session",
+      navigationError: null,
+      canonicalSessionKey: "agent:cloud:dashboard:background-placement",
+      background: true,
+    },
+  ])("$scenario", async ({ background = false, canonicalSessionKey, navigationError }) => {
     const createResult = vi.fn(async (params: Record<string, unknown>) => ({
       key: canonicalSessionKey ?? String(params.key),
       initialRun: { status: "idle" as const },
@@ -554,12 +623,27 @@ describe("DraftSubmissionFlow", () => {
       context.gateway.snapshot.sessionKey = sessionKey;
     });
     const selectAgent = vi.fn();
+    let backgroundWaitAttempts = 0;
     const client = {
       recoveryScope: "principal-a",
       recoveryScopeReady: true,
       request: vi.fn(async (method: string) => {
         if (method === "worktrees.branches") {
           return { repositoryStatus: "git", branches: [] };
+        }
+        if (method === "agent.wait") {
+          backgroundWaitAttempts += 1;
+          if (background && backgroundWaitAttempts === 1) {
+            context.gateway.snapshot.phase = "reconnecting";
+            throw new Error("gateway closed");
+          }
+          if (background && backgroundWaitAttempts === 2) {
+            return { status: "timeout" };
+          }
+          if (background && backgroundWaitAttempts === 3) {
+            return { status: "pending" };
+          }
+          return { status: "ok", endedAt: 1 };
         }
         return {};
       }),
@@ -595,7 +679,11 @@ describe("DraftSubmissionFlow", () => {
       },
       agentSelection: { state: { selectedId: "cloud" }, set: selectAgent },
       sessions: { state: { result: null }, createResult },
-      placementStartup: { start },
+      placementStartup: {
+        start,
+        get: vi.fn(() => undefined),
+        hasPendingTurn: vi.fn(() => background),
+      },
       config: { current: {} },
       navigateAndWait,
       preload,
@@ -700,19 +788,34 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
-    const submission = flow.submit();
-    await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
-
-    expect(preload).toHaveBeenCalledWith("chat", navigateAndWait.mock.calls[0]?.[1]);
-    expect(preload.mock.invocationCallOrder[0]).toBeLessThan(
-      navigateAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    if (!navigationError) {
+    const submission = flow.submit(undefined, background);
+    if (background) {
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      expect(navigateAndWait).not.toHaveBeenCalled();
+      expect(preload).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
+      expect(preload).toHaveBeenCalledWith("chat", navigateAndWait.mock.calls[0]?.[1]);
+      expect(preload.mock.invocationCallOrder[0]).toBeLessThan(
+        navigateAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    }
+    if (!navigationError && !background) {
       expect(flow.submitting).toBe(true);
       finishNavigation();
       document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
     }
     await submission;
+    if (background) {
+      context.gateway.snapshot.phase = "connected";
+      await vi.waitFor(
+        () =>
+          expect(
+            client.request.mock.calls.filter(([method]) => method === "agent.wait"),
+          ).toHaveLength(4),
+        { timeout: 4_000 },
+      );
+    }
 
     expect(start).toHaveBeenCalledOnce();
     expect(start.mock.calls[0]?.[0].recovery).toMatchObject({
@@ -725,9 +828,26 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.error).toBe(navigationError);
     expect(flow.submitting).toBe(false);
     expect(createResult).toHaveBeenCalledOnce();
-    expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
-    expect(selectAgent).toHaveBeenCalledWith("cloud");
-    expect(preload).toHaveBeenCalledOnce();
+    if (background) {
+      expect(setSessionKey).not.toHaveBeenCalled();
+      expect(selectAgent).not.toHaveBeenCalled();
+      expect(flow.message).toBe("");
+      expect(client.request).toHaveBeenCalledWith(
+        "agent.wait",
+        {
+          runId: start.mock.calls[0]?.[0].recovery.messageId,
+          timeoutMs: 30_000,
+        },
+        { timeoutMs: null },
+      );
+      expect(client.request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(
+        4,
+      );
+    } else {
+      expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
+      expect(selectAgent).toHaveBeenCalledWith("cloud");
+      expect(preload).toHaveBeenCalledOnce();
+    }
 
     if (navigationError) {
       expect(flow.canSubmit()).toBe(true);

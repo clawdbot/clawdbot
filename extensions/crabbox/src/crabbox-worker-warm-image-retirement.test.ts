@@ -59,7 +59,7 @@ describe("Crabbox checkpoint retirement", () => {
       const retained = listCrabboxWarmImages()[0]!;
       expect(retained.retirement?.checkpointId).toBe("chk_capture_1");
       const retainedResources = new Set(resources);
-      initial.provider.dispose();
+      await initial.provider.dispose();
       resetPluginStateStoreForTests();
       const restarted = createWarmProvider(command, initial.stateDir);
       failDeletion = false;
@@ -146,7 +146,7 @@ describe("Crabbox checkpoint retirement", () => {
       clock.mockReturnValue(now + DAY_MS);
       await captureWarmImage(initial.provider, PROFILE, "refresh");
       expect(resources).toEqual(new Set(["chk_capture_1", "chk_capture_2"]));
-      initial.provider.dispose();
+      await initial.provider.dispose();
       resetPluginStateStoreForTests();
       const restarted = createWarmProvider(command, initial.stateDir);
       clock.mockReturnValue(now + 2 * DAY_MS);

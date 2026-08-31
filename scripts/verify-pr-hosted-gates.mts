@@ -2,9 +2,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
+import { isRecord, readStringField } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   booleanFlag,
   classifyBoundedUnsignedDecimal,

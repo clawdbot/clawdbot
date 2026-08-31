@@ -267,6 +267,16 @@ export type WorkerProvider = {
    */
   resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
+  /**
+   * Bounded cleanup for configured profiles, including when no leases remain. Core schedules
+   * one pass at a time without blocking allocation. Check authority before external effects
+   * and after awaits before persistence; settle only after all owned commands have stopped.
+   */
+  maintain?: (context: {
+    profiles: readonly WorkerProfile[];
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verifies doctor/daemon repair switches service entrypoints between package and
-# git installs. Both fixtures come from the same prepared OpenClaw npm tarball.
+# Verifies Doctor preserves service definitions and explicit gateway install
+# switches package/git entrypoints. Both fixtures use the same prepared tarball.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,7 +22,14 @@ OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" doctor-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare"
 
 echo "Running doctor install switch E2E..."
+# Maintenance loads the installed unit's canonical PATH. Mount the shims there
+# so the unprivileged container keeps using the fixture manager during inspection.
+SHIM_DIR="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}/scripts/e2e/lib/doctor-install-switch/shims"
 docker_e2e_run_with_harness \
+  -v "$SHIM_DIR/systemctl:/usr/local/bin/systemctl:ro" \
+  -v "$SHIM_DIR/loginctl:/usr/local/bin/loginctl:ro" \
+  -v "$SHIM_DIR/busctl:/usr/local/bin/busctl:ro" \
+  -v "$SHIM_DIR/systemd-exec-start.mjs:/usr/local/bin/systemd-exec-start.mjs:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$NPM_INSTALL_TIMEOUT" \

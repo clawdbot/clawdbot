@@ -194,7 +194,7 @@ async function rejectAwsProfileAfterLeaseReconciliation(
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
-): WorkerProvider & { dispose: () => void } {
+): WorkerProvider & { dispose: () => Promise<void> } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const warn = dependencies.warn ?? (() => {});
@@ -246,6 +246,8 @@ export function createCrabboxWorkerProvider(
     warn,
   });
   const warmImages = createCrabboxWarmImageManager({ runCommand, runArgs: leaseRunArgs, warn });
+  const maintenanceAbort = new AbortController();
+  let maintenanceInFlight: Promise<void> | undefined;
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
     heartbeats.stop(context.id);
     // Cleanup has its own deadline. Only confirmed stop releases allocation/image ownership.
@@ -283,7 +285,39 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
-    dispose: () => heartbeats.dispose(),
+    async dispose() {
+      heartbeats.dispose();
+      maintenanceAbort.abort();
+      await maintenanceInFlight?.catch(() => {});
+    },
+    maintain(context) {
+      context.assertCurrent();
+      maintenanceAbort.signal.throwIfAborted();
+      return (maintenanceInFlight ??= Promise.resolve()
+        .then(async () => {
+          const signal = AbortSignal.any([context.signal, maintenanceAbort.signal]);
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            context.assertCurrent();
+          };
+          assertCurrent();
+          const binaries = new Set(
+            context.profiles.map((profile) => resolveBinary(parseCrabboxProfile(profile).binary)),
+          );
+          if (binaries.size !== 1) {
+            warn(
+              "Crabbox warm-image maintenance requires one configured CLI executable; retained images were not changed. Check cloud worker profile binary settings.",
+            );
+            return;
+          }
+          // The standard CLI shares its process-configured catalog across backend profiles.
+          // Checkpoint records, rather than the current profile, own native deletion routing.
+          await warmImages.maintain({ binary: [...binaries][0]!, signal, assertCurrent });
+        })
+        .finally(() => {
+          maintenanceInFlight = undefined;
+        }));
+    },
     listMachineOptions,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,

@@ -121,10 +121,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 }
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
-  getPluginRegistry: () => Pick<
-    PluginRegistry,
-    "workerProviders" | "plugins" | "agentHarnesses" | "nodeHostCommands"
-  >;
+  getPluginRegistry: () => PluginRegistry;
   getPortalRuntime: () => Pick<GatewayRequestContext, "portalService" | "broadcast"> | undefined;
   resolveGatewayContext: GatewayContextResolver;
   desktopSessionRegistry: DesktopSessionRegistry;
@@ -149,6 +146,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createWorkerNodePortalCarrier },
     { createWorkerComputerService },
     { resolveWorkerProvider },
+    { maintainConfiguredWorkerProviders },
     { createWorkerBootstrapArtifactTransferService },
     { createWorkerBootstrapArtifactTransferHttpCallback },
   ] = await Promise.all([
@@ -167,6 +165,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/portal-node-carrier.js"),
     import("./worker-environments/computer-transport.js"),
     import("../plugins/worker-provider-registry.js"),
+    import("../plugins/worker-provider-maintenance.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-service.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-http.js"),
   ]);
@@ -385,6 +384,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     closeComputers: computers.close,
     store: params.startup.store,
     getConfig: getRuntimeConfig,
+    maintainProviders: (signal) =>
+      maintainConfiguredWorkerProviders({
+        getRegistry: params.getPluginRegistry,
+        getConfig: getRuntimeConfig,
+        signal,
+        warn: (message) => workerEnvironmentLog.warn(message),
+      }),
     // Plugin reload replaces the registry object; resolve against the live binding.
     resolveProvider: (providerId) =>
       providerId === DEVICE_WORKER_PROVIDER_ID
