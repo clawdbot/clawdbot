@@ -223,11 +223,15 @@ async function main() {
     const origin = await readMetadataJson(skillDirectory, "origin.json");
     const lock = await readMetadataJson(installRoot, "lock.json");
     const installedVersion = origin?.installedVersion;
+    const originRegistry =
+      typeof origin?.registry === "string" ? origin.registry.trim().replace(/\/+$/, "") : undefined;
+    const originOwner =
+      typeof origin?.ownerHandle === "string" ? origin.ownerHandle.trim().toLowerCase() : undefined;
     const sourceMatches =
       origin?.slug === SLUG &&
-      origin?.registry?.replace(/\/+$/, "") === REGISTRY &&
+      originRegistry === REGISTRY &&
       typeof installedVersion === "string" &&
-      origin?.ownerHandle === OWNER;
+      originOwner === OWNER;
 
     if (!sourceMatches) {
       source = {

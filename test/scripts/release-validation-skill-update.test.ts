@@ -115,6 +115,18 @@ test.each([".clawhub", ".clawdhub"])(
       },
     });
 
+    await writeFile(
+      originPath,
+      JSON.stringify({
+        ...origin,
+        registry: " https://clawhub.ai/ ",
+        ownerHandle: " OpenClaw ",
+      }),
+    );
+    const normalized = await runChecker(scriptPath, workspace);
+    expect(normalized.status).toBe("update-available");
+    expect(normalized.update).toBeDefined();
+
     const { ownerHandle: _ownerHandle, ...ownerlessOrigin } = origin;
     await writeFile(originPath, JSON.stringify(ownerlessOrigin));
     const ownerless = await runChecker(scriptPath, workspace);
