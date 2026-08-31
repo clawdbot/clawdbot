@@ -350,6 +350,15 @@ describe("scheduled Codex app authority", () => {
           connectionFingerprint: "configured-connection",
           accountId: "configured-account",
         },
+        apps: [
+          {
+            id: "calendar",
+            allowDestructiveActions: true,
+            allowOpenWorld: true,
+            destructiveApprovalMode: "allow",
+            tools: { list: "approve" },
+          },
+        ],
       }),
     );
     expect(request).toHaveBeenCalledWith("account/rateLimits/read", {}, expect.any(Object));
