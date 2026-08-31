@@ -2129,7 +2129,7 @@ syncBuiltinESMExports();
     expect(blocked.stderr).toContain("OpenClaw lifecycle scripts remain blocked by Bun");
 
     writeFileSync(untrustedOutputPath, "");
-    writeFileSync(join(packageRoot, "dist", "openclaw-install-guard"), "pending\n");
+    writeFileSync(join(packageRoot, ".openclaw-lifecycle-pending"), "pending\n");
     const skipped = spawnSync(
       process.execPath,
       [
@@ -2142,7 +2142,7 @@ syncBuiltinESMExports();
       { encoding: "utf8" },
     );
     expect(skipped.status).not.toBe(0);
-    expect(skipped.stderr).toContain("OpenClaw preinstall lifecycle did not remove");
+    expect(skipped.stderr).toContain("OpenClaw package lifecycle did not complete");
   });
 
   it.runIf(process.platform !== "win32")(

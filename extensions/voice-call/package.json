@@ -28,6 +28,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-api.ts",
     "install": {
       "npmSpec": "@openclaw/voice-call",
       "defaultChoice": "npm",

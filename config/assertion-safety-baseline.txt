@@ -1864,7 +1864,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	15
+src/agents/failover-error.ts	12
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -2557,7 +2557,7 @@ src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
 src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/doctor/shared/stale-subagent-allowlist.ts	2
 src/commands/export-trajectory.ts	1
-src/commands/gateway-health-auth-diagnostic.ts	2
+src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	20

@@ -148,6 +148,9 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
         env: process.env,
       }),
     });
+    const { assertConfiguredWorkspaceStateReady } =
+      await import("../agents/workspace-state-dirs.js");
+    assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
   }
   if (ctx.postInstallDoctorResult) {
     const {
