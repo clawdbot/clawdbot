@@ -14,7 +14,7 @@ import {
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import {
@@ -25,6 +25,13 @@ import {
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
+
+// Each case owns its checkout and process trees. Overlap their real deadline
+// and drain waits while keeping subprocess pressure bounded within one worker.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
@@ -63,7 +70,7 @@ const linuxCases =
         { scenario: "non-executable-find", attempts: 0, code: null, checkout: false, deletions: 0 },
       ];
 
-it.each([
+it.concurrent.each([
   ...platformCases.map((entry) => Object.assign(entry, { linux: false, deletions: 0 })),
   ...linuxCases.map((entry) => Object.assign(entry, { linux: true })),
 ])(
@@ -224,7 +231,7 @@ it.each([
   55_000,
 );
 
-it.each([
+it.concurrent.each([
   ...[
     ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
     { kind: "platform", retained: false },

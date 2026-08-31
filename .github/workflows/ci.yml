@@ -2292,7 +2292,7 @@ jobs:
         env:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers", "3"]'
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"]'
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
@@ -2303,7 +2303,7 @@ jobs:
           else
             # Three workers deliberately exercise stable non-default file packing so
             # isolate:false mock-registry leaks fail close to the introducing change.
-            node --import tsx scripts/ci-run-node-test-shard.mts
+            DEBUG=vitest:browser:pool node --import tsx scripts/ci-run-node-test-shard.mts
           fi
 
   checks-ui-e2e:

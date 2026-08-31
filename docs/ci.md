@@ -273,8 +273,18 @@ The standalone UI suite uses the same group executor and cache leaf as its
 bounded four-file seed in the trusted warmer. It retains the root Node worker
 limit of three; Chromium uses its project default. It preserves the
 complete UI inventory, and each project's isolation and cleanup policy.
+Its native reporter records runtime CPU and memory facts, configured project
+workers, module diagnostics, and observed queue/end events. Browser pool logs
+record actual Chromium sessions. Event intervals are not scheduler-admission
+times; repeated environment/prepare durations must not be summed into wall time.
+These receipts do not establish transform-cache hits.
 Tooling stripes install Go only when their selected files include the docs
 translation test; historical whole-config plans retain their existing setup.
+
+Shell-heavy macOS elevation cases and independent checkout fixture tables admit
+at most two cases per file. Each case owns its commands and temporary roots;
+cleanup joins its process tree and callback work before removing those inputs.
+Outer elevation suites and the remaining checkout contract cases stay sequential.
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs with
 the all-Blacksmith planner and 96 with the `github` or `hybrid` planner profile. The smaller
