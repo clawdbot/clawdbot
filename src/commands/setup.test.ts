@@ -485,7 +485,9 @@ describe("setupCommand", () => {
         await setupCommand(json ? { json: true } : undefined, runtime, deps);
 
         expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+        expect(runtime.error).toHaveBeenCalledWith(
+          `Config invalid at ${configPath}. Run \`openclaw doctor --fix\` to repair it, then re-run setup.`,
+        );
         if (json) {
           expect(runtime.log).toHaveBeenCalledOnce();
           expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({

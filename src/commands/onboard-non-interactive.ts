@@ -64,14 +64,14 @@ async function runNonInteractiveMigrationImport(params: {
     async readConfigFile() {
       const snapshot = await readConfigFileSnapshot();
       if (!snapshot.valid) {
-        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        throw new Error("Migration target config became invalid. Run `openclaw doctor --fix`.");
       }
       return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
     },
     async commitConfigFile(config, expectedConfig) {
       const latest = await readConfigFileSnapshot();
       if (!latest.valid) {
-        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        throw new Error("Migration target config became invalid. Run `openclaw doctor --fix`.");
       }
       const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
       if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
@@ -101,7 +101,7 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     rejectOnboardingOption(
       opts,
       runtime,
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to repair it, then re-run setup.`,
     );
     return;
   }

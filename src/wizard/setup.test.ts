@@ -880,7 +880,9 @@ describe("runSetupWizard", () => {
     ).rejects.toThrow("exit:1");
 
     expect(select).not.toHaveBeenCalled();
-    expect(prompter.outro).toHaveBeenCalled();
+    expect(prompter.outro).toHaveBeenCalledWith(
+      "Config invalid. Run `openclaw doctor --fix` to repair it, then re-run setup.",
+    );
   });
 
   it("skips prompts and setup steps when flags are set", async () => {

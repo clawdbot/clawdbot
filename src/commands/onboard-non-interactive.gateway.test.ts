@@ -256,7 +256,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
             throw new Error(`exit:${code}`);
           },
         };
-        const message = "Config invalid. Run `openclaw doctor` to repair it, then re-run setup.";
+        const message =
+          "Config invalid. Run `openclaw doctor --fix` to repair it, then re-run setup.";
 
         await expect(
           runNonInteractiveSetup(
