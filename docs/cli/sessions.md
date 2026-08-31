@@ -271,6 +271,11 @@ different model. Explicitly disabled or untrusted plugins are not run. If their
 resources may remain, cleanup prints a warning on stderr without changing the
 JSON result. Dry runs do not load harness plugins.
 
+Applied artifact cleanup counts only successful file removals. If a file cannot
+be deleted, it contributes no freed bytes and remains part of disk usage;
+cleanup continues with other eligible files. If usage stays above the target,
+check filesystem permissions and retry after resolving the deletion failure.
+
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 
 ```json
