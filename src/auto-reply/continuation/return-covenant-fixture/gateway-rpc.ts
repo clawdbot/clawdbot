@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRequestHandlers } from "../../../gateway/server-methods/types.js";
@@ -14,7 +15,8 @@ import {
   parseReturnCovenantPlan,
   ReturnCovenantProtocolError,
 } from "./protocol.js";
-import { ReturnCovenantFixtureRun, type ReturnCovenantFixtureRunSnapshot } from "./run.js";
+import { parseReturnCovenantRunSnapshot } from "./run-snapshot.js";
+import { ReturnCovenantFixtureRun } from "./run.js";
 
 export const RETURN_COVENANT_GATEWAY_METHOD = "return-covenant.fixture";
 
@@ -46,16 +48,15 @@ function parseRestart(value: unknown): ReturnCovenantGatewayRestart | undefined 
   if (value === undefined) {
     return undefined;
   }
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     throw new ReturnCovenantProtocolError(
       "invalid-gateway-restart",
       "return-covenant gateway restart lineage is invalid",
     );
   }
-  const record = value as { original?: unknown; replacement?: unknown };
   return {
-    original: parseReturnCovenantGatewayBinding(record.original),
-    replacement: parseReturnCovenantGatewayBinding(record.replacement),
+    original: parseReturnCovenantGatewayBinding(value.original),
+    replacement: parseReturnCovenantGatewayBinding(value.replacement),
   };
 }
 
@@ -100,7 +101,10 @@ export function createReturnCovenantGatewayService(params: {
             );
           }
           const plan = parseReturnCovenantPlan(request.plan);
-          const snapshot = request.snapshot as ReturnCovenantFixtureRunSnapshot | undefined;
+          const snapshot =
+            request.snapshot === undefined
+              ? undefined
+              : parseReturnCovenantRunSnapshot(request.snapshot);
           run = snapshot
             ? await ReturnCovenantFixtureRun.restore({
                 config: params.config,

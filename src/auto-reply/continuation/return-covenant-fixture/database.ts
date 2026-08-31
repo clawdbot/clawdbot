@@ -446,7 +446,12 @@ export class PreparedReturnCovenantDatabaseProfiles {
       return;
     }
     if (this.#activeExecutionKey) {
-      const [caseId, form] = this.#activeExecutionKey.split(":") as [string, ReturnCovenantForm];
+      const separator = this.#activeExecutionKey.lastIndexOf(":");
+      const caseId = this.#activeExecutionKey.slice(0, separator);
+      const form = this.#activeExecutionKey.slice(separator + 1);
+      if (!caseId || (form !== "typed-tool" && form !== "bracket-token")) {
+        throw new Error("return-covenant active database assignment is malformed");
+      }
       await this.deactivate({ caseId, form });
     }
     closeOpenClawAgentDatabasesForTest();

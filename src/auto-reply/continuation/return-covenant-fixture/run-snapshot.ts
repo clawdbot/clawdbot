@@ -1,4 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { loadPendingSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
 import { decodeDelegateFlow, delegateFlowRecords } from "../delegate-flow-store.js";
@@ -31,6 +33,32 @@ export type ReturnCovenantFixtureRunSnapshot = {
   completed: Array<[string, CompletedReturnCovenantCase]>;
   profiles: ReturnCovenantDatabaseProfilesSnapshot;
 };
+
+const runSnapshotSchema = z
+  .object({
+    schema: z.literal(RETURN_COVENANT_RUN_SNAPSHOT_SCHEMA),
+    runId: z.string().min(1),
+    activeState: z
+      .custom<ReturnCovenantCaseState>((value) => value === null || isRecord(value))
+      .nullable(),
+    caseHandles: z.array(z.string().min(1)),
+    closedCaseHandles: z.array(z.string().min(1)),
+    completed: z.array(
+      z.tuple([
+        z.string().min(1),
+        z.custom<CompletedReturnCovenantCase>(
+          (value) =>
+            isRecord(value) && typeof value.caseHandle === "string" && isRecord(value.observation),
+        ),
+      ]),
+    ),
+    profiles: z.object({ activeExecutionKey: z.string().min(1).nullable() }).strict(),
+  })
+  .strict();
+
+export function parseReturnCovenantRunSnapshot(value: unknown): ReturnCovenantFixtureRunSnapshot {
+  return runSnapshotSchema.parse(value);
+}
 
 function stateDirectory(context: ReturnCovenantFixtureContext): string {
   const stateDir = context.env.OPENCLAW_STATE_DIR;

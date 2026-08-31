@@ -24,7 +24,10 @@ import {
   type ReturnCovenantPhaseRequest,
   type ReturnCovenantPlan,
 } from "./protocol.js";
-import type { ReturnCovenantFixtureRunSnapshot } from "./run.js";
+import {
+  parseReturnCovenantRunSnapshot,
+  type ReturnCovenantFixtureRunSnapshot,
+} from "./run-snapshot.js";
 
 export type { ReturnCovenantGatewayBinding, ReturnCovenantGatewayRestart };
 
@@ -249,10 +252,10 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
   async #restartForTransition(): Promise<ReturnCovenantGatewayRestart> {
     const original = this.#requireCurrent();
     const snapshotResponse = await this.#request(original, { operation: "snapshot" });
-    const snapshot = snapshotResponse.snapshot as ReturnCovenantFixtureRunSnapshot | undefined;
-    if (!snapshot) {
+    if (snapshotResponse.snapshot === undefined) {
       throw new Error("return-covenant gateway restart returned no run snapshot");
     }
+    const snapshot = parseReturnCovenantRunSnapshot(snapshotResponse.snapshot);
     await stopGateway(original);
     this.#current = undefined;
     const replacement = await this.#spawnGateway(`replacement-${this.#gateways.length}`, snapshot);
@@ -294,8 +297,9 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
         stderr: "",
         stdout: "",
       };
+      const output = starting;
       const append = (field: "stderr" | "stdout", chunk: Buffer | string) => {
-        starting![field] = `${starting![field]}${chunk.toString()}`.slice(-1_000_000);
+        output[field] = `${output[field]}${chunk.toString()}`.slice(-1_000_000);
       };
       child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
       child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
