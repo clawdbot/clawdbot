@@ -16,6 +16,7 @@
 import { createServer, type RequestListener } from "node:http";
 import type { Socket } from "node:net";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
@@ -162,11 +163,18 @@ function restoreSlackTransportEnv(): void {
 }
 
 const adapter = createSlackActions("slack");
+// createSlackActions always returns an adapter with a handleAction entry; the
+// ChannelMessageActionAdapter type marks it optional because not every adapter
+// handles actions, so narrow it once here.
+const handleAction = adapter.handleAction!;
+if (!handleAction) {
+  throw new Error("Slack channel action adapter is missing its handleAction entry");
+}
 
 function actionContext(
   cfg: OpenClawConfig,
   params: Record<string, unknown>,
-): Parameters<typeof adapter.handleAction>[0] {
+): ChannelMessageActionContext {
   return {
     channel: "slack",
     action: "bookmark",
@@ -190,7 +198,7 @@ async function runBookmarkScenario(
   const server = await startTransportServer(calls);
   process.env.SLACK_API_URL = server.apiUrl;
   try {
-    const result = await adapter.handleAction(actionContext(cfg, params));
+    const result = await handleAction(actionContext(cfg, params));
     return { result, calls: [...calls], error: undefined };
   } catch (error) {
     return { result: undefined, calls: [...calls], error: error as Error };
