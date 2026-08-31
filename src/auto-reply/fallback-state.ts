@@ -1,10 +1,10 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { ERROR_ICON_PREFIX_RE } from "../shared/assistant-error-format.js";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ERROR_ICON_PREFIX_RE } from "../shared/assistant-error-format.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.types.js";
