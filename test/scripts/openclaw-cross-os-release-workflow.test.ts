@@ -157,28 +157,27 @@ describe("cross-OS release checks workflow", () => {
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
-  it("uses the frozen extended-stable predecessor for installer update smoke", () => {
+  it("passes a frozen-line predecessor from target resolution to installer update smoke", () => {
     const release = readWorkflow(RELEASE_CHECKS_PATH);
-    const resolver = job(release, "resolve_installer_smoke_baseline");
-    const baseline = step(resolver, "Resolve frozen installer baseline");
+    const target = job(release, "resolve_target");
+    const baseline = step(target, "Resolve frozen installer update baseline");
     const installSmoke = job(release, "install_smoke_release_checks");
 
-    expect(resolver.needs).toEqual(["resolve_target"]);
-    expect(resolver.if).toBe("needs.resolve_target.outputs.install_smoke_scheduled == 'true'");
+    expect(target.outputs?.installer_smoke_update_baseline).toBe(
+      "${{ steps.frozen_installer_smoke_baseline.outputs.value }}",
+    );
+    expect(baseline.if).toContain("steps.inputs.outputs.install_smoke_scheduled == 'true'");
+    expect(baseline.if).toContain("startsWith(inputs.target_context_ref, 'extended-stable/')");
     expect(baseline.env).toMatchObject({
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
-      TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
+      TARGET_SHA: "${{ steps.ref.outputs.sha }}",
     });
-    expect(baseline.run).toContain("baseline=latest");
-    expect(baseline.run).toContain('"$TARGET_CONTEXT_REF" == "extended-stable/"*');
     expect(baseline.run).toContain("contents/package.json?ref=${TARGET_SHA}");
-    expect(baseline.run).toContain("npm view openclaw versions --json");
     expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
     expect(baseline.run).toContain('--target-context-ref "$TARGET_CONTEXT_REF"');
-    expect(baseline.run).toContain('--versions-json "$published_versions"');
-    expect(installSmoke.needs).toEqual(["resolve_target", "resolve_installer_smoke_baseline"]);
+    expect(installSmoke.needs).toEqual(["resolve_target"]);
     expect(installSmoke.with?.update_baseline_version).toBe(
-      "${{ needs.resolve_installer_smoke_baseline.outputs.value }}",
+      "${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}",
     );
   });
 

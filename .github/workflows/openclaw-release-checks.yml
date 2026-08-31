@@ -169,6 +169,7 @@ jobs:
       package_required: ${{ steps.inputs.outputs.package_required }}
       docker_required: ${{ steps.inputs.outputs.docker_required }}
       install_smoke_scheduled: ${{ steps.inputs.outputs.install_smoke_scheduled }}
+      installer_smoke_update_baseline: ${{ steps.frozen_installer_smoke_baseline.outputs.value }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -806,6 +807,47 @@ jobs:
             printf 'qa_parity_scheduled=%s\n' "$qa_parity_scheduled"
           } >> "$GITHUB_OUTPUT"
 
+      # A frozen extended-stable target must not downgrade from npm latest.
+      - name: Set up Node.js for frozen installer baseline
+        if: >-
+          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
+          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
+          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install trusted workflow validation dependencies
+        if: >-
+          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
+          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
+          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Resolve frozen installer update baseline
+        id: frozen_installer_smoke_baseline
+        if: >-
+          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
+          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
+          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          candidate_version="$(
+            gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${TARGET_SHA}" --jq .content |
+              base64 --decode |
+              jq -er '.version | select(type == "string" and length > 0)'
+          )"
+          baseline="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
+            --candidate-version "$candidate_version" \
+            --target-context-ref "$TARGET_CONTEXT_REF")"
+          echo "value=${baseline}" >> "$GITHUB_OUTPUT"
+
       - name: Summarize validated ref
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -1213,7 +1255,7 @@ jobs:
           echo "json=" >> "$GITHUB_OUTPUT"
 
   install_smoke_release_checks:
-    needs: [resolve_target, resolve_installer_smoke_baseline]
+    needs: [resolve_target]
     if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
     permissions:
       actions: read
@@ -1224,61 +1266,7 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
-      update_baseline_version: ${{ needs.resolve_installer_smoke_baseline.outputs.value }}
-
-  resolve_installer_smoke_baseline:
-    needs: [resolve_target]
-    if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    outputs:
-      value: ${{ steps.baseline.outputs.value }}
-    steps:
-      - name: Checkout trusted workflow ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          path: workflow
-          fetch-depth: 1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install trusted workflow validation dependencies
-        working-directory: workflow
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
-
-      - name: Resolve frozen installer baseline
-        id: baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
-        run: |
-          set -euo pipefail
-          baseline=latest
-          if [[ "$TARGET_CONTEXT_REF" == "extended-stable/"* ||
-                "$TARGET_CONTEXT_REF" == "refs/heads/extended-stable/"* ]]; then
-            candidate_version="$(
-              gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${TARGET_SHA}" --jq .content |
-                base64 --decode |
-                jq -er '.version | select(type == "string" and length > 0)'
-            )"
-            published_versions="$RUNNER_TEMP/openclaw-published-versions.json"
-            npm view openclaw versions --json > "$published_versions"
-            baseline="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
-              --candidate-version "$candidate_version" \
-              --target-context-ref "$TARGET_CONTEXT_REF" \
-              --versions-json "$published_versions")"
-          fi
-          echo "value=${baseline}" >> "$GITHUB_OUTPUT"
+      update_baseline_version: ${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}
 
   cross_os_release_checks:
     needs: [resolve_target, prepare_release_package]
@@ -2776,7 +2764,6 @@ jobs:
     needs:
       - resolve_target
       - prepare_release_package
-      - resolve_installer_smoke_baseline
       - install_smoke_release_checks
       - cross_os_release_checks
       - live_repo_e2e_release_checks
@@ -2901,8 +2888,6 @@ jobs:
           VALIDATE_ADVISORY_STATUSES_OUTCOME: ${{ steps.validate_advisory_statuses.outcome }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
-          RESOLVE_INSTALLER_SMOKE_BASELINE_RESULT: ${{ needs.resolve_installer_smoke_baseline.result }}
-          INSTALL_SMOKE_SCHEDULED: ${{ needs.resolve_target.outputs.install_smoke_scheduled }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
           LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
@@ -2931,11 +2916,6 @@ jobs:
           failed=0
           release_check_items=("resolve_target=${RESOLVE_TARGET_RESULT}")
           if [[ "$RELEASE_PHASE" != "candidate" ]]; then
-            if [[ "$INSTALL_SMOKE_SCHEDULED" == "true" ]]; then
-              release_check_items+=(
-                "resolve_installer_smoke_baseline=${RESOLVE_INSTALLER_SMOKE_BASELINE_RESULT}"
-              )
-            fi
             release_check_items+=(
               "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
               "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
@@ -3055,11 +3035,6 @@ jobs:
               result="$(release_check_result "$name" "$raw_result")"
             else
               result="$raw_result"
-            fi
-            if [[ "$name" == "resolve_installer_smoke_baseline" && "$result" != "success" ]]; then
-              echo "::error::${name} ended with ${result} while installer smoke was scheduled"
-              failed=1
-              continue
             fi
             if [[ "$name" == "qa_live_telegram_release_checks" ]]; then
               # Only an identified child execution is advisory; dispatch provenance remains a gate.
