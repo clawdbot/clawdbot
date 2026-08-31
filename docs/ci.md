@@ -97,11 +97,11 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
-Node test shards that need a built CLI use the same `build:ci-artifacts` profile
-before starting Vitest. It builds the runtime, Control UI, and scoped plugin SDK
-declarations without repeating global declaration emission in each shard.
-Private QA shards retain their private runtime build selection. Release package
-builds still generate the full declarations.
+Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
+Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
+provenance metadata. Private QA shards select their private runtime entries. The
+`build-artifacts` job owns Control UI and SDK declaration validation; release
+package builds still generate the full declarations.
 
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,
