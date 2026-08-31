@@ -51,8 +51,9 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     },
   };
   await write(packageRoot, "package.json", sourcePackage);
-  await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o755);
+  await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
+    mode: 0o755,
+  });
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
   await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
@@ -143,71 +144,18 @@ afterEach(async () => {
 });
 
 describe("node bootstrap distribution", () => {
-  it.skipIf(process.platform === "win32")(
-    "keeps concurrent staging private under a restrictive process mask",
-    async () => {
-      const { packageRoot } = await fixture();
-      for (let index = 0; index < 32; index += 1) {
-        await write(packageRoot, `dist/race-${index}.js`, "export {};\n");
-      }
-      const { stdout } = await promisify(execFile)(process.execPath, [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `
-          import * as tar from "tar";
-          import { createNodeBootstrapArtifactProvider } from ${JSON.stringify(new URL("./node-bootstrap-artifact.ts", import.meta.url).href)};
-          process.umask(0o077);
-          const nativeUmask = process.umask.bind(process);
-          // Node's getter sets umask(0), then restores it. Widen that real
-          // interval so concurrent filesystem opens reliably overlap it.
-          process.umask = (mask) => {
-            if (mask !== undefined) return nativeUmask(mask);
-            const previous = nativeUmask(0);
-            const deadline = performance.now() + 5;
-            while (performance.now() < deadline) {}
-            nativeUmask(previous);
-            return previous;
-          };
-          const provider = createNodeBootstrapArtifactProvider(${JSON.stringify({
-            packageRoot,
-            runningBuildId: buildId,
-            plugins: [
-              {
-                id: "remote-runtime",
-                root: path.join(packageRoot, "extensions", "remote-runtime"),
-              },
-            ],
-          })});
-          try {
-            const artifact = await provider.prepare();
-            const modes = {};
-            await tar.list({ file: artifact.tarballPath, onReadEntry(entry) {
-              modes[entry.path] = entry.mode;
-            }});
-            console.log(JSON.stringify(modes));
-          } finally {
-            process.umask = nativeUmask;
-            await provider.close();
-          }
-        `,
-      ]);
-      const modes = JSON.parse(stdout) as Record<string, number>;
-      expect(modes["package/openclaw.mjs"]).toBe(0o700);
-      expect(modes["package/dist/shared.js"]).toBe(0o600);
-      expect(
-        Object.keys(modes).filter((entry) => entry.startsWith("package/dist/race-")),
-      ).toHaveLength(32);
-      expect(Object.values(modes).every((mode) => (mode & 0o077) === 0)).toBe(true);
-    },
-  );
-
   it.each(["source", "package", "external-plugin"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
-      const [artifact, concurrent] = await Promise.all([provider.prepare(), provider.prepare()]);
+      // Node's getter temporarily changes the process mask and races parallel file creation.
+      const readUmask = vi.spyOn(process, "umask").mockImplementation(() => {
+        throw new Error("Artifact preparation must not read or mutate the process umask");
+      });
+      const [artifact, concurrent] = await Promise.all([
+        provider.prepare(),
+        provider.prepare(),
+      ]).finally(() => readUmask.mockRestore());
       expect(concurrent).toBe(artifact);
       expect(artifact).toMatchObject({
         buildId,
@@ -236,8 +184,13 @@ describe("node bootstrap distribution", () => {
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
       if (process.platform !== "win32") {
-        expect(modes.get("package/openclaw.mjs")).toBe(0o755 & ~process.umask());
-        expect(modes.get("package/dist/shared.js")).toBe(0o644 & ~process.umask());
+        for (const [relative, requestedMode] of [
+          ["openclaw.mjs", 0o755],
+          ["dist/shared.js", 0o644],
+        ] as const) {
+          const sourceMode = (await fs.stat(path.join(packageRoot, relative))).mode;
+          expect(modes.get(`package/${relative}`)).toBe(sourceMode & requestedMode);
+        }
       }
       if (mode === "external-plugin") {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
