@@ -86,385 +86,304 @@ it("starts with an empty, attribute-free body and native default focus", () => {
 }
 
 function fixtureFiles(): Record<string, string> {
-  const gatewayMocksPath = JSON.stringify(
-    path.join(repoRoot, "src", "gateway", "test-helpers.mocks.ts"),
-  );
-  const runtimeStorePath = JSON.stringify(
-    path.join(repoRoot, "src", "plugin-sdk", "runtime-store.ts"),
-  );
-  const sessionSuspensionPath = JSON.stringify(
-    path.join(repoRoot, "src", "agents", "session-suspension.ts"),
-  );
-  const agentRunRegistryPath = JSON.stringify(
-    path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
-  );
-  const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
-  const workAdmissionPath = JSON.stringify(
-    path.join(repoRoot, "src", "process", "gateway-work-admission.ts"),
-  );
-  const activeSessionsPath = JSON.stringify(
-    path.join(repoRoot, "src", "gateway", "active-sessions-shutdown-tracker.ts"),
-  );
-  const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
-  const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
-  const testEnvPath = JSON.stringify(path.join(repoRoot, "src", "test-utils", "env.ts"));
-  const payloadImports = [
-    'import { createRequire } from "node:module";',
-    'import { queryObjects } from "node:v8";',
-    'const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");',
-  ].join("\n");
+  const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+  const payloadImports = `import { createRequire } from "node:module";
+import { queryObjects } from "node:v8";
+const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
     "runner.ts": `export { default } from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};\n`,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
-    "01-mid.ts": [
-      'import { flavor } from "./01-dep.js";',
-      "export function describeFlavor(): string {",
-      "  return `flavor:${flavor()}`;",
-      "}",
-      "",
-    ].join("\n"),
+    "01-mid.ts": `import { flavor } from "./01-dep.js";
+export function describeFlavor(): string {
+  return \`flavor:\${flavor()}\`;
+}
+`,
     // Evaluate the real importer graph, then fail collection. The following
     // file must still apply its mock after onAfterRunFiles cleanup.
-    "01-a-crash.test.ts": [
-      'import "./01-mid.js";',
-      'import { expect } from "vitest";',
-      'expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);',
-      `await import(${JSON.stringify(path.join(repoRoot, "src/logging/diagnostic-run-activity.ts"))});`,
-      'throw new Error("synthetic collect failure");',
-      "",
-    ].join("\n"),
-    "01-b-mock.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      'vi.mock("./01-dep.js", () => ({ flavor: () => "mocked" }));',
-      'const { describeFlavor } = await import("./01-mid.js");',
-      'it("applies mocks after a sibling collection failure", () => {',
-      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(false);',
-      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.diagnosticRunActivityTestApi"))).toBe(false);',
-      '  expect(describeFlavor()).toBe("flavor:mocked");',
-      "});",
-      "",
-    ].join("\n"),
-    "02-a-gateway-env.test.ts": [
-      `import ${gatewayMocksPath};`,
-      'import { expect, it } from "vitest";',
-      'it("seeds gateway helper env", () => {',
-      '  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");',
-      '  expect(process.env.OPENCLAW_SKIP_CRON).toBe("1");',
-      "});",
-      "",
-    ].join("\n"),
-    "02-b-gateway-env.test.ts": [
-      'import { expect, it } from "vitest";',
-      'it("restores gateway helper env", () => {',
-      "  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();",
-      "  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();",
-      "});",
-      "",
-    ].join("\n"),
-    "02-c-agent-env.test.ts": [
-      `import { setTestEnvValue } from ${testEnvPath};`,
-      'import { expect, it, vi } from "vitest";',
-      'it("leaves agent selectors for file-completion env unstub", () => {',
-      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
-      "  expect(process.env.OPENCLAW_TEST_HOME).toBeTruthy();",
-      '  for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]) {',
-      "    setTestEnvValue(key, `/tmp/inherited-${key}`);",
-      "    vi.stubEnv(key, undefined);",
-      "    expect(process.env[key]).toBeUndefined();",
-      "  }",
-      "});",
-      "",
-    ].join("\n"),
-    "02-d-agent-env.test.ts": [
-      'import { expect, it } from "vitest";',
-      'it("clears restored agent selectors before the next file", () => {',
-      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
-      "  expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();",
-      "  expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();",
-      "});",
-      "",
-    ].join("\n"),
-    "03-a-runtime-store.test.ts": [
-      `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
-      'import { expect, it } from "vitest";',
-      'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
-      'it("seeds a named runtime slot", () => {',
-      '  store.setRuntime({ source: "first-file" });',
-      '  expect(store.getRuntime()).toEqual({ source: "first-file" });',
-      "});",
-      "",
-    ].join("\n"),
-    "03-b-runtime-store.test.ts": [
-      `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
-      'import { expect, it } from "vitest";',
-      'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
-      'it("clears named runtime slots", () => {',
-      "  expect(store.tryGetRuntime()).toBeNull();",
-      "});",
-      "",
-    ].join("\n"),
-    "04-a-session-suspension.test.ts": [
-      `import { fenceSessionSuspensionWritesForGatewayShutdown } from ${sessionSuspensionPath};`,
-      'import { expect, it } from "vitest";',
-      'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
-      'it("seeds the session suspension shutdown fence", () => {',
-      "  fenceSessionSuspensionWritesForGatewayShutdown();",
-      "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(true);",
-      "});",
-      "",
-    ].join("\n"),
-    "04-b-session-suspension.test.ts": [
-      `import ${sessionSuspensionPath};`,
-      'import { expect, it } from "vitest";',
-      'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
-      'it("clears the session suspension shutdown fence", () => {',
-      "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(false);",
-      "});",
-      "",
-    ].join("\n"),
-    "04-c-gateway-admission.test.ts": [
-      `import { beginGatewayRootWorkAdmissionWhenOpen, captureGatewayRootWorkAdmissionContinuationScope, getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission, tryBeginGatewaySuspendAdmission } from ${workAdmissionPath};`,
-      'import { expect, it } from "vitest";',
-      'it("seeds file-owned gateway admission and a suspended waiter", async () => {',
-      "  const admission = tryBeginGatewayRootWorkAdmission();",
-      '  if (!admission) throw new Error("expected gateway root admission");',
-      "  const continuation = await admission.run(async () => captureGatewayRootWorkAdmissionContinuationScope());",
-      "  expect(continuation).not.toBeNull();",
-      "  const suspension = tryBeginGatewaySuspendAdmission(() => {});",
-      '  if (!suspension?.commit()) throw new Error("expected prepared suspension");',
-      "  const pending = beginGatewayRootWorkAdmissionWhenOpen();",
-      "  void pending.catch(() => {});",
-      '  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("fixture.gatewayAdmission")] = { continuation, pending };',
-      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
-      "});",
-      "",
-    ].join("\n"),
-    "04-d-gateway-admission.test.ts": [
-      `import { getActiveGatewayRootWorkCount, isGatewayRestartDraining, tryBeginGatewayRootWorkAdmission, type GatewayRootWorkAdmissionContinuationScope } from ${workAdmissionPath};`,
-      'import { expect, it } from "vitest";',
-      'it("retires gateway admission before the next file", async () => {',
-      "  const state = globalThis as Record<PropertyKey, unknown>;",
-      '  const key = Symbol.for("fixture.gatewayAdmission");',
-      "  const prior = state[key] as { continuation: GatewayRootWorkAdmissionContinuationScope; pending: Promise<unknown> } | undefined;",
-      "  delete state[key];",
-      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
-      "  expect(isGatewayRestartDraining()).toBe(false);",
-      '  if (!prior?.continuation) throw new Error("expected prior gateway continuation");',
-      '  await expect(prior.pending).rejects.toThrow("Gateway is draining");',
-      '  await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");',
-      "  const admission = tryBeginGatewayRootWorkAdmission();",
-      "  expect(admission).not.toBeNull();",
-      "  admission?.release();",
-      "});",
-      "",
-    ].join("\n"),
-    "05-a-agent-run.test.ts": [
-      `import { getActiveGatewayRootWorkCount, markGatewayRestartDraining, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
-      `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
-      `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
-      `import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${activeSessionsPath};`,
-      'import { expect, it } from "vitest";',
-      'it("seeds process-global run contexts", () => {',
-      "  expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();",
-      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
-      "  markGatewayRestartDraining();",
-      '  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });',
-      "  expect(listActiveSessionsForShutdown()).toHaveLength(1);",
-      '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
-      '  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });',
-      '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
-      "  let sequence;",
-      "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
-      '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
-      "  unsubscribe();",
-      '  expect(getAgentRunContext("unrelated-run-a")).toBeDefined();',
-      '  expect(getAgentRunContext("unrelated-run-b")).toBeDefined();',
-      "  expect(sequence).toBe(1);",
-      "});",
-      "",
-    ].join("\n"),
-    "05-b-agent-run.test.ts": [
-      `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
-      `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
-      `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
-      `import { listActiveSessionsForShutdown } from ${activeSessionsPath};`,
-      'import { expect, it } from "vitest";',
-      'it("clears agent run registry state", () => {',
-      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
-      "  const admission = tryBeginGatewayRootWorkAdmission();",
-      "  expect(admission).not.toBeNull();",
-      "  admission?.release();",
-      "  expect(listActiveSessionsForShutdown()).toEqual([]);",
-      '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
-      "  let sequence;",
-      "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
-      '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
-      "  unsubscribe();",
-      "  expect(sequence).toBe(1);",
-      '  clearAgentRunContext("reused-run");',
-      '  registerAgentRunContext("target-run", { sessionKey: "target-session" });',
-      "  expect(sweepStaleRunContexts(-1)).toBe(1);",
-      '  expect(getAgentRunContext("target-run")).toBeUndefined();',
-      "});",
-      "",
-    ].join("\n"),
-    "06-a-console-routing.test.ts": [
-      `import { enableConsoleCapture, routeLogsToStderr } from ${loggingConsolePath};`,
-      `import { loggingState } from ${loggingStatePath};`,
-      'import { expect, it } from "vitest";',
-      'it("latches console capture and stderr routing", () => {',
-      "  const native = console.error;",
-      '  const warningListeners = process.listeners("warning");',
-      "  routeLogsToStderr();",
-      "  enableConsoleCapture();",
-      "  expect(loggingState.forceConsoleToStderr).toBe(true);",
-      "  expect(loggingState.consolePatched).toBe(true);",
-      "  expect(console.error).not.toBe(native);",
-      '  expect(process.listeners("warning")).toEqual(warningListeners);',
-      "});",
-      "",
-    ].join("\n"),
+    "01-a-crash.test.ts": `import "./01-mid.js";
+import { expect } from "vitest";
+expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);
+await import(${sourcePath("logging/diagnostic-run-activity.ts")});
+throw new Error("synthetic collect failure");
+`,
+    "01-b-mock.test.ts": `import { expect, it, vi } from "vitest";
+vi.mock("./01-dep.js", () => ({ flavor: () => "mocked" }));
+const { describeFlavor } = await import("./01-mid.js");
+it("applies mocks after a sibling collection failure", () => {
+  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(false);
+  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.diagnosticRunActivityTestApi"))).toBe(false);
+  expect(describeFlavor()).toBe("flavor:mocked");
+});
+`,
+    "02-a-gateway-env.test.ts": `import ${sourcePath("gateway/test-helpers.mocks.ts")};
+import { expect, it } from "vitest";
+it("seeds gateway helper env", () => {
+  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");
+  expect(process.env.OPENCLAW_SKIP_CRON).toBe("1");
+});
+`,
+    "02-b-gateway-env.test.ts": `import { expect, it } from "vitest";
+it("restores gateway helper env", () => {
+  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();
+  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();
+});
+`,
+    "02-c-agent-env.test.ts": `import { setTestEnvValue } from ${sourcePath("test-utils/env.ts")};
+import { expect, it, vi } from "vitest";
+it("leaves agent selectors for file-completion env unstub", () => {
+  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);
+  expect(process.env.OPENCLAW_TEST_HOME).toBeTruthy();
+  for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]) {
+    setTestEnvValue(key, \`/tmp/inherited-\${key}\`);
+    vi.stubEnv(key, undefined);
+    expect(process.env[key]).toBeUndefined();
+  }
+});
+`,
+    "02-d-agent-env.test.ts": `import { expect, it } from "vitest";
+it("clears restored agent selectors before the next file", () => {
+  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);
+  expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+  expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+});
+`,
+    "03-a-runtime-store.test.ts": `import { createPluginRuntimeStore } from ${sourcePath("plugin-sdk/runtime-store.ts")};
+import { expect, it } from "vitest";
+const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });
+it("seeds a named runtime slot", () => {
+  store.setRuntime({ source: "first-file" });
+  expect(store.getRuntime()).toEqual({ source: "first-file" });
+});
+`,
+    "03-b-runtime-store.test.ts": `import { createPluginRuntimeStore } from ${sourcePath("plugin-sdk/runtime-store.ts")};
+import { expect, it } from "vitest";
+const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });
+it("clears named runtime slots", () => {
+  expect(store.tryGetRuntime()).toBeNull();
+});
+`,
+    "04-a-session-suspension.test.ts": `import { fenceSessionSuspensionWritesForGatewayShutdown } from ${sourcePath("agents/session-suspension.ts")};
+import { expect, it } from "vitest";
+const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];
+it("seeds the session suspension shutdown fence", () => {
+  fenceSessionSuspensionWritesForGatewayShutdown();
+  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(true);
+});
+`,
+    "04-b-session-suspension.test.ts": `import ${sourcePath("agents/session-suspension.ts")};
+import { expect, it } from "vitest";
+const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];
+it("clears the session suspension shutdown fence", () => {
+  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(false);
+});
+`,
+    "04-c-gateway-admission.test.ts": `import { beginGatewayRootWorkAdmissionWhenOpen, captureGatewayRootWorkAdmissionContinuationScope, getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission, tryBeginGatewaySuspendAdmission } from ${sourcePath("process/gateway-work-admission.ts")};
+import { expect, it } from "vitest";
+it("seeds file-owned gateway admission and a suspended waiter", async () => {
+  const admission = tryBeginGatewayRootWorkAdmission();
+  if (!admission) throw new Error("expected gateway root admission");
+  const continuation = await admission.run(async () => captureGatewayRootWorkAdmissionContinuationScope());
+  expect(continuation).not.toBeNull();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  if (!suspension?.commit()) throw new Error("expected prepared suspension");
+  const pending = beginGatewayRootWorkAdmissionWhenOpen();
+  void pending.catch(() => {});
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("fixture.gatewayAdmission")] = { continuation, pending };
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+});
+`,
+    "04-d-gateway-admission.test.ts": `import { getActiveGatewayRootWorkCount, isGatewayRestartDraining, tryBeginGatewayRootWorkAdmission, type GatewayRootWorkAdmissionContinuationScope } from ${sourcePath("process/gateway-work-admission.ts")};
+import { expect, it } from "vitest";
+it("retires gateway admission before the next file", async () => {
+  const state = globalThis as Record<PropertyKey, unknown>;
+  const key = Symbol.for("fixture.gatewayAdmission");
+  const prior = state[key] as { continuation: GatewayRootWorkAdmissionContinuationScope; pending: Promise<unknown> } | undefined;
+  delete state[key];
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(isGatewayRestartDraining()).toBe(false);
+  if (!prior?.continuation) throw new Error("expected prior gateway continuation");
+  await expect(prior.pending).rejects.toThrow("Gateway is draining");
+  await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");
+  const admission = tryBeginGatewayRootWorkAdmission();
+  expect(admission).not.toBeNull();
+  admission?.release();
+});
+`,
+    "05-a-agent-run.test.ts": `import { getActiveGatewayRootWorkCount, markGatewayRestartDraining, tryBeginGatewayRootWorkAdmission } from ${sourcePath("process/gateway-work-admission.ts")};
+import { getAgentRunContext, registerAgentRunContext } from ${sourcePath("infra/agent-run-registry.ts")};
+import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
+import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { expect, it } from "vitest";
+it("seeds process-global run contexts", () => {
+  expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  markGatewayRestartDraining();
+  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
+  expect(listActiveSessionsForShutdown()).toHaveLength(1);
+  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });
+  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });
+  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });
+  let sequence;
+  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });
+  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });
+  unsubscribe();
+  expect(getAgentRunContext("unrelated-run-a")).toBeDefined();
+  expect(getAgentRunContext("unrelated-run-b")).toBeDefined();
+  expect(sequence).toBe(1);
+});
+`,
+    "05-b-agent-run.test.ts": `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${sourcePath("process/gateway-work-admission.ts")};
+import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${sourcePath("infra/agent-run-registry.ts")};
+import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
+import { listActiveSessionsForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { expect, it } from "vitest";
+it("clears agent run registry state", () => {
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  const admission = tryBeginGatewayRootWorkAdmission();
+  expect(admission).not.toBeNull();
+  admission?.release();
+  expect(listActiveSessionsForShutdown()).toEqual([]);
+  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });
+  let sequence;
+  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });
+  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });
+  unsubscribe();
+  expect(sequence).toBe(1);
+  clearAgentRunContext("reused-run");
+  registerAgentRunContext("target-run", { sessionKey: "target-session" });
+  expect(sweepStaleRunContexts(-1)).toBe(1);
+  expect(getAgentRunContext("target-run")).toBeUndefined();
+});
+`,
+    "06-a-console-routing.test.ts": `import { enableConsoleCapture, routeLogsToStderr } from ${sourcePath("logging/console.ts")};
+import { loggingState } from ${sourcePath("logging/state.ts")};
+import { expect, it } from "vitest";
+it("latches console capture and stderr routing", () => {
+  const native = console.error;
+  const warningListeners = process.listeners("warning");
+  routeLogsToStderr();
+  enableConsoleCapture();
+  expect(loggingState.forceConsoleToStderr).toBe(true);
+  expect(loggingState.consolePatched).toBe(true);
+  expect(console.error).not.toBe(native);
+  expect(process.listeners("warning")).toEqual(warningListeners);
+});
+`,
     // Production never unwinds those latches: a stdio MCP server or a `--json`
     // one-shot owns the console until the process exits. The next file must still
     // see its own console.error spy, not the previous file's stderr forwarder.
-    "06-b-console-routing.test.ts": [
-      `import { enableConsoleCapture } from ${loggingConsolePath};`,
-      `import { loggingState } from ${loggingStatePath};`,
-      'import { expect, it, vi } from "vitest";',
-      'it("starts from unrouted, unpatched console state", () => {',
-      '  const warningListeners = process.listeners("warning");',
-      "  expect(loggingState.forceConsoleToStderr).toBe(false);",
-      "  expect(loggingState.consolePatched).toBe(false);",
-      "  expect(loggingState.rawConsole).toBeNull();",
-      '  const spy = vi.spyOn(console, "error").mockImplementation(() => {});',
-      "  enableConsoleCapture();",
-      '  expect(process.listeners("warning")).toEqual(warningListeners);',
-      '  console.error("routed line");',
-      '  expect(spy.mock.calls).toEqual([["routed line"]]);',
-      "  spy.mockRestore();",
-      "});",
-      "",
-    ].join("\n"),
+    "06-b-console-routing.test.ts": `import { enableConsoleCapture } from ${sourcePath("logging/console.ts")};
+import { loggingState } from ${sourcePath("logging/state.ts")};
+import { expect, it, vi } from "vitest";
+it("starts from unrouted, unpatched console state", () => {
+  const warningListeners = process.listeners("warning");
+  expect(loggingState.forceConsoleToStderr).toBe(false);
+  expect(loggingState.consolePatched).toBe(false);
+  expect(loggingState.rawConsole).toBeNull();
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  enableConsoleCapture();
+  expect(process.listeners("warning")).toEqual(warningListeners);
+  console.error("routed line");
+  expect(spy.mock.calls).toEqual([["routed line"]]);
+  spy.mockRestore();
+});
+`,
     // Native require keeps only the constructors stable across module resets.
     // Plain factory closures avoid vi.fn's separate process-lifetime mock set.
     // Each census collects and traverses the heap, so check presence and release
     // across files without also scanning before allocation.
-    "mock-payloads.cjs": [
-      'class ManualPayload { value = "manual"; }',
-      "class AutoPayload extends Date {}",
-      "module.exports = { ManualPayload, AutoPayload };",
-      "",
-    ].join("\n"),
-    "07-manual-dep.ts": [
-      'export function flavor() { return "real"; }',
-      'export const untouched = "original";',
-      "",
-    ].join("\n"),
-    "07-a-manual-payload.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      payloadImports,
-      'vi.mock("./07-manual-dep.js", () => {',
-      "  const payload = new ManualPayload();",
-      "  return { flavor: () => payload.value };",
-      "});",
-      'it("creates a file-owned manual mock payload", async () => {',
-      '  const { flavor } = await import("./07-manual-dep.js");',
-      '  expect(flavor()).toBe("manual");',
-      "  expect(queryObjects(ManualPayload)).toBe(1);",
-      "});",
-      "",
-    ].join("\n"),
-    "07-b-manual-release.test.ts": [
-      'import { expect, it } from "vitest";',
-      payloadImports,
-      'it("releases the previous file manual mock payload", async () => {',
-      "  expect(queryObjects(ManualPayload)).toBe(0);",
-      '  const { flavor, untouched } = await import("./07-manual-dep.js");',
-      '  expect(flavor()).toBe("real");',
-      '  expect(untouched).toBe("original");',
-      "});",
-      "",
-    ].join("\n"),
-    "07-c-manual-remock.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      'vi.mock("./07-manual-dep.js", async (importOriginal) => ({',
-      "  ...await importOriginal(),",
-      '  flavor: () => "remocked",',
-      "}));",
-      'it("uses a fresh partial mock after a real import", async () => {',
-      '  const { flavor, untouched } = await import("./07-manual-dep.js");',
-      '  expect(flavor()).toBe("remocked");',
-      '  expect(untouched).toBe("original");',
-      "  vi.resetModules();",
-      '  expect((await import("./07-manual-dep.js")).flavor()).toBe("remocked");',
-      "});",
-      "",
-    ].join("\n"),
-    "07-d-manual-real.test.ts": [
-      'import { expect, it } from "vitest";',
-      'import { flavor, untouched } from "./07-manual-dep.js";',
-      'it("restores real imports after the partial mock", () => {',
-      '  expect(flavor()).toBe("real");',
-      '  expect(untouched).toBe("original");',
-      "});",
-      "",
-    ].join("\n"),
-    "08-auto-dep.ts": [
-      'import { createRequire } from "node:module";',
-      'const { AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");',
-      "export const payload = new AutoPayload(1234);",
-      "",
-    ].join("\n"),
-    "08-a-auto-payload.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      payloadImports,
-      'vi.mock("./08-auto-dep.js");',
-      'it("creates a file-owned automock payload", async () => {',
-      '  const { payload } = await import("./08-auto-dep.js");',
-      "  expect(payload.getTime()).toBe(1234);",
-      "  expect(queryObjects(AutoPayload)).toBe(1);",
-      "});",
-      "",
-    ].join("\n"),
-    "08-b-auto-release.test.ts": [
-      'import { expect, it } from "vitest";',
-      payloadImports,
-      'it("releases the previous file automock payload", async () => {',
-      "  expect(queryObjects(AutoPayload)).toBe(0);",
-      '  const { payload } = await import("./08-auto-dep.js");',
-      "  expect(payload.getTime()).toBe(1234);",
-      "});",
-      "",
-    ].join("\n"),
+    "mock-payloads.cjs": `class ManualPayload { value = "manual"; }
+class AutoPayload extends Date {}
+module.exports = { ManualPayload, AutoPayload };
+`,
+    "07-manual-dep.ts": `export function flavor() { return "real"; }
+export const untouched = "original";
+`,
+    "07-a-manual-payload.test.ts": `import { expect, it, vi } from "vitest";
+${payloadImports}
+vi.mock("./07-manual-dep.js", () => {
+  const payload = new ManualPayload();
+  return { flavor: () => payload.value };
+});
+it("creates a file-owned manual mock payload", async () => {
+  const { flavor } = await import("./07-manual-dep.js");
+  expect(flavor()).toBe("manual");
+  expect(queryObjects(ManualPayload)).toBe(1);
+});
+`,
+    "07-b-manual-release.test.ts": `import { expect, it } from "vitest";
+${payloadImports}
+it("releases the previous file manual mock payload", async () => {
+  expect(queryObjects(ManualPayload)).toBe(0);
+  const { flavor, untouched } = await import("./07-manual-dep.js");
+  expect(flavor()).toBe("real");
+  expect(untouched).toBe("original");
+});
+`,
+    "07-c-manual-remock.test.ts": `import { expect, it, vi } from "vitest";
+vi.mock("./07-manual-dep.js", async (importOriginal) => ({
+  ...await importOriginal(),
+  flavor: () => "remocked",
+}));
+it("uses a fresh partial mock after a real import", async () => {
+  const { flavor, untouched } = await import("./07-manual-dep.js");
+  expect(flavor()).toBe("remocked");
+  expect(untouched).toBe("original");
+  vi.resetModules();
+  expect((await import("./07-manual-dep.js")).flavor()).toBe("remocked");
+});
+`,
+    "07-d-manual-real.test.ts": `import { expect, it } from "vitest";
+import { flavor, untouched } from "./07-manual-dep.js";
+it("restores real imports after the partial mock", () => {
+  expect(flavor()).toBe("real");
+  expect(untouched).toBe("original");
+});
+`,
+    "08-auto-dep.ts": `import { createRequire } from "node:module";
+const { AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");
+export const payload = new AutoPayload(1234);
+`,
+    "08-a-auto-payload.test.ts": `import { expect, it, vi } from "vitest";
+${payloadImports}
+vi.mock("./08-auto-dep.js");
+it("creates a file-owned automock payload", async () => {
+  const { payload } = await import("./08-auto-dep.js");
+  expect(payload.getTime()).toBe(1234);
+  expect(queryObjects(AutoPayload)).toBe(1);
+});
+`,
+    "08-b-auto-release.test.ts": `import { expect, it } from "vitest";
+${payloadImports}
+it("releases the previous file automock payload", async () => {
+  expect(queryObjects(AutoPayload)).toBe(0);
+  const { payload } = await import("./08-auto-dep.js");
+  expect(payload.getTime()).toBe(1234);
+});
+`,
     "09-redirect-dep.ts": 'export const flavor = "real";\n',
     "__mocks__/09-redirect-dep.ts": 'export const flavor = "redirected";\n',
-    "09-a-redirect.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      'vi.mock("./09-redirect-dep.js");',
-      'import { flavor } from "./09-redirect-dep.js";',
-      'it("loads the redirected mock", () => {',
-      '  expect(flavor).toBe("redirected");',
-      "});",
-      "",
-    ].join("\n"),
-    "09-b-redirect-real.test.ts": [
-      'import { expect, it } from "vitest";',
-      'import { flavor } from "./09-redirect-dep.js";',
-      'it("restores the real module after a redirect", () => {',
-      '  expect(flavor).toBe("real");',
-      "});",
-      "",
-    ].join("\n"),
-    "09-c-redirect-remock.test.ts": [
-      'import { expect, it, vi } from "vitest";',
-      'vi.mock("./09-redirect-dep.js");',
-      'import { flavor } from "./09-redirect-dep.js";',
-      'it("reloads the redirected mock after a real import", () => {',
-      '  expect(flavor).toBe("redirected");',
-      "});",
-      "",
-    ].join("\n"),
+    "09-a-redirect.test.ts": `import { expect, it, vi } from "vitest";
+vi.mock("./09-redirect-dep.js");
+import { flavor } from "./09-redirect-dep.js";
+it("loads the redirected mock", () => {
+  expect(flavor).toBe("redirected");
+});
+`,
+    "09-b-redirect-real.test.ts": `import { expect, it } from "vitest";
+import { flavor } from "./09-redirect-dep.js";
+it("restores the real module after a redirect", () => {
+  expect(flavor).toBe("real");
+});
+`,
+    "09-c-redirect-remock.test.ts": `import { expect, it, vi } from "vitest";
+vi.mock("./09-redirect-dep.js");
+import { flavor } from "./09-redirect-dep.js";
+it("reloads the redirected mock after a real import", () => {
+  expect(flavor).toBe("redirected");
+});
+`,
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
   };
@@ -479,37 +398,35 @@ it("cleans every shared runner surface between files", async () => {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
+    // This real source uses only type imports; Node can retain its native generation.
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
-      [
-        `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};`,
-        'import { defineConfig } from "vitest/config";',
-        'import { BaseSequencer } from "vitest/node";',
-        "class AlphabeticalSequencer extends BaseSequencer {",
-        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
-        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
-        "  }",
-        "}",
-        "export default defineConfig({",
-        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
-        "  resolve: sharedVitestConfig.resolve,",
-        "  test: {",
-        "    isolate: false,",
-        "    fileParallelism: false,",
-        "    maxWorkers: 1,",
-        // This real source uses only type imports; Node can retain its native generation.
-        `    server: { deps: { external: [new RegExp(${JSON.stringify(
-          `^${path
-            .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
-            .replaceAll("\\", "/")
-            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-        )})] } },`,
-        "    sequence: { sequencer: AlphabeticalSequencer },",
-        `    runner: ${JSON.stringify(path.join(root, "runner.ts"))},`,
-        "  },",
-        "});",
-        "",
-      ].join("\n"),
+      `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
+import { defineConfig } from "vitest/config";
+import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  }
+}
+export default defineConfig({
+  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  resolve: sharedVitestConfig.resolve,
+  test: {
+    isolate: false,
+    fileParallelism: false,
+    maxWorkers: 1,
+    server: { deps: { external: [new RegExp(${JSON.stringify(
+      `^${path
+        .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
+        .replaceAll("\\", "/")
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+    )})] } },
+    sequence: { sequencer: AlphabeticalSequencer },
+    runner: ${JSON.stringify(path.join(root, "runner.ts"))},
+  },
+});
+`,
       "utf8",
     );
 
