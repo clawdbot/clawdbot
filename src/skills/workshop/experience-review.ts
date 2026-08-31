@@ -410,27 +410,6 @@ async function runSkillExperienceReviewInner(
     remaining: 1,
     readSkillHashes: new Map(),
   };
-  const foregroundSessionTarget = await resolveAgentRunSessionTarget({
-    agentId: foregroundPromptContext.agentId,
-    config,
-    sessionId: foregroundSessionId,
-    sessionKey: foregroundSessionKey,
-    missingSessionKey: "resolve-existing",
-  });
-  const foregroundSession = SessionManager.open(foregroundSessionTarget, workspaceDir);
-  const detachedSession = SessionManager.fromEntries(foregroundSession.getEntries(), workspaceDir);
-  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
-  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config,
-    agentId: foregroundPromptContext.agentId,
-  });
-  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    config,
-    runId,
-    foregroundPromptContext.agentId,
-    "skill-workshop.experience",
-  );
   const attemptedAtMs = Date.now();
   let outcome: "applied" | "proposed" | "nothing";
   let proposalId: string | undefined;
@@ -447,6 +426,28 @@ async function runSkillExperienceReviewInner(
     projectSessionMessages: false,
   });
   try {
+    const foregroundSessionTarget = await resolveAgentRunSessionTarget({
+      agentId: foregroundPromptContext.agentId,
+      config,
+      sessionId: foregroundSessionId,
+      sessionKey: foregroundSessionKey,
+      missingSessionKey: "resolve-existing",
+    });
+    const detachedSession = SessionManager.openModelContext(foregroundSessionTarget, {
+      cwd: workspaceDir,
+    });
+    const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+    const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+      config,
+      agentId: foregroundPromptContext.agentId,
+    });
+    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+    const preparedRunAdmission = prepareSystemAgentRunAdmission(
+      config,
+      runId,
+      foregroundPromptContext.agentId,
+      "skill-workshop.experience",
+    );
     let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
     try {
       const run = () =>

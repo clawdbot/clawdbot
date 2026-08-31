@@ -1788,6 +1788,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("formats terminal recap durations with full localized units", () => {
@@ -1815,19 +1816,23 @@ describe("grouped chat rendering", () => {
     ).toBe("Done in 30 seconds · 2,400 output tokens");
   });
 
-  it("shows live output usage beside elapsed time", () => {
+  it.each([
+    [0, "0 output tokens"],
+    [1, "1 output token"],
+    [5_500, "5,500 output tokens"],
+  ])("shows %i output tokens beside elapsed time", (outputTokens, label) => {
     const container = document.createElement("div");
 
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        runOutputTokens: 5_500,
+        runOutputTokens: outputTokens,
       }),
       container,
     );
 
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
-      "5,500 output tokens",
+      label,
     );
     // Known usage replaces the pre-usage working phrase.
     expect(container.querySelector("openclaw-working-phrase")).toBeNull();

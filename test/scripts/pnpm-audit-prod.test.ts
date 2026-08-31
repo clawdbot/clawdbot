@@ -465,11 +465,13 @@ snapshots:
     await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
   });
 
-  it("returns a failing exit code when bulk advisories include high severity findings", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
-    await writeFile(
-      path.join(tempDir, "pnpm-lock.yaml"),
-      `lockfileVersion: '9.0'
+  it.each([false, true])(
+    "reports npm-only coverage with the audit outcome (blocked %s)",
+    async (blocked) => {
+      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
+      await writeFile(
+        path.join(tempDir, "pnpm-lock.yaml"),
+        `lockfileVersion: '9.0'
 
 importers:
   .:
@@ -480,53 +482,74 @@ importers:
 snapshots:
   axios@1.0.0: {}
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    try {
-      const stdoutChunks: string[] = [];
-      const stderrChunks: string[] = [];
-      const exitCode = await runPnpmAuditProd({
-        rootDir: tempDir,
-        fetchImpl: async () =>
-          new Response(
-            JSON.stringify({
-              axios: [
-                {
-                  id: "GHSA-test",
-                  severity: "high",
-                  title: "test issue",
-                  vulnerable_versions: "<=1.0.0",
-                  url: "https://github.com/advisories/GHSA-test",
+      try {
+        const stdoutChunks: string[] = [];
+        const stderrChunks: string[] = [];
+        const exitCode = await runPnpmAuditProd({
+          rootDir: tempDir,
+          fetchImpl: async (input) => {
+            expect(String(input)).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
+            return new Response(
+              JSON.stringify(
+                blocked
+                  ? {
+                      axios: [
+                        {
+                          id: "GHSA-test",
+                          severity: "high",
+                          title: "test issue",
+                          vulnerable_versions: "<=1.0.0",
+                          url: "https://github.com/advisories/GHSA-test",
+                        },
+                      ],
+                    }
+                  : {},
+              ),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "application/json",
                 },
-              ],
-            }),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json",
               },
+            );
+          },
+          stdout: {
+            write(chunk: string) {
+              stdoutChunks.push(chunk);
+              return true;
             },
-          ),
-        stdout: {
-          write(chunk: string) {
-            stdoutChunks.push(chunk);
-            return true;
-          },
-        } as NodeJS.WriteStream,
-        stderr: {
-          write(chunk: string) {
-            stderrChunks.push(chunk);
-            return true;
-          },
-        } as NodeJS.WriteStream,
-      });
+          } as NodeJS.WriteStream,
+          stderr: {
+            write(chunk: string) {
+              stderrChunks.push(chunk);
+              return true;
+            },
+          } as NodeJS.WriteStream,
+        });
 
-      expect(exitCode).toBe(1);
-      expect(stdoutChunks).toStrictEqual([]);
-      expect(stderrChunks.join("")).toContain("Found 1 high or higher advisories");
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
+        expect(exitCode).toBe(blocked ? 1 : 0);
+        if (blocked) {
+          expect(stdoutChunks).toStrictEqual([]);
+          expect(stderrChunks.join("")).toContain(
+            "Found 1 high or higher advisories from npm bulk",
+          );
+          expect(stderrChunks.join("")).toContain("upstream repository advisories not checked");
+        } else {
+          expect(stderrChunks).toStrictEqual([]);
+          expect(stdoutChunks.join("")).toContain(
+            "No matching high or higher advisories returned by npm bulk",
+          );
+          expect(stdoutChunks.join("")).toContain(
+            "Upstream repository advisories were not checked",
+          );
+          expect(stdoutChunks.join("")).toContain("not comprehensive vulnerability clearance");
+        }
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

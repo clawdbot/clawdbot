@@ -190,10 +190,12 @@ function createMockCompactionSession() {
       sessionManualCompactionMock();
       return await completeCompaction();
     }),
-    [agentSessionAutomaticCompaction]: vi.fn(async () => {
-      sessionAutomaticCompactionMock();
-      return await completeCompaction();
-    }),
+    [agentSessionAutomaticCompaction]: vi.fn(
+      async (customInstructions, requestState, summaryOutputPolicy) => {
+        sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
+        return await completeCompaction();
+      },
+    ),
     [agentSessionSetContextReplacementHook]: (
       callback: ((tokensAfter: number) => void) | undefined,
     ) => {

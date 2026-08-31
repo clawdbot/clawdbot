@@ -1,10 +1,12 @@
 // Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
 import { spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
@@ -137,6 +139,39 @@ describe("gateway concurrency benchmark script", () => {
       count: 2,
       durationMs: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 },
       totalDurationMs: 40,
+    });
+  });
+
+  it("does not report missing or incomplete timeline evidence as zero scans", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, "");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, '{"type":"span.end","name":"plugins.metadata.scan"');
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+    });
+  });
+
+  it("counts load spans by emission time even when buffered setup spans arrive later", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      const spans = [999, 1_000, 1_500, 2_000, 2_001].map((timestamp) => ({
+        schemaVersion: "openclaw.diagnostics.v1",
+        type: "span.end",
+        name: "plugins.metadata.scan",
+        durationMs: 10,
+        timestamp: new Date(timestamp).toISOString(),
+      }));
+      await writeFile(file, spans.map((span) => JSON.stringify(span)).join("\n") + "\n");
+
+      expect(
+        testing.summarizePluginMetadataScans(
+          testing.readDiagnosticsTimelineSpans(file, { from: 1_000, through: 2_000 }),
+        ),
+      ).toMatchObject({ count: 3, totalDurationMs: 30 });
+      await writeFile(file, JSON.stringify({ ...spans[0], timestamp: "invalid" }) + "\n");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow("invalid diagnostics");
     });
   });
 

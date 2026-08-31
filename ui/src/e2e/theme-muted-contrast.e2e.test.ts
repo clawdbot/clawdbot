@@ -28,6 +28,12 @@ const themeCases = [
   { family: "phosphor", mode: "light", resolved: "phosphor-light" },
   { family: "crt", mode: "dark", resolved: "crt" },
   { family: "crt", mode: "light", resolved: "crt-light" },
+  { family: "manuscript", mode: "dark", resolved: "manuscript" },
+  { family: "manuscript", mode: "light", resolved: "manuscript-light" },
+  { family: "rose", mode: "dark", resolved: "rose" },
+  { family: "rose", mode: "light", resolved: "rose-light" },
+  { family: "miami", mode: "dark", resolved: "miami" },
+  { family: "miami", mode: "light", resolved: "miami-light" },
 ] as const;
 
 const textTokens = [
@@ -42,7 +48,18 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor" | "crt",
+  family:
+    | "claw"
+    | "knot"
+    | "dash"
+    | "absolutely"
+    | "tide"
+    | "beacon"
+    | "phosphor"
+    | "crt"
+    | "manuscript"
+    | "rose"
+    | "miami",
   mode: "dark" | "light",
   accent?: string,
 ) {

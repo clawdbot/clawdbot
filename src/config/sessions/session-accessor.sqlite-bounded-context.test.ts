@@ -512,3 +512,35 @@ it("counts paired reset tool results without counting discarded orphan results",
     expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
   });
 });
+
+it("counts retained raw bytes without hydrating private native payloads", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const marker = "synthetic-retained-native-payload:";
+    const privateText = marker + "x".repeat(1024 * 1024);
+    const manager = SessionManager.open(scope);
+    const kept = manager.appendMessage({
+      role: "user",
+      content: "kept",
+      timestamp: 1,
+      __openclaw: { upstreamUserText: privateText },
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    manager.appendResetBoundary("new", kept);
+    await waitForSessionTranscriptProjection(scope);
+    const originalParse = JSON.parse;
+    let privateBytes = 0;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes(marker)) {
+        privateBytes += text.length;
+      }
+      return originalParse(text, reviver);
+    });
+    try {
+      const stats = readSessionTranscriptActiveStats(scope);
+      expect(stats.eventCount).toBe(1);
+      expect(stats.sizeBytes).toBeGreaterThan(privateText.length);
+      expect(privateBytes).toBe(0);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+});

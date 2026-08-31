@@ -293,7 +293,6 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
     const props: ChatProps = {

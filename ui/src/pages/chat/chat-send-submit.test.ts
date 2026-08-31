@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { readStoredOutboxStore, storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import {
+  captureChatOutboxAdmission,
+  readStoredOutboxStore,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -233,7 +237,9 @@ describe("structured Goal admission", () => {
     };
     // The same browser persistence owner used on reconnect restores this immutable row.
     const { admitQueuedMessageForSession } = await import("./chat-queue.ts");
-    expect(admitQueuedMessageForSession(host, host.sessionKey, queued)).toBe(true);
+    expect(
+      admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, host.sessionKey), queued),
+    ).toBe(true);
     host.currentSessionId = "incarnation-b";
     host.chatDisplayedLeafEntryId = "leaf-b";
     await retryQueuedChatMessage(host, queued.id);

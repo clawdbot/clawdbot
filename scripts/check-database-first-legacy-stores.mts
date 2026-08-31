@@ -86,21 +86,6 @@ type BranchFsSafePropertyAssignment = {
   jsonStoreValue: boolean;
 };
 type BranchWrapperAssignment = { index: number; name: string; value: WrapperValue };
-type TrackedObjectMethodsParams = {
-  objectName: string;
-  initializer: ts.Expression;
-  directSourceName?: (expression: ts.Expression) => string | null;
-  spreadSourceName?: (expression: ts.Expression) => string | null;
-  onAlias?: (targetName: string, sourceName: string) => void;
-  onUnknownSpread?: (objectName: string) => void;
-  onSpread?: (targetName: string, sourceName: string) => void;
-  onPropertyName?: (propertyName: string, key: string) => void;
-  onMethod: (key: string, method: WrapperNode) => void;
-  onIdentifier: (key: string, identifier: string, expression: ts.Expression) => void;
-  onNested: (key: string, nested: ts.ObjectLiteralExpression) => void;
-  onOther?: (key: string, value: ts.Expression, hasNestedObject: boolean) => void;
-};
-
 const isWrapperNode = (node: ts.Node): node is WrapperNode =>
   ts.isFunctionLike(node) && "body" in node;
 
@@ -206,40 +191,46 @@ const stableExecApprovalsPolicyUriPath = "extensions/policy/src/exec-approvals-u
 const legacyExecApprovalsFilenamePattern =
   /(?:^|[/\\])exec-approvals\.json(?:\.doctor-importing)?$/u;
 
-const legacyStorePatterns = [
-  /\bsessions\.json\b/u,
-  /\.trajectory\.jsonl\b/u,
-  /\.acp-stream\.jsonl\b/u,
-  /\bacp\/event-ledger\.json\b/u,
-  /\bcache\/[^"'`]*\.json\b/u,
-  /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
-  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|(?:openclaw-)?workspace-state)\.json\b/u,
-  // Dynamic template spans resolve to `*`, so the start alternative also
-  // catches `${workspaceKey}.attested` and `${workspaceDir}.attested`.
-  /(?:^|[/\\])[^/\\"'`]+\.attested\b/u,
-  /\btui\/last-session\.json\b/u,
-  /\bcommitments\/commitments\.json\b/u,
-  /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
-  /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
-  /\bmcp-oauth\/[^"'`]*\.json\b/u,
-  /\bnode\.json\b/u,
-  /\bidentity\/device\.json\b/u,
-  /\bsubagents\/runs\.json\b/u,
-  /\btmp\/skill-uploads\b/u,
-  /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
-  /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
-  /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|config-audit|audit\/(?:file-transfer|openclaw|system-agent|crestodian))\.jsonl\b/u,
-  /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
-  /\bplugin-state\/state\.sqlite\b/u,
-  /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
-  /\bopenclaw-state\.sqlite\b/u,
-  /\bopenclaw-native-hook-relays\b/u,
-  /(?:^|\/)(?:meta|file-meta)\.json$/u,
-  /(?:^|\/)viewer\.html$/u,
-  /(?:^|\/)qmd\/embed\.lock(?:\.lock)?$/u,
-  /(?:^|\/)qmd-write\.lock(?:\.lock)?$/u,
-];
+// All alternatives are stateless /u patterns; other flags would change this union.
+const legacyStorePattern = new RegExp(
+  [
+    /\bsessions\.json\b/u,
+    /\.trajectory\.jsonl\b/u,
+    /\.acp-stream\.jsonl\b/u,
+    /\bacp\/event-ledger\.json\b/u,
+    /\bcache\/[^"'`]*\.json\b/u,
+    /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
+    /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|(?:openclaw-)?workspace-state)\.json\b/u,
+    // Dynamic template spans resolve to `*`, so the start alternative also
+    // catches `${workspaceKey}.attested` and `${workspaceDir}.attested`.
+    /(?:^|[/\\])[^/\\"'`]+\.attested\b/u,
+    /\btui\/last-session\.json\b/u,
+    /\bcommitments\/commitments\.json\b/u,
+    /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+    /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
+    /\bmcp-oauth\/[^"'`]*\.json\b/u,
+    /\bnode\.json\b/u,
+    /\bidentity\/device\.json\b/u,
+    /\bsubagents\/runs\.json\b/u,
+    /\btmp\/skill-uploads\b/u,
+    /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
+    /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
+    /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
+    /\b(?:calls|ref-index|config-audit|audit\/(?:file-transfer|openclaw|system-agent|crestodian))\.jsonl\b/u,
+    /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
+    /\bplugin-state\/state\.sqlite\b/u,
+    /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
+    /\bopenclaw-state\.sqlite\b/u,
+    /\bopenclaw-native-hook-relays\b/u,
+    /(?:^|\/)(?:meta|file-meta)\.json$/u,
+    /(?:^|\/)viewer\.html$/u,
+    /(?:^|\/)qmd\/embed\.lock(?:\.lock)?$/u,
+    /(?:^|\/)qmd-write\.lock(?:\.lock)?$/u,
+  ]
+    .map((pattern) => pattern.source)
+    .join("|"),
+  "u",
+);
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
@@ -305,6 +296,25 @@ function scopeForRead<Value>(scopes: ScopeStack<Value>, name: string) {
 
 function scopeForWrite<Value>(scopes: ScopeStack<Value>, name: string) {
   return scopeForRead(scopes, name) ?? lastScope(scopes);
+}
+
+// A destination can be inside its source. Capture every selected scope before
+// writing, so live Map iteration cannot consume newly created descendant aliases.
+function prepareObjectPropertyCopies<Value>(
+  scopes: ScopeStack<Value>,
+  sourceName: string,
+  targetName: string,
+): Array<[string, Value]> {
+  const prefix = `${sourceName}.`;
+  const copies: Array<[string, Value]> = [];
+  for (const scope of scopes) {
+    for (const [key, value] of scope) {
+      if (key.startsWith(prefix)) {
+        copies.push([`${targetName}.${key.slice(prefix.length)}`, value]);
+      }
+    }
+  }
+  return copies;
 }
 
 function isSourceFile(filePath: string) {
@@ -1115,9 +1125,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function expressionTextContainsLegacyStore(node: ts.Expression) {
-    return expressionLiteralCandidateTexts(node).some((text) =>
-      legacyStorePatterns.some((pattern) => pattern.test(text)),
-    );
+    return expressionLiteralCandidateTexts(node).some((text) => legacyStorePattern.test(text));
   }
 
   function literalTextsFromExpression(expression: ts.Expression) {
@@ -1784,24 +1792,27 @@ export function collectDatabaseFirstLegacyStoreViolations(
     storeScope: StringMap<boolean> = lastScope(fsSafeStoreScopes),
     jsonStoreScope: StringMap<boolean> = lastScope(fsSafeJsonStoreScopes),
   ) {
-    const sourcePrefix = `${sourceName}.`;
     for (let index = fsSafeStoreScopes.length - 1; index >= 0; index--) {
       const sourceStoreScope = fsSafeStoreScopes[index]!;
       const sourceJsonStoreScope = fsSafeJsonStoreScopes[index]!;
-      let copied = false;
-      for (const [key, value] of sourceStoreScope) {
-        if (key.startsWith(sourcePrefix)) {
-          storeScope.set(`${targetName}.${key.slice(sourcePrefix.length)}`, value);
-          copied = true;
-        }
+      const stores = prepareObjectPropertyCopies([sourceStoreScope], sourceName, targetName);
+      const jsonStores = prepareObjectPropertyCopies(
+        [sourceJsonStoreScope],
+        sourceName,
+        targetName,
+      );
+      for (const [key, value] of stores) {
+        storeScope.set(key, value);
       }
-      for (const [key, value] of sourceJsonStoreScope) {
-        if (key.startsWith(sourcePrefix)) {
-          jsonStoreScope.set(`${targetName}.${key.slice(sourcePrefix.length)}`, value);
-          copied = true;
-        }
+      for (const [key, value] of jsonStores) {
+        jsonStoreScope.set(key, value);
       }
-      if (copied || sourceStoreScope.has(sourceName) || sourceJsonStoreScope.has(sourceName)) {
+      if (
+        stores.length > 0 ||
+        jsonStores.length > 0 ||
+        sourceStoreScope.has(sourceName) ||
+        sourceJsonStoreScope.has(sourceName)
+      ) {
         return;
       }
     }
@@ -2762,82 +2773,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function registerTrackedObjectMethods({
-    objectName,
-    initializer,
-    directSourceName = () => null,
-    spreadSourceName = directSourceName,
-    onAlias = () => {},
-    onUnknownSpread = () => {},
-    onSpread = onAlias,
-    onPropertyName = () => {},
-    onMethod,
-    onIdentifier,
-    onNested,
-    onOther = () => {},
-  }: TrackedObjectMethodsParams) {
-    const objectLiteral = unwrapExpression(initializer);
-    const directSource = directSourceName(objectLiteral);
-    if (directSource) {
-      onAlias(objectName, directSource);
-      return;
-    }
-    if (!ts.isObjectLiteralExpression(objectLiteral)) {
-      return;
-    }
-
-    for (const property of objectLiteral.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        const sourceName = spreadSourceName(unwrapExpression(property.expression));
-        if (sourceName) {
-          onSpread(objectName, sourceName);
-        } else {
-          onUnknownSpread(objectName);
-        }
-        continue;
-      }
-
-      const propertyName = ts.isMethodDeclaration(property)
-        ? propertyNameText(property.name)
-        : ts.isPropertyAssignment(property)
-          ? propertyNameText(property.name)
-          : ts.isShorthandPropertyAssignment(property)
-            ? property.name.text
-            : null;
-      if (!propertyName) {
-        continue;
-      }
-      const key = `${objectName}.${propertyName}`;
-      onPropertyName(propertyName, key);
-      if (ts.isMethodDeclaration(property)) {
-        onMethod(key, property);
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property)) {
-        onIdentifier(key, property.name.text, property.name);
-        continue;
-      }
-
-      if (!ts.isPropertyAssignment(property)) {
-        continue;
-      }
-      const propertyInitializer = unwrapExpression(property.initializer);
-      if (ts.isFunctionExpression(propertyInitializer) || ts.isArrowFunction(propertyInitializer)) {
-        onMethod(key, propertyInitializer);
-        continue;
-      }
-      if (ts.isIdentifier(propertyInitializer)) {
-        onIdentifier(key, propertyInitializer.text, property.initializer);
-        continue;
-      }
-      const hasNestedObject = ts.isObjectLiteralExpression(propertyInitializer);
-      if (hasNestedObject) {
-        onNested(key, propertyInitializer);
-      }
-      onOther(key, property.initializer, hasNestedObject);
-    }
-  }
-
   function wrapperRecordForNode(node: WrapperNode) {
     return {
       environment: lexicalScopeStacks.map(([scopes]) => [...scopes]),
@@ -2885,34 +2820,19 @@ export function collectDatabaseFirstLegacyStoreViolations(
     scope: StringMap<WrapperValue> = lastScope(wrapperFunctionScopes),
     conditionalWrite = false,
   ) {
-    const sourcePrefix = `${sourceName}.`;
-    let copiedCount = 0;
-    const visibleScopeIndexes: number[] = [];
+    const visibleScopes: ScopeStack<WrapperValue> = [];
     for (let index = wrapperFunctionScopes.length - 1; index >= 0; index--) {
-      visibleScopeIndexes.push(index);
-      if (
-        wrapperFunctionScopes[index]!.has(sourceName) ||
-        legacyPathScopes[index]!.has(sourceName)
-      ) {
+      const sourceScope = wrapperFunctionScopes[index]!;
+      visibleScopes.push(sourceScope);
+      if (sourceScope.has(sourceName) || legacyPathScopes[index]!.has(sourceName)) {
         break;
       }
     }
-    for (const index of visibleScopeIndexes.toReversed()) {
-      const sourceScope = wrapperFunctionScopes[index]!;
-      for (const [name, value] of sourceScope) {
-        if (!name.startsWith(sourcePrefix)) {
-          continue;
-        }
-        setWrapperFunctionValue(
-          scope,
-          `${targetName}.${name.slice(sourcePrefix.length)}`,
-          cloneWrapperFunctionValue(value),
-          conditionalWrite,
-        );
-        copiedCount += 1;
-      }
+    const copies = prepareObjectPropertyCopies(visibleScopes.toReversed(), sourceName, targetName);
+    for (const [key, value] of copies) {
+      setWrapperFunctionValue(scope, key, cloneWrapperFunctionValue(value), conditionalWrite);
     }
-    return copiedCount;
+    return copies.length;
   }
 
   function registerWrapperObjectMethods(
@@ -2921,45 +2841,69 @@ export function collectDatabaseFirstLegacyStoreViolations(
     scope: StringMap<WrapperValue> = lastScope(wrapperFunctionScopes),
     conditionalWrite = false,
   ) {
+    const objectLiteral = unwrapExpression(initializer);
+    if (!ts.isObjectLiteralExpression(objectLiteral)) {
+      return;
+    }
+    // Later duplicate keys and unknown spreads clear captured methods in source order.
     const seenProperties = new Set<string>();
-    const remember = (key: string, value: WrapperValue): void =>
-      setWrapperFunctionValue(scope, key, value, conditionalWrite);
-    const copy = (targetName: string, sourceName: string): number =>
-      copyWrapperObjectMethods(targetName, sourceName, scope, conditionalWrite);
-
-    registerTrackedObjectMethods({
-      objectName,
-      initializer,
-      onUnknownSpread: () => clearWrapperObjectMethods(scope, objectName),
-      onSpread: (targetName, sourceName) => {
-        if (copy(targetName, sourceName) === 0 && !lookupKnownLegacyObjectLiteral(sourceName)) {
-          clearWrapperObjectMethods(scope, targetName);
+    for (const property of objectLiteral.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        const expression = unwrapExpression(property.expression);
+        const sourceName = ts.isIdentifier(expression)
+          ? expression.text
+          : callExpressionName(expression);
+        if (
+          !sourceName ||
+          (copyWrapperObjectMethods(objectName, sourceName, scope, conditionalWrite) === 0 &&
+            !lookupKnownLegacyObjectLiteral(sourceName))
+        ) {
+          clearWrapperObjectMethods(scope, objectName);
         }
-      },
-      spreadSourceName: (expression) =>
-        ts.isIdentifier(expression) ? expression.text : callExpressionName(expression),
-      onPropertyName: (propertyName, key) => {
-        if (seenProperties.has(propertyName)) {
-          clearWrapperObjectMethod(scope, key);
-        }
-        seenProperties.add(propertyName);
-      },
-      onMethod: (key, method) => remember(key, wrapperRecordForNode(method)),
-      onIdentifier: (key, identifier) => {
-        const wrapper = resolveWrapperFunction(identifier);
+        continue;
+      }
+      const propertyName = ts.isShorthandPropertyAssignment(property)
+        ? property.name.text
+        : ts.isMethodDeclaration(property) || ts.isPropertyAssignment(property)
+          ? propertyNameText(property.name)
+          : null;
+      if (!propertyName) {
+        continue;
+      }
+      const key = `${objectName}.${propertyName}`;
+      if (seenProperties.has(propertyName)) {
+        clearWrapperObjectMethod(scope, key);
+      }
+      seenProperties.add(propertyName);
+      if (ts.isMethodDeclaration(property)) {
+        setWrapperFunctionValue(scope, key, wrapperRecordForNode(property), conditionalWrite);
+        continue;
+      }
+      const value = ts.isShorthandPropertyAssignment(property)
+        ? property.name
+        : ts.isPropertyAssignment(property)
+          ? unwrapExpression(property.initializer)
+          : null;
+      if (!value) {
+        continue;
+      }
+      if (ts.isFunctionExpression(value) || ts.isArrowFunction(value)) {
+        setWrapperFunctionValue(scope, key, wrapperRecordForNode(value), conditionalWrite);
+      } else if (ts.isIdentifier(value)) {
+        const wrapper = resolveWrapperFunction(value.text);
         if (wrapper) {
-          remember(key, cloneWrapperFunctionValue(wrapper));
+          setWrapperFunctionValue(scope, key, cloneWrapperFunctionValue(wrapper), conditionalWrite);
         }
-        copy(key, identifier);
-      },
-      onNested: (key, nested) => registerWrapperObjectMethods(key, nested, scope, conditionalWrite),
-      onOther: (key, value) => {
+        copyWrapperObjectMethods(key, value.text, scope, conditionalWrite);
+      } else if (ts.isObjectLiteralExpression(value)) {
+        registerWrapperObjectMethods(key, value, scope, conditionalWrite);
+      } else {
         const wrapper = resolveWrapperExpression(value);
         if (wrapper) {
-          remember(key, cloneWrapperFunctionValue(wrapper));
+          setWrapperFunctionValue(scope, key, cloneWrapperFunctionValue(wrapper), conditionalWrite);
         }
-      },
-    });
+      }
+    }
   }
   function wrapperRecords(value: WrapperValue | undefined) {
     if (!value) {

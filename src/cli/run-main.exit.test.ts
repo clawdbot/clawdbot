@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -2639,8 +2640,10 @@ describe("runCli exit behavior", () => {
           },
         );
         expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        flushDiagnosticsTimeline();
         expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
       } finally {
+        flushDiagnosticsTimeline();
         await fs.rm(root, { recursive: true, force: true });
       }
     },

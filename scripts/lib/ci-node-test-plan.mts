@@ -656,8 +656,12 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
+export function isExclusiveCompactShardName(shardName: string): boolean {
+  return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
+}
+
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
-  return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+  return isExclusiveCompactShardName(group.shard_name);
 }
 
 // Spawn/signal/PTY-timing suites also flake under high in-process worker
@@ -692,13 +696,27 @@ function usesExpandedRunnerProfile(runnerBackend: string | undefined): boolean {
   return runnerBackend === "github" || runnerBackend === "hybrid";
 }
 
+// Hand-fitted tables stand in only until a group has direct Blacksmith samples,
+// so a committed measurement owns the weight and the table covers the rest.
+// Reading the tables first made every pinned group immune to the nightly refit:
+// pins stale-low kept packing partners onto the tallest bins, and pins
+// stale-high kept splitting groups that had since become cheap.
+function readUnmeasuredCompactHint(
+  group: NodeTestShardGroup,
+  hints: ReadonlyMap<string, number>,
+): number | undefined {
+  return readCompactGroupTimings("blacksmith")[group.shard_name] === undefined
+    ? hints.get(group.shard_name)
+    : undefined;
+}
+
 function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
   // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
   // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
   // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
   // one point above the 0.86 packing cliff.
   return (
-    COMPACT_HYBRID_GROUP_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_HYBRID_GROUP_SECONDS_HINTS) ??
     Math.round(seconds * COMPACT_HYBRID_GROUP_SECONDS_SCALE)
   );
 }
@@ -732,7 +750,7 @@ function estimateCompactStripeSeconds(
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   const blacksmithSeconds =
-    COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS) ??
     estimateDefaultCompactGroupSeconds(group);
   return runnerBackend === "hybrid"
     ? estimateHybridCompactGroupSeconds(group, blacksmithSeconds)

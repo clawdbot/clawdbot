@@ -7,7 +7,9 @@ import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -57,7 +59,6 @@ import {
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard } from "./chat-submit-guard.ts";
-import { resolveStoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
@@ -365,7 +366,7 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
         }
-        const recoveryScope = resolveStoredChatOutboxScope(host, submittedSessionKey);
+        const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
         await sendDetachedCommandMessage(host, message, {
           attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
           recovery: captureChatCommandComposerRecovery(
@@ -394,6 +395,7 @@ export async function handleSendChat(
         }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
         await withChatSubmitGuard(host, submitKey, async () => {
+          const admission = captureChatOutboxAdmission(host, host.sessionKey);
           if (messageOverride == null) {
             recordNonTranscriptInputHistory(host, userMessage);
             host.chatMessage = "";
@@ -414,7 +416,7 @@ export async function handleSendChat(
             return;
           }
           queued.sendState = reconnectSafeQueuedSendState(host);
-          if (!admitQueuedMessageForSession(host, host.sessionKey, queued)) {
+          if (!admitQueuedMessageForSession(host, admission, queued)) {
             removeQueuedMessageWithoutReleasing(host, queued.id);
             if (messageOverride == null) {
               host.chatMessage = previousDraft;
@@ -434,7 +436,7 @@ export async function handleSendChat(
         }
         let prevDraft = messageOverride == null ? previousDraft : undefined;
         let recoveryComposer: { draft: string; attachments: ChatAttachment[] } | undefined;
-        const recoveryScope = resolveStoredChatOutboxScope(host, submittedSessionKey);
+        const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (waitsForPicker) {
@@ -634,7 +636,7 @@ export async function handleSendChat(
     publishPendingSendMessage(host, queued);
     const admittedDurably = admitQueuedMessageForSession(
       host,
-      submittedSessionKey,
+      submission.admission,
       queued,
       resumedEdit
         ? {
@@ -642,7 +644,6 @@ export async function handleSendChat(
             expected: resumedEdit.source,
           }
         : undefined,
-      submission.admission,
     );
     if (resumedEdit) {
       retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments, resumedEdit);

@@ -778,28 +778,6 @@ describe("wrapCopilotAnthropicStream", () => {
     });
   });
 
-  it("adapts provider stream context without changing wrapper behavior", () => {
-    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-
-    const wrapped = requireStreamFn(
-      wrapCopilotProviderStream({
-        streamFn: baseStreamFn,
-      } as never),
-    );
-
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-4.1",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {},
-    );
-
-    expect(baseStreamFn).toHaveBeenCalledOnce();
-  });
-
   it("does not claim provider transport before OpenClaw chooses one", () => {
     expect(
       wrapCopilotProviderStream({

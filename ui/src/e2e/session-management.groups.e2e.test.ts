@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   actionOpacity,
   activateSelfRemovingControl,
@@ -13,7 +14,6 @@ import {
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   submitInputDialog,
   uiProofArtifactDir,

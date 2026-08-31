@@ -17,7 +17,7 @@ import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
   removeDeliveredQueuedChatSendForRun,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -257,12 +257,8 @@ export function retireDeliveredQueuedUserTurn(
     const reason = result.status === "failed" ? result.reason : "missing";
     // Delivery proof must never become a fresh-send retry because local bytes
     // were unavailable. Keep the same run identity and its no-replay barrier.
-    updateQueuedMessageForSession(
-      host,
-      scope.sessionKey,
-      stored.id,
-      (item) => failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
-      scope.agentId,
+    updateQueuedMessage(host, stored.id, (item) =>
+      failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
     );
     return "retained";
   });

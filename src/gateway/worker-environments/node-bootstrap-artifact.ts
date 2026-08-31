@@ -19,13 +19,19 @@ import {
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
-  readWorkerBundleDirectoryManifest,
 } from "../../shared/worker-bundle-archive.js";
-import { hashWorkerBundleManifest } from "../../shared/worker-bundle-hash.js";
+import {
+  compareWorkerBundlePaths,
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_ARTIFACT_MODE,
+  type WorkerBundleHashEntry,
+} from "../../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 
 const INSTALL_GUARD_PATH = "dist/openclaw-install-guard";
 const BOOTSTRAP_LAUNCHER_FILES = ["openclaw.mjs", "node-version.mjs"];
+const BOOTSTRAP_COPY_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
 const METADATA_KEYS = [
   "name",
@@ -170,22 +176,50 @@ async function prepareNodeBootstrapArtifact(
   const packageJson = composePackagePlugins(sourcePackage, plugins);
   const stagingRoot = path.join(temporaryRoot, "package");
   await fs.mkdir(stagingRoot, { mode: 0o700 });
-  const staged = new Set<string>();
+  const staged = new Map<string, WorkerBundleHashEntry>();
+  const directories = new Map<string, Promise<string | undefined>>();
   let expandedBytes = 0;
+  let reservedEntries = 0;
 
-  const writeFile = async (relative: string, contents: Buffer | string, executable = false) => {
+  const reserveFile = (relative: string, bytes: number) => {
     bootstrapPath(relative);
-    expandedBytes += Buffer.byteLength(contents);
+    expandedBytes += bytes;
+    reservedEntries += 1;
     if (
-      staged.size >= DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries ||
+      reservedEntries > DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries ||
       expandedBytes > DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxExpandedBytes
     ) {
       throw new Error("Node bootstrap distribution exceeds its artifact limits");
     }
+  };
+  const writeStagedFile = async (
+    relative: string,
+    contents: Buffer | string,
+    executable: boolean,
+  ) => {
     const target = path.join(stagingRoot, relative);
-    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await fs.writeFile(target, contents, { mode: executable ? 0o755 : 0o644 });
-    staged.add(relative);
+    const directory = path.dirname(target);
+    let created = directories.get(directory);
+    if (!created) {
+      created = fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      directories.set(directory, created);
+    }
+    await created;
+    const mode = executable ? 0o755 : 0o644;
+    // Record the verified bytes before writing; the final archive comparison also
+    // detects staging changes without reopening and hashing the entire directory.
+    const entry = {
+      path: `package/${relative}`,
+      mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode & ~process.umask(),
+      size: Buffer.byteLength(contents),
+      sha256: createHash("sha256").update(contents).digest("hex"),
+    };
+    await fs.writeFile(target, contents, { mode });
+    staged.set(relative, entry);
+  };
+  const writeFile = async (relative: string, contents: string) => {
+    reserveFile(relative, Buffer.byteLength(contents));
+    await writeStagedFile(relative, contents, false);
   };
   const copyFile = async (root: string, relative: string, destination = relative) => {
     bootstrapPath(relative);
@@ -196,16 +230,16 @@ async function prepareNodeBootstrapArtifact(
     const handle = await fs.open(source, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
     try {
       const before = await handle.stat();
-      if (
-        !before.isFile() ||
-        before.size > DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxExpandedBytes - expandedBytes
-      ) {
+      if (!before.isFile()) {
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
+      // Reserve before reading so concurrent copies share the same byte/entry budget.
+      reserveFile(destination, before.size);
       const contents = await handle.readFile();
       const after = await handle.stat();
       const current = await fs.lstat(source);
       if (
+        contents.byteLength !== before.size ||
         before.size !== after.size ||
         before.mtimeMs !== after.mtimeMs ||
         before.ctimeMs !== after.ctimeMs ||
@@ -216,9 +250,22 @@ async function prepareNodeBootstrapArtifact(
       ) {
         throw new Error(`Node distribution changed while packaging: ${relative}`);
       }
-      await writeFile(destination, contents, (before.mode & 0o111) !== 0);
+      await writeStagedFile(destination, contents, (before.mode & 0o111) !== 0);
     } finally {
       await handle.close();
+    }
+  };
+  const copyFiles = async (root: string, files: readonly string[], prefix = "") => {
+    const result = await runTasksWithConcurrency({
+      tasks: [...new Set(files)].map(
+        (relative) => () => copyFile(root, relative, `${prefix}${relative}`),
+      ),
+      limit: BOOTSTRAP_COPY_CONCURRENCY,
+      errorMode: "stop",
+    });
+    // The pool must drain in-flight writes before preparation removes staging on failure.
+    if (result.hasError) {
+      throw result.firstError;
     }
   };
 
@@ -233,16 +280,16 @@ async function prepareNodeBootstrapArtifact(
       "Cloud bootstrap is missing its built CLI entry; run pnpm build and restart the Gateway",
     );
   }
-  for (const relative of [...BOOTSTRAP_LAUNCHER_FILES, ...files]) {
-    if (relative !== INSTALL_GUARD_PATH) {
-      await copyFile(packageRoot, relative);
-    }
-  }
-  for (const relative of sourcePackage.files ?? []) {
-    if (relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/")) {
-      await copyFile(packageRoot, relative);
-    }
-  }
+  const scripts = (sourcePackage.files ?? []).filter(
+    (relative) =>
+      relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
+  );
+  await copyFiles(
+    packageRoot,
+    [...BOOTSTRAP_LAUNCHER_FILES, ...files, ...scripts].filter(
+      (relative) => relative !== INSTALL_GUARD_PATH,
+    ),
+  );
   // Keep real install guards/pruning, but source-only prepare/prepack commands must not run on a node.
   packageJson.scripts = Object.fromEntries(
     Object.entries(packageJson.scripts ?? {}).filter(([name]) =>
@@ -254,6 +301,7 @@ async function prepareNodeBootstrapArtifact(
     if (plugin.bundled) {
       continue;
     }
+    const pluginFiles: string[] = [];
     const visit = async (directory: string, relativeRoot = ""): Promise<void> => {
       for (const child of await fs.readdir(directory, { withFileTypes: true })) {
         if (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name)) {
@@ -266,11 +314,12 @@ async function prepareNodeBootstrapArtifact(
         if (child.isDirectory()) {
           await visit(path.join(directory, child.name), relative);
         } else if (/\.(?:[cm]?js|json|wasm)$/u.test(child.name)) {
-          await copyFile(plugin.root, relative, `dist/extensions/${plugin.id}/${relative}`);
+          pluginFiles.push(relative);
         }
       }
     };
     await visit(plugin.root);
+    await copyFiles(plugin.root, pluginFiles, `dist/extensions/${plugin.id}/`);
   }
 
   // Only declared bundled/workspace packages cross as JavaScript artifacts. Native dependencies
@@ -302,9 +351,7 @@ async function prepareNodeBootstrapArtifact(
         `Bundled node dependency ${name} needs its compiled distribution; rebuild the Gateway`,
       );
     }
-    for (const relative of bundledFiles) {
-      await copyFile(root, relative, `node_modules/${name}/${relative}`);
-    }
+    await copyFiles(root, bundledFiles, `node_modules/${name}/`);
     delete bundled.dependencies;
     delete bundled.devDependencies;
     delete bundled.scripts;
@@ -327,10 +374,10 @@ async function prepareNodeBootstrapArtifact(
     }
   }
   await writeFile("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
-  const inventory = [...staged].filter((entry) => entry.startsWith("dist/")).toSorted();
+  const inventory = [...staged.keys()].filter((entry) => entry.startsWith("dist/")).toSorted();
   await writeFile(PACKAGE_DIST_INVENTORY_RELATIVE_PATH, `${JSON.stringify(inventory)}\n`);
   await writeFile(INSTALL_GUARD_PATH, "OpenClaw package preinstall has not completed.\n");
-  assertBuiltImportClosure(stagingRoot, [...staged], packageJson.name);
+  assertBuiltImportClosure(stagingRoot, [...staged.keys()], packageJson.name);
   if (
     (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
     !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
@@ -340,10 +387,9 @@ async function prepareNodeBootstrapArtifact(
     );
   }
   const tarballPath = path.join(temporaryRoot, "node-runtime.tgz");
-  const manifest = await readWorkerBundleDirectoryManifest({
-    root: temporaryRoot,
-    limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  });
+  const manifest = [...staged.values()].toSorted((left, right) =>
+    compareWorkerBundlePaths(left.path, right.path),
+  );
   await tar.create(
     {
       cwd: temporaryRoot,

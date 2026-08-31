@@ -66,6 +66,7 @@ function guardHostWorkspaceTool(
 }
 
 type CoreCodingToolsOptions = {
+  abortSignal?: AbortSignal;
   codingRoot: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
@@ -181,6 +182,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        abortSignal: options.abortSignal,
         createTool: options.baseToolFactories?.createEditTool,
       });
       base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
@@ -190,6 +192,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        abortSignal: options.abortSignal,
         createTool: options.baseToolFactories?.createWriteTool,
       });
       base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
@@ -201,6 +204,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
       memoryWriteProvenance: options.memoryWriteProvenance,
+      abortSignal: options.abortSignal,
     };
     const edit = createSandboxedEditTool({
       ...toolOptions,
@@ -240,6 +244,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               : undefined,
           workspaceOnly: options.applyPatchWorkspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          abortSignal: options.abortSignal,
         }),
       );
     }

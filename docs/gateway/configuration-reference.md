@@ -531,7 +531,7 @@ See [Plugins](/tools/plugin).
   ui: {
     seamColor: "#FF4500",
     prefs: {
-      theme: "claw", // claw | knot | dash | custom
+      theme: "claw", // claw | knot | dash | absolutely | tide | beacon | phosphor | crt | manuscript | rose | miami | custom
       themeMode: "system", // light | dark | system
       locale: "en",
       chatShowThinking: true,

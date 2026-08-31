@@ -47,6 +47,7 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -422,6 +423,7 @@ export function buildGatewaySessionRow(params: {
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     permissionMode: entry?.permissionMode,
+    permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),

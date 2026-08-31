@@ -1,6 +1,7 @@
 ﻿# Changelog
 
 Docs: https://docs.openclaw.ai
+Latest release notes: https://docs.openclaw.ai/releases/2026.8.1
 
 ## Unreleased
 

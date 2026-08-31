@@ -12,6 +12,7 @@ import {
   consumeSessionPendingInput,
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
@@ -19,7 +20,6 @@ import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
   readMessageIdempotencyKey,
-  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,

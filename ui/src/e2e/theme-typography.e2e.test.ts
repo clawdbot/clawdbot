@@ -242,6 +242,9 @@ suite.define(() => {
     ],
     ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
     ["crt", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
+    ["manuscript", "Lora", "Lora", ["lora"], "auto"],
+    ["rose", "DM Sans", "DM Sans", ["dm-sans"], "antialiased"],
+    ["miami", "Space Grotesk", "Space Grotesk", ["space-grotesk"], "antialiased"],
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
     async (theme, body, chat, faces, chatSmoothing) => {
@@ -356,6 +359,9 @@ suite.define(() => {
     ["beacon", "beacon", "#000000", "#ffffff"],
     ["phosphor", "phosphor", "#0a0f0a", "#f4f7f4"],
     ["crt", "crt", "#090a09", "#f5f5f4"],
+    ["manuscript", "manuscript", "#211e18", "#f6f1e4"],
+    ["rose", "rose", "#191724", "#faf4ed"],
+    ["miami", "miami", "#140f1e", "#f7f3f6"],
   ])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {

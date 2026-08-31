@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -7,7 +8,6 @@ import {
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   submitInputDialog,
   waitForPatch,

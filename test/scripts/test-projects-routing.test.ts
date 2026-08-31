@@ -293,11 +293,6 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.extension-line.config.ts",
     },
     {
-      title: "routes matrix extension file targets to the matrix config",
-      target: "extensions/matrix/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-matrix.config.ts",
-    },
-    {
       title: "routes direct OpenAI provider extension file targets to the OpenAI provider config",
       target: "extensions/openai/openai-chatgpt-provider.test.ts",
       config: "test/vitest/vitest.extension-provider-openai.config.ts",
