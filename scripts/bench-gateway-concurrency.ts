@@ -16,6 +16,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -346,7 +347,7 @@ Options:
   --subscribers <n> Dedicated session-message subscription clients
   --stream-chunk-delay-ms <n> Mock-provider delay between stream chunks (default: ${MOCK_RESPONSE_CHUNK_DELAY_MS})
   --visible-observer Mark subscribed clients visible to exercise session observation
-  --no-diagnostics-timeline Disable synchronous diagnostics timeline file writes
+  --no-diagnostics-timeline Disable diagnostics timeline file writes
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
   --tool-events      Make every synthetic turn execute a tool before replying
   --workspace-fanout Bind each turn to a distinct workspace
@@ -395,34 +396,43 @@ function summarizePluginMetadataScans(events: readonly DiagnosticsTimelineSpan[]
   };
 }
 
-function readDiagnosticsTimelineSpans(timelinePath: string): DiagnosticsTimelineSpan[] {
-  try {
-    return readFileSync(timelinePath, "utf8")
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          const event = JSON.parse(line) as {
-            durationMs?: unknown;
-            name?: unknown;
-            type?: unknown;
-          };
-          if (event.type !== "span.end" || typeof event.name !== "string") {
-            return [];
-          }
-          return [
-            {
-              name: event.name,
-              ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
-            },
-          ];
-        } catch {
-          return [];
-        }
-      });
-  } catch {
-    return [];
+function readDiagnosticsTimelineSpans(
+  timelinePath: string,
+  window?: { from: number; through: number },
+): DiagnosticsTimelineSpan[] {
+  const contents = readFileSync(timelinePath, "utf8");
+  if (!contents.trim() || !contents.endsWith("\n")) {
+    throw new Error("diagnostics timeline is empty or incomplete");
   }
+  return contents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      const event: unknown = JSON.parse(line);
+      if (
+        !isRecord(event) ||
+        event.schemaVersion !== "openclaw.diagnostics.v1" ||
+        typeof event.timestamp !== "string" ||
+        !Number.isFinite(Date.parse(event.timestamp))
+      ) {
+        throw new Error("invalid diagnostics timeline record");
+      }
+      const timestamp = Date.parse(event.timestamp);
+      if (window && (timestamp < window.from || timestamp > window.through)) {
+        return [];
+      }
+      if (event.type !== "span.end") {
+        return [];
+      }
+      if (
+        typeof event.name !== "string" ||
+        typeof event.durationMs !== "number" ||
+        !Number.isFinite(event.durationMs)
+      ) {
+        throw new Error("invalid diagnostics timeline span");
+      }
+      return [{ name: event.name, durationMs: event.durationMs }];
+    });
 }
 
 function remainingMs(deadlineAt: number): number {
@@ -992,6 +1002,8 @@ async function runGatewaySample(options: {
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
   let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
+  let result: BenchmarkRun | undefined;
+  let timelineWindow: { from: number; through: number } | undefined;
 
   try {
     const configPath = buildConfig(root, mockPort, options.concurrency, options.pluginCount);
@@ -1169,11 +1181,6 @@ async function runGatewaySample(options: {
     for (const auxiliaryClient of auxiliaryClients) {
       auxiliaryClient.setDeadlineAt(loadDeadlineAt);
     }
-    // The benchmark compares runtime event work, so discard startup and lazy-import spans.
-    if (options.diagnosticsTimeline) {
-      writeFileSync(timelinePath, "");
-    }
-
     const controlUi: ControlUiProbe[] = [];
     const history: TimedProbe[] = [];
     const messageSubscriptionsDuringLoad: TimedProbe[] = [];
@@ -1191,6 +1198,9 @@ async function runGatewaySample(options: {
       resolveAllTurnsStarted = resolve;
     });
     const turnsStartedAt = performance.now();
+    // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
+    // Inclusive millisecond timestamps conservatively include events on the boundary.
+    const timelineFrom = Date.now();
     const turns = Promise.all(
       Array.from({ length: options.concurrency }, (_, index) =>
         runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
@@ -1328,7 +1338,8 @@ async function runGatewaySample(options: {
       ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
       : 0;
 
-    return {
+    timelineWindow = { from: timelineFrom, through: Date.now() };
+    result = {
       controlUi,
       durationMs: performance.now() - runStartedAt,
       freshConnection: freshConnectionResult,
@@ -1338,9 +1349,7 @@ async function runGatewaySample(options: {
       messageSubscriptionsDuringLoad,
       modelRequestCount,
       probeWarmup,
-      pluginMetadataScans: summarizePluginMetadataScans(
-        options.diagnosticsTimeline ? readDiagnosticsTimelineSpans(timelinePath) : [],
-      ),
+      pluginMetadataScans: summarizePluginMetadataScans([]),
       readyz,
       sessionSeedDurationMs,
       sessionsList,
@@ -1349,31 +1358,47 @@ async function runGatewaySample(options: {
       turnCount: options.concurrency,
       turnsDurationMs,
     };
+    // Finally fills the timeline summary after the child has drained its buffered output.
+    return result;
   } catch (error) {
     const detail = formatRunFailure(error, gatewayOutput, mockOutput);
     throw new Error(detail, { cause: error });
   } finally {
-    for (const auxiliaryClient of auxiliaryClients) {
-      auxiliaryClient.close();
-    }
-    client?.close();
-    if (gateway) {
-      if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
-        // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-        const profileFlushed = new Promise<void>((resolve) => {
-          gateway!.once("exit", () => {
-            resolve();
-          });
-        });
-        gateway.kill("SIGINT");
-        await Promise.race([profileFlushed, delay(2_000)]);
+    try {
+      for (const auxiliaryClient of auxiliaryClients) {
+        auxiliaryClient.close();
       }
-      await stopChild(gateway);
+      client?.close();
+      if (gateway) {
+        if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
+          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+          const profileFlushed = new Promise<void>((resolve) => {
+            gateway!.once("exit", () => {
+              resolve();
+            });
+          });
+          gateway.kill("SIGINT");
+          await Promise.race([profileFlushed, delay(2_000)]);
+        }
+        const stopped = await stopChild(gateway);
+        if (result && options.diagnosticsTimeline) {
+          if (stopped.exitCode !== 0 || stopped.signal !== null) {
+            throw new Error("Gateway did not exit cleanly; diagnostics timeline may be incomplete");
+          }
+          if (gatewayOutput.readOutput().includes("[diagnostics] failed to write timeline event")) {
+            throw new Error("Gateway reported a diagnostics timeline write failure");
+          }
+          result.pluginMetadataScans = summarizePluginMetadataScans(
+            readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
+          );
+        }
+      }
+    } finally {
+      if (mockProvider) {
+        await stopChild(mockProvider);
+      }
+      rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
     }
-    if (mockProvider) {
-      await stopChild(mockProvider);
-    }
-    rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
   }
 }
 
@@ -1553,6 +1578,7 @@ export const testing = {
   runBenchmarkSamples,
   runTurn,
   sampleGateway,
+  readDiagnosticsTimelineSpans,
   summarizePluginMetadataScans,
   summarizeNumbers,
   summarizeRuns,

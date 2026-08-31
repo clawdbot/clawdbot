@@ -39,6 +39,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -635,6 +636,7 @@ test("chat.send replays a cached result after the session is archived", async ()
 });
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
+  flushDiagnosticsTimeline();
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
     .trim()
@@ -6263,6 +6265,7 @@ describe("gateway server chat", () => {
         },
       );
     } finally {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {
