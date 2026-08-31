@@ -190,7 +190,7 @@ export function analyzeWindowsShellCommand(params: {
 }
 
 export function isWindowsPlatform(platform?: string | null): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(platform);
+  const normalized = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
   return normalized.startsWith("win");
 }
 
