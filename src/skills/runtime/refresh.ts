@@ -24,6 +24,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
+import { resolveSkillsWatchPath } from "./refresh-watch-path.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
@@ -223,7 +224,7 @@ function toWatchRoot(raw: string): string {
 }
 
 function makeWatchTarget(raw: string, depth: number): WatchTarget {
-  const watchPath = toWatchRoot(raw);
+  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
   return { path: watchPath, depth, key: watchPath };
 }
 
