@@ -1,5 +1,9 @@
 // Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createChannelIngressQueue,
+  purgeChannelIngressQueueAccount,
+} from "../channels/message/ingress-queue.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -27,6 +31,11 @@ const registryRefreshMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({ stopped: true })),
+}));
+
+// Disabling an account confirms at the terminal before it mutates anything.
+const wizardMocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => true),
 }));
 
 vi.mock("../channels/plugins/catalog.js", async () => {
@@ -62,6 +71,10 @@ vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
+}));
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: () => ({ confirm: wizardMocks.confirm }),
 }));
 
 const runtime = createTestRuntime();
@@ -104,6 +117,8 @@ describe("channelsRemoveCommand", () => {
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     gatewayMocks.callGateway.mockClear();
     gatewayMocks.callGateway.mockResolvedValue({ stopped: true });
+    wizardMocks.confirm.mockClear();
+    wizardMocks.confirm.mockResolvedValue(true);
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -381,5 +396,119 @@ describe("channelsRemoveCommand", () => {
     expect(callOrder).toEqual(["stop", "error"]);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("discards the ingress rows a deleted account owned and reports the unanswered ones", async () => {
+    const callOrder: string[] = [];
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const scopedPlugin = createExternalChatDeletePlugin();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "external-chat",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "never answered" });
+    await queue.enqueue("inbound-2", { text: "already answered" });
+    await queue.complete("inbound-2");
+    configMocks.writeConfigFile.mockImplementationOnce(async () => {
+      callOrder.push("persist");
+    });
+    runtime.log.mockImplementationOnce(() => {
+      callOrder.push("output");
+    });
+
+    await channelsRemoveCommand(
+      {
+        channel: "external-chat",
+        account: "default",
+        delete: true,
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Discarded 2 stored ingress events, 1 of which had not been answered yet.',
+    );
+    // Discarding after the config write means a failed write cannot drop inbound work
+    // for an account that is still configured.
+    expect(callOrder).toEqual(["persist", "output"]);
+    expect(
+      purgeChannelIngressQueueAccount({ channelId: "external-chat", accountId: "default" }),
+    ).toEqual({ discarded: 0, undelivered: 0 });
+  });
+
+  it("keeps the ingress rows of a disabled account so re-enabling it drains them", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const deletePlugin = createExternalChatDeletePlugin();
+    const scopedPlugin = {
+      ...deletePlugin,
+      config: {
+        ...deletePlugin.config,
+        setAccountEnabled: vi.fn(({ cfg }: { cfg: Record<string, unknown> }) => cfg),
+      },
+    } as ChannelPlugin;
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "external-chat",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "waiting for the account to come back" });
+
+    await channelsRemoveCommand(
+      {
+        channel: "external-chat",
+        account: "default",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith('Disabled external-chat account "default".');
+    // The account can be re-enabled, so its queued work is still deliverable. Reading it
+    // back through the purge both proves it survived and leaves the worker state clean.
+    expect(
+      purgeChannelIngressQueueAccount({ channelId: "external-chat", accountId: "default" }),
+    ).toEqual({ discarded: 1, undelivered: 1 });
   });
 });

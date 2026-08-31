@@ -627,6 +627,55 @@ export async function listChannelIngressQueueAccountIdsReadOnly(params: {
   }
 }
 
+/** Ingress rows dropped when a channel account is removed. */
+export type ChannelIngressQueueAccountPurge = {
+  /** Rows removed across every status. */
+  discarded: number;
+  /** Removed rows that were still awaiting an answer, so the removal dropped inbound work. */
+  undelivered: number;
+};
+
+/**
+ * Drops every ingress row a removed channel account owned.
+ *
+ * Retention prunes on admission, so an account that never admits again keeps its rows
+ * forever; removal is the last point that can dispose of them. Callers report
+ * `undelivered` because those rows are inbound events no one will ever answer.
+ */
+export function purgeChannelIngressQueueAccount(params: {
+  channelId: string;
+  accountId?: string;
+  stateDir?: string;
+}): ChannelIngressQueueAccountPurge {
+  const queueName = queueNameForParts(
+    normalizePart(params.channelId, "unknown"),
+    normalizePart(params.accountId, "default"),
+  );
+  const database = openChannelIngressDatabase(params.stateDir);
+  return runOpenClawStateWriteTransaction(
+    (tx) => {
+      const kysely = getChannelIngressKysely(tx.db);
+      const undelivered =
+        executeSqliteQueryTakeFirstSync(
+          tx.db,
+          kysely
+            .selectFrom("channel_ingress_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("queue_name", "=", queueName)
+            .where("status", "in", ["pending", "claimed"]),
+        )?.count ?? 0;
+      const discarded = affectedRows(
+        executeSqliteQuerySync(
+          tx.db,
+          kysely.deleteFrom("channel_ingress_events").where("queue_name", "=", queueName),
+        ),
+      );
+      return { discarded, undelivered };
+    },
+    { path: database.path },
+  );
+}
+
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,

@@ -1,6 +1,10 @@
 // Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  type ChannelIngressQueueAccountPurge,
+  purgeChannelIngressQueueAccount,
+} from "../../channels/message/ingress-queue.js";
+import {
   applyPreparedChannelAccountRemoval,
   type ChannelAccountMutationPlugin,
   prepareChannelAccountRemoval,
@@ -69,6 +73,13 @@ async function stopGatewayRuntimeBeforeRemove(params: {
       `Could not stop running ${channelLabel(params.channel)} account "${params.accountId}" before removing it: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+function formatDiscardedIngressEvents(purge: ChannelIngressQueueAccountPurge): string {
+  const events = `${purge.discarded} stored ingress event${purge.discarded === 1 ? "" : "s"}`;
+  return purge.undelivered > 0
+    ? `Discarded ${events}, ${purge.undelivered} of which had not been answered yet.`
+    : `Discarded ${events}.`;
 }
 
 /** Disable or delete a channel account, stopping gateway runtime state before mutation. */
@@ -218,17 +229,30 @@ export async function channelsRemoveCommand(
     ...(baseHash !== undefined ? { baseHash } : {}),
     runtime,
   });
+  // Ingress retention prunes on admission, so a deleted account - which never admits
+  // again - would own its rows forever. Discard them once the removal is durable:
+  // running before the config write would drop inbound work for an account that is
+  // still configured if that write fails. A disabled account keeps its rows because
+  // re-enabling it drains them.
+  const discardedEvents = deleteConfig
+    ? purgeChannelIngressQueueAccount({
+        // Rows carry the plugin's own channel id, so read it off the resolved plugin
+        // rather than the alias the operator typed.
+        channelId: plugin.id,
+        accountId: preparedRemoval.accountKey,
+      })
+    : undefined;
+  const summary = [
+    deleteConfig
+      ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
+      : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+    ...(discardedEvents && discardedEvents.discarded > 0
+      ? [formatDiscardedIngressEvents(discardedEvents)]
+      : []),
+  ].join(" ");
   if (useWizard && prompter) {
-    await prompter.outro(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    );
+    await prompter.outro(summary);
   } else {
-    runtime.log(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    );
+    runtime.log(summary);
   }
 }
