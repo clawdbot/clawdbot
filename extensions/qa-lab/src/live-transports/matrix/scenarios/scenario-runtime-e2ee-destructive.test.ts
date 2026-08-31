@@ -209,7 +209,7 @@ describe("Matrix sync-state loss driver readiness", () => {
         gatewayStateDir: "/tmp/unused-gateway-state",
         gatewayRuntimeEnv: { OPENCLAW_CONFIG_PATH: "/tmp/unused-gateway-config" },
         restartGatewayAfterStateMutation: async (mutate) => {
-          await mutate();
+          await mutate({ stateDir: "/tmp/unused-gateway-state" });
         },
       });
 
