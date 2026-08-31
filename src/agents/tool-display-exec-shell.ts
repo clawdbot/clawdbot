@@ -121,6 +121,19 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
+/**
+ * True for a shell redirection token such as `>`, `>>`, `2>`, `&>`, `>|` or `2>&1`,
+ * including the attached-filename form `2>/dev/null`.
+ *
+ * Exported for summary builders that must not mistake a redirect for a path. It is
+ * deliberately NOT applied inside `positionalArgs`: other summaries (for example
+ * `cat > file <<EOF`) already render redirect operators, and filtering them globally
+ * would change that long-standing output.
+ */
+export function isRedirectToken(token: string): boolean {
+  return /^(?:\d*>>?\|?|\d*>&\d*|&>>?)/u.test(token);
+}
+
 /** Returns positional args after skipping options and configured option values. */
 export function positionalArgs(
   words: string[],

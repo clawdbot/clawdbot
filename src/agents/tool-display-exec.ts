@@ -11,6 +11,7 @@ import {
   binaryName,
   firstPositional,
   hasShellCompoundCommand,
+  isRedirectToken,
   optionValue,
   positionalArgs,
   scanTopLevelChars,
@@ -102,7 +103,8 @@ function summarizeKnownExec(words: string[]): string {
   }
 
   if (bin === "grep" || bin === "rg" || bin === "ripgrep") {
-    const positional = positionalArgs(words, 1, [
+    const searchWords = words.filter((word) => !isRedirectToken(word));
+    const positional = positionalArgs(searchWords, 1, [
       "-e",
       "--regexp",
       "-f",
@@ -116,7 +118,13 @@ function summarizeKnownExec(words: string[]): string {
       "-C",
       "--context",
     ]);
-    const pattern = optionValue(words, ["-e", "--regexp"]) ?? positional[0];
+    // `rg --files` lists files and takes NO pattern, so every positional is a path.
+    // Reading positional[0] as a pattern mislabelled the call as a text search.
+    if (searchWords.includes("--files")) {
+      const listTarget = positional.at(-1);
+      return listTarget ? `list files in ${listTarget}` : "list files";
+    }
+    const pattern = optionValue(searchWords, ["-e", "--regexp"]) ?? positional[0];
     const target = positional.length > 1 ? positional.at(-1) : undefined;
     if (pattern) {
       if (isUnsafeSearchSummaryPattern(pattern)) {
