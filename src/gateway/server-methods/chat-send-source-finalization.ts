@@ -329,6 +329,7 @@ export async function finalizeChatSendSourceReplies(
     suppressFinal?: boolean;
   },
 ): Promise<boolean> {
+  const { suppressFinal } = params;
   const result = await finalizeChatSendAgentReplyPayloads({
     accountId: params.accountId,
     context: params.context,
@@ -336,7 +337,8 @@ export async function finalizeChatSendSourceReplies(
     markTerminalBroadcasted: params.markTerminalBroadcasted,
     payloads: selectChatSendAgentReplyPayloads(params),
     session: params.session,
-    suppressFinal: params.suppressFinal,
+    suppressFinal,
   });
-  return result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
+  // A persisted mirror owns terminal output only when its final was actually broadcast.
+  return !suppressFinal && result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
 }
