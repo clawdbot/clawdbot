@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 
@@ -185,6 +186,7 @@ function createTurn(): AdmittedFollowupTurn {
 function createExecution(
   overrides: {
     autoCompactionCount?: number;
+    compaction?: AgentTurnCompaction;
     compactionTraceparent?: string;
     continueWorkRequests?: Array<{ reason: string; delaySeconds: number }>;
   } = {},
@@ -215,6 +217,7 @@ function createExecution(
         resolved: { provider: "anthropic", model: "claude" },
         fallback: { exhausted: false, attempts: [] },
         autoCompactionCount: overrides.autoCompactionCount ?? 0,
+        ...(overrides.compaction ? { compaction: overrides.compaction } : {}),
         didLogHeartbeatStrip: false,
       },
     },
@@ -561,6 +564,22 @@ describe("accountFollowupTurn", () => {
       defaults,
       execution: createExecution({
         autoCompactionCount: 1,
+        compaction: {
+          count: 1,
+          durable: [
+            {
+              kind: "durable",
+              count: 1,
+              currentContextSnapshot: { tokens: 100 },
+              target: {
+                agentId: "agent",
+                sessionId: "session-1",
+                sessionKey: "main",
+                storePath: "/tmp/sessions.json",
+              },
+            },
+          ],
+        },
         compactionTraceparent: "00-trace",
       }),
     });
