@@ -89,6 +89,77 @@ describe("configureCommandFromSectionsArg", () => {
     );
   });
 
+  // A supplied `--agent ""` must reach the wizard's strict validator instead of being
+  // dropped by a truthiness check and silently falling back to the default owner.
+  it.each([
+    ["undefined", "full wizard dispatch", undefined, undefined, { command: "configure" }],
+    [
+      "a supplied agent id",
+      "full wizard dispatch",
+      undefined,
+      "ops",
+      {
+        command: "configure",
+        agentId: "ops",
+      },
+    ],
+    [
+      "a supplied empty agent id",
+      "full wizard dispatch",
+      undefined,
+      "",
+      {
+        command: "configure",
+        agentId: "",
+      },
+    ],
+    [
+      "undefined",
+      "section-limited dispatch",
+      ["channels"],
+      undefined,
+      {
+        command: "configure",
+        sections: ["channels"],
+      },
+    ],
+    [
+      "a supplied agent id",
+      "section-limited dispatch",
+      ["channels"],
+      "ops",
+      {
+        command: "configure",
+        sections: ["channels"],
+        agentId: "ops",
+      },
+    ],
+    [
+      "a supplied empty agent id",
+      "section-limited dispatch",
+      ["channels"],
+      "",
+      {
+        command: "configure",
+        sections: ["channels"],
+        agentId: "",
+      },
+    ],
+  ] as const)(
+    "forwards %s to the wizard for %s",
+    async (_label, _dispatchLabel, sections, agentId, expectedParams) => {
+      const runtime = makeRuntime();
+
+      await configureCommandFromSectionsArg(sections, runtime, {
+        interactive: true,
+        agentId,
+      });
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runConfigureWizardMock).toHaveBeenCalledWith(expectedParams, runtime);
+    },
+  );
+
   it.each([
     ["an empty section", [""], true],
     ["a whitespace section", [" \t "], true],

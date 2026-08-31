@@ -43,22 +43,31 @@ function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: b
   return false;
 }
 
-async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
-  await runConfigureWizard({ command: "configure" }, runtime);
+async function configureCommand(runtime: RuntimeEnv = defaultRuntime, agentId?: string) {
+  // Presence, not truthiness: a supplied empty `--agent ""` must reach the wizard's strict
+  // validator instead of being dropped here and silently falling back to the default owner.
+  await runConfigureWizard(
+    { command: "configure", ...(agentId !== undefined ? { agentId } : {}) },
+    runtime,
+  );
 }
 
 async function configureCommandWithSections(
   sections: WizardSection[],
   runtime: RuntimeEnv = defaultRuntime,
+  agentId?: string,
 ) {
-  await runConfigureWizard({ command: "configure", sections }, runtime);
+  await runConfigureWizard(
+    { command: "configure", sections, ...(agentId !== undefined ? { agentId } : {}) },
+    runtime,
+  );
 }
 
 /** Parse `--section` input and run the requested configure wizard sections. */
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
   runtime: RuntimeEnv = defaultRuntime,
-  options?: { interactive?: boolean },
+  options?: { interactive?: boolean; agentId?: string },
 ): Promise<void> {
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (invalid.length > 0) {
@@ -79,9 +88,9 @@ export async function configureCommandFromSectionsArg(
   }
 
   if (sections.length === 0) {
-    await configureCommand(runtime);
+    await configureCommand(runtime, options?.agentId);
     return;
   }
 
-  await configureCommandWithSections(sections as never, runtime);
+  await configureCommandWithSections(sections as never, runtime, options?.agentId);
 }
