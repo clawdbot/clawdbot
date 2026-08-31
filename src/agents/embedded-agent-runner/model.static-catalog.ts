@@ -1,6 +1,7 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -8,11 +9,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
+import { getPluginCache, getPluginMetadataSnapshotCache } from "../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -28,6 +30,7 @@ import {
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
+import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
 import {
   createStaticModelIdMatcher,
   staticModelIdMatches,
@@ -63,17 +66,6 @@ function normalizeStaticCatalogInput(
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function normalizeStaticCatalogCost(
-  cost: NormalizedModelCatalogRow["cost"],
-): ProviderRuntimeModel["cost"] {
-  return {
-    input: cost?.input ?? 0,
-    output: cost?.output ?? 0,
-    cacheRead: cost?.cacheRead ?? 0,
-    cacheWrite: cost?.cacheWrite ?? 0,
-  };
-}
-
 /** Converts a normalized catalog row into the provider runtime model shape. */
 function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
@@ -84,7 +76,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
     input: normalizeStaticCatalogInput(row.input),
-    cost: normalizeStaticCatalogCost(row.cost),
+    cost: normalizeResolvedPricing(row.cost ?? {}),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
@@ -108,7 +100,7 @@ function completeProviderStaticCatalogModel(
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model.input),
-    cost: model.cost ?? normalizeStaticCatalogCost(undefined),
+    cost: model.cost ?? normalizeResolvedPricing({}),
     contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
@@ -127,24 +119,7 @@ type BundledStaticCatalogParams = {
   workspaceDir?: string;
 };
 
-type BundledStaticCatalogState = {
-  plugins: StaticCatalogPlugin[];
-  plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
-};
-
-let bundledStaticCatalogStatesByOwner = new WeakMap<
-  object,
-  WeakMap<OpenClawConfig, BundledStaticCatalogState>
->();
 const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
-
-function clearBundledStaticCatalogStates(): void {
-  bundledStaticCatalogStatesByOwner = new WeakMap();
-}
-
-// Snapshot or environment identity pins one plugin generation; install/reload
-// owners replace this map so retained resolvers cannot keep stale provider plans.
-registerPluginMetadataProcessMemoLifecycleClear(clearBundledStaticCatalogStates);
 
 function resolveBundledStaticCatalogMetadataSnapshot(
   params: BundledStaticCatalogParams,
@@ -153,6 +128,10 @@ function resolveBundledStaticCatalogMetadataSnapshot(
   // Rediscovery here can mix generations and repeat manifest work for every model lookup.
   if (params.metadataSnapshot) {
     return params.metadataSnapshot;
+  }
+  const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+  if (gatewaySnapshot) {
+    return gatewaySnapshot;
   }
   if (params.env !== process.env) {
     return undefined;
@@ -200,6 +179,10 @@ function resolveBundledStaticCatalogState(
   params: BundledStaticCatalogParams,
   metadataSnapshot?: PluginMetadataSnapshot,
 ): BundledStaticCatalogState {
+  const cache = metadataSnapshot
+    ? getPluginMetadataSnapshotCache(metadataSnapshot)
+    : getPluginCache();
+  const bundledStaticCatalogStatesByOwner = cache.metadata.staticCatalogStates;
   const owner = metadataSnapshot ?? params.env;
   let states = bundledStaticCatalogStatesByOwner.get(owner);
   if (!states) {

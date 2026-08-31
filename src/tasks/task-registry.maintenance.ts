@@ -33,6 +33,10 @@ import {
 } from "../sessions/session-chat-type-shared.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import {
+  isContextEngineMaintenanceTaskOwnerActive,
+  isContextEngineTurnMaintenanceTask,
+} from "./context-engine-maintenance-task-owner.js";
+import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
@@ -179,6 +183,7 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
     | "active_background_exec"
     | "backing_session_missing"
     | "backing_session_present"
+    | "cli_runtime_not_authoritative"
     | "cron_runtime_not_authoritative"
     | "lost_grace_pending"
     | "subagent_recovery_wedged";
@@ -394,10 +399,14 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
 }
 
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
+  const hasProcessLocalLiveness =
+    task.runtime === "cron" || task.runtime === "cli" || task.runtime === "acp";
+  // Only the Gateway owns these process-local liveness registries. A standalone
+  // maintenance process must stay conservative when its local registries are empty.
+  if (hasProcessLocalLiveness && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return true;
+  }
   if (task.runtime === "cron") {
-    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
-      return true;
-    }
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
@@ -408,6 +417,12 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
       processSessionId &&
       taskRegistryMaintenanceRuntime.isBackgroundExecSessionActive?.(processSessionId),
     );
+  }
+  if (isContextEngineTurnMaintenanceTask(task)) {
+    // Only the authoritative Gateway owns the process-local liveness set.
+    return !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()
+      ? true
+      : isContextEngineMaintenanceTaskOwnerActive(task.taskId);
   }
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
@@ -421,11 +436,6 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return !isHarnessOwnedSubagentTask(task);
   }
   if (task.runtime === "acp") {
-    // The live-turn map is process-local; only the gateway owns it. A standalone CLI
-    // maintenance run has an empty map, so stay conservative there and never reclaim.
-    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
-      return true;
-    }
     // The persisted entry survives a crash, so only a live in-process turn proves the ACP run is alive.
     return taskRegistryMaintenanceRuntime.hasActiveAcpTurn(childSessionKey);
   }
@@ -447,6 +457,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isContextEngineTurnMaintenanceTask(task)) {
+    return "owning process exited";
+  }
   if (isHarnessOwnedSubagentTask(task)) {
     return "Native subagent stopped reporting progress";
   }
@@ -828,12 +841,6 @@ export function inspectTasksReadOnly(): {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
-function isActiveTaskRestartBlockerStatus(
-  status: TaskStatus,
-): status is ActiveTaskRestartBlocker["status"] {
-  return status === "running";
-}
-
 function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
   status: ActiveTaskRestartBlocker["status"];
 } {
@@ -841,12 +848,16 @@ function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
   // work can survive a gateway restart and should not indefinitely block one.
   // Likewise, stale records that still say "running" but already have endedAt
   // are registry inconsistencies, not live restart blockers.
-  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
+  return task.status === "running" && !task.endedAt;
 }
 
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  // Reconciliation can retire a blocker, never revive a non-blocker. Select first
+  // so frequent restart polls do not clone and sort retained terminal history.
+  const candidates = taskRegistryMaintenanceRuntime.listTaskRecords(isTaskRestartBlocker);
   const blockers: ActiveTaskRestartBlocker[] = [];
-  for (const task of reconcileInspectableTasks()) {
+  for (const task of reconcileTaskRecordsForOperatorInspection(candidates)) {
     if (!isTaskRestartBlocker(task)) {
       continue;
     }
@@ -951,6 +962,9 @@ function explainActiveTaskRetention(params: {
   }
   if (params.task.runtime === "acp" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
     return { decision: "retained", reason: "acp_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "cli" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return { decision: "retained", reason: "cli_runtime_not_authoritative" };
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };
@@ -1066,18 +1080,18 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         }
         continue;
       }
-      const shouldRecheckFreshTask =
-        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
-      let lostContext = backingSessionContext;
-      if (shouldRecheckFreshTask) {
-        lostContext = createBackingSessionLookupContext();
-        if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
-          processed += 1;
-          if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
-            await yieldToEventLoop();
-          }
-          continue;
+      // Recovery yields to runtime owners. Recheck every liveness source from a
+      // fresh snapshot when recovery could have changed persisted backing.
+      const lostContext =
+        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook)
+          ? createBackingSessionLookupContext()
+          : backingSessionContext;
+      if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
+        processed += 1;
+        if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+          await yieldToEventLoop();
         }
+        continue;
       }
       if (recovery.recovered) {
         recovered += 1;

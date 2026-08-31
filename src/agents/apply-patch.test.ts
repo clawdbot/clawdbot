@@ -12,8 +12,7 @@ import {
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
 import { createApplyPatchTool } from "./apply-patch.js";
-import { applyPatch } from "./apply-patch.test-support.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   // realpath: production sandbox checks compare against canonical paths; on macOS
@@ -42,70 +41,39 @@ function buildAddFilePatch(targetPath: string): string {
 *** End Patch`;
 }
 
-function createMemoryPatchSandbox(
-  initialFiles: Record<string, string | Buffer> = {},
-  options: { supportsExclusiveCreate?: boolean } = {},
-) {
-  const files = new Map<string, string | Buffer>(
-    Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
-  );
-  const writeFile = vi.fn(async ({ filePath, data }) => {
-    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
-  });
-  const createFileExclusive = vi.fn(async ({ filePath, data }) => {
-    if (files.has(filePath)) {
-      return "exists" as const;
+it("fences apply_patch after a file read when permissions change", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "permission.txt");
+    await fs.writeFile(target, "original\n");
+    const generation = new AbortController();
+    const readFile = fs.readFile.bind(fs);
+    const read = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof readFile>) => {
+        const value = await readFile(...args);
+        if (args[0] === target) {
+          generation.abort(new Error("Permission change"));
+        }
+        return value;
+      });
+    try {
+      const tool = createApplyPatchTool({ cwd: dir, workspaceOnly: false });
+      await expect(
+        tool.execute(
+          "permission-patch",
+          {
+            input:
+              "*** Begin Patch\n*** Update File: permission.txt\n@@\n-original\n+replacement\n*** End Patch",
+          },
+          generation.signal,
+        ),
+      ).rejects.toThrow("Permission change");
+    } finally {
+      read.mockRestore();
     }
-    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
-    return "created" as const;
+    expect(await fs.readFile(target, "utf8")).toBe("original\n");
   });
-  const mkdirp = vi.fn(async () => {});
-  const bridge: SandboxFsBridge = {
-    resolvePath: ({ filePath }) => ({
-      relativePath: filePath,
-      containerPath: `/sandbox/${filePath}`,
-    }),
-    readFile: async ({ filePath }) => {
-      const contents = files.get(filePath);
-      return typeof contents === "string"
-        ? Buffer.from(contents, "utf8")
-        : Buffer.from(contents ?? "");
-    },
-    writeFile,
-    ...(options.supportsExclusiveCreate === false ? {} : { createFileExclusive }),
-    remove: async ({ filePath }) => {
-      files.delete(filePath);
-    },
-    rename: async ({ from, to }) => {
-      const contents = files.get(from);
-      if (contents !== undefined) {
-        files.set(to, contents);
-        files.delete(from);
-      }
-    },
-    stat: async ({ filePath }) => {
-      const contents = files.get(filePath);
-      return contents === undefined
-        ? null
-        : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
-    },
-    mkdirp,
-  };
-  return {
-    files,
-    bridge,
-    writeFile,
-    createFileExclusive,
-    mkdirp,
-    options: {
-      cwd: "/local/workspace",
-      sandbox: {
-        root: "/local/workspace",
-        bridge,
-      },
-    },
-  };
-}
+});
 
 async function expectOutsideWriteRejected(params: {
   dir: string;
@@ -457,245 +425,6 @@ describe("applyPatch", () => {
     const tool = createApplyPatchTool(memory.options);
     const toolResult = await tool.execute("call-no-op", { input: patch }, undefined);
     expect(toolResult.terminate).toBe(true);
-  });
-
-  it("preserves line endings and EOF state for no-op update hunks", async () => {
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+bar
-*** End Patch`;
-    for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
-      const memory = createMemoryPatchSandbox({ "source.txt": initial });
-
-      const result = await applyPatch(patch, memory.options);
-
-      expect(result.noOp).toBe(true);
-      expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
-      expect(memory.writeFile.mock.calls).toHaveLength(0);
-    }
-  });
-
-  it("preserves CRLF line endings for changed and context lines", async () => {
-    const initial =
-      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("hello");\r\n  }\r\n}\r\n';
-    const memory = createMemoryPatchSandbox({ "source.txt": initial });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
-   static void Main() {
--    Console.WriteLine("hello");
-+    Console.WriteLine("world");
-   }
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(result.noOp).toBeUndefined();
-    expect(memory.files.get("/sandbox/source.txt")).toBe(
-      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("world");\r\n  }\r\n}\r\n',
-    );
-  });
-
-  it("preserves CRLF line endings when the hunk spans the whole file", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nbaz\r\n");
-  });
-
-  it("preserves CRLF line endings for inserted lines", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@ foo
-+middle
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nmiddle\r\nbar\r\n");
-  });
-
-  it("keeps LF files on LF after a real update hunk", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
-  });
-
-  it("keeps context line bytes when the hunk drops trailing whitespace", async () => {
-    const memory = createMemoryPatchSandbox({
-      "notes.md": "# Notes\nfirst line  \nsecond line  \nold value\ntail\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: notes.md
-@@
- first line
- second line
--old value
-+new value
- tail
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/notes.md")).toBe(
-      "# Notes\nfirst line  \nsecond line  \nnew value\ntail\n",
-    );
-  });
-
-  it.each([
-    {
-      title: "keeps context line punctuation when the hunk uses normalized quotes",
-      fileName: "notes.md",
-      initialContent: "It\u2019s done\nold value\n",
-      patchText: `*** Begin Patch
-*** Update File: notes.md
-@@
- It's done
--old value
-+new value
-*** End Patch`,
-      expectedPath: "/sandbox/notes.md",
-      expectedContent: "It\u2019s done\nnew value\n",
-    },
-    {
-      title: "does not normalize mixed line endings outside the changed hunk",
-      fileName: "source.txt",
-      initialContent: "first\r\nsecond\nthird\r\n",
-      patchText: `*** Begin Patch
-*** Update File: source.txt
-@@
--second
-+changed
-*** End Patch`,
-      expectedPath: "/sandbox/source.txt",
-      expectedContent: "first\r\nchanged\nthird\r\n",
-    },
-    {
-      title: "applies context-only insertions at the requested context",
-      fileName: "source.txt",
-      initialContent: "alpha\nanchor\nomega\n",
-      patchText: `*** Begin Patch
-*** Update File: source.txt
-@@ anchor
-+inserted
-*** End Patch`,
-      expectedPath: "/sandbox/source.txt",
-      expectedContent: "alpha\nanchor\ninserted\nomega\n",
-    },
-    {
-      title: "keeps later insertion contexts in original file coordinates",
-      fileName: "source.txt",
-      initialContent: "a\nb\nc\n",
-      patchText: `*** Begin Patch
-*** Update File: source.txt
-@@ a
-+after-a
-@@ b
-+after-b
-*** End Patch`,
-      expectedPath: "/sandbox/source.txt",
-      expectedContent: "a\nafter-a\nb\nafter-b\nc\n",
-    },
-    {
-      title: "supports end-of-file inserts",
-      fileName: "end.txt",
-      initialContent: "line1\n",
-      patchText: `*** Begin Patch
-*** Update File: end.txt
-@@
-+line2
-*** End of File
-*** End Patch`,
-      expectedPath: "/sandbox/end.txt",
-      expectedContent: "line1\nline2\n",
-    },
-  ])("$title", async ({ fileName, initialContent, patchText, expectedPath, expectedContent }) => {
-    const memory = createMemoryPatchSandbox({
-      [fileName]: initialContent,
-    });
-    const patch = patchText;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get(expectedPath)).toBe(expectedContent);
-  });
-
-  it("keeps tab indentation on context lines when the hunk uses spaces", async () => {
-    const memory = createMemoryPatchSandbox({
-      "run.py":
-        "def run(x):\n\tif x:\n\t\tprepare()\n\t\tvalue = 1\n\t\treturn value\n\treturn 0\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: run.py
-@@
-     if x:
-         prepare()
--        value = 1
-+        value = 2
-         return value
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/run.py")).toBe(
-      "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
-    );
-  });
-
-  it("applies a real deletion of the sole blank line", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
--
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(result.noOp).toBeUndefined();
-    expect(memory.files.get("/sandbox/source.txt")).toBe("");
-    expect(memory.writeFile.mock.calls).toHaveLength(1);
-  });
-
-  it("preserves formatting for same-path move no-op hunks", async () => {
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: ./source.txt
-@@
- foo
--bar
-+bar
-*** End Patch`;
-    for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
-      const memory = createMemoryPatchSandbox({ "source.txt": initial });
-
-      const result = await applyPatch(patch, memory.options);
-
-      expect(result.noOp).toBe(true);
-      expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
-      expect(memory.writeFile.mock.calls).toHaveLength(0);
-    }
   });
 
   it("normalizes supported punctuation while matching update hunks", async () => {

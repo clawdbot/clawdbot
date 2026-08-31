@@ -163,6 +163,7 @@ const runtimePostBuildWatchedPaths = [
   "scripts/stage-bundled-plugin-runtime.mjs",
   "scripts/stage-bundled-plugin-runtime.mts",
   "scripts/windows-cmd-helpers.mjs",
+  "scripts/write-build-info.ts",
   "scripts/write-official-channel-catalog.mjs",
   "scripts/write-official-channel-catalog.mts",
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -1585,6 +1586,8 @@ function createRunNodeDeps(params: RunNodeMainParams) {
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
   const env = params.env ? { ...params.env } : { ...process.env };
+  // Select this checkout's plugins over tracked installs without changing source/dist loading.
+  env.OPENCLAW_DEV_SOURCE_ROOT ??= cwd;
   const mutableState: RunNodeMutableState = {
     outputTee: null,
     runNodeProgress: undefined,

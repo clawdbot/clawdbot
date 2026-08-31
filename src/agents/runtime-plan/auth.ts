@@ -44,6 +44,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   sessionAuthProfileCandidateIds?: string[];
   modelRoute?: AgentRuntimeAuthPlan["modelRoute"];
   deferredRouteSupport?: AgentRuntimeAuthPlan["deferredRouteSupport"];
+  credentialSource?: AgentRuntimeAuthPlan["credentialSource"];
   config?: OpenClawConfig;
   workspaceDir?: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
@@ -100,5 +101,6 @@ export function buildAgentRuntimeAuthPlan(params: {
       : {}),
     ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
     ...(params.deferredRouteSupport ? { deferredRouteSupport: params.deferredRouteSupport } : {}),
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
   } satisfies AgentRuntimeAuthPlan;
 }

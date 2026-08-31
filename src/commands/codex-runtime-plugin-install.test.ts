@@ -1,10 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  emptyMetadataSnapshot,
+  metadataSnapshot,
+} from "../plugins/management-service.test-helpers.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { WizardCancelledError } from "../wizard/prompts.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
   repairMissingPluginInstallsForIds: vi.fn(),
   ensureOnboardingPluginInstalled: vi.fn(),
+  metadata: vi.fn(),
+  writeInstallRecords: vi.fn(),
 }));
 
 type MissingPluginInstallRepairCall = {
@@ -28,8 +37,13 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingPluginInstallsForIds: mocks.repairMissingPluginInstallsForIds,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease: mocks.writeInstallRecords,
+}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: mocks.metadata,
 }));
 vi.mock("./onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: mocks.ensureOnboardingPluginInstalled,
@@ -38,6 +52,7 @@ describe("Codex runtime plugin install repair", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -49,6 +64,96 @@ describe("Codex runtime plugin install repair", () => {
       status: "failed",
     });
   });
+
+  it.each([
+    { enabled: false, accepted: false, usable: false, promptError: undefined },
+    { enabled: false, accepted: true, usable: true, promptError: undefined },
+    { enabled: true, accepted: false, usable: true, promptError: undefined },
+    { enabled: false, accepted: false, usable: false, promptError: new WizardCancelledError() },
+  ])(
+    "honors runtime capabilities, enabled=$enabled accepted=$accepted promptError=$promptError",
+    async ({ enabled, accepted, usable, promptError }) => {
+      await withTestDir({ prefix: "openclaw-runtime-consent-" }, async (artifactDir) => {
+        createColdPluginFixture({
+          rootDir: artifactDir,
+          pluginId: "codex",
+          manifest: {
+            providers: [],
+            channels: [],
+            channelConfigs: {},
+            providerAuthChoices: [],
+            contracts: { tools: ["runtime.write"] },
+          },
+        });
+        const record = { source: "npm", installPath: artifactDir, integrity: "sha512-runtime" };
+        mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({ codex: record });
+        const metadata = metadataSnapshot({
+          id: "codex",
+          name: "Codex",
+          enabled,
+          origin: "global",
+          installRecord: record,
+        });
+        const manifest = metadata.byPluginId.get("codex")!;
+        manifest.rootDir = artifactDir;
+        manifest.contracts = { tools: ["runtime.write"] };
+        metadata.index.plugins[0]!.rootDir = artifactDir;
+        mocks.metadata.mockReturnValue(metadata);
+        const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled } } } };
+        const confirm = vi.fn(async () => {
+          if (promptError) {
+            throw promptError;
+          }
+          return accepted;
+        });
+        const { ensureCodexRuntimePluginForModelSelection } =
+          await import("./codex-runtime-plugin-install.js");
+
+        const pending = ensureCodexRuntimePluginForModelSelection({
+          cfg,
+          model: "openai/gpt-5.6-luna",
+          prompter: { confirm, note: vi.fn(async () => {}) } as never,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        });
+        if (promptError) {
+          await expect(pending).rejects.toBe(promptError);
+          expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
+          return;
+        }
+        const result = await pending;
+
+        if (usable) {
+          expect(result).toMatchObject({
+            ok: true,
+            cfg: { plugins: { entries: { codex: { enabled: true } } } },
+          });
+        } else {
+          expect(result).toMatchObject({
+            ok: false,
+            status: "failed",
+            message: expect.stringMatching(/capabilit/i),
+          });
+          expect(result).not.toHaveProperty("cfg");
+        }
+        expect(cfg.plugins?.entries?.codex?.enabled).toBe(enabled);
+        expect(confirm).toHaveBeenCalledTimes(enabled ? 0 : 1);
+        if (accepted && !enabled) {
+          expect(mocks.writeInstallRecords).toHaveBeenCalledWith(
+            expect.objectContaining({
+              codex: expect.objectContaining({
+                acceptedSurface: expect.objectContaining({ tools: ["runtime.write"] }),
+                acceptedSurfaceIntegrity: "sha512-runtime",
+              }),
+            }),
+            expect.any(Object),
+          );
+        } else {
+          expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
+        }
+        expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("surfaces non-fatal ClawHub repair notices to warning-only callers", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";

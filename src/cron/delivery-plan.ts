@@ -190,10 +190,10 @@ export function resolveFailureDestination(
         : undefined);
     const overrideAccountId = normalizeOptionalString(routeOverride.accountId);
     const overrideMode = normalizeFailureMode(routeOverride.mode);
-    const hasChannelField = "channel" in routeOverride;
-    const hasToField = "to" in routeOverride;
-    const hasAccountIdField = "accountId" in routeOverride;
-    const hasModeField = "mode" in routeOverride;
+    const hasChannelField = Object.hasOwn(routeOverride, "channel");
+    const hasToField = Object.hasOwn(routeOverride, "to");
+    const hasAccountIdField = Object.hasOwn(routeOverride, "accountId");
+    const hasModeField = Object.hasOwn(routeOverride, "mode");
 
     const hasExplicitTo = hasToField && overrideTo !== undefined;
     const globalChannel = resolveAnnounceChannel({ channel, to });

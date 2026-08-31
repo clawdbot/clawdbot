@@ -1855,7 +1855,12 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Run the memory sync");
   });
 
-  it("ignores chat scaffolding tags when building rem reflections", () => {
+  it.each([
+    ["assistant", "the"],
+    ["1.00", "51-54"],
+    ["１.００", "５１-５４"],
+    ["2026-04-16", "2026-04-16.txt"],
+  ])("normalizes stored concept tags and rejects %s / %s in rem reflections", (...noise) => {
     const preview = previewRemDreaming({
       entries: [
         {
@@ -1874,17 +1879,18 @@ describe("memory-core dreaming phases", () => {
           lastRecalledAt: "2026-04-16T18:00:00.000Z",
           queryHashes: ["q1"],
           recallDays: ["2026-04-16"],
-          conceptTags: ["assistant", "the", "ollama", "provider"],
+          conceptTags: [...noise, "Ollama", "provider", "kv", "ＫＶ", "s3", "备份"],
         },
       ],
-      limit: 5,
+      limit: 20,
       minPatternStrength: 0,
     });
 
-    expect(preview.reflections.join("\n")).toContain("`ollama`");
-    expect(preview.reflections.join("\n")).toContain("`provider`");
-    expect(preview.reflections.join("\n")).not.toContain("`assistant`");
-    expect(preview.reflections.join("\n")).not.toContain("`the`");
+    expect(preview.reflections.filter((line) => line.startsWith("- Theme:"))).toEqual(
+      ["kv", "ollama", "provider", "s3", "备份"].map(
+        (tag) => `- Theme: \`${tag}\` kept surfacing across 1 memories.`,
+      ),
+    );
   });
 
   it("does not reread unchanged dreaming-generated transcripts after checkpointing skip state", async () => {

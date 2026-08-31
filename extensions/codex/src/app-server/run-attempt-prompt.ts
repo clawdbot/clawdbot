@@ -198,7 +198,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           return promptState.developerInstructions;
         },
       },
-      messages: structuredClone(historyState.messages),
+      messages: historyState.messages,
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {

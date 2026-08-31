@@ -222,7 +222,14 @@ public actor GatewayChannelActor {
     /// Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
     /// request. Read from the provider at connect time so edits apply on the next reconnect
     /// without re-pairing. Values are credentials: never log them.
+    private var workerEdgeCredentials: [String: String]?
+
+    func currentWorkerEdgeCredentials() -> [String: String]? {
+        self.workerEdgeCredentials
+    }
+
     private func makeUpgradeRequest() -> URLRequest {
+        self.workerEdgeCredentials = nil
         var request = URLRequest(url: self.url)
         // Custom headers can contain service tokens or Authorization values. Do not even read
         // the provider for cleartext routes, where credentials would be exposed in transit.
@@ -230,6 +237,11 @@ public actor GatewayChannelActor {
         guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
         for (name, value) in GatewayCustomHeaders.sanitized(headers) {
             request.setValue(value, forHTTPHeaderField: name)
+        }
+        if let clientID = request.value(forHTTPHeaderField: "CF-Access-Client-Id"),
+           let clientSecret = request.value(forHTTPHeaderField: "CF-Access-Client-Secret")
+        {
+            self.workerEdgeCredentials = ["clientId": clientID, "clientSecret": clientSecret]
         }
         return request
     }

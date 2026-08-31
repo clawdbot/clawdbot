@@ -21,7 +21,6 @@ import {
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 import {
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
@@ -29,6 +28,7 @@ import {
   failDelivery,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,

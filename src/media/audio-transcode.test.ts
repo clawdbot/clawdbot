@@ -227,49 +227,29 @@ describe("transcodeAudioBuffer", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
-  it("returns noop-same-container when source and target containers match", async () => {
+  it.each([
+    [
+      "returns noop-same-container when source and target containers match",
+      "mp3",
+      ".mp3",
+      "noop-same-container",
+    ],
+    [
+      "returns no-recipe when no afconvert recipe is defined for the requested pair",
+      "mp3",
+      "flac",
+      "no-recipe",
+    ],
+    ["returns invalid-extension for an empty source extension", "", "caf", "invalid-extension"],
+    ["returns invalid-extension for an empty target extension", "mp3", "", "invalid-extension"],
+    ["rejects path-traversal style extensions", "../etc/passwd", "caf", "invalid-extension"],
+  ])("%s", async (_name, sourceExtension, targetExtension, reason) => {
     const result = await transcodeAudioBuffer({
       audioBuffer: Buffer.from("payload"),
-      sourceExtension: "mp3",
-      targetExtension: ".mp3",
+      sourceExtension,
+      targetExtension,
     });
-    expect(result).toEqual({ ok: false, reason: "noop-same-container" });
-  });
-
-  it("returns no-recipe when no afconvert recipe is defined for the requested pair", async () => {
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "mp3",
-      targetExtension: "flac",
-    });
-    expect(result).toEqual({ ok: false, reason: "no-recipe" });
-  });
-
-  it("returns invalid-extension for an empty source extension", async () => {
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "",
-      targetExtension: "caf",
-    });
-    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
-  });
-
-  it("returns invalid-extension for an empty target extension", async () => {
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "mp3",
-      targetExtension: "",
-    });
-    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
-  });
-
-  it("rejects path-traversal style extensions", async () => {
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "../etc/passwd",
-      targetExtension: "caf",
-    });
-    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
+    expect(result).toEqual({ ok: false, reason });
   });
 
   it("returns platform-unsupported off-Darwin without invoking afconvert", async () => {

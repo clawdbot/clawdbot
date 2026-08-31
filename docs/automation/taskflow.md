@@ -7,7 +7,7 @@ read_when:
 title: "Task flow"
 ---
 
-Task Flow is the orchestration layer above [background tasks](/automation/tasks). A flow is a durable record of multi-step work with its own status, JSON state, revision counter, and linked task records. Flows survive gateway restarts; individual tasks remain the unit of detached work.
+Task Flow (formerly ClawFlow) is the orchestration layer above [background tasks](/automation/tasks). A flow is a durable record of multi-step work with its own status, JSON state, revision counter, and linked task records. Flows survive gateway restarts; individual tasks remain the unit of detached work.
 
 ## When to use Task Flow
 

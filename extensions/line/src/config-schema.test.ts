@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { LineConfigSchema } from "./config-schema.js";
 
 describe("LineConfigSchema", () => {
+  it("preserves root and account join-introduction overrides without materializing defaults", () => {
+    const defaults = LineConfigSchema.parse({ accounts: { work: {} } });
+    const configured = LineConfigSchema.parse({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true } },
+    });
+
+    expect(defaults).not.toHaveProperty("joinIntro");
+    expect(defaults.accounts?.work).not.toHaveProperty("joinIntro");
+    expect(configured).toMatchObject({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true } },
+    });
+  });
+
   it('rejects dmPolicy="open" without wildcard allowFrom', () => {
     const result = LineConfigSchema.safeParse({
       channelAccessToken: "token",

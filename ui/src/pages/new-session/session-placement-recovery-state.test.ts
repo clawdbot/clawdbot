@@ -38,32 +38,44 @@ describe("pending session placement recovery state", () => {
     );
   });
 
-  it("stages an idempotent create before the Gateway request", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-      message: "run remotely",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
-      createParams: { agentId: "cloud", message: "", thinkingLevel: "high", worktree: true },
-    });
+  it.each([undefined, true, false, "auto"] as const)(
+    "stages an idempotent create with Fast Mode %s before the Gateway request",
+    (fastMode) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      const createParams = pending.stageCreate({
+        agentId: "cloud",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
+        message: "run remotely",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: {
+          agentId: "cloud",
+          message: "",
+          thinkingLevel: "high",
+          ...(fastMode !== undefined ? { fastMode } : {}),
+          contextWindow: "large",
+          worktree: true,
+        },
+      });
 
-    expect(createParams).toMatchObject({
-      agentId: "cloud",
-      key: expect.stringMatching(/^agent:cloud:dashboard:/),
-      thinkingLevel: "high",
-      worktree: true,
-    });
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-    ).toMatchObject({
-      phase: "creating",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-      sessionKey: createParams?.key,
-      createParams,
-    });
-  });
+      expect(createParams).toMatchObject({
+        agentId: "cloud",
+        key: expect.stringMatching(/^agent:cloud:dashboard:/),
+        thinkingLevel: "high",
+        ...(fastMode !== undefined ? { fastMode } : {}),
+        contextWindow: "large",
+        worktree: true,
+      });
+      expect(
+        readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+      ).toMatchObject({
+        phase: "creating",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
+        sessionKey: createParams?.key,
+        createParams,
+      });
+    },
+  );
 
   it("preserves the requested permission mode in placement recovery", () => {
     const pending = new PendingSessionPlacementRecoveryState();
@@ -86,6 +98,33 @@ describe("pending session placement recovery state", () => {
       readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
     ).toMatchObject({ createParams: { permissionMode: "guarded" } });
   });
+
+  it.each([false, true])(
+    "does not promote over a replacement submission (canonical key changes: %s)",
+    (changesKey) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      expect(
+        pending.stageCreate({
+          agentId: "cloud",
+          target: { kind: "device", deviceId: "device-1" },
+          message: "old input",
+          gatewayUrl: "ws://gateway.example",
+          recoveryScope: "principal-a",
+          createParams: { agentId: "cloud", message: "", worktree: true },
+        }),
+      ).not.toBeNull();
+      const previous = pending.capture();
+      expect(previous).not.toBeNull();
+      const replacement = { ...previous!, messageId: "new-submission", message: "new input" };
+      expect(writeSessionPlacementRecovery(replacement)).toBe(true);
+      expect(
+        pending.promoteToDispatching(changesKey ? "agent:cloud:canonical" : pending.sessionKey),
+      ).toBe(false);
+      expect(
+        readSessionPlacementRecovery(pending.gatewayUrl, pending.recoveryScope, pending.sessionKey),
+      ).toEqual(replacement);
+    },
+  );
 
   it.each(["", "x".repeat(129)])(
     "rejects an invalid persisted machine class %#",
@@ -220,6 +259,7 @@ describe("pending session placement recovery state", () => {
       createParams: {
         agentId: "cloud",
         incognito: true,
+        fastMode: true,
         message: "",
         worktree: true,
       },
@@ -229,6 +269,7 @@ describe("pending session placement recovery state", () => {
     expect(createParams).toMatchObject({
       agentId: "cloud",
       incognito: true,
+      fastMode: true,
       worktree: true,
     });
     expect(createParams).not.toHaveProperty("key");
@@ -355,7 +396,6 @@ describe("pending session placement recovery state", () => {
         createParams: { agentId: "cloud", message: "", worktree: true },
       }),
     ).not.toBeNull();
-    const staleKey = pending.sessionKey;
     const newerRecovery = {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
@@ -368,7 +408,7 @@ describe("pending session placement recovery state", () => {
     };
     expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
 
-    pending.clearFor("ws://gateway.example", "principal-a", staleKey);
+    pending.clear();
 
     expect(pending.sessionKey).toBe("");
     expect(

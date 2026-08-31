@@ -1,7 +1,6 @@
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 // Gateway extension relay upgrade handler: auth + routing decisions.
-import http, { type IncomingMessage } from "node:http";
-import net from "node:net";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,13 +8,31 @@ const getBrowserControlStateMock = vi.fn();
 const startBrowserControlServiceFromConfigMock = vi.fn();
 vi.mock("../../control-service.js", () => ({
   getBrowserControlState: () => getBrowserControlStateMock(),
-  startBrowserControlServiceFromConfig: () => startBrowserControlServiceFromConfigMock(),
+  startBrowserControlServiceFromConfig: async () => {
+    const state = await startBrowserControlServiceFromConfigMock();
+    if (state) {
+      getBrowserControlStateMock.mockReturnValue(state);
+    }
+    return state;
+  },
 }));
 
 const ensureExtensionRelayForProfileMock = vi.fn();
 vi.mock("./relay-lifecycle.js", () => ({
-  ensureExtensionRelayForProfile: (...args: unknown[]) =>
-    ensureExtensionRelayForProfileMock(...args),
+  ensureExtensionRelayForProfile: async (
+    state: ReturnType<typeof stateWithExtensionProfile>,
+    profile: { name: string; cdpPort: number },
+  ) => {
+    const result = await ensureExtensionRelayForProfileMock(state, profile);
+    const relay = {
+      ...result,
+      ownership: "owned",
+      port: profile.cdpPort,
+      token: readExtensionRelayTokenMock(),
+    };
+    state.extensionRelays.set(profile.name, relay);
+    return relay;
+  },
 }));
 
 const resolveProfileMock = vi.fn();
@@ -96,6 +113,10 @@ function v2Req(url = "/browser/extension"): IncomingMessage {
 
 function stateWithExtensionProfile() {
   return {
+    profiles: new Map([
+      ["chrome", { profile: { name: "chrome", driver: "extension", cdpPort: 18799 } }],
+    ]),
+    extensionRelays: new Map(),
     resolved: {
       extensionRelayToken: TOKEN,
       profiles: { chrome: { driver: "extension" } },
@@ -131,7 +152,7 @@ function oversizedMaskedTextFrame(): Buffer {
 
 // Default: the requested profile resolves to a valid extension profile.
 function primeProfile() {
-  resolveProfileMock.mockReturnValue({ name: "chrome", driver: "extension" });
+  resolveProfileMock.mockReturnValue({ name: "chrome", driver: "extension", cdpPort: 18799 });
 }
 
 async function mockSuccessfulUpgrade() {
@@ -141,6 +162,8 @@ async function mockSuccessfulUpgrade() {
     close: vi.fn(),
     terminate: vi.fn(),
     send: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
   });
   vi.spyOn(wsMod.WebSocketServer.prototype, "handleUpgrade").mockImplementation(
     (_req, _socket, _head, cb) => {
@@ -228,7 +251,7 @@ describe("handleGatewayExtensionUpgrade", () => {
     primeProfile();
     const bridge = { id: "fresh-bridge" };
     ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
-    await mockSuccessfulUpgrade();
+    const ws = await mockSuccessfulUpgrade();
 
     const { socket } = fakeSocket();
     const handled = await handleGatewayExtensionUpgrade(
@@ -238,12 +261,12 @@ describe("handleGatewayExtensionUpgrade", () => {
     );
 
     expect(handled).toBe(true);
-    expect(readExtensionRelayTokenMock).toHaveBeenCalledOnce();
+    expect(readExtensionRelayTokenMock).toHaveBeenCalled();
+    expect(() => ws.emit("error", new Error("Invalid WebSocket frame"))).not.toThrow();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("does not lazy-start or attach v2 before the in-band client proof succeeds", async () => {
@@ -275,57 +298,29 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
     expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
     attach();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
-    const server = http.createServer();
-    server.on("upgrade", (request, socket, head) => {
-      void handleGatewayExtensionUpgrade(request, socket, head);
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected direct-Gateway test port");
-    }
-    const socket = net.createConnection({ host: "127.0.0.1", port: address.port });
-    socket.on("error", () => {});
-    await once(socket, "connect");
-    const response: Buffer[] = [];
-    socket.on("data", (chunk) => response.push(Buffer.from(chunk)));
-    const closed = once(socket, "close");
-    const request = Buffer.from(
-      [
-        "GET /browser/extension HTTP/1.1",
-        "Host: 127.0.0.1",
-        "Connection: Upgrade",
-        "Upgrade: websocket",
-        "Sec-WebSocket-Version: 13",
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-        "Sec-WebSocket-Protocol: openclaw-extension-relay.v2",
-        "Origin: chrome-extension://relay-auth-v2-test",
-        "",
-        "",
-      ].join("\r\n"),
+    const { socket, writes, isDestroyed } = fakeSocket();
+    const handled = await handleGatewayExtensionUpgrade(
+      v2Req(),
+      socket,
+      oversizedMaskedTextFrame(),
     );
-    socket.write(Buffer.concat([request, oversizedMaskedTextFrame()]));
-    await closed;
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
 
-    const text = Buffer.concat(response).toString("utf8");
-    expect(text).not.toContain("auth.challenge");
-    expect(text).not.toContain("auth.ok");
-    expect(authenticateExtensionWebSocketMock).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
-    expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
+    const response = writes.join("");
+    expect(handled).toBe(true);
+    expect(response.startsWith("HTTP/1.1 400 Bad Request\r\n")).toBe(true);
+    expect(isDestroyed()).toBe(true);
+    expect(response.includes("auth.challenge")).toBe(false);
+    expect(response.includes("auth.ok")).toBe(false);
+    expect(authenticateExtensionWebSocketMock.mock.calls.length).toBe(0);
+    expect(startBrowserControlServiceFromConfigMock.mock.calls.length).toBe(0);
+    expect(ensureExtensionRelayForProfileMock.mock.calls.length).toBe(0);
+    expect(attachExtensionWebSocketMock.mock.calls.length).toBe(0);
   });
 
   it("binds v2 to the exact profile resource and refuses mixed-protocol downgrade", async () => {
@@ -386,10 +381,9 @@ describe("handleGatewayExtensionUpgrade", () => {
     );
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 
   it("authenticates against the live relay secret when Browser state is stale", async () => {
@@ -418,9 +412,8 @@ describe("handleGatewayExtensionUpgrade", () => {
 
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(
-      bridge,
-      expect.objectContaining({ readyState: 1 }),
-    );
+    await expect
+      .poll(() => attachExtensionWebSocketMock.mock.calls)
+      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
   });
 });

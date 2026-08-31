@@ -1,6 +1,7 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../../runtime.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -70,7 +71,8 @@ vi.mock("../../commands/doctor-lint.js", () => ({
   runDoctorLintCli: mocks.runDoctorLintCli,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -90,7 +92,14 @@ describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
     registerMaintenanceCommands(program);
-    await program.parseAsync(args, { from: "user" });
+    try {
+      await program.parseAsync(args, { from: "user" });
+    } catch (error) {
+      if (!(error instanceof ExitError)) {
+        throw error;
+      }
+      runtime.exit(error.code);
+    }
   }
 
   beforeEach(() => {

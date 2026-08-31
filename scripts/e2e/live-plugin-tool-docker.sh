@@ -165,7 +165,7 @@ fi
 plugin_tgz="${plugin_tgzs[0]}"
 
 echo "Installing fixture plugin from npm-pack: $plugin_tgz"
-openclaw plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1
 node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs configure
 openclaw plugins enable "$PLUGIN_ID" >/tmp/openclaw-plugin-enable.log 2>&1
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json

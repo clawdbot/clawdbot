@@ -111,8 +111,16 @@ describe("readServiceStatusSummary", () => {
       expect(formatStatusServiceValue(summary)).toBe(
         probe === "load"
           ? "systemd unknown (inspection failed: Error: service manager permission denied) · stopped"
-          : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
+          : probe === "runtime"
+            ? "systemd disabled (inspection failed: service runtime inspection failed) · unknown"
+            : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
       );
+      if (probe === "runtime") {
+        expect(summary.runtime?.inspectionFailure).toEqual({
+          code: "service-runtime-inspection-failed",
+          detail: "service manager permission denied",
+        });
+      }
     },
   );
 

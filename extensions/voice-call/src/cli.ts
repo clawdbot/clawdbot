@@ -22,7 +22,7 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./config.js";
-import { findCallMatchesInStore, loadActiveCallsFromStore } from "./manager/store.js";
+import { findCallInStore, loadActiveCallsFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
@@ -379,8 +379,7 @@ export function registerVoiceCallCli(params: {
       ensureHistoryStateRuntime();
       const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const persisted = await findCallMatchesInStore(storePath, options.callId);
-        const call = persisted.byCallId ?? persisted.byProviderCallId;
+        const call = findCallInStore(storePath, options.callId);
         writeCliJson(call ?? { found: false });
         return;
       }

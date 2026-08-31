@@ -1,13 +1,17 @@
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
-import {
-  readAvatarGatewayContext,
-  registerAvatarGatewayReset,
-  resolveTrustedAvatarUrl,
-} from "./identity-avatar.ts";
+import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
+import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-const IDENTITY_AVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+// Agent identity files also support SVG; these blobs render only as <img>, never inline markup.
+const IDENTITY_AVATAR_MIME_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/svg+xml",
+]);
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;

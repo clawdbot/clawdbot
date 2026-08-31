@@ -250,7 +250,7 @@ describe("Codex session deletion subscriptions", () => {
     expect(fixture.request).toHaveBeenCalledExactlyOnceWith(
       "thread/unsubscribe",
       { threadId: fixture.binding.threadId },
-      { timeoutMs: 5_000 },
+      { timeoutMs: 5_000, assertCurrent: expect.any(Function) },
     );
   });
 });

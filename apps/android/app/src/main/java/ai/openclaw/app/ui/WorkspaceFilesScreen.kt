@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -399,16 +398,14 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   } else {
     // Reuse the chat renderer's code block so previews highlight and cap
     // exactly like fenced code in the transcript.
-    SelectionContainer {
-      Column(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 12.dp),
-      ) {
-        ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
-      }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState())
+          .padding(bottom = 12.dp),
+    ) {
+      ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
     }
   }
 }

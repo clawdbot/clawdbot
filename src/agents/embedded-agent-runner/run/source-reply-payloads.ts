@@ -16,6 +16,8 @@ type EmbeddedRunReplyItem = {
   /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
   isCommentary?: boolean;
   audioAsVoice?: boolean;
+  attachments?: ReplyPayload["attachments"];
+  trustedLocalMedia?: boolean;
   replyToId?: string;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -44,8 +46,8 @@ export function buildSourceReplyPayloadState(params: {
   const sourceReplyPayloads = params.payloads ?? [];
   const replyItems = sourceReplyPayloads.flatMap((payload, index): EmbeddedRunReplyItem[] => {
     const text = normalizeOptionalString(payload.text) ?? "";
-    const media = Array.from(
-      new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
+    const media = (
+      payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : []
     ).filter((value) => value.trim().length > 0);
     if (
       !text &&
@@ -64,6 +66,10 @@ export function buildSourceReplyPayloadState(params: {
         ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
         ...(media.length ? { media } : {}),
         ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
+        ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
+        ...(payload.trustedLocalMedia !== undefined
+          ? { trustedLocalMedia: payload.trustedLocalMedia }
+          : {}),
         ...(payload.presentation ? { presentation: payload.presentation } : {}),
         ...(payload.interactive ? { interactive: payload.interactive } : {}),
         ...(payload.channelData ? { channelData: payload.channelData } : {}),

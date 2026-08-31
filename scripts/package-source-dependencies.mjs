@@ -32,7 +32,7 @@ export function validateBundledPackageDependencyAlignment({
     }
     if (rootVersion !== version && rootVersion !== `workspace:${version}`) {
       throw new Error(
-        `${rootPackageLabel} must declare ${name}@${version} to bundle @openclaw/ai without duplicate dependencies`,
+        `${rootPackageLabel} must declare ${name}@${version} to bundle ${bundledPackageLabel} without duplicate dependencies`,
       );
     }
     aligned.push([name, version]);

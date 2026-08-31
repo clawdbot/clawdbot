@@ -77,6 +77,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -99,6 +100,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -122,6 +124,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -148,6 +151,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(["running-job"]),
@@ -184,6 +188,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     );
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -218,6 +223,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     );
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -248,6 +254,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(["running-job"]),
@@ -282,6 +289,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -312,6 +320,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
 
     try {
       const activeResult = await runSessionRegistryMaintenanceForStore({
+        agentId: "main",
         apply: true,
         retentionMs: 7 * DAY_MS,
         runningCronJobIds: new Set(),
@@ -324,6 +333,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     }
 
     const releasedResult = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),

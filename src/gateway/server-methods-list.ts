@@ -44,6 +44,7 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "chat.metadata.changed",
   "ui.command",
   "session.approval",
   "session.message",
