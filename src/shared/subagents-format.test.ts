@@ -1,4 +1,3 @@
-// Subagent format tests cover concise subagent status and duration formatting.
 import { describe, expect, it } from "vitest";
 import { formatTokenUsageDisplay, resolveTotalTokens, truncateLine } from "./subagents-format.js";
 
@@ -49,16 +48,6 @@ describe("shared/subagents-format", () => {
     expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖...");
     // CJK Extension B (surrogate pair) at boundary: character stays intact.
     expect(truncateLine("AB𠮷CDEF", 7)).toBe("AB𠮷...");
-    // No broken surrogates in output.
-    for (const result of [
-      truncateLine("AB🤖CDEF", 6),
-      truncateLine("🤖🤖🤖", 5),
-      truncateLine("AB𠮷CDEF", 7),
-    ]) {
-      expect(result).not.toMatch(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
-      );
-    }
   });
 
   it("resolves token totals and io breakdowns from valid numeric fields only", () => {

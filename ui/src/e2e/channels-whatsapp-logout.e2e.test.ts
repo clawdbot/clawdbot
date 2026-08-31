@@ -1,7 +1,7 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,18 +14,21 @@ const suite = createControlUiE2eSuite({
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "channels-save-failure",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("channels-save-failure");
+  }
+});
+let wizardUiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    wizardUiProofArtifactDir = createControlUiE2eArtifactDir("channel-wizard-continue-spinner");
+  }
+});
 
 suite.define(() => {
   it("shows rejected channel configuration saves in the open editor without losing the draft", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         locale: "en-US",
@@ -179,7 +182,6 @@ suite.define(() => {
         });
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -266,7 +268,6 @@ suite.define(() => {
         await firstConfirm.getByRole("button", { name: "Cancel" }).focus();
         await page.keyboard.press("Escape");
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -481,6 +482,16 @@ suite.define(() => {
       });
       await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
       await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
+      const busyButton = wizard.locator('button[aria-busy="true"]');
+      await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
+      await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");
+      await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
+      if (captureUiProofEnabled) {
+        await wizard.screenshot({ path: path.join(wizardUiProofArtifactDir, "after.png") });
+      }
+      await expect
+        .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
+        .toBe(0);
       await gateway.resolveDeferred("wizard.next");
 
       const token = wizard.getByLabel("Telegram bot token");

@@ -1,8 +1,6 @@
 /** Redaction policy surface: Git snapshots may omit these credential-bearing tables. */
 export const STATE_SECRET_TABLE_NAMES = [
   "audit_identity_keys",
-  "auth_profile_state",
-  "auth_profile_stores",
   "apns_registrations",
   "channel_ingress_events",
   "channel_pairing_requests",
@@ -23,7 +21,11 @@ export const STATE_SECRET_TABLE_NAMES = [
 ] as const;
 
 /** Secret-redacted Git backups must never carry machine-state values under these prefixes. */
-export const STATE_SECRET_CONFIG_STATE_KEY_PREFIXES = ["nodeHost.", "webPush.vapidKeys"] as const;
+export const STATE_SECRET_CONFIG_STATE_KEY_PREFIXES = [
+  "authProfiles.",
+  "nodeHost.",
+  "webPush.vapidKeys",
+] as const;
 
 /** Redaction policy surface for credential-bearing per-agent database tables. */
 export const AGENT_SECRET_TABLE_NAMES = [

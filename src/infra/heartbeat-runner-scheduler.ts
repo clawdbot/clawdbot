@@ -358,20 +358,39 @@ export function startHeartbeatRunner(opts: {
     const agentOutcomes = await Promise.all(
       Array.from(state.agents.values(), (agent) => runOneAgent(agent.agentId, agent)),
     );
-    const firstRetryableSkip = agentOutcomes.find(
-      (outcome) => outcome.retryableSkip,
-    )?.retryableSkip;
-    if (firstRetryableSkip) {
-      // At least one agent's runtime was busy. The wake layer schedules a
-      // retry; on retry, agents that already advanced their schedule will
-      // defer via cooldown, so only the still-busy agent actually re-runs.
-      return firstRetryableSkip;
+    let ran = false;
+    let firstResult: HeartbeatRunResult | undefined;
+    let firstGuardSkip: Extract<HeartbeatRunResult, { status: "skipped" }> | undefined;
+    for (const outcome of agentOutcomes) {
+      if (outcome.retryableSkip) {
+        // Busy agents own the retry. Successful siblings already advanced their
+        // cooldown, so the retry does not replay their completed work.
+        return outcome.retryableSkip;
+      }
+      ran ||= outcome.ran;
+      firstResult ??= outcome.result;
+      const result = outcome.result;
+      if (
+        !ran &&
+        result?.status === "skipped" &&
+        result.retryAtMs !== undefined &&
+        (!firstGuardSkip || result.retryAtMs < (firstGuardSkip.retryAtMs ?? Infinity))
+      ) {
+        // Keep the original result identity and first agent on equal deadlines;
+        // wake-layer retention consumes the exact guard reason and retry time.
+        firstGuardSkip = result;
+      }
     }
-
-    if (agentOutcomes.some((outcome) => outcome.ran)) {
+    if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    return (
+      firstGuardSkip ??
+      firstResult ?? {
+        status: "skipped",
+        reason: isInterval ? "not-due" : "disabled",
+      }
+    );
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>

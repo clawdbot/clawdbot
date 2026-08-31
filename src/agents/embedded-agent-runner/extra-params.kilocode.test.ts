@@ -156,14 +156,6 @@ describe("extra-params: Kilocode kilo-auto/balanced reasoning", () => {
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
   });
 
-  it("still normalizes reasoning for Kilocode under restrictive plugins.allow", () => {
-    const capturedPayload = applyAndCaptureReasoning({
-      modelId: "anthropic/claude-sonnet-4",
-    });
-
-    expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
-  });
-
   it("does not inject reasoning.effort for x-ai models", () => {
     const capturedPayload = applyAndCaptureReasoning({
       modelId: "x-ai/grok-3",

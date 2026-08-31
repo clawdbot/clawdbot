@@ -25,13 +25,26 @@ separate from the Gateway's current wire protocol number reported in `hello-ok`.
 
 ## Install
 
+Use the verified stable release with exact pins:
+
 ```bash
-npm install @openclaw/gateway-client @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-Node consumers use the `ws` transport included as a runtime dependency. Browser
-consumers provide their platform WebSocket through the browser-safe protocol
-client surface.
+See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
+Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
+package versions and dist-tags.
+
+This release declares Node.js `>=22.19.0`. Node consumers use the `ws` transport
+included as a runtime dependency. Browser consumers provide their platform
+WebSocket through the browser-safe protocol client surface.
+
+For device-authenticated Node connections, supply `deviceIdentity` (or
+`hostDeps.loadOrCreateDeviceIdentity`) and the `hostDeps.signDevicePayload` and
+`hostDeps.publicKeyRawBase64UrlFromPem` callbacks. The host also owns device-token
+storage through `GatewayClientHostDeps`; the package does not load OpenClaw's
+local identity or credentials automatically.
 
 ## Entry points
 
@@ -80,9 +93,16 @@ The client waits for the Gateway's `connect.challenge` event before sending its
 does not fall back to a pre-challenge handshake. `onHelloOk` fires only after the
 Gateway accepts a compatible connection, so requests should wait for that callback.
 
-For remote connections, use `wss://`. Plaintext `ws://` is allowed by default
-only for loopback addresses. Authentication material and Gateway traffic must
-not cross an untrusted network without transport security.
+This loopback example uses the default `gateway-client` / `backend` identity.
+It is not a device-pairing example. UI clients should declare their actual `mode`
+and supply the device-auth host callbacks described above; see
+[device identity and pairing](https://docs.openclaw.ai/gateway/protocol#device-identity-and-pairing).
+
+For remote connections, prefer `wss://`. The Node client also accepts plaintext
+`ws://` by default for loopback, private/link-local/CGNAT IP addresses, and
+`.local` or `.ts.net` hostnames. This allowlist does not provide encryption:
+authentication material and Gateway traffic must not cross an untrusted network
+without transport security.
 
 ## Browser clients
 

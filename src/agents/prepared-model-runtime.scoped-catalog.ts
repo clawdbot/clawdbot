@@ -1,13 +1,28 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
+import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import {
   prepareAgentCatalogSource,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
 import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
+import {
+  listPreparedSyntheticAuthProviderRefs,
+  resolvePreparedSyntheticAuth,
+} from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.types.js";
+
+type ScopedReadOnlyModelAuthInput = Pick<
+  PreparedModelRuntimeInput,
+  "config" | "env" | "workspaceDir"
+>;
 
 async function prepareScopedReadOnlyModelCatalogWithMode(
   input: PreparedModelRuntimeInput,
@@ -34,6 +49,45 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   return (
     await prepareFullCatalogFacts(agentFactsForInput, pluginGeneration, catalogMode, catalogSource)
   ).modelCatalog;
+}
+
+/** Resolves provider-scoped, secret-free auth modes without live model discovery. */
+export async function prepareScopedReadOnlyModelAuthModes(
+  input: ScopedReadOnlyModelAuthInput,
+  providerDiscoveryProviderIds: readonly string[],
+  pluginMetadataSnapshot: PluginMetadataSnapshot,
+): Promise<PreparedAgentCredentialModes> {
+  const providerIds = [
+    ...new Set(providerDiscoveryProviderIds.map(normalizeProviderId).filter(Boolean)),
+  ];
+  const providers =
+    (
+      await prepareImplicitProviderStaticCatalog({
+        config: input.config,
+        env: input.env,
+        pluginMetadataSnapshot,
+        providerDiscoveryProviderIds: providerIds,
+        staticCatalogProviderIds: providerIds,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      })
+    ).providers ?? [];
+  const credentials = resolveAmbientAgentCredentialsForDiscovery({
+    config: input.config,
+    env: input.env,
+    authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
+    syntheticAuthProviderRefs: listPreparedSyntheticAuthProviderRefs(providers),
+    resolveSyntheticAuth: (provider) =>
+      resolvePreparedSyntheticAuth({ config: input.config, provider, providers }),
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+  });
+  const modes = resolveUsableAgentCredentialModes(credentials);
+  const scoped: Record<string, PreparedAgentCredentialModes[string]> = {};
+  for (const provider of providerIds) {
+    if (modes[provider]) {
+      scoped[provider] = modes[provider];
+    }
+  }
+  return scoped;
 }
 
 /** Builds a request-scoped read-only catalog without executing live provider discovery. */

@@ -15,6 +15,7 @@ import {
   resetPendingAssistantUsage,
   handleMessageEnd,
 } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   handleToolExecutionEnd,
@@ -24,16 +25,16 @@ import {
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
+import { deriveSessionTotalTokens, normalizeUsage } from "./usage.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (
     evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
   ): void | Promise<void> => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
         return handler();
@@ -56,11 +57,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             ctx.state.pendingEventChain = null;
           }
         });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-        return task;
-      }
-      return;
+      ctx.state.pendingEventChain = task;
+      return task;
     }
 
     const task = ctx.state.pendingEventChain
@@ -73,10 +71,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-      return task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
   return (evt: AgentSessionEvent) => {
@@ -99,17 +95,34 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           handleMessageUpdate(ctx, evt as never);
         });
         return;
-      case "message_end":
-        if ((evt.message as AgentMessage)?.role === "assistant") {
-          preservePendingAssistantUsage(
-            evt.message as Extract<AgentMessage, { role: "assistant" }>,
-            ctx.state.pendingAssistantUsage,
-          );
+      case "message_end": {
+        const message = evt.message as AgentMessage;
+        // Snapshot provider facts before transcript repair can synthesize $0.
+        // Queued accounting must not reread the mutated message's placeholder cost.
+        const usageForAccounting =
+          message?.role === "assistant" &&
+          !isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)
+            ? normalizeUsage(message.usage)
+            : undefined;
+        if (message?.role === "assistant") {
+          preservePendingAssistantUsage(message, ctx.state.pendingAssistantUsage);
+          if (!isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
+            // Delivery may still be queued when compaction replaces the context.
+            // Capture this message's usage now, including an explicitly unknown snapshot.
+            ctx.params.onContextAccountingEvent?.({
+              kind: "model",
+              contextTokens: deriveSessionTotalTokens({
+                lastCallUsage: normalizeUsage(message.usage),
+              }),
+            });
+          }
         }
         void scheduleEvent(evt, () => {
+          ctx.recordAssistantUsage(usageForAccounting);
           return handleMessageEnd(ctx, evt as never);
         });
         return;
+      }
       case "tool_execution_start":
         void scheduleEvent(evt, () => {
           return handleToolExecutionStart(ctx, evt as never);
@@ -121,13 +134,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "tool_execution_end":
-        void scheduleEvent(
-          evt,
-          async () => {
-            await handleToolExecutionEnd(ctx, evt as never);
-          },
-          { detach: true },
-        );
+        void scheduleEvent(evt, async () => {
+          await handleToolExecutionEnd(ctx, evt as never);
+        });
         return;
       case "agent_start":
         void scheduleEvent(evt, () => {
@@ -143,6 +152,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "compaction_end":
+        // The attempt's replacement hook already recorded its private commit fact.
+        // Keep public completion timing and standalone subscriber counting unchanged.
         void scheduleEvent(evt, () => {
           handleCompactionEnd(ctx, evt);
         });

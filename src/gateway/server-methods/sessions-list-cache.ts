@@ -1,13 +1,16 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
-import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import {
+  readSessionIdentityMutationVersion,
+  readSessionLifecycleVersion,
+} from "../../sessions/session-lifecycle-events.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
   readOpenIncognitoAgentDatabaseGeneration,
 } from "../../state/openclaw-agent-db.js";
+import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
@@ -26,9 +29,12 @@ type SessionListFence = {
   modelCatalogRevision: string;
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
+  sessionLifecycleVersion: number;
+  userProfileVersion: number;
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
+  workerEnvironmentInventoryVersion: number;
   workerPlacementDiskSpaceVersion: number;
   workerPlacementRunnerAvailabilityVersion: number;
 };
@@ -42,10 +48,10 @@ type SessionListState = {
 
 const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
 const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
-const modelCatalogRevisions = new WeakMap<readonly ModelCatalogEntry[], number>();
+const modelCatalogRevisions = new WeakMap<object, number>();
 let nextModelCatalogRevision = 1;
 
-function readModelCatalogRevision(modelCatalog: readonly ModelCatalogEntry[] | undefined): number {
+function readModelCatalogRevision(modelCatalog: object | undefined): number {
   if (!modelCatalog) {
     return 0;
   }
@@ -60,8 +66,8 @@ function readModelCatalogRevision(modelCatalog: readonly ModelCatalogEntry[] | u
 
 /**
  * Serializes the per-agent catalog revision set so the cache fence advances
- * when any row owner's catalog changes. The revision identity of each distinct
- * catalog array is monotonic; the string join is stable per sorted agent set.
+ * when any row owner's entries or provider policy changes. A new read wrapper
+ * alone does not invalidate the cache; the prepared facts retain stable identity.
  */
 function readSessionListModelCatalogFence(
   modelCatalog: SessionListModelCatalog | undefined,
@@ -71,7 +77,10 @@ function readSessionListModelCatalogFence(
   }
   return [...modelCatalog.entries()]
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([agentId, entries]) => `${agentId}:${readModelCatalogRevision(entries)}`)
+    .map(
+      ([agentId, catalog]) =>
+        `${agentId}:${readModelCatalogRevision(catalog?.entries)}:${readModelCatalogRevision(catalog?.pluginRegistry)}`,
+    )
     .join(",");
 }
 
@@ -87,11 +96,14 @@ function readSessionListFence(
     modelCatalogRevision: readSessionListModelCatalogFence(modelCatalog),
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
+    sessionLifecycleVersion: readSessionLifecycleVersion(),
+    userProfileVersion: readUserProfileVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     // Rows embed transcript-derived previews/titles; a committed transcript
     // write without a session mutation must still invalidate reuse.
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerEnvironmentInventoryVersion: context.workerEnvironmentService?.inventoryVersion() ?? 0,
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
     workerPlacementRunnerAvailabilityVersion:
       context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
@@ -107,9 +119,12 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.modelCatalogRevision === fence.modelCatalogRevision &&
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
+    value.sessionLifecycleVersion === fence.sessionLifecycleVersion &&
+    value.userProfileVersion === fence.userProfileVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerEnvironmentInventoryVersion === fence.workerEnvironmentInventoryVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
     value.workerPlacementRunnerAvailabilityVersion ===
       fence.workerPlacementRunnerAvailabilityVersion

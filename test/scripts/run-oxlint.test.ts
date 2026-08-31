@@ -1,6 +1,6 @@
 // Run Oxlint tests cover run oxlint script behavior.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import {
   createOxlintShards,
   filterOxlintShards,
   parseShardRunnerArgs,
-  createWindowsExtensionShards,
+  createExtensionOxlintShards,
   resolveShardKillGraceMs,
   resolveShardHeartbeatMs,
   resolveShardTimeoutMs,
@@ -24,6 +24,8 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mts";
+import { waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -63,11 +65,15 @@ function writeModule(target: string, lines: string[]): void {
 function createSignalRunner(mode: SignalScenario, target: string): void {
   if (mode === "group") {
     const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    // An empty PID read becomes 0, so failure cleanup would kill its own process
+    // group. Publish complete PID bytes before the harness can observe the file.
     writeModule(target, [
       "import { spawn } from 'node:child_process';",
-      "import { writeFileSync } from 'node:fs';",
+      "import { renameSync, writeFileSync } from 'node:fs';",
       `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-      "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid)); writeFileSync(process.env.READY_FILE, String(process.pid));",
+      "writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(child.pid));",
+      "renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
+      "writeFileSync(process.env.READY_FILE, String(process.pid));",
       "process.on('SIGTERM', () => process.exit(0));",
       "setInterval(() => {}, 1000);",
     ]);
@@ -162,6 +168,40 @@ function oxlintShard(name: string, config: string, ...targets: string[]) {
   return { name, args: ["--tsconfig", `config/tsconfig/oxlint.${config}.json`, ...targets] };
 }
 
+const PLUGIN_FIXTURE_DIRECTORIES = [
+  "zeta",
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "epsilon",
+  "eta",
+  "theta",
+  "iota",
+];
+
+function createPluginShardFixture(
+  env: NodeJS.ProcessEnv,
+  memoryGiB: number,
+  platform: NodeJS.Platform = "linux",
+) {
+  const cwd = createTempDir("openclaw-oxlint-memory-");
+  for (const directory of PLUGIN_FIXTURE_DIRECTORIES) {
+    mkdirSync(join(cwd, "extensions", directory), { recursive: true });
+  }
+  writeFileSync(join(cwd, "extensions", "root.test.ts"), "");
+  writeFileSync(join(cwd, "extensions", "notes.md"), "");
+  return filterOxlintShards(
+    createOxlintShards({
+      cwd,
+      env: { ...env, OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "1" },
+      platform,
+      hostResources: { totalMemoryBytes: memoryGiB * 1024 ** 3, logicalCpuCount: 4 },
+    }),
+    new Set(["extensions"]),
+  );
+}
+
 describe("run-oxlint", () => {
   it("ends a failing run with a stable final status line", async () => {
     const { lines } = await captureFailedTrailer(() => {
@@ -239,13 +279,13 @@ describe("run-oxlint", () => {
     };
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
 
-    expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.check).toBe("node --import ./scripts/tsx.mjs scripts/check.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core",
+      "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core",
     );
     expect(packageJson.scripts.check).not.toContain(
-      "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
+      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts",
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
@@ -257,7 +297,7 @@ describe("run-oxlint", () => {
     };
     const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
 
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
     expect(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
@@ -387,39 +427,52 @@ describe("run-oxlint", () => {
       const runner = join(tempDir, "timeout-runner.mjs");
       const childPidPath = join(tempDir, "child.pid");
       let childPid = 0;
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+        "fs.writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(process.pid));",
+        "fs.renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
+      ].join("\n");
+      writeModule(runner, [
+        "import { spawn } from 'node:child_process';",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ]);
+
+      // The watchdog must test teardown, not win a race against child startup.
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        expect(
+          runShard({
+            env: {
+              ...process.env,
+              CHILD_PID_PATH: childPidPath,
+              OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
+              OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
+              OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
+            },
+            extraArgs: [],
+            runner,
+            shard: { name: "timeout-group-test", args: [] },
+          }),
+        ).resolves.toBe(124),
+      );
       try {
-        writeModule(runner, [
-          "import { spawn } from 'node:child_process';",
-          "import { writeFileSync } from 'node:fs';",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid));",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ]);
-
-        const command = runShard({
-          env: {
-            ...process.env,
-            CHILD_PID_PATH: childPidPath,
-            OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
-            OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
-          },
-          extraArgs: [],
-          runner,
-          shard: { name: "timeout-group-test", args: [] },
-        });
-
-        await waitFor(() => existsSync(childPidPath), 15_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 15_000);
         expect(isProcessAlive(childPid)).toBe(true);
-
-        await expect(command).resolves.toBe(124);
+        await releaseAndWait();
         await waitFor(() => !isProcessAlive(childPid), 15_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        try {
+          await releaseAndWait();
+        } finally {
+          if (!childPid && existsSync(childPidPath)) {
+            childPid = Number(readFileSync(childPidPath, "utf8"));
+          }
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+            await waitForDead(childPid, 2_000);
+          }
         }
       }
     },
@@ -462,6 +515,7 @@ describe("run-oxlint", () => {
         OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "2",
       },
       platform: "win32",
+      hostResources: ROOMY_HOST,
       readDir: () =>
         [
           { name: "zeta", isDirectory: () => true, isFile: () => false },
@@ -479,6 +533,35 @@ describe("run-oxlint", () => {
       oxlintShard("extensions:01", "extensions", "extensions/alpha", "extensions/beta"),
       oxlintShard("extensions:02", "extensions", "extensions/zeta"),
       oxlintShard("scripts", "scripts", "scripts"),
+    ]);
+  });
+
+  it.each([
+    { platform: "linux", env: { CI: "true" } },
+    { platform: "darwin", env: {} },
+  ] as const)(
+    "bounds small-host plugin lint with complete coverage on $platform",
+    ({ platform, env }) => {
+      const shards = createPluginShardFixture(env, 16, platform);
+      expect(shards.map((shard) => shard.args.slice(2).length)).toEqual([1, 8, 1]);
+      expect(shards.flatMap((shard) => shard.args.slice(2))).toEqual([
+        "extensions/root.test.ts",
+        ...PLUGIN_FIXTURE_DIRECTORIES.toSorted().map((directory) => `extensions/${directory}`),
+      ]);
+      expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards(shards)).toBe(true);
+    },
+  );
+
+  it.each([
+    { name: "explicit full speed", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "full" } },
+    { name: "explicit fast mode", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "fast" } },
+    { name: "explicit parallel", memoryGiB: 16, env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" } },
+    { name: "large low-CPU CI", memoryGiB: 64, env: { CI: "true" } },
+    { name: "large explicit serial", memoryGiB: 64, env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "1" } },
+    { name: "memory threshold", memoryGiB: 24, env: { CI: "true" } },
+  ])("keeps the unsplit plugin workload for $name", ({ memoryGiB, env }) => {
+    expect(createPluginShardFixture(env, memoryGiB)).toEqual([
+      oxlintShard("extensions", "extensions", "extensions"),
     ]);
   });
 
@@ -619,8 +702,9 @@ describe("run-oxlint", () => {
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {
-    const shards = createWindowsExtensionShards({
+    const shards = createExtensionOxlintShards({
       cwd: "/repo",
+      platform: "win32",
       readDir: () => {
         throw new Error("missing extensions");
       },

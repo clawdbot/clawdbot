@@ -1,6 +1,7 @@
 /** Linux systemd user service installer, parser, and lifecycle controls. */
 export {
   isNonFatalSystemdInstallProbeError,
+  hasSudoToRootSystemdUserManagerMismatch,
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   resolveSystemdUserServiceAccount,
@@ -20,10 +21,7 @@ export {
 } from "./systemd-lifecycle.js";
 export { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 export { isSystemdServiceEnabled, readSystemdServiceRuntime } from "./systemd-runtime.js";
-export {
-  readSystemdServiceExecStart,
-  resolveSystemdUserUnitPath,
-} from "./systemd-service-files.js";
+export { readSystemdServiceExecStart } from "./systemd-service-files.js";
 export {
   findInstalledSystemdGatewayScope,
   findSystemdGatewayInstallation,

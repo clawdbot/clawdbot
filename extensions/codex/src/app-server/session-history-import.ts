@@ -14,6 +14,8 @@ export async function createImportedCodexSession(params: {
   config: OpenClawConfig;
   key: string;
   agentId: string;
+  // Adoption explicitly snapshots a title; native forks must not inherit one.
+  displayName?: string;
   thread: CodexThread;
   throughTurnId: string | null;
   recoverMatchingInitialEntry?: true;
@@ -26,13 +28,12 @@ export async function createImportedCodexSession(params: {
     created: CreatedCodexImportedSession,
   ) => Promise<{ pluginExtensions: CreatedCodexImportedSession["entry"]["pluginExtensions"] }>;
 }): Promise<CreatedCodexImportedSession> {
-  const label = params.thread.name?.trim() || undefined;
   const spawnedCwd = params.thread.cwd?.trim() || undefined;
   const createParams = {
     cfg: params.config,
     key: params.key,
     agentId: params.agentId,
-    ...(label ? { label } : {}),
+    ...(params.displayName !== undefined ? { displayName: params.displayName } : {}),
     ...(spawnedCwd ? { spawnedCwd } : {}),
     initialEntry: params.initialEntry,
     afterCreate: async (entry: CreatedCodexImportedSession) => {

@@ -1,13 +1,15 @@
 // Qa Lab tests cover server plugin behavior.
+import { getTextContent, type ChatCompletionRequest } from "@copilotkit/aimock";
+import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 import { startQaAimockServer } from "./server.js";
 
 function makeResponsesInput(text: string) {
   return {
-    role: "user",
+    role: "user" as const,
     content: [
       {
-        type: "input_text",
+        type: "input_text" as const,
         text,
       },
     ],
@@ -15,6 +17,131 @@ function makeResponsesInput(text: string) {
 }
 
 describe("qa aimock server", () => {
+  it("matches programmatic fixtures across trailing runtime context without rewriting requests", async () => {
+    const server = await startQaAimockServer({ host: "127.0.0.1", port: 0 });
+    const client = new OpenAI({
+      baseURL: `${server.baseUrl}/v1`,
+      apiKey: "qa-local",
+      maxRetries: 0,
+    });
+    const userText = "Recover the research answer";
+    const toolOutput = "approval-unavailable: initiating-platform-disabled";
+    const carrier = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "Synthetic runtime context",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const call = {
+      type: "function_call" as const,
+      call_id: "call_shell",
+      name: "exec",
+      arguments: "{}",
+    };
+    const request = (text: string, output: string) =>
+      client.responses.create({
+        model: "gpt-5.6-luna",
+        input: [
+          makeResponsesInput(text),
+          call,
+          { type: "function_call_output", call_id: call.call_id, output },
+          makeResponsesInput(carrier),
+        ],
+      });
+    try {
+      const reset = await fetch(`${server.baseUrl}/__aimock/reset`, { method: "POST" });
+      expect(reset.status).toBe(200);
+      await reset.json();
+      server.addFixture({
+        match: {
+          predicate: (body) => {
+            const tool = body.messages.findLast((message) => message.role === "tool");
+            return (
+              body.messages.some(
+                (message) =>
+                  message.role === "user" && getTextContent(message.content) === userText,
+              ) &&
+              tool?.tool_call_id === call.call_id &&
+              getTextContent(tool.content) === toolOutput
+            );
+          },
+        },
+        response: {
+          toolCalls: [{ id: "call_read", name: "read", arguments: '{"path":"note.md"}' }],
+        },
+      });
+      for (const { text, output } of [
+        { text: "unrelated request", output: toolOutput },
+        { text: userText, output: "approval-pending" },
+      ]) {
+        await expect(request(text, output)).rejects.toMatchObject({
+          status: 404,
+          code: "no_fixture_match",
+        });
+      }
+      const response = await request(userText, toolOutput);
+      expect(response.output).toContainEqual(
+        expect.objectContaining({
+          type: "function_call",
+          call_id: "call_read",
+          name: "read",
+          arguments: '{"path":"note.md"}',
+        }),
+      );
+      const debug = await fetch(`${server.baseUrl}/debug/last-request`).then((result) =>
+        result.json(),
+      );
+      const expectedMessages: ChatCompletionRequest["messages"] = [
+        { role: "user", content: userText },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: call.call_id,
+              type: "function",
+              function: { name: call.name, arguments: call.arguments },
+            },
+          ],
+        },
+        { role: "tool", content: toolOutput, tool_call_id: call.call_id },
+        { role: "user", content: carrier },
+      ];
+      expect(debug.body.messages).toEqual(expectedMessages);
+      expect(JSON.parse(debug.raw)).toEqual(debug.body);
+      expect(debug).toMatchObject({
+        prompt: userText,
+        toolOutput,
+        toolOutputCallId: call.call_id,
+        plannedToolCallId: "call_read",
+      });
+      const journal = await fetch(`${server.baseUrl}/__aimock/journal`).then((result) =>
+        result.json(),
+      );
+      expect(journal.at(-1).body).toEqual(debug.body);
+
+      const registered = await fetch(`${server.baseUrl}/__aimock/fixtures`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          fixtures: [
+            {
+              match: { userMessage: "ordinary HTTP fixture" },
+              response: { content: "HTTP_MATCH_OK" },
+            },
+          ],
+        }),
+      });
+      expect(await registered.json()).toEqual({ added: 1 });
+      const httpResponse = await client.responses.create({
+        model: "gpt-5.6-luna",
+        input: "prefix ordinary HTTP fixture suffix",
+      });
+      expect(httpResponse.output_text).toBe("HTTP_MATCH_OK");
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("keeps complete large input when the upstream body is still retained", async () => {
     const server = await startQaAimockServer();
     const prompt = "u".repeat(40_000);

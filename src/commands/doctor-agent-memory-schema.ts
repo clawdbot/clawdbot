@@ -7,6 +7,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
   migrateOpenClawAgentDatabaseForMaintenance,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -152,7 +153,10 @@ export async function noteDoctorAgentMemorySchemaHealth(
     report = await withDoctorSqliteMaintenanceLock({
       env: params.env,
       operation: "agent memory schema repair",
-      run: () => repairDoctorAgentMemorySchemas({ env: params.env }),
+      run: () =>
+        withAgentDatabaseMaintenanceLease({ env: params.env }, async () =>
+          repairDoctorAgentMemorySchemas({ env: params.env }),
+        ),
     });
   } catch (error) {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {

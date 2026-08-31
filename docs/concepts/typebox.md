@@ -61,7 +61,7 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 - `pnpm protocol:gen:swift` generates the Swift gateway models.
 - `pnpm protocol:check:swift` verifies the committed Swift models without rewriting them.
 - `pnpm protocol:gen:kotlin` generates the Android protocol models and constants.
-- `pnpm protocol:check` checks the registry structure, runs all three generators, and verifies the committed Swift and Kotlin output (the JSON Schema output is a gitignored build artifact).
+- `pnpm protocol:check` checks the registry structure, runs all three generators, and verifies the committed Swift and Kotlin output. The JSON Schema output is a gitignored build artifact with no committed baseline to diff against, so `pnpm protocol:gen` instead asserts the published-document contract (required frame definitions, frame ordering, `type` discriminator mapping, non-empty method metadata) and fails the check when the generated schema drifts from it.
 
 When a gateway schema affects native clients, run `pnpm protocol:gen:swift`, review the generated diff, then run `pnpm protocol:check:swift`. Commit the schema and `GatewayModels.swift` update together. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
 

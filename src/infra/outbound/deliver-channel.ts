@@ -122,6 +122,9 @@ async function runChannelMessageSendWithLifecycle<
   try {
     attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
     const result = await params.send();
+    if (result.outcome === "not_sent") {
+      return { result };
+    }
     const successCtx = {
       ...params.ctx,
       result,
@@ -265,6 +268,10 @@ function createPluginHandler(
   ): Promise<T> => {
     await params.onPlatformSendStart?.(route);
     await params.onDirectAdapterHandoff?.();
+    // Keep the final authority check and adapter invocation in one synchronous
+    // call stack. An awaited callback leaves a microtask gap where custody can
+    // change after validation but before recipient-visible transport code runs.
+    params.assertDirectAdapterHandoff?.();
     return await send();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
@@ -312,7 +319,10 @@ function createPluginHandler(
         cfg: params.cfg,
         accountId: params.accountId,
       }) === true,
-    supportsMedia: Boolean(messageMedia ?? sendMedia),
+    // sendFormattedMedia is a first-class media sender (deliver-core prefers it
+    // over sendMedia), so leaving it out here silently drops media for
+    // formatted-only adapters and records the fallback as a plain sent text.
+    supportsMedia: Boolean(messageMedia ?? sendMedia ?? outbound?.sendFormattedMedia),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>
           outbound.sanitizeText!({
@@ -553,6 +563,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   conversationReadOrigin: params.conversationReadOrigin,
   deliveryQueueId: params.deliveryQueueId,
   preparedMessageId: params.preparedMessageId,
+  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   onPlatformSendDispatch: params.onPlatformSendDispatch,
   onDeliveryResult: params.onDeliveryResult,
 });

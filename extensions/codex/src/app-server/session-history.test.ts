@@ -1,4 +1,5 @@
 // Codex tests cover mirrored session-history branch selection.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 const tempDirs: string[] = [];
 
@@ -130,6 +132,44 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("preserves native prompt evidence across explicit model-only reads", async () => {
+    const { marker, sessionTarget } = await writeSqliteSession();
+    const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);
+    const message = {
+      role: "user" as const,
+      content: "native visible",
+      timestamp: 3,
+      __openclaw: {
+        upstreamUserText,
+        mirrorIdentity: "synthetic-native-turn",
+        mirrorOrigin: "codex",
+        turnTainted: true,
+      },
+    };
+    await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+    const target = { ...sessionTarget, sessionTarget, sessionFile: marker };
+    const hash = (text: string | undefined) =>
+      createHash("sha256")
+        .update(text ?? "")
+        .digest("hex");
+    const before = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    expect(hash(readUpstreamUserText(before))).toBe(hash(upstreamUserText));
+    const model = (await readCodexMirroredSessionHistoryMessages(
+      target,
+      undefined,
+      "model-context",
+    ))!.at(-1)!;
+    expect(readUpstreamUserText(model)).toBeUndefined();
+    expect(readMirrorIdentity(model)).toBe("synthetic-native-turn");
+    expect(model).toMatchObject({
+      content: "native visible",
+      timestamp: 3,
+      __openclaw: { mirrorOrigin: "codex", turnTainted: true },
+    });
+    const after = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    expect(hash(readUpstreamUserText(after))).toBe(hash(upstreamUserText));
+    expect(readMirrorIdentity(after)).toBe("synthetic-native-turn");
+  });
   it("treats a missing mirrored session file as empty history", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
     tempDirs.push(dir);

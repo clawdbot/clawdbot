@@ -15,11 +15,25 @@ on:
         required: false
         default: ""
         type: string
+      target_context_ref:
+        description: Canonical release context for an exact-SHA frozen-target validation
+        required: false
+        default: ""
+        type: string
       full_release_validation:
         description: Enable release-only Docker prerelease lanes from Full Release Validation
         required: false
         default: false
         type: boolean
+      phase:
+        description: Plugin prerelease phase to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - independent
+          - candidate
       node_test_exclude_patterns_json:
         description: Full Release Validation-only exact plugin test paths omitted for a frozen target
         required: false
@@ -40,7 +54,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}
+  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}
   cancel-in-progress: ${{ inputs.target_ref == 'main' }}
 
 env:
@@ -61,9 +75,57 @@ jobs:
       node_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.patterns_json }}
       run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
       plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
+      run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
+      - name: Validate phase inputs
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHASE" in
+            all|independent) exit 0 ;;
+            candidate) ;;
+            *)
+              echo "phase must be one of: all, independent, candidate" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$FULL_RELEASE_VALIDATION" != "true" ]]; then
+            echo "phase=candidate requires full_release_validation=true." >&2
+            exit 1
+          fi
+          if ! jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            'def digits: tostring | test("^[1-9][0-9]*$");
+             def hex40: type == "string" and test("^[a-f0-9]{40}$");
+             def hex64: type == "string" and test("^[a-f0-9]{64}$");
+             (.packageArtifactName | type == "string" and length > 0) and
+             (.packageArtifactId | digits) and
+             (.packageArtifactDigest | hex64) and
+             (.packageArtifactRunId | digits) and
+             (.packageArtifactRunAttempt | digits) and
+             (.packageFileName | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$")) and
+             (.packageSourceSha | hex40) and
+             ($sha == "" or .packageSourceSha == $sha) and
+             (.packageSha256 | hex64) and
+             (.packageVersion | type == "string" and length > 0) and
+             (.imageArtifactName | type == "string" and length > 0) and
+             (.imageArtifactId | digits) and
+             (.imageArtifactDigest | hex64) and
+             (.imageArtifactRunId | digits) and
+             (.imageArtifactRunAttempt | digits) and
+             (.imageArchiveSha256 | hex64)' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null; then
+            echo "phase=candidate requires the complete immutable package and Docker image artifact tuple." >&2
+            exit 1
+          fi
+
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
         env:
@@ -153,6 +215,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
         run: |
           node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, globSync } from "node:fs";
@@ -166,6 +229,7 @@ jobs:
           }).trim();
           const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          const phase = process.env.PHASE ?? "all";
           if (expectedSha && expectedSha !== checkoutRevision) {
             console.error(
               `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
@@ -211,24 +275,29 @@ jobs:
           }
 
           try {
-            const {
-              createExtensionTestShards,
-              DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-              splitExtensionTestJobTargets,
-            } = await import(targetPlanPath("extension-test-plan"));
-            const allExtensionShards = createExtensionTestShards({
-              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+            const planner = await import(targetPlanPath("extension-test-plan"));
+            const allExtensionShards = planner.createExtensionTestShards({
+              shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
-            const telegramPlanGroup = allExtensionShards
-              .find((shard) => shard.extensionIds.includes("telegram"))
-              ?.planGroups.find((group) => group.extensionIds.includes("telegram"));
-            const genericExtensionIds = allExtensionShards
-              .flatMap((shard) => shard.extensionIds)
-              .filter((extensionId) => extensionId !== "telegram");
-            const batchShards = createExtensionTestShards({
-              extensionIds: genericExtensionIds,
-              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-            }).map((shard) => ({
+            const hasJobSplitter = typeof planner.splitExtensionTestJobTargets === "function";
+            const telegramPlanGroup = hasJobSplitter
+              ? allExtensionShards
+                  .find((shard) => shard.extensionIds.includes("telegram"))
+                  ?.planGroups.find((group) => group.extensionIds.includes("telegram"))
+              : null;
+            const genericExtensionIds = hasJobSplitter
+              ? allExtensionShards
+                  .flatMap((shard) => shard.extensionIds)
+                  .filter((extensionId) => extensionId !== "telegram")
+              : [];
+            const batchShards = (
+              hasJobSplitter
+                ? planner.createExtensionTestShards({
+                    extensionIds: genericExtensionIds,
+                    shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                  })
+                : allExtensionShards
+            ).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
               vitest_config: "",
@@ -255,18 +324,20 @@ jobs:
                 ? path.relative(telegramTestDir, pattern).replaceAll("\\", "/")
                 : pattern,
             );
-            const telegramTestFiles = globSync(telegramTestConfig.include ?? [], {
-              cwd: telegramTestDir,
-              exclude: telegramTestExclude,
-            })
-              .map((file) =>
-                path
-                  .relative(process.cwd(), path.resolve(telegramTestDir, file))
-                  .replaceAll("\\", "/"),
-              )
-              .sort();
+            const telegramTestFiles = telegramPlanGroup
+              ? globSync(telegramTestConfig.include ?? [], {
+                  cwd: telegramTestDir,
+                  exclude: telegramTestExclude,
+                })
+                  .map((file) =>
+                    path
+                      .relative(process.cwd(), path.resolve(telegramTestDir, file))
+                      .replaceAll("\\", "/"),
+                  )
+                  .sort()
+              : [];
             const telegramJobTargets = telegramPlanGroup
-              ? splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
+              ? planner.splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
               : [];
             const telegramShards = telegramPlanGroup
               ? telegramJobTargets.map((includePatterns, index) => ({
@@ -276,7 +347,7 @@ jobs:
                   vitest_config: telegramPlanGroup.config,
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
-                  shard_index: DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
+                  shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
                 }))
               : [];
@@ -338,11 +409,14 @@ jobs:
             task: check.check,
           }));
           const dockerLanes = pluginPrereleasePlan.dockerLanes;
-          const runStatic = staticChecks.length > 0;
-          const runNode = nodeShards.length > 0;
-          const runExtensions = extensionShards.length > 0;
-          const runDocker = fullReleaseValidation && dockerLanes.length > 0;
-          const runSuite = runStatic || runNode || runExtensions || runDocker;
+          const runIndependent = phase !== "candidate";
+          const runCandidate = phase !== "independent";
+          const runStatic = runIndependent && staticChecks.length > 0;
+          const runNode = runIndependent && nodeShards.length > 0;
+          const runExtensions = runIndependent && extensionShards.length > 0;
+          const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;
+          const runSuite = runStatic || runNode || runExtensions || runInspector || runDocker;
 
           const manifest = {
             checkout_revision: checkoutRevision,
@@ -353,6 +427,7 @@ jobs:
             plugin_prerelease_node_matrix: createMatrix(nodeShards),
             run_plugin_prerelease_extensions: runExtensions,
             plugin_prerelease_extension_matrix: createMatrix(extensionShards),
+            run_plugin_prerelease_inspector: runInspector,
             run_plugin_prerelease_docker: runDocker,
             plugin_prerelease_docker_lanes: dockerLanes.join(" "),
           };
@@ -369,7 +444,8 @@ jobs:
   plugin-prerelease-static-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    # Job-level skips happen before matrix expansion; retain a unique owner name.
+    name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
@@ -406,7 +482,7 @@ jobs:
   plugin-prerelease-node-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
@@ -433,7 +509,9 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          sparse-checkout: src/plugins/npm-install-security-scan.release.test.ts
+          sparse-checkout: |
+            src/plugins/npm-install-security-scan.release.test.ts
+            scripts/lib/npm-json-output.mts
           sparse-checkout-cone-mode: false
           submodules: false
 
@@ -447,6 +525,9 @@ jobs:
           install -m 0644 \
             "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \
             src/plugins/npm-install-security-scan.release.test.ts
+          install -m 0644 \
+            "$trusted_checkout/scripts/lib/npm-json-output.mts" \
+            scripts/lib/npm-json-output.mts
           rm -rf -- "$trusted_checkout"
           trap - EXIT
 
@@ -463,6 +544,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.preflight.outputs.node_test_exclude_patterns_json }}
+          OPENCLAW_RELEASE_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -516,7 +598,7 @@ jobs:
   plugin-prerelease-extension-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
@@ -586,7 +668,7 @@ jobs:
       contents: read
     name: plugin-prerelease-inspector
     needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30

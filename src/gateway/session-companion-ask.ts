@@ -197,6 +197,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       workspaceDir: params.workspaceDir,
       cwd: params.workspaceDir,
       config: buildSessionCompanionRunConfig(params.cfg),
+      codeModeOverride: false,
       prompt: current.content,
       provider: selection.runtimeProvider ?? selection.provider,
       model: selection.modelId,

@@ -109,14 +109,15 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     ).resolves.toMatchObject({ ok: false });
   });
 
-  it("starts Discord voice in transcripts mode", async () => {
-    const join = vi.fn(async () => ({ ok: true, message: "joined" }));
+  it("starts Discord voice capture and reports the retired subscription", async () => {
+    const join = vi.fn<DiscordVoiceManager["join"]>(async () => ({ ok: true, message: "joined" }));
     setDiscordTranscriptsVoiceManager({
       accountId: "primary",
       manager: { join } as unknown as DiscordVoiceManager,
     });
 
     const onUtterance = vi.fn();
+    const onStatus = vi.fn();
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       session: {
         sessionId: "notes-1",
@@ -129,6 +130,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         },
       },
       onUtterance,
+      onStatus,
     });
 
     expect(result).toMatchObject({ ok: true });
@@ -138,9 +140,16 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         transcripts: {
           sessionId: "notes-1",
           onUtterance,
+          onStop: expect.any(Function),
         },
       },
     );
+    await join.mock.calls[0]?.[1]?.transcripts?.onStop?.();
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith({
+      active: false,
+      sessionId: "notes-1",
+      source: { providerId: "discord-voice", accountId: "primary", guildId: "g1", channelId: "c1" },
+    });
   });
 
   it("uses the sole voice-capable account instead of a text-only default", async () => {

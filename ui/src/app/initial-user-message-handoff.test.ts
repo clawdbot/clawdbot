@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  createInitialUserMessageHandoff,
-  type ApplicationInitialUserMessage,
-} from "./initial-user-message-handoff.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
-function message(text: string): ApplicationInitialUserMessage {
+function message(
+  text: string,
+): Parameters<ReturnType<typeof createInitialUserMessageHandoff>["prepare"]>[0]["message"] {
   return { role: "user", content: [{ type: "text", text }], timestamp: 1 };
 }
 
@@ -22,6 +21,7 @@ describe("initial user message handoff", () => {
     });
 
     expect(handoff.read("main", owner)).toEqual({
+      pending: true,
       sessionKey: "agent:main:main",
       message: first,
       owner,

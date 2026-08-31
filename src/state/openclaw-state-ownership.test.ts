@@ -15,9 +15,9 @@ import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import * as sqliteReadonlyLocation from "../infra/sqlite-readonly-location.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  getOpenClawStateDatabaseIfOpen,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
@@ -25,7 +25,10 @@ import {
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateDirForDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
 import {
   assertOpenClawStateWriteAllowedAtPath,
@@ -359,7 +362,8 @@ describe("external shared-state ownership", () => {
     const writer = new DatabaseSync(databasePath);
     writer.exec(
       "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; " +
-        "PRAGMA cache_size = 2; PRAGMA cache_spill = ON;",
+        "PRAGMA cache_size = 2; PRAGMA cache_spill = ON; " +
+        "CREATE TABLE rollback_race_pressure (payload TEXT NOT NULL) STRICT;",
     );
     const baselineOwnership = {
       version: 1 as const,
@@ -375,18 +379,18 @@ describe("external shared-state ownership", () => {
     };
     const payload = JSON.stringify("x".repeat(8192));
     writer.exec("BEGIN IMMEDIATE;");
-    const insert = writer.prepare(
+    const writeOwnership = writer.prepare(
       `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-       VALUES (?, ?, ?)`,
+       VALUES (?, ?, ?)
+       ON CONFLICT(state_key) DO UPDATE SET
+         value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms`,
     );
-    insert.run(
+    writeOwnership.run(
       STATE_SUPERVISION_KEY,
       JSON.stringify(baselineOwnership),
       baselineOwnership.claimedAt,
     );
-    for (let index = 0; index < 256; index += 1) {
-      insert.run(`rollback-race-${index.toString().padStart(3, "0")}`, payload, index);
-    }
+    const insertPressure = writer.prepare("INSERT INTO rollback_race_pressure VALUES (?)");
     writer.exec("COMMIT;");
     const originalGet = Object.getOwnPropertyDescriptor(StatementSync.prototype, "get")?.value as
       | ((
@@ -399,7 +403,6 @@ describe("external shared-state ownership", () => {
     }
     let transactionStarted = false;
     let transientOwnershipObserved = false;
-    let insertTransientOwnership = false;
     const get = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
       this: import("node:sqlite").StatementSync,
       ...params: unknown[]
@@ -407,30 +410,16 @@ describe("external shared-state ownership", () => {
       if (!transactionStarted && params[0] === STATE_SUPERVISION_KEY) {
         transactionStarted = true;
         writer.exec("BEGIN IMMEDIATE;");
-        if (insertTransientOwnership) {
-          writer
-            .prepare(
-              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-            )
-            .run(
-              STATE_SUPERVISION_KEY,
-              JSON.stringify(transientOwnership),
-              transientOwnership.claimedAt,
-            );
+        writeOwnership.run(
+          STATE_SUPERVISION_KEY,
+          JSON.stringify(transientOwnership),
+          transientOwnership.claimedAt,
+        );
+        // Fresh pages force cache misses even when SQLite's global cache retains existing rows.
+        // Use another B-tree after releasing the ownership cursor; rollback discards these pages.
+        for (let index = 0; index < 256; index += 1) {
+          insertPressure.run(payload);
         }
-        writer
-          .prepare(
-            `UPDATE config_machine_state
-             SET value_json = CASE WHEN state_key = ? THEN ? ELSE ? END,
-                 updated_at_ms = ?`,
-          )
-          .run(
-            STATE_SUPERVISION_KEY,
-            JSON.stringify(transientOwnership),
-            JSON.stringify("y".repeat(8192)),
-            transientOwnership.claimedAt,
-          );
         const racedReader = new DatabaseSync(resolveImmutableSqliteFileUri(databasePath), {
           readOnly: true,
         });
@@ -464,7 +453,6 @@ describe("external shared-state ownership", () => {
         .run(STATE_SUPERVISION_KEY);
       transactionStarted = false;
       transientOwnershipObserved = false;
-      insertTransientOwnership = true;
       expect(
         runWithOpenClawStateWriteAccess(
           { databasePath, env },
@@ -529,20 +517,26 @@ describe("external shared-state ownership", () => {
 
   it("closes an unpublished fresh handle when coordinator release fails", () => {
     const env = createEnv();
-    let cachedDuringRelease: ReturnType<typeof getOpenClawStateDatabaseIfOpen> = undefined;
+    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+    let cachedDuringRelease: ReturnType<
+      typeof openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath
+    > = undefined;
     const exec = mockCoordinatorRollbackFailure(() => {
-      cachedDuringRelease = getOpenClawStateDatabaseIfOpen({ env });
+      cachedDuringRelease =
+        openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
     });
 
     try {
       expect(() => openOpenClawStateDatabase({ env })).toThrow(
-        /fresh state database open completed, but releasing its coordinator failed/u,
+        /fresh state database open and coordinator release both failed/u,
       );
     } finally {
       exec.mockRestore();
     }
     expect(cachedDuringRelease).toBeUndefined();
-    expect(getOpenClawStateDatabaseIfOpen({ env })).toBeUndefined();
+    expect(
+      openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath),
+    ).toBeUndefined();
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
   });
 

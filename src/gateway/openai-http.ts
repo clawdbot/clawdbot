@@ -16,11 +16,12 @@ import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
@@ -44,7 +45,9 @@ import {
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
+  type ConversationToolCall,
   IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -72,11 +75,7 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import {
-  isFailedOpenAiAgentRun,
-  resolveOpenAiCompatError,
-  validateOpenAiSamplingParams,
-} from "./openai-compat-errors.js";
+import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -448,12 +447,6 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
-type AssistantToolCall = {
-  id: string;
-  name: string;
-  arguments: string;
-};
-
 function stringifyToolCallArguments(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -469,11 +462,11 @@ function stringifyToolCallArguments(value: unknown): string {
   }
 }
 
-function extractAssistantToolCalls(value: unknown): AssistantToolCall[] {
+function extractAssistantToolCalls(value: unknown): ConversationToolCall[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const calls: AssistantToolCall[] = [];
+  const calls: ConversationToolCall[] = [];
   for (const rawCall of value) {
     if (!rawCall || typeof rawCall !== "object" || Array.isArray(rawCall)) {
       continue;
@@ -493,12 +486,6 @@ function extractAssistantToolCalls(value: unknown): AssistantToolCall[] {
     calls.push({ id, name, arguments: argumentsValue });
   }
   return calls;
-}
-
-function renderAssistantToolCalls(calls: AssistantToolCall[]): string {
-  return calls
-    .map((call) => `tool_call id=${call.id} name=${call.name} arguments=${call.arguments}`)
-    .join("\n");
 }
 
 function resolveImageUrlPart(part: unknown): string | undefined {
@@ -681,8 +668,7 @@ function buildAgentPrompt(
     }
     const assistantToolCalls =
       normalizedRole === "assistant" ? extractAssistantToolCalls(msg.tool_calls) : [];
-    const assistantToolCallsSummary =
-      assistantToolCalls.length > 0 ? renderAssistantToolCalls(assistantToolCalls) : "";
+    const assistantToolCallsSummary = assistantToolCalls.map(renderConversationToolCall).join("\n");
 
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
@@ -1091,7 +1077,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         throw new Error("agent run failed");
       }
       const usage = resolveChatCompletionUsage(result);
@@ -1183,11 +1169,9 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let streamedAssistantText = "";
-  let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
@@ -1244,7 +1228,7 @@ export async function handleOpenAiHttpRequest(
     maybeFinalize();
   };
 
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt) => {
     if (evt.runId !== runId) {
       return;
     }
@@ -1296,13 +1280,7 @@ export async function handleOpenAiHttpRequest(
       // If the provider ignores `tool_choice`, no partial text should leak
       // before the stream fails with an OpenAI-compatible error payload.
       if (toolChoiceConstraint) {
-        bufferedAssistantContent += content;
         return;
-      }
-
-      if (!wroteRole) {
-        wroteRole = true;
-        writeAssistantRoleChunk(res, streamIdentity);
       }
 
       sawAssistantDelta = true;
@@ -1361,7 +1339,6 @@ export async function handleOpenAiHttpRequest(
     releaseStreamRootWork();
   });
 
-  wroteRole = true;
   writeAssistantRoleChunk(res, streamIdentity);
 
   void (async () => {
@@ -1378,7 +1355,7 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         terminalLifecyclePhase = "error";
         finishStreamWithError({ message: "internal error", type: "api_error" });
         return;
@@ -1411,14 +1388,11 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
         if (!sawAssistantDelta) {
+          // Final payloads own held prose; snapshots may replace provisional deltas.
           const commentary =
-            bufferedAssistantContent ||
             resolveAgentResponseCommentary(result) ||
+            streamedAssistantText ||
             bufferedReplaceableAssistantContent;
           if (commentary) {
             sawAssistantDelta = true;
@@ -1437,11 +1411,6 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (!sawAssistantDelta) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
-
         const content =
           resolveAgentResponseCommentary(result) ||
           bufferedReplaceableAssistantContent ||

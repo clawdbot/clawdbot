@@ -174,7 +174,7 @@ export function parseInlineSessionDirectives(
   const queue = parseScopedDirective("queue", extractQueueDirective);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: hasAnyDirective ? cleaned : body.trim(),
+    cleaned,
     ...(nativeCommand && hasAnyDirective
       ? {
           nativeCommand: {

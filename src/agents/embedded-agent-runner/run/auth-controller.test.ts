@@ -605,41 +605,74 @@ describe("createEmbeddedRunAuthController", () => {
     });
   });
 
-  it("preserves OAuth mode when billing-disabled profiles are all unavailable", async () => {
+  it.each(["billing", "auth_permanent"] as const)(
+    "preserves OAuth mode when %s-disabled profiles are all unavailable",
+    async (disabledReason) => {
+      const harness = createMutableAuthControllerHarness();
+      const profileId = "custom-openai:oauth";
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey: vi.fn(),
+        profileCandidates: [profileId],
+        fallbackConfigured: true,
+        authStore: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "custom-openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+          usageStats: {
+            [profileId]: {
+              disabledUntil: Date.now() + 60_000,
+              disabledReason,
+            },
+          },
+        },
+      });
+
+      const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(FailoverError);
+      expect(error).toMatchObject({
+        reason: disabledReason,
+        authMode: "oauth",
+      });
+    },
+  );
+
+  it("preserves selected-profile identity through auth exhaustion bookkeeping", async () => {
     const harness = createMutableAuthControllerHarness();
-    const profileId = "custom-openai:oauth";
+    mocks.getApiKeyForModelCore.mockRejectedValue(
+      Object.assign(new Error("selected profile missing"), {
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      }),
+    );
     const controller = createMutableEmbeddedRunAuthController({
       harness,
       setRuntimeApiKey: vi.fn(),
-      profileCandidates: [profileId],
+      profileCandidates: ["first", "second"],
       fallbackConfigured: true,
-      authStore: {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "custom-openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-        usageStats: {
-          [profileId]: {
-            disabledUntil: Date.now() + 60_000,
-            disabledReason: "billing",
-          },
-        },
-      },
     });
 
     const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(FailoverError);
     expect(error).toMatchObject({
-      reason: "billing",
-      authMode: "oauth",
+      reason: "auth",
+      code: "selected_auth_profile_unavailable",
+      authProfileFailure: { allInCooldown: false },
     });
+    expect(mocks.getApiKeyForModelCore.mock.calls.map(([params]) => params.profileId)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(harness.profileIndex).toBe(2);
   });
 
   it("only enables transient cooldown probing when every automatic profile is transiently cooled", () => {

@@ -1,11 +1,10 @@
 // Public file-oriented media-understanding runtime for image, audio, video, and
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
-import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -331,25 +330,11 @@ async function readImageDescriptionInput(params: {
   cfg: OpenClawConfig;
   timeoutMs: number;
 }): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
-  const remoteRef =
-    params.mediaUrl ??
-    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
-  if (!remoteRef) {
-    const { buffer } = await readLocalFileSafely({ filePath: params.filePath });
-    return {
-      buffer,
-      fileName: basenameFromMediaReference(params.filePath),
-      mime: await detectMime({
-        buffer,
-        filePath: params.filePath,
-        headerMime: concreteMime(params.mime),
-      }),
-    };
-  }
   const attachments = normalizeMediaAttachments(
     buildFileContext({ ...params, capability: "image" }),
   );
   const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
   });
   try {
@@ -360,7 +345,7 @@ async function readImageDescriptionInput(params: {
     });
     return {
       buffer: media.buffer,
-      fileName: media.fileName || basenameFromMediaReference(remoteRef),
+      fileName: media.fileName || basenameFromMediaReference(params.mediaUrl ?? params.filePath),
       // The attachment cache has already resolved MIME from bytes, filename, and headers.
       // Keep the caller hint only as a fallback for cache implementations with no MIME result.
       mime: media.mime ?? concreteMime(params.mime),

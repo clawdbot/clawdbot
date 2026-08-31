@@ -616,6 +616,34 @@ describe("tool-policy-pipeline", () => {
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
   });
 
+  test("reads policy changes at each stage and each new filtering operation", () => {
+    const tools = [{ name: "read" }, { name: "write" }, { name: "exec" }];
+    const policy = { allow: ["read", "write"], deny: [] as string[] };
+    const run = (denied: string) =>
+      applyToolPolicyPipeline({
+        tools,
+        toolMeta: () => undefined,
+        warn: () => {},
+        steps: [
+          { policy: { allow: ["*"] }, label: "first" },
+          { policy, label: "second" },
+        ],
+        onFilter: ({ step }) => {
+          if (step.label === "first") {
+            policy.deny.splice(0, policy.deny.length, denied);
+          }
+        },
+      });
+
+    const first = run("write");
+    expect(first).toEqual([tools[0]]);
+    expect(first[0]).toBe(tools[0]);
+    const second = run("read");
+    expect(second).toEqual([tools[1]]);
+    expect(second[0]).toBe(tools[1]);
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "write", "exec"]);
+  });
+
   test("applies deny filtering after allow filtering", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

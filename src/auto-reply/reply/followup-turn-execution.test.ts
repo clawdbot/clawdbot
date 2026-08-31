@@ -134,7 +134,7 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
-    expect(onAgentRunStart).toHaveBeenCalledWith("run-1", undefined);
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {

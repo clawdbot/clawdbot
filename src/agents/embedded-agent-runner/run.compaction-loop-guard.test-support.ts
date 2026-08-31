@@ -1,5 +1,6 @@
 // Full-entry coverage for wiring the post-compaction loop guard into embedded runs.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   diagnosticSessionStates as DiagnosticSessionStatesType,
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
@@ -20,15 +21,18 @@ import {
   makeOverflowError,
 } from "./run.overflow-compaction.fixture.js";
 import {
-  overflowBaseRunParams as baseParams,
   mockedCompactDirect,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
+let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["runParams"];
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 // Import after the shared harness loads so these references point at the
 // same module instances as the re-imported runner graph.
@@ -45,7 +49,7 @@ let PostCompactionLoopPersistedError: typeof PostCompactionLoopPersistedErrorTyp
 const HISTORY_TRIM_CAP = 30;
 
 function recordToolOutcome(
-  state: SessionState,
+  diagnosticState: SessionState,
   toolName: string,
   toolParams: unknown,
   result: unknown,
@@ -53,9 +57,9 @@ function recordToolOutcome(
 ): void {
   // Seed diagnostic history directly for cases that inspect persisted loop
   // state without running a wrapped tool.
-  const toolCallId = `${toolName}-${state.toolCallHistory?.length ?? 0}`;
+  const toolCallId = `${toolName}-${diagnosticState.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
-  recordToolCall(state, toolName, toolParams, toolCallId, undefined, scope);
+  recordToolCall(diagnosticState, toolName, toolParams, toolCallId, undefined, scope);
   const outcome: Parameters<typeof recordToolCallOutcome>[1] = {
     toolName,
     toolParams,
@@ -65,7 +69,7 @@ function recordToolOutcome(
   if (runId) {
     outcome.runId = runId;
   }
-  recordToolCallOutcome(state, outcome);
+  recordToolCallOutcome(diagnosticState, outcome);
 }
 
 let liveToolCallSeq = 0;
@@ -97,6 +101,10 @@ async function executeWrappedToolOutcome(
 }
 
 describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
+  let queuedTasks: Promise<unknown>[];
+  let pendingTasks: Set<Promise<unknown>>;
+  let restoreQueueObserver: (() => void) | undefined;
+  let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     // Re-import after the harness reset so we share module instances with
@@ -108,10 +116,35 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     ({ PostCompactionLoopPersistedError } = await import("./post-compaction-loop-guard.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     liveToolCallSeq = 0;
     diagnosticSessionStates.clear();
     resetSharedRunIntegrationHarnessMocks();
+    session = await createSharedRunIntegrationSession();
+    baseParams = session.runParams;
+    const queue = await import("../../process/command-queue.js");
+    const enqueue = queue.enqueueCommandInLane;
+    queuedTasks = [];
+    pendingTasks = new Set();
+    // Observe the callback, not the caller's timeout race. Delegate unchanged so
+    // the real queue still owns scheduling, errors and AsyncLocalStorage capture.
+    const observe: typeof enqueue = (lane, task, options) =>
+      enqueue(
+        lane,
+        (marker) => {
+          const work = task(marker);
+          queuedTasks.push(work);
+          pendingTasks.add(work);
+          void work.then(
+            () => pendingTasks.delete(work),
+            () => pendingTasks.delete(work),
+          );
+          return work;
+        },
+        options,
+      );
+    const spy = vi.spyOn(queue, "enqueueCommandInLane").mockImplementation(observe);
+    restoreQueueObserver = () => spy.mockRestore();
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -131,6 +164,21 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         lower.includes("prompt too large")
       );
     });
+  });
+
+  afterEach(async () => {
+    // The ignored backend must settle before canonical cleanup removes its files.
+    // If this join fails, leave the fixture owned by the proof process.
+    try {
+      await Promise.allSettled(queuedTasks);
+      expect(queuedTasks.length, "post-reset queue observer captured actual work").toBeGreaterThan(
+        0,
+      );
+      expect(pendingTasks.size).toBe(0);
+      await session?.cleanup();
+    } finally {
+      restoreQueueObserver?.();
+    }
   });
 
   it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
@@ -177,7 +225,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBeInstanceOf(
       PostCompactionLoopPersistedError,
     );
 
@@ -190,7 +238,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
   it("releases the lane after a post-compaction abort when the backend ignores cancellation", async () => {
     vi.useFakeTimers();
-    let settleIgnoredAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    const ignoredAttempt = createDeferred<ReturnType<typeof makeAttemptResult>>();
+    let run: ReturnType<typeof runEmbeddedAgent> | undefined;
     let resolveAttemptAborted: (() => void) | undefined;
     const attemptAbortedPromise = new Promise<void>((resolve) => {
       resolveAttemptAborted = resolve;
@@ -218,9 +267,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         }
         attemptAborted = abortSignal?.aborted ?? false;
         resolveAttemptAborted?.();
-        return await new Promise((resolve) => {
-          settleIgnoredAttempt = resolve;
-        });
+        return await ignoredAttempt.promise;
       });
       mockedCompactDirect.mockResolvedValueOnce(
         makeCompactionSuccess({
@@ -230,8 +277,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         }),
       );
 
-      const run = runEmbeddedAgent({
-        ...baseParams,
+      run = runEmbeddedAgent({
+        ...session.runParams,
         runId: "run-post-compaction-abort-lane-release",
         timeoutMs: 48 * 60 * 60 * 1000,
       });
@@ -242,21 +289,24 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         })
         .catch(() => {});
 
-      await attemptAbortedPromise;
+      await Promise.race([attemptAbortedPromise, run]);
       expect(attemptAborted).toBe(true);
       await vi.advanceTimersByTimeAsync(30_001);
 
       expect(settled).toBe(true);
+      expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      settleIgnoredAttempt?.(makeAttemptResult());
+      ignoredAttempt.resolve(makeAttemptResult());
+      await run?.catch(() => undefined);
       vi.useRealTimers();
     }
   });
 
   it("keeps a native lane alive while a tool is still running", async () => {
     vi.useFakeTimers();
-    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    const heldAttempt = createDeferred<ReturnType<typeof makeAttemptResult>>();
+    let run: ReturnType<typeof runEmbeddedAgent> | undefined;
     let resolveAttemptStarted: (() => void) | undefined;
     const attemptStarted = new Promise<void>((resolve) => {
       resolveAttemptStarted = resolve;
@@ -268,12 +318,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         };
         resolveAttemptStarted?.();
         onAttemptTimeoutArmed?.();
-        return await new Promise((resolve) => {
-          settleAttempt = resolve;
-        });
+        return await heldAttempt.promise;
       });
 
-      const run = runEmbeddedAgent({
+      run = runEmbeddedAgent({
         ...baseParams,
         runId: "run-native-tool-heartbeat",
         timeoutMs: 1,
@@ -291,16 +339,19 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       await vi.advanceTimersByTimeAsync(30_001);
 
       expect(settled).toBe(false);
-      settleAttempt?.(makeAttemptResult());
+      heldAttempt.resolve(makeAttemptResult());
       await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
     } finally {
+      heldAttempt.resolve(makeAttemptResult());
+      await run?.catch(() => undefined);
       vi.useRealTimers();
     }
   });
 
   it("releases a native lane when a timed-out attempt ignores cancellation", async () => {
     vi.useFakeTimers();
-    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    const heldAttempt = createDeferred<ReturnType<typeof makeAttemptResult>>();
+    let run: ReturnType<typeof runEmbeddedAgent> | undefined;
     let resolveAttemptStarted: (() => void) | undefined;
     const attemptStarted = new Promise<void>((resolve) => {
       resolveAttemptStarted = resolve;
@@ -314,12 +365,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         resolveAttemptStarted?.();
         onAttemptTimeoutArmed?.();
         onAttemptTimeout?.(new Error("attempt timed out"));
-        return await new Promise((resolve) => {
-          settleAttempt = resolve;
-        });
+        return await heldAttempt.promise;
       });
 
-      const run = runEmbeddedAgent({
+      run = runEmbeddedAgent({
         ...baseParams,
         runId: "run-native-timeout-lane-release",
         timeoutMs: 48 * 60 * 60 * 1000,
@@ -337,16 +386,19 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       await vi.advanceTimersByTimeAsync(30_001);
 
       expect(settled).toBe(true);
+      expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      settleAttempt?.(makeAttemptResult());
+      heldAttempt.resolve(makeAttemptResult());
+      await run?.catch(() => undefined);
       vi.useRealTimers();
     }
   });
 
   it("releases a native lane when an explicit abort ignores cancellation", async () => {
     vi.useFakeTimers();
-    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    const heldAttempt = createDeferred<ReturnType<typeof makeAttemptResult>>();
+    let run: ReturnType<typeof runEmbeddedAgent> | undefined;
     let resolveAttemptStarted: (() => void) | undefined;
     const attemptStarted = new Promise<void>((resolve) => {
       resolveAttemptStarted = resolve;
@@ -360,12 +412,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         resolveAttemptStarted?.();
         onAttemptTimeoutArmed?.();
         onAttemptAbort?.();
-        return await new Promise((resolve) => {
-          settleAttempt = resolve;
-        });
+        return await heldAttempt.promise;
       });
 
-      const run = runEmbeddedAgent({
+      run = runEmbeddedAgent({
         ...baseParams,
         runId: "run-native-abort-lane-release",
         timeoutMs: 48 * 60 * 60 * 1000,
@@ -383,9 +433,11 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       await vi.advanceTimersByTimeAsync(30_001);
 
       expect(settled).toBe(true);
+      expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      settleAttempt?.(makeAttemptResult());
+      heldAttempt.resolve(makeAttemptResult());
+      await run?.catch(() => undefined);
       vi.useRealTimers();
     }
   });
@@ -423,7 +475,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...baseParams,
+      ...session.runParams,
       config: {
         tools: {
           loopDetection: {
@@ -491,7 +543,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBeInstanceOf(
       PostCompactionLoopPersistedError,
     );
 
