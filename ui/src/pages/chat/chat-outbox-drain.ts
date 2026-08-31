@@ -1,3 +1,4 @@
+import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
@@ -23,9 +24,11 @@ import {
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
+  removeDeliveredQueuedChatSendForRun,
   removeQueuedMessageWithoutReleasing,
   syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
@@ -156,6 +159,9 @@ async function readCurrentStoredChatHistory(
         ? { agentId: outbox.agentId }
         : {}),
       limit: 1000,
+      ...(item.sendRunId && item.sendRunId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS
+        ? { inputRunIds: [item.sendRunId] }
+        : {}),
     });
   } catch (err) {
     const connectionCurrent =
@@ -209,15 +215,28 @@ async function readCurrentStoredChatHistory(
     return "continue";
   }
   syncVisibleChatQueueProjection(host);
+  const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+  const inputRunId =
+    !item.sessionId || item.sessionId === historySessionId ? item.sendRunId : undefined;
+  const acceptedPendingInput =
+    inputRunId && history.pendingInputs?.items.some((input) => input.runId === inputRunId);
+  const consumedInput =
+    inputRunId && history.inputConsumptions?.some((input) => input.runId === inputRunId);
   // Gateway chat run IDs equal client idempotency keys; terminal-event retirement
   // uses the same delivery proof, even before the transcript marker is persisted.
   if (
+    acceptedPendingInput ||
+    consumedInput ||
     chatMessagesContainQueuedSend(history.messages, item) ||
     sessionRunProvesQueuedDelivery(history.sessionInfo, item)
   ) {
-    const retirement = await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox);
+    // Pending custody already owns the display bytes; other delivery proof must
+    // finish the outbox owner's attachment handoff before releasing local bytes.
+    const retired = acceptedPendingInput
+      ? removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null
+      : (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)) === "retired";
     if (
-      retirement !== "retired" ||
+      !retired ||
       host.client !== client ||
       host.connectionEpoch !== connectionEpoch ||
       !host.connected
@@ -225,7 +244,12 @@ async function readCurrentStoredChatHistory(
       return "blocked";
     }
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
-      void loadChatHistory(host);
+      if (acceptedPendingInput && historySessionId && host.currentSessionId === historySessionId) {
+        applyChatPendingInputs(host, history.pendingInputs);
+      }
+      void loadChatHistory(host, {
+        supersedeInFlight: Boolean(acceptedPendingInput || consumedInput),
+      });
     }
     return "continue";
   }

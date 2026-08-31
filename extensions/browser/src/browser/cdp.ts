@@ -844,10 +844,15 @@ async function buildCdpRoleSnapshot(params: {
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
-      ...(nth > 0 ? { nth } : {}),
+      nth,
       ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
       ...(params.frameId ? { frameId: params.frameId } : {}),
     };
+  }
+  for (const node of tree) {
+    if (node.ref && counts.get(`${node.role.toLowerCase()}:${node.name}`) === 1) {
+      delete refs[node.ref]?.nth;
+    }
   }
 
   const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);
@@ -912,6 +917,7 @@ export async function snapshotRoleViaCdp(opts: {
   lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
+  recurseIframes?: boolean;
   timeoutMs?: number;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
@@ -930,7 +936,7 @@ export async function snapshotRoleViaCdp(opts: {
         send,
         options: opts.options ?? {},
         urls: opts.urls,
-        recurseIframes: true,
+        recurseIframes: opts.recurseIframes ?? true,
         nextRef: { value: 1 },
       });
       const renderedSnapshot =

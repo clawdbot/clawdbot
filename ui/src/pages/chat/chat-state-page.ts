@@ -61,7 +61,7 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream, type RunOutputUsage } from "./tool-stream.ts";
 
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;
@@ -190,7 +190,7 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [],
     chatRunId: null,
-    chatRunUsageById: new Map<string, number>(),
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,

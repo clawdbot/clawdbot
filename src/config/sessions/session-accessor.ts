@@ -6,9 +6,12 @@
  */
 export * from "./session-history.js";
 export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputConsumptions,
   listSessionPendingInputs,
   readSessionPendingInput,
   stageSessionPendingInput,
+  withSessionPendingInputPersistence,
   type SessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInputReceipt,

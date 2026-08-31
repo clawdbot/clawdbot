@@ -55,6 +55,7 @@ import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import {
@@ -8913,6 +8914,184 @@ describe("handleSendChat", () => {
     },
   );
 
+  it.each([
+    { state: "queued", sessionKey: "agent:work:background", agentId: "work" },
+    { state: "interrupted", sessionKey: "global", agentId: "work" },
+    { state: "cancelled", sessionKey: "agent:work:background", agentId: "work" },
+    { state: "queued", sessionKey: "agent:main:visible", agentId: "main" },
+  ])("retires $state custody in $sessionKey without projecting or resending it", async (target) => {
+    const visible = target.sessionKey === "agent:main:visible";
+    const physicalSessionId = visible ? "accepted-physical-session" : "visible-physical-session";
+    let historyReads = 0;
+    const currentMessages = [{ role: "assistant", content: "The visible conversation" }];
+    const host = makeChatHost({
+      sessionKey: "agent:main:visible",
+      currentSessionId: physicalSessionId,
+      chatMessages: currentMessages,
+      chatRunId: "visible-run",
+      chatStream: "Still working",
+      requestHandlers: {
+        "chat.history": () => {
+          if (++historyReads > 1) {
+            throw new Error("History refresh unavailable");
+          }
+          return {
+            sessionId: "accepted-physical-session",
+            messages: [],
+            sessionInfo: row(target.sessionKey, {
+              sessionId: "accepted-physical-session",
+              hasActiveRun: true,
+              status: "running",
+            }),
+            pendingInputs: {
+              items: [
+                {
+                  id: "accepted-input",
+                  runId: "accepted-source",
+                  acceptedAt: 1,
+                  state: target.state,
+                  message: { role: "user", content: "Keep this accepted source" },
+                },
+              ],
+              total: 1,
+            },
+          };
+        },
+      },
+      chatQueue: [
+        {
+          id: "accepted-source-outbox",
+          text: "Keep this accepted source",
+          createdAt: 1,
+          sendRunId: "accepted-source",
+          sendAttempts: 1,
+          sendState: "waiting-reconnect",
+          sessionId: "accepted-physical-session",
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+    expect(host.chatMessages).toBe(currentMessages);
+    expect(host.currentSessionId).toBe(physicalSessionId);
+    expect(host.chatRunId).toBe("visible-run");
+    expect(host.chatStream).toBe("Still working");
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: target.sessionKey,
+      ...(target.sessionKey === "global" ? { agentId: "work" } : {}),
+      limit: 1000,
+      inputRunIds: ["accepted-source"],
+    });
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    if (visible) {
+      await waitForFast(() => expect(historyReads).toBe(2));
+      expect(getChatPendingInputs(host)?.page.items).toEqual([
+        expect.objectContaining({ id: "accepted-input", state: target.state }),
+      ]);
+    } else {
+      expect(getChatPendingInputs(host)).toBeUndefined();
+    }
+  });
+
+  it.each(["reconnect", "ok replay", "replacement session"])(
+    "retires a collected source through consumption history on %s",
+    async (recovery) => {
+      let replayed = false;
+      const source = {
+        id: "collected-source",
+        text: "The accepted source",
+        createdAt: 1,
+        sendRunId: "collected-source-run",
+        sendAttempts: 1,
+        sendState: "unconfirmed" as const,
+        queueMode: "collect" as const,
+        sessionKey: "agent:main:collected",
+        sessionId: "collected-physical-session",
+        ...(recovery === "replacement session"
+          ? { intent: { kind: "session-goal-start" as const, version: 1 as const, issuedAtMs: 1 } }
+          : {}),
+        sender: { id: "author", name: "Author" },
+        replyToId: "reply",
+      };
+      const aggregate = {
+        role: "user",
+        content: "Collected inputs",
+        __openclaw: {
+          id: "aggregate",
+          seq: 1,
+          idempotencyKey: "followup-collect:session:batch",
+        },
+      };
+      const host = makeChatHost({
+        sessionKey: source.sessionKey,
+        currentSessionId: source.sessionId,
+        chatHistoryPagination: { hasMore: false, completeSnapshot: true },
+        chatMessages: [aggregate],
+        chatQueue: [source],
+        requestHandlers: {
+          "chat.send": () => {
+            replayed = true;
+            return { runId: source.sendRunId, status: "ok" };
+          },
+          "chat.history": () => ({
+            sessionId: recovery === "replacement session" ? "replacement" : source.sessionId,
+            messages: [aggregate],
+            pendingInputs: { items: [], total: 0 },
+            inputConsumptions:
+              recovery === "ok replay" && !replayed
+                ? []
+                : [{ runId: source.sendRunId, consumedByEventId: "aggregate" }],
+            sessionInfo: row(source.sessionKey, {
+              sessionId: recovery === "replacement session" ? "replacement" : source.sessionId,
+              hasActiveRun: false,
+              status: "done",
+              lastRunId: "aggregate-run",
+            }),
+          }),
+        },
+      });
+      admitHostQueueItems(host);
+      if (recovery === "replacement session") {
+        // Structured admissions retain a physical-session binding in the durable outbox.
+        expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+          sessionId: source.sessionId,
+        });
+      }
+      if (recovery === "ok replay") {
+        await retryQueuedChatMessage(host, source.id);
+      } else {
+        await retryReconnectableQueuedChatSends(host);
+      }
+      if (recovery === "replacement session") {
+        expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
+          expect.objectContaining({ id: source.id }),
+        ]);
+        expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+        return;
+      }
+      await waitForFast(() => {
+        expect(listStoredChatOutboxes(host)).toEqual([]);
+        expect(host.chatQueue).toEqual([]);
+        expect(host.chatMessages).toEqual([aggregate]);
+      });
+      expect(getChatPendingInputs(host)?.page.items ?? []).toEqual([]);
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(
+        recovery === "ok replay" ? 1 : 0,
+      );
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({
+          inputRunIds: [source.sendRunId],
+        }),
+      );
+    },
+  );
+
   it("rechecks an idle history snapshot before parking a delivered send", async () => {
     let historyRequests = 0;
 
@@ -9440,6 +9619,9 @@ describe("handleSendChat", () => {
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: "agent:main",
         limit: 400,
+        inputRunIds: [
+          findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
+        ],
       });
       expect(host.request).toHaveBeenCalledWith("sessions.branches.list", {
         sessionKey: "agent:main",

@@ -808,7 +808,7 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
-          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && fs.existsSync('scripts/profile-extension-memory.mts') ? 0 : 1)"; then
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; const extensionProbe=['scripts/profile-extension-memory.mts','scripts/profile-extension-memory.mjs'].some((entry)=>fs.existsSync(entry)); process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && extensionProbe ? 0 : 1)"; then
             cat > "$SOURCE_PERF_DIR/index.md" <<EOF
           # OpenClaw Source Performance
 
@@ -820,15 +820,19 @@ jobs:
 
           - Tested ref: ${TESTED_REF}
           - Tested SHA: ${TESTED_SHA}
-          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, openclaw.mjs, scripts/profile-extension-memory.mts
+          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, openclaw.mjs, scripts/profile-extension-memory.{mts,mjs}
           EOF
             cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          # target_ref may predate the dedicated profile; preserve the historical full build there.
-          if node --import tsx -e "import('./scripts/build-all.mts').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
+          # Run the narrower build only when the candidate advertises the profile.
+          if [[ -f scripts/build-all.mts ]] && \
+            node --import tsx scripts/build-all.mts --help | grep -Fxq '  sourcePerformance'; then
             OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
+          elif [[ -f scripts/build-all.mjs ]] && \
+            node scripts/build-all.mjs --help | grep -Fxq '  sourcePerformance'; then
+            OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
           else
             pnpm build
           fi

@@ -177,7 +177,7 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
       expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
     } finally {
-      client.onClose();
+      await client.onClose();
       bridge.dispose();
     }
   });

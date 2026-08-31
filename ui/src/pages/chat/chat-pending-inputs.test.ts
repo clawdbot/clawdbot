@@ -16,14 +16,17 @@ import {
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
+import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 const sessionKey = "agent:main:accepted-inputs";
@@ -40,6 +43,20 @@ const input: ChatPendingInputsPage["items"][number] = {
   },
 };
 const page: ChatPendingInputsPage = { items: [input], total: 2, nextBefore: 2 };
+
+async function retainDeliveredUserTurn(
+  host: Parameters<typeof retireDeliveredQueuedUserTurn>[0],
+  item: ChatQueueItem,
+): Promise<void> {
+  expect(admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)).toBe(true);
+  const outbox = expectDefined(
+    listStoredChatOutboxes(host).find((entry) =>
+      entry.queue.some((queued) => queued.id === item.id),
+    ),
+    "admitted provisional source",
+  );
+  expect(await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)).toBe("retired");
+}
 
 function makeChatPageHost({
   requestHandlers,
@@ -66,6 +83,226 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("does not share consumption queries between panes with different provisional sources", async () => {
+    const response = createDeferred<unknown>();
+    const first = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      chatHistoryPagination: { hasMore: false },
+      requestHandlers: { "chat.history": () => response.promise },
+    });
+    const second = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      client: first.client,
+      chatHistoryPagination: { hasMore: false },
+    });
+    for (const [host, runId] of [
+      [first, "source-a"],
+      [second, "source-b"],
+    ] as const) {
+      await retainDeliveredUserTurn(host, {
+        id: runId,
+        sendRunId: runId,
+        sessionKey,
+        createdAt: 1,
+        text: runId,
+      });
+    }
+    const loading = [loadChatHistory(first), loadChatHistory(second)];
+    const calls = first.request.mock.calls.filter(([method]) => method === "chat.history");
+    response.resolve({ sessionId, messages: [], pendingInputs: { items: [], total: 0 } });
+    await Promise.all(loading);
+    expect(calls).toHaveLength(2);
+    expect(calls.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ inputRunIds: ["source-a"] }),
+      expect.objectContaining({ inputRunIds: ["source-b"] }),
+    ]);
+  });
+
+  it("bounds consumption lookup without forgetting provisional sources beyond the first batch", async () => {
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      chatHistoryPagination: { hasMore: false },
+      requestHandlers: {
+        "chat.history": (params: { inputRunIds?: string[] }) => ({
+          sessionId,
+          messages: [],
+          pendingInputs: { items: [], total: 0 },
+          inputConsumptions: params.inputRunIds?.map((runId) => ({
+            runId,
+            consumedByEventId: "aggregate",
+          })),
+        }),
+      },
+    });
+    for (let index = 0; index < 51; index++) {
+      const runId = `source-${String(index).padStart(2, "0")}`;
+      await retainDeliveredUserTurn(host, {
+        id: runId,
+        sendRunId: runId,
+        sessionKey,
+        createdAt: index,
+        text: runId,
+      });
+    }
+    await loadChatHistory(host);
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.request).toHaveBeenLastCalledWith(
+      "chat.history",
+      expect.objectContaining({
+        inputRunIds: Array.from(
+          { length: 50 },
+          (_, index) => `source-${String(index).padStart(2, "0")}`,
+        ),
+      }),
+    );
+    await loadChatHistory(host);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.request).toHaveBeenLastCalledWith(
+      "chat.history",
+      expect.objectContaining({ inputRunIds: ["source-50"] }),
+    );
+  });
+
+  it.each(["page", "delta"])(
+    "retires consumed sources from %s history after missing custody and terminal events",
+    async (delivery) => {
+      const aggregate = {
+        role: "user",
+        content: "Collected source inputs",
+        __openclaw: { id: "aggregate", seq: 1, idempotencyKey: "followup-collect:session:batch" },
+      };
+      const cache: ChatMessageCache = new Map();
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        chatRunId: "aggregate-run",
+        chatStream: "Still working",
+        chatMessages: [aggregate],
+        chatHistoryPagination: { hasMore: false, completeSnapshot: true },
+        chatMessagesBySession: cache,
+        requestHandlers: {
+          "chat.history": {
+            ...(delivery === "delta" ? { kind: "delta", deltaCursor: "next" } : { sessionId }),
+            messages: delivery === "delta" ? [] : [aggregate],
+            pendingInputs: { items: [], total: 0 },
+            inputConsumptions: [{ runId: "consumed-source", consumedByEventId: "aggregate" }],
+            sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
+          },
+        },
+      });
+      cacheChatSessionSnapshot(
+        cache,
+        host,
+        { sessionKey },
+        {
+          messages: [aggregate],
+          sessionId,
+          pagination: host.chatHistoryPagination,
+          ...(delivery === "delta" ? { deltaCursor: "previous" } : {}),
+        },
+      );
+      for (const sendRunId of ["consumed-source", "unrelated-source"]) {
+        await retainDeliveredUserTurn(host, {
+          id: sendRunId,
+          sendRunId,
+          sessionKey,
+          createdAt: 1,
+          text: "Same source text",
+          sender: { id: "author", name: "Author" },
+          replyToId: "reply",
+        });
+      }
+      const unrelated = host.chatMessages.at(-1);
+      await loadChatHistory(host);
+      expect(getChatHistoryLoadState(host).phase).toBe("committed");
+      expect(host.chatMessages).toEqual([aggregate, unrelated]);
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({
+          inputRunIds: ["consumed-source", "unrelated-source"],
+        }),
+      );
+      expect(getChatPendingInputs(host)?.page.items).toEqual([]);
+      expect(host.chatRunId).toBe("aggregate-run");
+      expect(host.chatStream).toBe("Still working");
+    },
+  );
+
+  it.each(["direct", "page", "delta"])(
+    "retires an attributed optimistic source on %s custody without disturbing active work",
+    async (delivery) => {
+      const canonical = {
+        role: "user",
+        content: "An earlier canonical input",
+        __openclaw: { id: "canonical-user", seq: 1, runId: "canonical-run" },
+      };
+      const tool = { role: "assistant", toolCallId: "active-tool", runId: "active-run" };
+      const cache: ChatMessageCache = new Map();
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        chatRunId: "active-run",
+        chatStream: "Still working",
+        chatToolMessages: [tool],
+        chatMessages: [canonical],
+        chatHistoryPagination: { hasMore: false, completeSnapshot: true },
+        chatMessagesBySession: cache,
+        requestHandlers: {
+          "chat.history": {
+            ...(delivery === "delta" ? { kind: "delta", deltaCursor: "next" } : { sessionId }),
+            messages: delivery === "delta" ? [] : [canonical],
+            pendingInputs: page,
+            sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
+          },
+        },
+      });
+      cacheChatSessionSnapshot(
+        cache,
+        host,
+        { sessionKey },
+        {
+          messages: [canonical],
+          sessionId,
+          pagination: { hasMore: false, completeSnapshot: true },
+          ...(delivery === "delta" ? { deltaCursor: "previous" } : {}),
+        },
+      );
+      for (const sendRunId of [input.runId, "other-source"]) {
+        await retainDeliveredUserTurn(host, {
+          id: `local-${sendRunId}`,
+          sendRunId,
+          sessionKey,
+          createdAt: 100,
+          text: "Keep my accepted input",
+          sender: { id: "author", name: "Author" },
+          replyToId: "reply-target",
+        });
+      }
+      const unrelated = host.chatMessages.at(-1);
+      if (delivery === "direct") {
+        applyChatPendingInputs(host, page);
+      } else {
+        await loadChatHistory(host);
+        expect(host.lastError).toBeNull();
+        expect(getChatHistoryLoadState(host).phase).toBe("committed");
+      }
+      expect(host.chatMessages).toEqual([canonical, unrelated]);
+      expect(getChatSessionProjection(host, host.chatMessages).messages).toEqual([
+        canonical,
+        unrelated,
+      ]);
+      expect(host.chatRunId).toBe("active-run");
+      expect(host.chatStream).toBe("Still working");
+      expect(host.chatToolMessages).toEqual([tool]);
+      expect(getChatPendingInputs(host)?.page).toEqual(page);
+      applyChatPendingInputs(host, { items: [], total: 0 });
+      expect(host.chatMessages).toEqual([canonical, unrelated]);
+    },
+  );
+
   it.each(["send", "agent.run.started", "agent.input.settled"])(
     "refreshes accepted inputs on %s while a retained pane is running",
     async (reason) => {
@@ -368,25 +605,38 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("does not treat another message sharing the run correlation as input promotion", () => {
-    const items = buildChatItems({
-      paneId: "correlated-pane",
-      sessionKey,
-      messages: [
-        {
-          role: "assistant",
-          content: "Earlier result",
-          __openclaw: { id: "another-entry", runId: input.runId },
-        },
-      ],
-      pendingInputs: page.items,
-      queue: [],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
-    expect(items.filter((item) => item.kind === "group" && item.role === "user")).toHaveLength(1);
-  });
+  it.each(["user", "assistant"])(
+    "preserves a canonical %s sharing the pending run correlation",
+    (role) => {
+      const canonical = {
+        role,
+        content: "Earlier result",
+        __openclaw: { id: "another-entry", runId: input.runId },
+      };
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        chatMessages: [canonical],
+      });
+      applyChatPendingInputs(host, page);
+      expect(host.chatMessages).toEqual([canonical]);
+      const items = buildChatItems({
+        paneId: "correlated-pane",
+        sessionKey,
+        messages: host.chatMessages,
+        pendingInputs: page.items,
+        queue: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: true,
+      });
+      const displayed = items.flatMap((item) =>
+        item.kind === "group" ? item.messages.map((entry) => entry.message) : [],
+      );
+      expect(displayed).toContain(canonical);
+      expect(displayed.filter((message) => message === input.message)).toHaveLength(1);
+    },
+  );
 });

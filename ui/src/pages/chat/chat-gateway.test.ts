@@ -3170,6 +3170,7 @@ describe("loadChatHistory retry handling", () => {
     history: unknown[];
     visible: unknown[];
     expected: unknown[];
+    inputRunIds?: string[];
     state?: Partial<ChatState>;
     verify?: (state: ChatState) => void;
   };
@@ -3186,6 +3187,7 @@ describe("loadChatHistory retry handling", () => {
           history: [persisted],
           visible: [persisted, pending],
           expected: [persisted, pending],
+          inputRunIds: ["latest-run"],
         };
       },
     },
@@ -3209,6 +3211,7 @@ describe("loadChatHistory retry handling", () => {
           history: [first, persisted],
           visible: [first, pending],
           expected: [first, persisted, pending],
+          inputRunIds: ["third-run"],
         };
       },
     },
@@ -3223,7 +3226,12 @@ describe("loadChatHistory retry handling", () => {
         const pending = createTextChatMessage("user", "already persisted", {
           idempotencyKey: "persisted-run:user",
         });
-        return { history: [persisted], visible: [pending], expected: [persisted] };
+        return {
+          history: [persisted],
+          visible: [pending],
+          expected: [persisted],
+          inputRunIds: ["persisted-run"],
+        };
       },
     },
     {
@@ -3277,13 +3285,14 @@ describe("loadChatHistory retry handling", () => {
           history: [persisted],
           visible: [persisted, pending],
           expected: [persisted, pending],
+          inputRunIds: ["active-run"],
           state: stream,
           verify: (state) => expect(state).toMatchObject(stream),
         };
       },
     },
   ])("$name", async (fixture) => {
-    const { history, visible, expected, state: overrides, verify } = fixture.create();
+    const { history, visible, expected, inputRunIds, state: overrides, verify } = fixture.create();
     const { request, state } = createResolvedHistoryState(
       { messages: history },
       {
@@ -3294,7 +3303,11 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 400 });
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 400,
+      ...(inputRunIds ? { inputRunIds } : {}),
+    });
     expect(state.chatMessages).toEqual(expected);
     verify?.(state);
   });
@@ -3936,8 +3949,14 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
-  it("coalesces same-session history while a proven pending send changes local messages", async () => {
-    const { history, request, state } = createDeferredHistoryState();
+  it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {
+    const staleHistory = createDeferred<HistoryResult>();
+    const currentHistory = createDeferred<HistoryResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockImplementationOnce(() => currentHistory.promise);
+    const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
     const pending = createTextChatMessage("user", "new local ask", {
@@ -3949,18 +3968,30 @@ describe("loadChatHistory retry handling", () => {
       message: pending,
     });
     const secondLoad = loadChatHistory(state);
+    const thirdLoad = loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls).toEqual([
+      ["chat.history", { sessionKey: "main", limit: 400 }],
+      [
+        "chat.history",
+        { sessionKey: "main", limit: 400, inputRunIds: ["same-session-pending-run"] },
+      ],
+    ]);
     expect(state.chatMessages).toEqual([pending]);
+
+    staleHistory.resolve(createAssistantHistory("stale history"));
+    await firstLoad;
+    expect(state.chatMessages).toEqual([pending]);
+    expect(state.chatLoading).toBe(true);
 
     const persisted = createTextChatMessage("assistant", "persisted history", {
       id: "same-session-history-assistant",
       seq: 1,
     });
-    history.resolve({ messages: [persisted] });
-    await Promise.all([firstLoad, secondLoad]);
+    currentHistory.resolve({ messages: [persisted] });
+    await Promise.all([secondLoad, thirdLoad]);
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([persisted, pending]);
     expect(state.chatLoading).toBe(false);
   });

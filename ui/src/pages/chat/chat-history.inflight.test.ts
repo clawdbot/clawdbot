@@ -185,7 +185,7 @@ describe("chat history in-flight assistant recovery", () => {
     },
   );
 
-  it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
+  it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [
       {
@@ -213,11 +213,20 @@ describe("chat history in-flight assistant recovery", () => {
           args: { path: "README.md" },
         },
       },
+      {
+        runId: "run-live",
+        seq: 3,
+        stream: "usage",
+        ts: 1_100,
+        sessionKey: "main",
+        data: { outputTokens: 695, context: { totalTokens: 1_500, contextWindow: 8_000 } },
+      },
     ];
     const state = createState(history);
 
     await loadHistoryWithBrowserTimers(state);
 
+    expect(state.chatRunUsageById?.get("run-live")?.outputTokens).toBe(695);
     expect(state.chatToolMessages[0]).toMatchObject({
       runId: "run-live",
       toolCallId: "call-restored",

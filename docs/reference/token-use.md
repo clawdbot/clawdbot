@@ -121,6 +121,12 @@ In chat:
 
 Other surfaces:
 
+- **Control UI:** the working indicator and completed-run recap show cumulative
+  **output tokens** for that run, including its model calls across tool use and
+  retries. Counts update when the runtime reports completed-response usage, not
+  on every streamed text fragment. Reloading an active run restores its latest
+  count. This counter excludes input tokens and is separate from the composer
+  context-window meter and persisted billing summaries.
 - **TUI/Web TUI:** `/status` and `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).

@@ -16,6 +16,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  listSessionPendingInputConsumptions,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -185,6 +186,7 @@ async function handleChatHistoryRequest({
     sessionId: requestedSessionId,
     maxChars,
     pendingBefore,
+    inputRunIds,
   } = params as {
     sessionKey: string;
     agentId?: string;
@@ -195,6 +197,7 @@ async function handleChatHistoryRequest({
     sessionId?: string;
     maxChars?: number;
     pendingBefore?: number;
+    inputRunIds?: string[];
   };
   if (offset !== undefined && messageId !== undefined) {
     respond(
@@ -333,6 +336,15 @@ async function handleChatHistoryRequest({
           { before: pendingBefore, limit: max, maxChars: effectiveMaxChars },
         )
       : { items: [], total: 0 };
+  // Receipts belong to the currently selected physical session, never archived history.
+  const inputConsumptions = inputRunIds
+    ? !messageId && sessionId && sessionId === entry?.sessionId
+      ? listSessionPendingInputConsumptions(
+          { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
+          { runIds: inputRunIds },
+        )
+      : []
+    : undefined;
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -579,6 +591,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
+      ...(inputConsumptions ? { inputConsumptions } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -595,6 +608,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
+    ...(inputConsumptions ? { inputConsumptions } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

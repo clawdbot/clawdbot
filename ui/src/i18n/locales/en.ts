@@ -5784,8 +5784,8 @@ export const en: TranslationMap = {
     },
     turnRecap: {
       doneIn: "Done in {duration}",
-      tokens: "{count} tokens",
-      tokensOne: "1 token",
+      tokens: "{count} output tokens",
+      tokensOne: "1 output token",
     },
     commands: {
       arguments: "Command arguments",

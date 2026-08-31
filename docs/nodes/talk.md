@@ -53,6 +53,8 @@ Voice-originated consult runs require a new, exact spoken confirmation before hi
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 
+Transcription providers can advertise their model choices in `talk.catalog.transcription.providers[].models`. Pass `model` to `talk.session.create` to override the configured transcription model for that session. Omitting it keeps the provider configuration, then the matching `agents.defaults.voiceModel`, then the provider's own default.
+
 Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
 provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
 `describe_view` asks for visual context; it does not receive a continuous

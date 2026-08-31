@@ -220,6 +220,7 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   provider: string | undefined;
   providerConfigs: Record<string, TConfig>;
   providers: readonly RealtimeProviderWithConfig<TConfig>[];
+  requestedModel?: string;
 }): { provider: string; model: string } | undefined {
   const configuredProvider = normalizeOptionalString(params.provider);
   const refs = resolveSupportedVoiceModelRefs({
@@ -237,8 +238,11 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
         providerConfigs: params.providerConfigs,
         provider,
       });
-      const rawConfigWithModel =
-        rawConfig.model === undefined ? { ...rawConfig, model: ref.model } : rawConfig;
+      const rawConfigWithModel = {
+        ...rawConfig,
+        model:
+          params.requestedModel ?? (rawConfig.model === undefined ? ref.model : rawConfig.model),
+      };
       const providerConfig =
         provider.resolveConfig?.({
           cfg: params.config,
@@ -253,7 +257,11 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   return undefined;
 }
 
-export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
+export function buildTalkRealtimeConfig(
+  config: OpenClawConfig,
+  requestedProvider?: string,
+  requestedModel?: string,
+) {
   const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
   const talkRealtime = getRecord(config.talk?.realtime);
   const talkRealtimeProviderConfigs = talkRealtime?.providers as
@@ -278,6 +286,8 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     provider: selectedProvider,
     providerConfigs,
     providers: listRealtimeVoiceProviders(config),
+    requestedModel:
+      normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
   const provider = selectedProvider ?? voiceModelDefault?.provider;
   const model = normalizeOptionalString(talkRealtime?.model) ?? voiceModelDefault?.model;
@@ -313,7 +323,11 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   };
 }
 
-export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedProvider?: string) {
+export function buildTalkTranscriptionConfig(
+  config: OpenClawConfig,
+  requestedProvider?: string,
+  requestedModel?: string,
+) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
@@ -323,6 +337,7 @@ export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedPr
     provider,
     providerConfigs,
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
+    requestedModel: normalizeOptionalString(requestedModel),
   });
   return {
     provider: provider ?? voiceModelDefault?.provider,
@@ -343,6 +358,7 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   config: OpenClawConfig;
   configuredProviderId?: string;
   providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>;
+  requestedModel?: string;
   defaultModel?: string;
 }) {
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
@@ -362,10 +378,9 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
       provider,
       configuredProviderId: params.configuredProviderId,
     });
-    const rawConfigWithModel =
-      params.defaultModel && rawConfig.model === undefined
-        ? { ...rawConfig, model: params.defaultModel }
-        : rawConfig;
+    const model =
+      params.requestedModel ?? (rawConfig.model === undefined ? params.defaultModel : undefined);
+    const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
     const providerConfig =
       provider.resolveConfig?.({ cfg: params.config, rawConfig: rawConfigWithModel }) ??
       rawConfigWithModel;

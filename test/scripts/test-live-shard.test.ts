@@ -15,6 +15,8 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardBuildEntrypoint,
+  resolveLiveShardBuildProfile,
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
@@ -271,6 +273,24 @@ describe("scripts/test-live-shard", () => {
     expect(
       resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-infra", allFiles)),
     ).toBeNull();
+  });
+
+  it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
+      "--import",
+      "tsx",
+      "scripts/build-all.mts",
+    ]);
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
+      "scripts/build-all.mjs",
+    ]);
+    expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(
+      "Live test shard cannot find scripts/build-all.{mts,mjs}",
+    );
+    expect(
+      resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n  sourcePerformance\n"),
+    ).toBe("sourcePerformance");
+    expect(resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n")).toBe("full");
   });
 
   it.each(["native-live-src-agents", "native-live-extensions-openai"])(
