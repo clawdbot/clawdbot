@@ -7,12 +7,13 @@ import { expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import {
-  accelerateCiCheckoutFetchClock,
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
+  renderGitTestClock,
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
+import { runCiGitStep } from "./ci-git-owner.test-support.js";
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
@@ -23,6 +24,7 @@ const platformCases = [
   { scenario: "harness-timeout", attempts: 2, code: 124, checkout: true },
   { scenario: "git-failure", attempts: 1, code: 23, checkout: false },
   { scenario: "git-exit-124", attempts: 1, code: 124, checkout: false },
+  { scenario: "pre-existing-lock", attempts: 1, code: 128, checkout: false },
   // Windows has no POSIX signals/ps boundary; native Job cancellation proof is separate.
   ...(process.platform === "win32" ? [] : ["SIGTERM", "SIGINT", "SIGHUP"]).map((signal, index) => ({
     scenario: `cancel-${signal}`,
@@ -78,22 +80,11 @@ it.each([
           // Reproduce startup beyond the old wall-clock budget without delaying other consumers.
           writeFileSync(path.join(root, "tree-start-delay-3.json"), "2100");
         }
-        for (const anchor of [
-          "def run_git(",
-          "deadline = time.monotonic() + timeout",
-          "deadline is not None and time.monotonic() >= deadline",
-        ]) {
-          expect(run, `Missing fetch clock source anchor: ${anchor}`).toContain(anchor);
+        if (scenario === "git-exit-124") {
+          // Slow child startup must not replace Git's injected exit with a fixture timeout.
+          writeFileSync(path.join(root, "tree-start-delay-1.json"), "4100");
         }
-        // Only a ready, deliberately stalled tree advances the fetch clock. Real
-        // process startup and teardown retain their independent wall-clock watchdogs.
-        const accelerated = accelerateCiCheckoutFetchClock(run)
-          .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
-          .replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()")
-          .replace(
-            /retry_at = time\.monotonic\(\) \+ [^\n]+/u,
-            "retry_at = time.monotonic() + 0.05",
-          );
+        const accelerated = renderGitTestClock(run, { realDrain: scenario.startsWith("cancel-") });
         expect(accelerated).not.toBe(run);
         // A broken preflight must never let these negative fixture tests run real Git.
         writeFileSync(
@@ -122,7 +113,27 @@ it.each([
         expect(report.error, stderr).toBeUndefined();
         expectCiCheckoutCleanup(report);
         expect(report.code).toBe(code);
-        expect(report.readyAttempts).toEqual(Array.from({ length: attempts }, (_, i) => i + 1));
+        expect(readFileSync(path.join(workspace, ".git/preexisting.lock"), "utf8")).toBe(
+          "not invocation-owned\n",
+        );
+        if (scenario === "pre-existing-lock") {
+          expect(readFileSync(path.join(workspace, ".git/shallow.lock"), "utf8")).toBe(
+            "not invocation-owned\n",
+          );
+        }
+        if (scenario === "recovery") {
+          for (let attempt = 1; attempt <= attempts; attempt++) {
+            expect(
+              readFileSync(path.join(root, "shared-git-cache", `${attempt}.lock`), "utf8"),
+            ).toBe("outside Git ownership\n");
+          }
+        }
+        if (scenario === "git-exit-124") {
+          expect(report.output).toBe("");
+        }
+        const readyAttempts =
+          scenario === "pre-existing-lock" ? [] : Array.from({ length: attempts }, (_, i) => i + 1);
+        expect(report.readyAttempts).toEqual(readyAttempts);
         expect(report.boundaries.filter((entry) => entry.name.startsWith("fetch:"))).toHaveLength(
           attempts,
         );
@@ -483,6 +494,40 @@ process.exitCode = 1;
   55_000,
 );
 
+it.skipIf(process.platform === "win32")(
+  "waits for legal slow tree startup before cancellation",
+  async () => {
+    const report = await runCiGitStep({
+      job: "checks-windows",
+      env: { CHECKOUT_KIND: "platform" },
+      fetchResults: ["hang"],
+      scenario: "cancel-SIGTERM",
+      startupDelay: { tree: 4_100 },
+    });
+    expect(report.code, report.output).toBe(143);
+    expect(report.readyAttempts).toEqual([1]);
+    expect(report.fetches).toHaveLength(1);
+  },
+  55_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "reports owner exit and output instead of a cleanup readiness timeout",
+  async () => {
+    const report = await runCiGitStep({
+      policy: 'print("owner exited before cleanup readiness", flush=True)\nraise SystemExit(23)\n',
+      fetchResults: [],
+      cancelDuringCleanup: true,
+    });
+    expect(report.code).toBe(23);
+    expect(report.cancelledDuringCleanup).toBe(false);
+    expect(report.output).toBe("owner exited before cleanup readiness\n");
+    expect(report.readyAttempts).toEqual([]);
+    expect(report.commands).toEqual([]);
+  },
+  55_000,
+);
+
 it("does not revive an observed-dead fixture instance when its PID is reused", () => {
   const result = spawnSync(
     process.platform === "win32" ? "python" : "python3",
@@ -556,10 +601,7 @@ print("fixture lifetime contract passed")
 it.skipIf(process.platform === "win32")(
   "recognizes terminated POSIX groups without accepting live signal denials",
   () => {
-    const owner = expectDefined(
-      readCiCheckoutStep("checks-windows").run.split("<<'PYTHON'\n")[1]?.split("\nPYTHON")[0],
-      "checkout Python owner",
-    );
+    const owner = readFileSync(".github/actions/git-owner/owner.py", "utf8");
     const result = spawnSync(
       "python3",
       [

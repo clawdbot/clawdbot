@@ -1,6 +1,7 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
@@ -188,7 +189,11 @@ describe("Codex app-server main thread cleanup", () => {
       b: path.join(tempDir, "session-b.jsonl"),
     };
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const clientStarted = createDeferred<void>();
+    vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
+      clientStarted.resolve();
+      return harness.client;
+    });
 
     for (const [index, label] of (["a", "b", "a", "b"] as const).entries()) {
       const sessionKey = `agent:main:session-${label}`;
@@ -204,6 +209,7 @@ describe("Codex app-server main thread cleanup", () => {
         bindingStore: testCodexAppServerBindingStore,
       });
       if (index === 0) {
+        await clientStarted.promise;
         const initialize = await waitForHarnessRequest(harness, "initialize", requestStart);
         harness.send({
           id: initialize.id,
@@ -284,7 +290,7 @@ describe("Codex app-server main thread cleanup", () => {
 
   it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
     const physical = createClientHarness();
-    const startClient = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(physical.client);
+    const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
     const firstParams = createParams(
       path.join(tempDir, "concurrent-first.jsonl"),
       path.join(tempDir, "concurrent-first-workspace"),
@@ -441,7 +447,7 @@ describe("Codex app-server main thread cleanup", () => {
     const workspaceDir = path.join(tempDir, "incognito-workspace");
     const sessionKey = "agent:main:dashboard:incognito-live-thread";
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
       bindingStore: testCodexAppServerBindingStore,
     });
@@ -547,7 +553,7 @@ describe("Codex app-server main thread cleanup", () => {
       const workspaceDir = path.join(tempDir, "cancelled-start-workspace");
       const harness = createClientHarness();
       const abort = new AbortController();
-      vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
       const params = createParams(sessionFile, workspaceDir);
       params.abortSignal = abort.signal;
@@ -655,7 +661,7 @@ describe("Codex app-server main thread cleanup", () => {
       const harness = createClientHarness();
       const abort = new AbortController();
       const close = vi.spyOn(harness.client, "close");
-      vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
       const params = createParams(sessionFile, workspaceDir, sessionKey);
       params.abortSignal = abort.signal;
@@ -759,7 +765,7 @@ describe("Codex app-server main thread cleanup", () => {
 
   it("rejects late cancellation after failed finalization enters cleanup", async () => {
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const abort = new AbortController();
     const params = createParams(
       path.join(tempDir, "failed-finalization.jsonl"),
@@ -803,8 +809,8 @@ describe("Codex app-server main thread cleanup", () => {
     const replacement = createClientHarness();
     const startClient = vi
       .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(contaminated.client)
-      .mockReturnValueOnce(replacement.client);
+      .mockResolvedValueOnce(contaminated.client)
+      .mockResolvedValueOnce(replacement.client);
 
     const failedRun = runCodexAppServerAttempt(
       createParams(sessionFile, workspaceDir, sessionKey),

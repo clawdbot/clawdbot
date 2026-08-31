@@ -409,6 +409,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     estimatedCostUsd: undefined,
+    transcriptByteCompactionLatch: undefined,
     totalTokens: hasTotalTokens ? params.totalTokens : undefined,
     totalTokensFresh: hasTotalTokens ? true : undefined,
     totalTokensVersion: hasTotalTokens ? SESSION_TOTAL_TOKENS_VERSION : undefined,

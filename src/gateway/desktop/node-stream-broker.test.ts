@@ -8,6 +8,7 @@ const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.useRealTimers();
 });
 
 async function startBrokerServer(params: {
@@ -67,6 +68,52 @@ async function expectUnauthorized(url: string): Promise<void> {
 }
 
 describe("node desktop stream tickets", () => {
+  it.each(["desktop", "portal"] as const)(
+    "keeps idle %s streams alive through remote backpressure until their owner closes",
+    async (kind) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      const binding = { nodeId: "node-1", ...session };
+      const minted = kind === "desktop" ? broker.mint(binding) : broker.mintPortal(binding);
+      const ws = await connectAndSend(
+        `${baseUrl}${minted.attachPath}`,
+        kind === "desktop" ? { auth: "vnc-password" } : { ok: true },
+      );
+      const { stream } = await minted.attached;
+      const pings: Buffer[] = [];
+      const streamBytes: Buffer[] = [];
+      ws.on("ping", (data) => pings.push(data));
+      stream.on("data", (data) => streamBytes.push(data));
+
+      vi.advanceTimersByTime(25_000);
+      await expect.poll(() => pings.length).toBe(1);
+      expect(streamBytes).toEqual([]);
+
+      // A paused remote peer cannot process pings or send automatic pongs.
+      ws.pause();
+      vi.advanceTimersByTime(50_000);
+      ws.resume();
+      await expect.poll(() => pings.length).toBe(3);
+      ws.send(Buffer.from("resumed stream bytes"), { binary: true });
+      await expect.poll(() => Buffer.concat(streamBytes).toString()).toBe("resumed stream bytes");
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      const closed = new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+      const streamClosed = new Promise<void>((resolve) => {
+        stream.once("close", () => resolve());
+      });
+      stream.destroy();
+      await Promise.all([closed, streamClosed]);
+      vi.advanceTimersByTime(25_000);
+      expect(pings).toHaveLength(3);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("is single-use and resolves one ticket-bound binary stream", async () => {
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };

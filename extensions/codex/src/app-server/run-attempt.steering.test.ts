@@ -1,5 +1,6 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -23,6 +24,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
   cancelPendingAgentQuestionForSession: vi.fn(),
@@ -99,6 +101,7 @@ function createSteeringParams() {
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
   params.toolAuthorityFingerprint = `authority-${sessionId}`;
+  params.model = { ...params.model, input: ["text", "image"] };
   return params;
 }
 
@@ -117,6 +120,148 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
+  it.each([
+    { incognito: false, interruptFails: false, terminationFails: false },
+    { incognito: true, interruptFails: false, terminationFails: false },
+    { incognito: false, interruptFails: true, terminationFails: false },
+    { incognito: false, interruptFails: false, terminationFails: true },
+  ])(
+    "joins permission-change cleanup without cancelling the enclosing run (incognito: $incognito, interrupt failure: $interruptFails, terminal failure: $terminationFails)",
+    async ({ incognito, interruptFails, terminationFails }) => {
+      const terminalCleanup = createDeferred<void>();
+      let terminalRunning = true;
+      const { requests, waitForMethod } = createStartedThreadHarness(async (method) => {
+        if (method === "turn/interrupt" && interruptFails) {
+          throw new Error("native interrupt unavailable");
+        }
+        if (method === "thread/backgroundTerminals/list") {
+          return { data: terminalRunning ? [{ processId: "42" }] : [], nextCursor: null };
+        }
+        if (method === "thread/backgroundTerminals/terminate") {
+          await terminalCleanup.promise;
+          if (terminationFails) {
+            throw new Error("native terminal cleanup unavailable");
+          }
+          terminalRunning = false;
+          return { terminated: true };
+        }
+        return undefined;
+      });
+      const params = createSteeringParams();
+      if (incognito) {
+        params.sessionKey = `agent:main:dashboard:incognito-${params.sessionId}`;
+      }
+      const onAttemptAbort = vi.fn();
+      params.onAttemptAbort = onAttemptAbort;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
+      let acknowledgeApplied: ((applied: boolean) => void) | undefined;
+      const application = new Promise<boolean>((resolve) => {
+        acknowledgeApplied = resolve;
+      });
+      const permissionChange = {
+        owner: {},
+        baseExecOverrides: {},
+        notice: "Permission change. Continue with updated permissions.",
+        request: vi.fn(() => application),
+        applied: vi.fn(() => true),
+        recordApplied: vi.fn(),
+      };
+      params.permissionChange = permissionChange;
+      const run = runCodexAppServerAttempt(params);
+      const outcome = run.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const settled = vi.fn();
+      void outcome.then(settled);
+      await waitForMethod("turn/start");
+      expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+        additionalContext: {
+          openclaw_permission_change: { kind: "application", value: permissionChange.notice },
+        },
+      });
+      let handle:
+        | {
+            abort: () => void;
+            applyPermissionMode?: (mode: "full", revokeApprovals: () => void) => Promise<boolean>;
+          }
+        | undefined;
+      await vi.waitFor(() => {
+        handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+          (call) => call[0] === params.sessionId,
+        )?.[1] as typeof handle;
+        expect(handle).toBeDefined();
+      }, fastWait);
+      try {
+        expect(handle?.applyPermissionMode).toBeTypeOf("function");
+        const revokeApprovals = vi.fn();
+        const applied = handle!.applyPermissionMode!("full", revokeApprovals);
+        const acknowledged = vi.fn();
+        void applied.then(acknowledged);
+        expect(revokeApprovals).toHaveBeenCalledOnce();
+        if (!interruptFails) {
+          await waitForMethod("thread/backgroundTerminals/terminate", fastWait.timeout);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).not.toHaveBeenCalled();
+          expect(requests.some((request) => request.method === "thread/unsubscribe")).toBe(false);
+          terminalCleanup.resolve();
+        }
+        const error = await outcome;
+        if (interruptFails) {
+          expect(error).toMatchObject({
+            message: "Permission change could not confirm the previous Codex turn stopped.",
+          });
+          expect(requests.some((request) => request.method.includes("backgroundTerminals"))).toBe(
+            false,
+          );
+        } else if (terminationFails) {
+          expect(error).toMatchObject({
+            message:
+              "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
+          });
+        } else {
+          expect(error).toBeUndefined();
+          expect(terminalRunning).toBe(false);
+          expect(requests).toContainEqual({
+            method: "thread/backgroundTerminals/terminate",
+            params: { threadId: "thread-1", processId: "42" },
+          });
+        }
+        expect(acknowledged).not.toHaveBeenCalled();
+        expect(onAttemptAbort).not.toHaveBeenCalled();
+        expect(
+          onAgentEvent.mock.calls.some(
+            ([event]) =>
+              event.stream === "lifecycle" &&
+              ["end", "error", "finishing"].includes(event.data.phase),
+          ),
+        ).toBe(false);
+        expect(permissionChange.request).toHaveBeenCalledWith("full");
+        expect(requests).toContainEqual({
+          method: "turn/interrupt",
+          params: { threadId: "thread-1", turnId: "turn-1" },
+        });
+        expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
+          threadId: "thread-1",
+        });
+        if (incognito) {
+          expect(requests.some((request) => request.method === "thread/unsubscribe")).toBe(false);
+        }
+        const shouldApply = !interruptFails && !terminationFails;
+        acknowledgeApplied?.(shouldApply);
+        await expect(applied).resolves.toBe(shouldApply);
+      } finally {
+        terminalCleanup.resolve();
+        handle?.abort();
+        acknowledgeApplied?.(false);
+        await outcome;
+      }
+    },
+  );
+
   it("marks the active run aborted before asynchronous cleanup releases its handle", async () => {
     const { requests, waitForMethod } = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -197,9 +342,26 @@ describe("runCodexAppServerAttempt steering", () => {
     await run;
   });
 
-  it.each(["none", "sleep", "dynamicToolCall", "commandExecution"])(
-    "persists every completed answer before Gateway steering across a %s barrier",
-    async (barrierType) => {
+  it.each([
+    ...["none", "sleep", "dynamicToolCall", "commandExecution"].map((barrierType) => ({
+      name: `Gateway steering across a ${barrierType} barrier`,
+      barrierType,
+      isInboundUserMessage: true,
+      provenance: undefined,
+    })),
+    {
+      name: "inter-session steering with provenance",
+      barrierType: "none",
+      isInboundUserMessage: false,
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      },
+    },
+  ])(
+    "persists every completed answer before $name",
+    async ({ barrierType, isInboundUserMessage, provenance }) => {
       const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
       const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
@@ -223,23 +385,38 @@ describe("runCodexAppServerAttempt steering", () => {
       });
       let steerPersisted = false;
       const userTurnTranscriptRecorder = {
+        message: { role: "user" as const, content: "steer this active turn", timestamp: 1 },
+        async resolveMessage() {
+          return this.message;
+        },
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
         persistApproved: vi.fn(async () => {
           if (steerPersisted) {
             return undefined;
           }
           steerPersisted = true;
-          return await appendSessionTranscriptMessageByIdentity({
+          await appendSessionTranscriptMessageByIdentity({
             ...sessionTarget,
             message: {
               role: "user",
               content: "steer this active turn",
               timestamp: Date.now(),
               idempotencyKey: `${params.runId}:steer:user`,
+              ...(provenance ? { provenance } : {}),
             },
           });
+          return undefined;
         }),
         hasPersisted: () => steerPersisted,
-      } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+      } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
@@ -317,7 +494,7 @@ describe("runCodexAppServerAttempt steering", () => {
       // promise stays pending until the matching item/completed notification below.
       await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
         debounceMs: 0,
-        isInboundUserMessage: true,
+        isInboundUserMessage,
         toolAuthorityFingerprint: params.toolAuthorityFingerprint,
         taskSuggestionDeliveryMode: "gateway",
         waitForTranscriptCommit: true,
@@ -352,6 +529,7 @@ describe("runCodexAppServerAttempt steering", () => {
                 role: string;
                 content: string | Array<{ type: string; text?: string }>;
                 __openclaw?: { mirrorIdentity?: string };
+                provenance?: JsonObject;
               };
             }
           ).message;
@@ -365,7 +543,14 @@ describe("runCodexAppServerAttempt steering", () => {
                   .flatMap((part) => (part.type === "text" ? [part.text] : []))
                   .join("");
           return text
-            ? [{ role: message.role, text, mirrorIdentity: message["__openclaw"]?.mirrorIdentity }]
+            ? [
+                {
+                  role: message.role,
+                  text,
+                  mirrorIdentity: message["__openclaw"]?.mirrorIdentity,
+                  ...(message.provenance ? { provenance: message.provenance } : {}),
+                },
+              ]
             : [];
         });
       const prefix = await readTextRows();
@@ -399,7 +584,12 @@ describe("runCodexAppServerAttempt steering", () => {
         },
         { role: "assistant", text: "answer-a", mirrorIdentity: "turn-1:assistant:answer-a" },
         { role: "assistant", text: "answer-b", mirrorIdentity: "turn-1:assistant:answer-b" },
-        { role: "user", text: "steer this active turn", mirrorIdentity: undefined },
+        {
+          role: "user",
+          text: "steer this active turn",
+          mirrorIdentity: undefined,
+          ...(provenance ? { provenance } : {}),
+        },
       ]);
       expect(await readTextRows()).toEqual([
         ...prefix,
@@ -707,6 +897,7 @@ describe("runCodexAppServerAttempt steering", () => {
     { name: "gateway-backed", isSecret: false },
     { name: "secret", isSecret: true },
   ])("routes $name user prompts without consuming internal steering", async ({ isSecret }) => {
+    const turnStarted = createDeferred<void>();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -716,6 +907,7 @@ describe("runCodexAppServerAttempt steering", () => {
         return threadStartResult();
       }
       if (method === "turn/start") {
+        turnStarted.resolve();
         return turnStartResult();
       }
       return {};
@@ -747,10 +939,7 @@ describe("runCodexAppServerAttempt steering", () => {
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      { interval: 1 },
-    );
+    await turnStarted.promise;
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
 
     const response = handleRequest?.({

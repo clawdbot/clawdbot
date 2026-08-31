@@ -5,7 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import {
   captureEnv,
@@ -1947,6 +1949,52 @@ describe("gateway run option collisions", () => {
     );
 
     expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { phase: "server", kind: "state" },
+    { phase: "server", kind: "agent" },
+    { phase: "server", kind: "wrapped-reader" },
+    { phase: "bootstrap", kind: "reader" },
+    { phase: "configuration", kind: "wrapped-reader" },
+  ] as const)("stops newer-schema retries from $phase ($kind)", async ({ phase, kind }) => {
+    const readerError = createNewerSqliteSchemaVersionError(
+      "test database",
+      "/tmp/newer.sqlite",
+      999,
+      998,
+    );
+    const error =
+      kind === "state" || kind === "agent"
+        ? new OpenClawDatabaseSchemaPreflightError([
+            { kind, path: "/tmp/newer.sqlite", foundVersion: 999, supportedVersion: 998 },
+          ])
+        : kind === "reader"
+          ? readerError
+          : new Error("Failed to open plugin state", { cause: readerError });
+    if (phase === "bootstrap") {
+      beforeRun.mockRejectedValueOnce(error);
+    } else if (phase === "configuration") {
+      refreshManagedProxy.mockRejectedValueOnce(error);
+    } else {
+      startGatewayServer.mockRejectedValueOnce(error);
+    }
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
+    const restoreHooks = installGatewayRunRuntimeHooks({ refreshManagedProxy });
+    try {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+    } finally {
+      restoreHooks();
+    }
+
+    expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+    expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("newer");
+    expect(runtimeErrors.join("\n")).toContain("build that supports");
+    expect(runtimeErrors.join("\n")).not.toContain("doctor --fix");
+    expect(startGatewayServer).toHaveBeenCalledTimes(phase === "server" ? 1 : 0);
   });
 
   it.each([

@@ -1858,7 +1858,11 @@ describe("reply run registry", () => {
     );
   });
 
-  it("queues images only through backends that preserve them", async () => {
+  it.each([
+    { images: [{ type: "image" as const, data: "png", mimeType: "image/png" }] },
+    { media: [{ path: "/tmp/stored.png", contentType: "image/png" }] },
+    { imageOrder: ["offloaded" as const] },
+  ])("queues image inputs only through backends that preserve them: %j", async (input) => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-images",
@@ -1870,10 +1874,9 @@ describe("reply run registry", () => {
       queueMessage,
     });
     operation.setPhase("running");
-    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
 
     await expect(
-      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+      queueCurrentReplyRunMessage("session-images", "inspect", input),
     ).resolves.toMatchObject({ status: "rejected", reason: "image_input_unsupported" });
     expect(queueMessage).not.toHaveBeenCalled();
 
@@ -1885,12 +1888,12 @@ describe("reply run registry", () => {
       supportsQueueMessageImages: true,
     });
 
-    await expect(
-      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
-    ).resolves.toEqual({ status: "accepted" });
+    await expect(queueCurrentReplyRunMessage("session-images", "inspect", input)).resolves.toEqual({
+      status: "accepted",
+    });
     expect(queueMessage).toHaveBeenCalledWith(
       "inspect",
-      expect.objectContaining({ images, onQueueAccepted: expect.any(Function) }),
+      expect.objectContaining({ ...input, onQueueAccepted: expect.any(Function) }),
     );
   });
 

@@ -239,7 +239,7 @@ export function resolveSessionEntryCandidateTarget(
     return {
       agentId: resolvedAgentId,
       candidateKey,
-      entry: structuredClone(resolved.existing),
+      entry: resolved.existing,
       persisted: true,
       sessionKey: resolved.normalizedKey,
     };
@@ -387,11 +387,9 @@ export function listSessionEntriesCore(scope: SessionEntryListScope = {}): Sessi
 }
 
 /**
- * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
- * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
- * or canonical-key resolution. The first probe materializes one validated store
- * snapshot; later probes and `entries` reuse its parsed rows. Rows are borrowed,
- * not cloned: callers must not mutate them and must drop the view before any await.
+ * Synchronous read view: `get` queries one exact persisted key without alias resolution;
+ * `entries` reuses a validated store snapshot. List rows and their nested values are
+ * borrowed: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},

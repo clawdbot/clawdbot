@@ -1,7 +1,12 @@
 // Oxlint Config tests cover oxlint config script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
 
 type OxlintConfig = {
   ignorePatterns?: string[];
@@ -123,11 +128,124 @@ const DEFERRED_IMPORT_RULES = [
   "import/no-unassigned-import",
 ];
 
-function readJson(path: string): unknown {
-  return JSON5.parse(fs.readFileSync(path, "utf8"));
+function readJson(filePath: string): unknown {
+  return JSON5.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 describe("oxlint config", () => {
+  it("enforces namespace, evaluation, and unused-binding policies with the installed binary", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-policy-"));
+    const typescriptExtensions = ["ts", "tsx", "mts", "cts"];
+    const javascriptExtensions = ["js", "jsx", "cjs", "mjs"];
+    const evaluation = 'eval("1 + 1");\nglobalThis.eval("1 + 1");\n';
+    const fixtures = [
+      ...typescriptExtensions.map((extension) => ({
+        file: `src/namespaces.${extension}`,
+        source: [
+          "export type Profile = { ready: boolean };",
+          "export const Profile = { ready: true };",
+          "export interface Adapter { ready: boolean; }",
+          "export const Adapter: Adapter = { ready: true };",
+        ].join("\n"),
+        rules: [],
+      })),
+      ...javascriptExtensions.map((extension) => ({
+        file: `src/redeclaration.${extension}`,
+        source:
+          "var duplicateBinding = 1;\nvar duplicateBinding = 2;\nconsole.log(duplicateBinding);\n",
+        rules: ["eslint(no-redeclare)", "eslint(no-var)", "eslint(no-var)"],
+      })),
+      ...typescriptExtensions.map((extension) => ({
+        file: `src/no-var.${extension}`,
+        source: "export var legacyBinding = 1;\n",
+        rules: ["eslint(no-var)"],
+      })),
+      ...[...typescriptExtensions, ...javascriptExtensions].flatMap((extension) => [
+        {
+          file: `src/evaluation.${extension}`,
+          source: evaluation,
+          rules: ["eslint(no-eval)", "eslint(no-eval)"],
+        },
+        {
+          file: `src/unused.${extension}`,
+          source:
+            "function meaningful(_event) { return true; }\nfunction bare(_) { return true; }\nmeaningful(1);\nbare(1);\n",
+          rules: ["eslint(no-unused-vars)"],
+        },
+      ]),
+      ...[
+        "extensions/qa-lab/src/web-runtime.ts",
+        "extensions/qa-lab/src/web-runtime.test.ts",
+        "extensions/qa-lab/src/other-runtime.ts",
+        "extensions/other/src/web-runtime.ts",
+      ].map((file) => ({
+        file,
+        source: evaluation,
+        rules:
+          file === "extensions/qa-lab/src/web-runtime.ts"
+            ? ["eslint(no-eval)"]
+            : ["eslint(no-eval)", "eslint(no-eval)"],
+      })),
+    ];
+    fs.copyFileSync(".oxlintrc.json", path.join(tempRoot, ".oxlintrc.json"));
+    for (const fixture of fixtures) {
+      const target = path.join(tempRoot, fixture.file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, fixture.source);
+    }
+    // These syntax-rule fixtures need no type program; one batch uses the real config and paths.
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/oxlint/bin/oxlint"),
+        "--config",
+        ".oxlintrc.json",
+        "--format",
+        "json",
+        "--threads=1",
+        "--report-unused-disable-directives-severity",
+        "error",
+        ...fixtures.map((fixture) => fixture.file),
+      ],
+      { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      number_of_files: number;
+      diagnostics: Array<{
+        filename: string;
+        code: string;
+        severity: string;
+        labels: Array<{ span: { line: number } }>;
+      }>;
+    };
+    expect(report.number_of_files).toBe(fixtures.length);
+    for (const fixture of fixtures) {
+      const diagnostics = report.diagnostics.filter(
+        (diagnostic) => diagnostic.filename.replaceAll("\\", "/") === fixture.file,
+      );
+      expect(diagnostics.map((diagnostic) => diagnostic.code).toSorted(), fixture.file).toEqual(
+        fixture.rules.toSorted(),
+      );
+      expect(
+        diagnostics.every((diagnostic) => diagnostic.severity === "error"),
+        fixture.file,
+      ).toBe(true);
+    }
+    const ownerDiagnostics = report.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.filename.replaceAll("\\", "/") === "extensions/qa-lab/src/web-runtime.ts",
+    );
+    expect(ownerDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual([1]);
+    const unusedDiagnostics = report.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "eslint(no-unused-vars)",
+    );
+    expect(unusedDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual(
+      [...typescriptExtensions, ...javascriptExtensions].map(() => 2),
+    );
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 

@@ -37,6 +37,7 @@ import {
 import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
+import { SESSION_PENDING_INPUTS_TABLE } from "./openclaw-agent-pending-inputs-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
@@ -62,6 +63,14 @@ type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
+export function migratedSessionColumn(
+  columns: ReadonlySet<string>,
+  columnName: string,
+  fallback: string,
+): string {
+  return columns.has(columnName) ? columnName : fallback;
+}
+
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
@@ -72,6 +81,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
     SESSION_GOAL_OPERATIONS_TABLE,
+    SESSION_PENDING_INPUTS_TABLE,
     SESSION_PARTICIPANTS_TABLE,
     SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,
@@ -80,6 +90,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_pending_inputs.consumed_event_id",
     "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
     "standing_intents.creator_sender",

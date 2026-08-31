@@ -1,5 +1,8 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type {
+  ChatInputConsumptions,
+  ChatPendingInputsPage,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -11,11 +14,13 @@ import type {
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import {
-  isAssistantHeartbeatAckForDisplay,
-  stripHeartbeatTokenForDisplay,
-} from "../../lib/chat/heartbeat-display.ts";
-import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
+  isHiddenAssistantStreamText,
+  isVisibleChatHistoryMessage,
+  shouldHideAssistantChatMessage,
+  visibleChatHistoryMessages,
+} from "../../lib/chat/message-visibility.ts";
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -32,10 +37,10 @@ import {
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
+  uiConversationMatches,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
   resolveUiSelectedSessionAgentId,
@@ -47,13 +52,20 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
-import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import {
+  applyChatPendingInputs,
+  clearChatPendingInputs,
+  readChatInputRunIds,
+} from "./chat-pending-inputs.ts";
+import { reconcileChatRunStartup, type ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
+  getChatRunOwner,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
 import {
@@ -62,6 +74,7 @@ import {
   roundedControlUiDurationMs,
 } from "./performance.ts";
 import {
+  adoptStartedChatRun,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   setChatRunError,
@@ -96,10 +109,11 @@ import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identi
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
-const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
-  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
-export const CHAT_HISTORY_REQUEST_LIMIT = 100;
+export const CHAT_HISTORY_REQUEST_LIMIT = 400;
+// Back-scroll pages are larger than the startup tail: session open stays cheap
+// while older-history reads amortize round trips and prepend/re-anchor cycles.
+// The gateway independently bounds each response (entry cap + byte budget).
+const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
 const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
@@ -189,6 +203,10 @@ export function retireChatBranchRequests(state: ChatState): void {
   getChatHistoryPaneRequests(state).branchVersion += 1;
 }
 
+export function getChatHistoryVersion(state: ChatState): number {
+  return getChatHistoryPaneRequests(state).historyVersion;
+}
+
 type ChatHistoryRequestOwnership = {
   version: number;
   client: GatewayBrowserClient;
@@ -235,6 +253,7 @@ function shouldApplyChatHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  clearChatPendingInputs(state);
   const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
@@ -245,67 +264,6 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
-}
-
-export function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
-}
-
-/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
-function isAssistantSilentReply(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
-    return false;
-  }
-  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
-  if (typeof entry.text === "string") {
-    return isSilentReplyStream(entry.text);
-  }
-  const text = extractText(message);
-  return typeof text === "string" && isSilentReplyStream(text);
-}
-
-function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "toolresult") {
-    return false;
-  }
-  const text = extractText(message);
-  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
-}
-
-function isHeartbeatAckStream(text: string): boolean {
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
-}
-
-export function isHiddenAssistantStreamText(text: string): boolean {
-  return isSilentReplyStream(text) || isHeartbeatAckStream(text);
-}
-
-export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
-}
-
-function shouldHideHistoryMessage(message: unknown): boolean {
-  return (
-    shouldHideAssistantChatMessage(message) ||
-    isSyntheticTranscriptRepairToolResult(message) ||
-    isEmptyUserTextOnlyMessage(message)
-  );
-}
-
-export function visibleChatHistoryMessages(messages: unknown): unknown[] {
-  return Array.isArray(messages)
-    ? messages.filter((message) => !shouldHideHistoryMessage(message))
-    : [];
 }
 
 export function materializeVisibleAssistantStreamMessages(
@@ -341,6 +299,8 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 };
 
 export type ChatHistoryResult = {
+  pendingInputs?: ChatPendingInputsPage;
+  inputConsumptions?: ChatInputConsumptions;
   sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
@@ -374,6 +334,8 @@ export type ChatHistoryResult = {
 };
 
 type ChatHistoryDeltaResult = {
+  pendingInputs?: ChatPendingInputsPage;
+  inputConsumptions?: ChatInputConsumptions;
   kind: "delta";
   messages: unknown[];
   deltaCursor: string;
@@ -489,27 +451,51 @@ function applyHistoryRunSnapshot(params: {
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
     const terminalRunId = sessionInfo?.lastRunId;
+    const knownRun = terminalRunId ? currentRunProjections[terminalRunId] : undefined;
     if (
       terminalRunId &&
-      sessionInfo.lastRunError &&
-      (sessionInfo.status === "failed" || sessionInfo.status === "timeout") &&
+      (sessionInfo.status === "done" ||
+        sessionInfo.status === "failed" ||
+        sessionInfo.status === "timeout") &&
+      sessionInfo.hasActiveRun !== true &&
       !isSessionRunActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
+      !state.chatQueue.some(
+        (item) =>
+          item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
+      ) &&
+      (!knownRun ||
+        state.chatRunId === terminalRunId ||
+        getChatRunOwner(state) === terminalRunId) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
     ) {
-      // A create-time failure can precede the pane subscription. Recover its
-      // durable terminal through the same reducer; newer live runs win the race
-      // and an existing full diagnostic wins over the bounded session summary.
+      // A copied row cannot reclaim retired display ownership. The pane retains
+      // its accepted owner past active cleanup; unseen runs recover through the
+      // reducer, whose full diagnostic wins over the bounded history summary.
       const projection = reduceChatSessionProjection(state, {
         type: "runTerminal",
         runId: terminalRunId,
-        status: sessionInfo.status === "timeout" ? "timeout" : "error",
+        status:
+          sessionInfo.status === "done"
+            ? "completed"
+            : sessionInfo.status === "timeout"
+              ? "timeout"
+              : "error",
         errorMessage: sessionInfo.lastRunError,
       });
-      setChatRunError(
-        state,
-        projection.runs[terminalRunId]?.errorMessage ?? sessionInfo.lastRunError,
-      );
+      setChatRunOwner(state, terminalRunId);
+      const terminal = projection.runs[terminalRunId];
+      if (terminal?.errorMessage) {
+        if (state.chatRunError?.runId !== terminalRunId || !knownRun?.errorMessage) {
+          setChatRunError(state, terminal.errorMessage, terminalRunId);
+        }
+      } else if (
+        terminal?.status === "completed" &&
+        state.chatRunError?.runId &&
+        state.chatRunError.runId !== terminalRunId
+      ) {
+        state.chatRunError = null;
+      }
       reconcileChatRunFromSessionRow(state, sessionInfo, { publishRunStatus: false });
     }
     return;
@@ -541,8 +527,7 @@ function applyHistoryRunSnapshot(params: {
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
-    state.chatRunId = inFlightRunId;
-    state.chatRunError = null;
+    adoptStartedChatRun(state, inFlightRunId, Date.now());
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
@@ -586,7 +571,10 @@ function applyHistoryRunSnapshot(params: {
       },
     ];
   }
-  const startupPhase = run.events?.findLast((event) => event.stream === "run_status")?.data.phase;
+  const startup = run.events?.findLast(
+    (event) => event.runId === inFlightRunId && event.stream === "run_status",
+  );
+  const startupPhase = startup?.data.phase;
   const hasStartupStatus =
     startupPhase === "preparing_workspace" ||
     startupPhase === "naming_worktree" ||
@@ -595,10 +583,16 @@ function applyHistoryRunSnapshot(params: {
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
     startupPhase === "starting_model";
-  state.chatRunStartup =
-    hasStartupStatus && !tail && !(sameRunContinued && state.chatRunStartup?.state === "activity")
-      ? { state: "status", runId: inFlightRunId, phase: startupPhase }
-      : { state: "activity", runId: inFlightRunId };
+  if (run.text) {
+    reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
+  } else if (startup && hasStartupStatus) {
+    reconcileChatRunStartup(state, {
+      state: "status",
+      runId: inFlightRunId,
+      phase: startupPhase,
+      seq: startup.seq,
+    });
+  }
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
@@ -705,6 +699,7 @@ function reconcileLoadedHistoryTail(options: {
 
 export type ChatEventPayload = {
   runId?: string;
+  seq?: number;
   sessionKey: string;
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
@@ -723,35 +718,12 @@ function setChatError(state: ChatState, error: string | null) {
   state.chatError = message;
 }
 
-function chatScopedEventAgentScopeMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  if (!isUiSelectedGlobalSessionKey(state, state.sessionKey) || !isUiGlobalSessionKey(sessionKey)) {
-    return true;
-  }
-  const payloadAgentId =
-    typeof agentId === "string" && agentId.trim() ? normalizeAgentId(agentId) : undefined;
-  const selectedAgentId = resolveUiSelectedSessionAgentId(state);
-  return payloadAgentId
-    ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
-    : selectedAgentId === undefined || selectedAgentId === resolveUiDefaultAgentId(state);
-}
-
 export function chatScopedEventSessionMatches(
   state: ChatState,
   sessionKey: string,
   agentId?: string | null,
 ): boolean {
-  if (areUiSessionKeysEquivalent(sessionKey, state.sessionKey)) {
-    return chatScopedEventAgentScopeMatches(state, sessionKey, agentId);
-  }
-  return (
-    isUiGlobalSessionKey(sessionKey) &&
-    isUiSelectedGlobalSessionKey(state, state.sessionKey) &&
-    chatScopedEventAgentScopeMatches(state, sessionKey, agentId)
-  );
+  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }
 
 function normalizeSubscriptionKey(value: string | null | undefined): string | null {
@@ -763,11 +735,7 @@ function resolveSelectedGlobalAliasAgentId(
   state: ChatSessionMessageSubscriptionState,
   key: string | null | undefined,
 ): string | null {
-  const row = state.sessionsResult?.sessions.find((session) => session.key === key);
-  return resolveUiGlobalAliasAgentId(state, key, {
-    rowKind: row?.kind,
-    requireGlobalRowForMainAlias: true,
-  });
+  return resolveUiGlobalAliasAgentId(state, key);
 }
 
 function resolveSelectedGlobalAgentId(state: ChatSessionMessageSubscriptionState): string {
@@ -1096,6 +1064,7 @@ async function requestChatHistory(
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
   cursor?: string,
+  inputRunIds: string[] = [],
 ): Promise<ChatHistoryResponse> {
   for (;;) {
     try {
@@ -1104,6 +1073,7 @@ async function requestChatHistory(
         ...(requestAgentId ? { agentId: requestAgentId } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
         limit: CHAT_HISTORY_REQUEST_LIMIT,
+        ...(inputRunIds.length ? { inputRunIds } : {}),
       });
     } catch (err) {
       if (!shouldContinue()) {
@@ -1131,6 +1101,7 @@ function requestSharedChatHistory(
   isCurrentConsumer: () => boolean,
   cursor?: string,
   sourceCanonicalListRevision?: number,
+  inputRunIds?: string[],
 ): Promise<SharedChatHistoryResponse> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
@@ -1162,6 +1133,7 @@ function requestSharedChatHistory(
       shouldContinue,
       shouldRetry,
       cursor,
+      inputRunIds,
     )
       .then((response) => ({ ...response, sourceCanonicalListRevision }))
       .finally(() => {
@@ -1654,7 +1626,16 @@ export async function loadChatHistory(
       })?.deltaCursor
     : undefined;
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
-  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
+  const inputRunIds = readChatInputRunIds(state);
+  const requestKeyPrefix = JSON.stringify([
+    connectionEpoch,
+    method,
+    sessionKey,
+    requestAgentId ?? "",
+    CHAT_HISTORY_REQUEST_LIMIT,
+    inputRunIds,
+  ]);
+  const requestKey = `${requestKeyPrefix}${requestModeKey}`;
   const inFlight = requests.historyLoad;
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
@@ -1682,6 +1663,8 @@ export async function loadChatHistory(
     requestAgentId,
     method,
     deltaCursor,
+    inputRunIds,
+    requestKeyPrefix,
   ).then((result) => {
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
@@ -1748,6 +1731,24 @@ export function retryChatHistoryLoad(
   return retry;
 }
 
+async function requestOlderChatHistoryPage(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  offset: number,
+): Promise<ChatHistoryResult> {
+  const result = await client.request<ChatHistoryResult>("chat.history", {
+    sessionKey,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
+    offset,
+  });
+  return {
+    ...result,
+    messages: visibleChatHistoryMessages(result.messages),
+  };
+}
+
 export async function loadOlderChatHistoryPage(
   state: ChatState,
   offset: number,
@@ -1767,19 +1768,80 @@ export async function loadOlderChatHistoryPage(
     sessionKey,
     requestAgentId,
   );
-  const result = await client.request<ChatHistoryResult>("chat.history", {
-    sessionKey,
-    ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    limit: CHAT_HISTORY_REQUEST_LIMIT,
-    offset,
-  });
+  const result = await requestOlderChatHistoryPage(client, sessionKey, requestAgentId, offset);
   if (!shouldApplyChatHistoryResult(state, ownership)) {
     return undefined;
   }
-  return {
-    ...result,
-    messages: visibleChatHistoryMessages(result.messages),
+  return result;
+}
+
+export type StagedOlderHistoryPage = {
+  claim: {
+    client: GatewayBrowserClient;
+    connectionEpoch: number;
+    sessionKey: string;
+    agentId?: string;
+    /** Projection fence: any later history request or reset (tail reload,
+     * rewind, branch switch) advances the version and voids this page even
+     * when the replacement projection lands on the same cursor. */
+    historyVersion: number;
   };
+  requestedOffset: number;
+  result: ChatHistoryResult;
+};
+
+// The staged prefetch deliberately skips beginChatHistoryRequest: request
+// ownership is last-writer-wins, so a background fetch bumping the version
+// could invalidate a concurrent tail load's apply. The claim below carries the
+// same facts and the pane validates it at consume time instead.
+export async function fetchStagedOlderHistoryPage(
+  state: ChatState,
+  offset: number,
+): Promise<StagedOlderHistoryPage | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const sessionKey = state.sessionKey;
+  const historyVersion = getChatHistoryPaneRequests(state).historyVersion;
+  const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const result = await requestOlderChatHistoryPage(client, sessionKey, requestAgentId, offset);
+  return {
+    claim: {
+      client,
+      connectionEpoch,
+      sessionKey,
+      historyVersion,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    },
+    requestedOffset: offset,
+    result,
+  };
+}
+
+/** A staged page is valid only for the exact connection, session, and the
+ * pagination cursor it was fetched at; any drift means the reactive path must
+ * refetch (tail reloads rebase offsets, resets reuse session keys). */
+export function isStagedOlderHistoryPageCurrent(
+  state: ChatState,
+  staged: StagedOlderHistoryPage,
+): boolean {
+  const claim = staged.claim;
+  const pagination = state.chatHistoryPagination;
+  return (
+    state.client === claim.client &&
+    state.connected &&
+    state.connectionEpoch === claim.connectionEpoch &&
+    getChatHistoryPaneRequests(state).historyVersion === claim.historyVersion &&
+    state.sessionKey === claim.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, claim.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === claim.agentId) &&
+    pagination.hasMore &&
+    pagination.nextOffset === staged.requestedOffset
+  );
 }
 
 export function applyChatAgentsList(
@@ -1813,6 +1875,8 @@ async function loadChatHistoryUncached(
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
   deltaCursor: string | undefined,
+  inputRunIds: string[],
+  requestKeyPrefix: string,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1840,7 +1904,7 @@ async function loadChatHistoryUncached(
   setChatError(state, null);
   try {
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
-    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
+    const requestKey = `${requestKeyPrefix}${requestModeKey}`;
     let response = await requestSharedChatHistory(
       client,
       requestKey,
@@ -1851,6 +1915,7 @@ async function loadChatHistoryUncached(
       () => shouldApplyChatHistoryResult(state, ownership),
       deltaCursor,
       state.sessions?.canonicalListRevision,
+      inputRunIds,
     );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
@@ -1863,7 +1928,7 @@ async function loadChatHistoryUncached(
     }
     if (isChatHistoryCursorResult(response) && response.kind === "reset") {
       clearCachedChatDeltaCursor(state, sessionKey, requestAgentId);
-      const pageRequestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000page`;
+      const pageRequestKey = `${requestKeyPrefix}page`;
       response = await requestSharedChatHistory(
         client,
         pageRequestKey,
@@ -1874,6 +1939,7 @@ async function loadChatHistoryUncached(
         () => shouldApplyChatHistoryResult(state, ownership),
         undefined,
         state.sessions?.canonicalListRevision,
+        inputRunIds,
       );
       if (!shouldApplyChatHistoryResult(state, ownership)) {
         recordChatHistoryTiming(state, "stale", startedAtMs, {
@@ -1903,6 +1969,12 @@ async function loadChatHistoryUncached(
         ...historyProjection,
         scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
       });
+      applyChatPendingInputs(state, response.pendingInputs, {
+        consumptions:
+          !previousSessionId || previousSessionId === state.currentSessionId
+            ? response.inputConsumptions
+            : undefined,
+      });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
@@ -1928,6 +2000,8 @@ async function loadChatHistoryUncached(
       return {
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
+        pendingInputs: response.pendingInputs,
+        inputConsumptions: response.inputConsumptions,
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
@@ -1983,7 +2057,7 @@ async function loadChatHistoryUncached(
       {
         type: "snapshotLoaded",
         messages: authoritativeMessages,
-        options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
+        options: { shouldIncludeMessage: isVisibleChatHistoryMessage },
       },
       {
         scope,
@@ -2001,6 +2075,12 @@ async function loadChatHistoryUncached(
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
+    applyChatPendingInputs(state, res.pendingInputs, {
+      consumptions:
+        !previousSessionId || previousSessionId === nextSessionId
+          ? res.inputConsumptions
+          : undefined,
+    });
     commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (
       state.reconnectResumeSessionId &&
@@ -2029,7 +2109,7 @@ async function loadChatHistoryUncached(
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
       const liveToolIds = currentLiveToolCallIds(state);
       if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
-        state.chatRunStartup = { state: "activity", runId: state.chatRunId };
+        reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }
       const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
       const historyReplacedToolStream =

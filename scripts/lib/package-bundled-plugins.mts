@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { satisfies, valid } from "semver";
-import { validateBundledPackageDependencyAlignment } from "../package-source-dependencies.mjs";
+import {
+  composePackagePlugins,
+  type DistributionPackageManifest,
+} from "../../src/infra/package-plugin-composition.ts";
 import {
   collectBundledPluginBuildEntries,
   collectRootPackageExcludedExtensionDirs,
@@ -16,15 +18,7 @@ import {
   PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "./package-dist-inventory-contract.mts";
 
-type PackageJson = {
-  name: string;
-  version: string;
-  files: string[];
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-};
+type PackageJson = DistributionPackageManifest;
 
 export function resolvePackageBundledPlugins(sourceDir: string, pluginIds: string[]) {
   const ids = [...new Set(pluginIds)].toSorted();
@@ -56,7 +50,7 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
   assertRealOutputRoot(path.join(sourceDir, "dist"));
   const packagePath = path.join(sourceDir, "package.json");
   const original = await fs.readFile(packagePath, "utf8");
-  const packageJson = JSON.parse(original) as PackageJson;
+  const sourcePackageJson = JSON.parse(original) as PackageJson;
   for (const { id, sourceEntries } of selected) {
     const sourcePackage = JSON.parse(
       await fs.readFile(path.join(sourceDir, "extensions", id, "package.json"), "utf8"),
@@ -88,46 +82,14 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     for (const entry of sourceEntries) {
       await fs.access(path.join(pluginRoot, entry.replace(/\.[^.]+$/u, ".js")));
     }
-    for (const section of ["dependencies", "optionalDependencies"] as const) {
-      const dependencies = sourcePackage[section] ?? {};
-      for (const [name, spec] of Object.entries(dependencies)) {
-        if (valid(spec) !== spec) {
-          throw new Error(
-            `Selected plugin ${id} requires an exact dependency pin: ${name}@${spec}`,
-          );
-        }
-      }
-      for (const existing of [packageJson.dependencies, packageJson.optionalDependencies]) {
-        validateBundledPackageDependencyAlignment({
-          bundledDependencies: dependencies,
-          bundledPackageLabel: `selected plugin ${id}`,
-          rootDependencies: { ...dependencies, ...existing },
-        });
-      }
-      packageJson[section] = { ...packageJson[section], ...dependencies };
-    }
   }
-  // A required dependency must not remain optional when another selected owner needs it.
-  for (const name of Object.keys(packageJson.dependencies ?? {})) {
-    delete packageJson.optionalDependencies?.[name];
-  }
-  for (const { id, packageJson: metadata } of selected) {
-    const plugin = metadata as PackageJson;
-    for (const [name, range] of Object.entries(plugin.peerDependencies ?? {})) {
-      const version =
-        name === packageJson.name
-          ? packageJson.version
-          : (packageJson.dependencies?.[name] ?? packageJson.optionalDependencies?.[name]);
-      if (
-        (!version && !plugin.peerDependenciesMeta?.[name]?.optional) ||
-        (version && !satisfies(version, range))
-      ) {
-        throw new Error(`Selected plugin ${id} requires peer ${name}@${range} in the distribution`);
-      }
-    }
-  }
-  const exclusions = new Set(selected.map(({ id }) => `!dist/extensions/${id}/**`));
-  packageJson.files = packageJson.files.filter((entry) => !exclusions.has(entry));
+  const packageJson = composePackagePlugins(
+    sourcePackageJson,
+    selected.map(({ id, packageJson: pluginPackage }) => ({
+      id,
+      packageJson: pluginPackage as PackageJson,
+    })),
+  );
   const snapshots = await Promise.all(
     ["package.json", PACKAGE_DIST_INVENTORY_RELATIVE_PATH, PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
       async (relativePath) => {

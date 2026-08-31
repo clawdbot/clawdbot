@@ -690,6 +690,7 @@ describe("Codex app-server dynamic tool build", () => {
       tools.find((tool) => tool.name === "exec"),
       `${testCase.mode} OpenClaw shell replacement`,
     );
+    expect.soft(gatewayExec.parameters).not.toHaveProperty("properties.security");
     const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
       command: testCase.command,
       ask: "off",
@@ -1437,12 +1438,16 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
+    const execTool = expectDefined(
+      createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),
+      "assembled exec tool",
+    );
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("read"),
       createRuntimeDynamicTool("write"),
       createRuntimeDynamicTool("edit"),
       createRuntimeDynamicTool("apply_patch"),
-      createRuntimeDynamicTool("exec"),
+      execTool,
       createRuntimeDynamicTool("process"),
       createRuntimeDynamicTool("message"),
     ]);
@@ -1468,6 +1473,9 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
     expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
       "configured sandbox backend",
+    );
+    expect(tools.find((tool) => tool.name === "sandbox_exec")?.parameters).not.toHaveProperty(
+      "properties.security",
     );
     expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
       "background shell sessions",

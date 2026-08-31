@@ -66,7 +66,7 @@ describe("resolveLocalAuthSpawnInvocation", () => {
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
+      args: ["/d", "/s", "/c", '""C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" "login""'],
       options: { windowsHide: true, windowsVerbatimArguments: true },
     });
   });
@@ -80,7 +80,7 @@ describe("resolveLocalAuthSpawnInvocation", () => {
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" "login""'],
       options: { windowsHide: true, windowsVerbatimArguments: true },
     });
   });

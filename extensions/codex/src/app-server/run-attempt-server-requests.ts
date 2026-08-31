@@ -198,9 +198,8 @@ export function createCodexAttemptServerRequestController(
           stream: "tool",
           data: {
             phase: "start",
-            // OpenClaw tool execution stays observable without becoming public channel content.
-            hideFromChannelProgress: true,
             name: call.tool,
+            itemId: call.callId,
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
             ...(toolArgs ? { args: toolArgs } : {}),
@@ -306,8 +305,8 @@ export function createCodexAttemptServerRequestController(
             stream: "tool",
             data: {
               phase: "result",
-              hideFromChannelProgress: true,
               name: call.tool,
+              itemId: call.callId,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               ...(commandBearing ? { commandBearing: true } : {}),

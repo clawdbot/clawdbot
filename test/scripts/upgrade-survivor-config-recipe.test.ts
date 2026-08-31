@@ -38,6 +38,8 @@ describe("upgrade survivor config recipe command resolution", () => {
     expect(runner).toContain(
       "recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)",
     );
+    expect(runner).toContain('OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"');
+    expect(runner).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION");
     expect(runner).toContain('"${recipe_runner[@]}" apply');
     expect(dockerRunner).toContain(
       'TRUSTED_TSX_IMPORT="$TRUSTED_TSX_NODE_MODULES/tsx/dist/loader.mjs"',
@@ -147,15 +149,19 @@ describe("upgrade survivor config recipe command resolution", () => {
   });
 
   it.each([
-    ["base", "stable"],
-    ["prerelease-plugin-registry", "beta"],
-  ])("keeps the %s scenario on the %s update channel", (scenario, expectedChannel) => {
-    const updateChannels = resolveUpgradeSurvivorConfigSteps(scenario)
-      .filter((step) => step.argv.slice(0, 3).join(" ") === "config set update.channel")
-      .map((step) => step.argv[3]);
+    ["base", undefined, "stable"],
+    ["base", "beta", "beta"],
+    ["prerelease-plugin-registry", undefined, "beta"],
+  ])(
+    "keeps the %s scenario on the %s override update channel",
+    (scenario, channel, expectedChannel) => {
+      const updateChannels = resolveUpgradeSurvivorConfigSteps(scenario, channel)
+        .filter((step) => step.argv.slice(0, 3).join(" ") === "config set update.channel")
+        .map((step) => step.argv[3]);
 
-    expect(updateChannels.at(-1)).toBe(expectedChannel);
-  });
+      expect(updateChannels.at(-1)).toBe(expectedChannel);
+    },
+  );
 
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");

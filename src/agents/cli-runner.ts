@@ -280,13 +280,14 @@ export async function runPreparedCliAgent(
         sessionTarget: params.sessionTarget,
       })
     : [];
+  const promptForHooks = context.promptForHooks ?? params.prompt;
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
     provider: params.provider,
     model: context.modelId,
     systemPrompt: context.systemPrompt,
-    prompt: params.prompt,
+    prompt: promptForHooks,
     historyMessages,
     imagesCount: params.images?.length ?? 0,
   } as const;
@@ -321,7 +322,7 @@ export async function runPreparedCliAgent(
     ...buildAgentHookConversationMessages({
       historyMessages,
       currentTurnMessages: [
-        buildCliHookUserMessage(params.prompt),
+        buildCliHookUserMessage(promptForHooks),
         ...(lastAssistant ? [lastAssistant] : []),
       ],
     }),
@@ -625,7 +626,7 @@ export async function runPreparedCliAgent(
       try {
         beforeRunResult = await hookRunner.runBeforeAgentRun(
           {
-            prompt: params.prompt,
+            prompt: promptForHooks,
             systemPrompt: context.systemPrompt,
             messages: buildAgentHookConversationMessages({
               historyMessages,

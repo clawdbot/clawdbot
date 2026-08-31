@@ -1,4 +1,5 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
+import { statSync } from "node:fs";
 import { matchesGlob, relative } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -21,6 +22,7 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
+import { buildVitestRunPlans, isTestFileTarget } from "../test-projects.test-support.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import {
@@ -55,6 +57,7 @@ type NodeTestShard = {
 };
 
 type NodeTestPlanOptions = {
+  changedPaths?: readonly string[];
   includeReleaseOnlyPluginShards?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
@@ -423,7 +426,7 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
 const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 50],
   ["agentic-agents-core-isolated", 23],
-  ["agentic-agents-core-models", 72],
+  ["agentic-agents-core-models", 198],
   ["agentic-agents-core-runner-cli-1", 16],
   ["agentic-agents-core-runner-cli-2", 25],
   ["agentic-agents-core-runner-cli-3", 23],
@@ -452,7 +455,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-commands-doctor-gateway", 8],
   ["agentic-commands-doctor-platform", 7],
   ["agentic-commands-doctor-plugins-tools", 21],
-  ["agentic-commands-doctor-sessions-cron", 60],
+  ["agentic-commands-doctor-sessions-cron", 87],
   ["agentic-commands-doctor-shared", 61],
   ["agentic-commands-doctor-whatsapp", 2],
   ["agentic-commands-doctor-workspace", 3],
@@ -481,17 +484,17 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   // keep it under COMPACT_GITHUB_MAX_PREDICTED_SECONDS so it is never striped
   // into two jobs that would each build.
   ["agentic-gateway-core-runtime", 145],
-  ["agentic-gateway-core-1", 128],
+  ["agentic-gateway-core-1", 176],
   ["agentic-gateway-core-2", 149],
   ["agentic-gateway-core-3", 141],
   ["agentic-gateway-methods", 169],
   ["agentic-plugin-sdk", 70],
   ["auto-reply-core-top-level", 43],
-  ["auto-reply-reply-agent-runner", 114],
+  ["auto-reply-reply-agent-runner", 169],
   ["auto-reply-reply-commands-1", 53],
   ["auto-reply-reply-commands-2", 26],
   ["auto-reply-reply-commands-3", 48],
-  ["auto-reply-reply-dispatch", 30],
+  ["auto-reply-reply-dispatch", 55],
   ["auto-reply-reply-dispatch-core", 75],
   ["auto-reply-reply-dispatch-delivery", 70],
   ["auto-reply-reply-dispatch-lifecycle", 20],
@@ -535,7 +538,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-system-runtime", 69],
   ["core-runtime-media-ui-1", 97],
   ["core-runtime-media-ui-2", 78],
-  ["core-runtime-media-ui-3", 54],
+  ["core-runtime-media-ui-3", 71],
   ["core-runtime-media-ui-support", 101],
   ["core-runtime-secrets", 73],
   ["core-runtime-shared", 92],
@@ -653,8 +656,12 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
+export function isExclusiveCompactShardName(shardName: string): boolean {
+  return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
+}
+
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
-  return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+  return isExclusiveCompactShardName(group.shard_name);
 }
 
 // Spawn/signal/PTY-timing suites also flake under high in-process worker
@@ -689,13 +696,27 @@ function usesExpandedRunnerProfile(runnerBackend: string | undefined): boolean {
   return runnerBackend === "github" || runnerBackend === "hybrid";
 }
 
+// Hand-fitted tables stand in only until a group has direct Blacksmith samples,
+// so a committed measurement owns the weight and the table covers the rest.
+// Reading the tables first made every pinned group immune to the nightly refit:
+// pins stale-low kept packing partners onto the tallest bins, and pins
+// stale-high kept splitting groups that had since become cheap.
+function readUnmeasuredCompactHint(
+  group: NodeTestShardGroup,
+  hints: ReadonlyMap<string, number>,
+): number | undefined {
+  return readCompactGroupTimings("blacksmith")[group.shard_name] === undefined
+    ? hints.get(group.shard_name)
+    : undefined;
+}
+
 function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
   // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
   // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
   // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
   // one point above the 0.86 packing cliff.
   return (
-    COMPACT_HYBRID_GROUP_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_HYBRID_GROUP_SECONDS_HINTS) ??
     Math.round(seconds * COMPACT_HYBRID_GROUP_SECONDS_SCALE)
   );
 }
@@ -729,7 +750,7 @@ function estimateCompactStripeSeconds(
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   const blacksmithSeconds =
-    COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS) ??
     estimateDefaultCompactGroupSeconds(group);
   return runnerBackend === "hybrid"
     ? estimateHybridCompactGroupSeconds(group, blacksmithSeconds)
@@ -1899,6 +1920,17 @@ function formatNodeTestShardCheckName(shardName: string): string {
 /** Create node test shard descriptors for CI, optionally excluding release-only plugin shards. */
 export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
+  const changedTestPlans = includeReleaseOnlyPluginShards
+    ? []
+    : (options.changedPaths ?? [])
+        .map(normalizeChangedPath)
+        .filter(
+          (file) =>
+            isTestFileTarget(file) &&
+            !file.endsWith(".live.test.ts") &&
+            statSync(file, { throwIfNoEntry: false })?.isFile(),
+        )
+        .flatMap((file) => buildVitestRunPlans([file]));
 
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
@@ -1913,13 +1945,6 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
     const splitShards = SPLIT_NODE_SHARDS.get(shard.name);
     if (splitShards) {
       return splitShards.flatMap((splitShard) => {
-        if (
-          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
-          !includeReleaseOnlyPluginShards
-        ) {
-          return [];
-        }
-
         const splitConfigs = splitShard.includeExternalConfigs
           ? splitShard.configs
           : splitShard.configs.filter((config) => configs.includes(config));
@@ -1927,8 +1952,27 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
           return [];
         }
 
+        let includePatterns = splitShard.includePatterns;
+        if (
+          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
+          !includeReleaseOnlyPluginShards
+        ) {
+          // PR fallback must retain directly edited tests without enabling the
+          // release sweep or stealing files from their canonical Vitest owners.
+          includePatterns = [
+            ...new Set(
+              changedTestPlans
+                .filter((plan) => splitConfigs.includes(plan.config))
+                .flatMap((plan) => plan.includePatterns ?? []),
+            ),
+          ].toSorted();
+          if (includePatterns.length === 0) {
+            return [];
+          }
+        }
+
         const pretestBuildMode = resolveVitestPretestBuildMode([
-          { configs: splitConfigs, includePatterns: splitShard.includePatterns },
+          { configs: splitConfigs, includePatterns },
         ]);
 
         return [
@@ -1937,7 +1981,7 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
-            ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(includePatterns ? { includePatterns } : {}),
             ...(pretestBuildMode ? { pretestBuildMode } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,

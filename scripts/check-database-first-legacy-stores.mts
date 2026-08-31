@@ -2155,16 +2155,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return objectLiteralPropertyLegacyValue(objectLiteral, propertyName) === true;
   }
 
-  function clearLegacyObjectProperties(scope: StringMap<LegacyPropertyValue>, objectName: string) {
-    const prefix = `${objectName}.`;
-    for (const key of scope.keys()) {
-      if (key.startsWith(prefix)) {
-        scope.delete(key);
-      }
-    }
-  }
-
-  function clearKnownLegacyObjectLiterals(scope: StringMap<boolean>, objectName: string) {
+  function deleteObjectPropertyDescendants<Value>(scope: StringMap<Value>, objectName: string) {
     const prefix = `${objectName}.`;
     for (const key of scope.keys()) {
       if (key.startsWith(prefix)) {
@@ -2460,7 +2451,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
         const knownUndefinedScope = knownUndefinedScopes[index]!;
         const propertyScope = legacyObjectPropertyScopes[index]!;
         const knownObjectLiteralScope = legacyKnownObjectLiteralScopes[index]!;
-        clearKnownLegacyObjectLiterals(knownObjectLiteralScope, name);
+        deleteObjectPropertyDescendants(knownObjectLiteralScope, name);
         knownObjectLiteralScope.set(name, merged.knownObjectLiteral);
         for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
           knownObjectLiteralScope.set(knownObjectLiteralKey, value);
@@ -2468,12 +2459,12 @@ export function collectDatabaseFirstLegacyStoreViolations(
         pathScope.set(name, merged.value);
         knownUndefinedScope.set(name, merged.knownUndefined);
         literalScope.set(name, merged.literalTexts);
-        clearLegacyObjectProperties(propertyScope, name);
+        deleteObjectPropertyDescendants(propertyScope, name);
         for (const [propertyKey, value] of merged.objectProperties) {
           propertyScope.set(propertyKey, value);
         }
       }
-      clearKnownLegacyObjectLiterals(lastScope(legacyKnownObjectLiteralScopes), name);
+      deleteObjectPropertyDescendants(lastScope(legacyKnownObjectLiteralScopes), name);
       lastScope(legacyKnownObjectLiteralScopes).set(name, merged.knownObjectLiteral);
       for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
         lastScope(legacyKnownObjectLiteralScopes).set(knownObjectLiteralKey, value);
@@ -2481,7 +2472,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       lastScope(legacyPathScopes).set(name, merged.value);
       lastScope(knownUndefinedScopes).set(name, merged.knownUndefined);
       lastScope(literalTextScopes).set(name, merged.literalTexts);
-      clearLegacyObjectProperties(lastScope(legacyObjectPropertyScopes), name);
+      deleteObjectPropertyDescendants(lastScope(legacyObjectPropertyScopes), name);
       for (const [propertyKey, value] of merged.objectProperties) {
         lastScope(legacyObjectPropertyScopes).set(propertyKey, value);
       }
@@ -2606,9 +2597,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
           const propertyKey = `${objectName}.${name}`;
           const unknownComputed = name === unknownComputedPropertyName;
           if (!unknownComputed) {
-            clearLegacyObjectProperties(targetScope, propertyKey);
+            deleteObjectPropertyDescendants(targetScope, propertyKey);
             if (knownObjectLiteralScope) {
-              clearKnownLegacyObjectLiterals(knownObjectLiteralScope, propertyKey);
+              deleteObjectPropertyDescendants(knownObjectLiteralScope, propertyKey);
             }
           }
           const propertyValue = legacyObjectPropertyValueFromExpression(property.initializer);
@@ -2695,7 +2686,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       copiedEntries.sort((left, right) => left[0].length - right[0].length);
       for (const [key, value] of copiedEntries) {
-        clearLegacyObjectProperties(targetScope, key);
+        deleteObjectPropertyDescendants(targetScope, key);
         targetScope.set(key, value);
       }
       const copied = copiedEntries.length > 0;
@@ -2722,7 +2713,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       copiedEntries.sort((left, right) => left[0].length - right[0].length);
       for (const [key, value] of copiedEntries) {
-        clearKnownLegacyObjectLiterals(targetScope, key);
+        deleteObjectPropertyDescendants(targetScope, key);
         targetScope.set(key, value);
       }
       const copied = copiedEntries.length > 0;
@@ -3970,7 +3961,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
         );
         lastScope(legacyPathScopes).set(node.left.text, nextPathValue);
         markKnownLegacyObjectLiteral(node.left.text, node.right);
-        clearLegacyObjectProperties(lastScope(legacyObjectPropertyScopes), node.left.text);
+        deleteObjectPropertyDescendants(lastScope(legacyObjectPropertyScopes), node.left.text);
         markLegacyObjectProperties(
           node.left.text,
           node.right,
@@ -3991,7 +3982,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
         const requireAliasTarget = requireAliasWriteTarget(node.left.text);
         requireAliasTarget.scope.set(node.left.text, nextRequireAlias);
         markFsModulePropertyShadows(node.left);
-        clearLegacyObjectProperties(propertyScope, node.left.text);
+        deleteObjectPropertyDescendants(propertyScope, node.left.text);
         markKnownLegacyObjectLiteral(
           node.left.text,
           node.right,
@@ -4124,7 +4115,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
         lastScope(conditionalExecutionScopes) && !conditionalExecutionScopes[target.index];
       if (conditionalPropertyWrite) {
         const previousKnownObjectLiteral = lookupKnownLegacyObjectLiteral(key);
-        clearKnownLegacyObjectLiterals(legacyKnownObjectLiteralScopes[target.index]!, key);
+        deleteObjectPropertyDescendants(legacyKnownObjectLiteralScopes[target.index]!, key);
         legacyKnownObjectLiteralScopes[target.index]!.set(
           key,
           previousKnownObjectLiteral && nextKnownObjectLiteral,
@@ -4140,11 +4131,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
         }
       } else {
         target.scope.set(key, nextValue);
-        clearKnownLegacyObjectLiterals(legacyKnownObjectLiteralScopes[target.index]!, key);
+        deleteObjectPropertyDescendants(legacyKnownObjectLiteralScopes[target.index]!, key);
         legacyKnownObjectLiteralScopes[target.index]!.set(key, nextKnownObjectLiteral);
       }
       if (!conditionalPropertyWrite) {
-        clearLegacyObjectProperties(target.scope, key);
+        deleteObjectPropertyDescendants(target.scope, key);
         for (const [propertyKey, value] of rewriteValues) {
           target.scope.set(propertyKey, value);
         }
@@ -4166,9 +4157,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
           }
         }
         lastScope(legacyObjectPropertyScopes).set(key, nextValue);
-        clearKnownLegacyObjectLiterals(lastScope(legacyKnownObjectLiteralScopes), key);
+        deleteObjectPropertyDescendants(lastScope(legacyKnownObjectLiteralScopes), key);
         lastScope(legacyKnownObjectLiteralScopes).set(key, nextKnownObjectLiteral);
-        clearLegacyObjectProperties(lastScope(legacyObjectPropertyScopes), key);
+        deleteObjectPropertyDescendants(lastScope(legacyObjectPropertyScopes), key);
         for (const [propertyKey, value] of rewriteValues) {
           lastScope(legacyObjectPropertyScopes).set(propertyKey, value);
         }

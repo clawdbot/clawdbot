@@ -2,14 +2,17 @@ import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveMediaBuffer } from "../../media/store.js";
+import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
+import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -20,6 +23,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -38,7 +42,7 @@ describe("current attachments in an active remote placement", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "keeps later image and PDF originals readable without reconciling them as %s output",
+    "keeps later image and PDF originals readable with %s retention",
     async (executionMode) => {
       const remote = path.join(await realpath(root), "remote");
       const local = path.join(await realpath(root), "local");
@@ -99,8 +103,11 @@ describe("current attachments in an active remote placement", () => {
           }
           const file = path.join(entry.parentPath, entry.name);
           const bytes = await readFile(file);
-          files.push(bytes);
           originalFiles.set(file, bytes);
+          if (entry.name === ".gitignore") {
+            continue;
+          }
+          files.push(bytes);
           expect(prompt).toContain(
             path.relative(remote, path.dirname(file)).split(path.sep).join("/"),
           );
@@ -116,7 +123,7 @@ describe("current attachments in an active remote placement", () => {
           await writeFile(path.join(remote, file), "user project output");
         }
       };
-      const tunnel: WorkerTunnelHandle = {
+      const tunnel: WorkerTurnTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(async (command) => {
@@ -137,40 +144,96 @@ describe("current attachments in an active remote placement", () => {
             signal: command.signal,
           });
         }),
-        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-          await verifyFiles(request.plan.assignment.prompt);
-          request.onDispatchReady?.();
-          const transcriptLeafId = openSessionManager().appendMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "Read both" }],
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-test",
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: Date.now(),
+        measureLaunchTurn,
+        stageAttachments: async (request) => {
+          const service = createNodeWorkspaceTransferService({
+            getOwner: () => ({
+              credential: {
+                ownerEpoch: OWNER_EPOCH,
+                sessionId: SESSION_ID,
+                expiresAtMs: Date.now() + 60_000,
+              },
+              environment: attachedEnvironment(),
+            }),
+            temporaryRoot: path.join(remoteHome, "transfers"),
           });
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
-            claim: request.turnClaim,
-            transcriptSeq: 2,
-            liveSeq: 1,
-          });
-          return {
-            stdout: JSON.stringify({ status: "completed", transcriptLeafId, transcriptNextSeq: 3 }),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }),
+          const server = await startNodeWorkspaceTransferTestServer(service);
+          try {
+            await service.prepareSync({
+              environmentId: ENVIRONMENT_ID,
+              ownerEpoch: OWNER_EPOCH,
+              sessionId: SESSION_ID,
+              generation: 1,
+              localPath: local,
+              isAuthorized: request.isAuthorized,
+            });
+            const prepared = await service.prepareAttachments({
+              ...request,
+              environmentId: ENVIRONMENT_ID,
+            });
+            await runNodeWorkerWorkspaceTransfer({
+              gatewayUrl: server.gatewayUrl,
+              environmentId: ENVIRONMENT_ID,
+              workspaceDir: remote,
+              manifestHome: remoteHome,
+              transfer: {
+                direction: "download",
+                token: prepared.token,
+                manifestRef: prepared.snapshot.manifestRef,
+                attachments: true,
+              },
+              signal: request.signal,
+            });
+          } finally {
+            await service.closeAll();
+            await server.close();
+          }
+        },
+        launchTurn: vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(
+          async (request): Promise<SpawnResult> => {
+            const prompt = request.plan.assignment.prompt;
+            await verifyFiles(
+              typeof prompt === "string"
+                ? prompt
+                : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+            );
+            request.onDispatchReady?.();
+            const transcriptLeafId = openSessionManager().appendMessage({
+              role: "assistant",
+              content: [{ type: "text", text: "Read both" }],
+              api: "openai-responses",
+              provider: "openai",
+              model: "gpt-test",
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            });
+            createWorkerSessionPlacementGate(placements).updateAckCursors({
+              claim: request.turnClaim,
+              transcriptSeq: 2,
+              liveSeq: 1,
+            });
+            return {
+              stdout: JSON.stringify({
+                status: "completed",
+                transcriptLeafId,
+                transcriptNextSeq: 3,
+              }),
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            };
+          },
+        ),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: async () => {},
           resume: async () => {},
@@ -228,12 +291,31 @@ describe("current attachments in an active remote placement", () => {
           return { meta: { durationMs: 1 } };
         },
       );
+      if (executionMode === "remote-exec") {
+        // At most one setup, three PDF chunks, and one image chunk.
+        expect(vi.mocked(tunnel.runWorkspaceCommand).mock.calls.length).toBeLessThanOrEqual(5);
+      }
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
-      const expectedFiles = ["remote-edits.txt", "report.txt", ...userFiles].toSorted();
+      const retainedFiles =
+        executionMode === "worker-turn"
+          ? [...originalFiles.keys()].map((file) =>
+              path.relative(remote, file).split(path.sep).join("/"),
+            )
+          : [];
+      const expectedFiles = [
+        "remote-edits.txt",
+        "report.txt",
+        ...userFiles,
+        ...retainedFiles,
+      ].toSorted();
       const expectedPaths = [
-        ...expectedFiles,
-        ...userFiles.map((file) => path.dirname(file)),
+        ...new Set(
+          expectedFiles.flatMap((file) => {
+            const segments = file.split("/");
+            return segments.map((_segment, index) => segments.slice(0, index + 1).join("/"));
+          }),
+        ),
       ].toSorted();
       expect(workerManifestPaths).toEqual(expectedPaths);
       expect(acceptedManifestPaths).toEqual(expectedFiles);
@@ -249,6 +331,9 @@ describe("current attachments in an active remote placement", () => {
       }
       for (const [file, bytes] of originalFiles) {
         expect(await readFile(file)).toEqual(bytes);
+        if (executionMode === "worker-turn") {
+          expect(await readFile(path.join(local, path.relative(remote, file)))).toEqual(bytes);
+        }
       }
       expect(input.prompt).toBe("Read both attachments");
     },

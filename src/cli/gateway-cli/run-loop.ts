@@ -574,6 +574,7 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
+      let shutdownFailed = false;
       const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
@@ -734,6 +735,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
+        shutdownFailed = true;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -743,7 +745,9 @@ export async function runGatewayLoop(params: {
         }
         if (isRestart) {
           try {
-            if (handoffClosed) {
+            if (shutdownFailed) {
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
                 managedUpdateCancellation === "restored-in-process",

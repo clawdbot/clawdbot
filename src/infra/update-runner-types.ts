@@ -44,6 +44,7 @@ export type UpdateRunResult = {
           | "manager-unavailable"
           | "deps-install-failed"
           | "build-failed"
+          | "rollback-checkout-dirty"
           | "runtime-verification-failed";
       };
   postUpdate?: {
@@ -114,15 +115,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-type UpdateStepCompletion = UpdateStepInfo & {
-  durationMs: number;
-  exitCode: number | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: UpdateStepAdvisory;
-};
+type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
   onStepStart?: (step: UpdateStepInfo) => void;

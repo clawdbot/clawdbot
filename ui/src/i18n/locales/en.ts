@@ -219,7 +219,6 @@ export const en: TranslationMap = {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    noPrYet: "No PR yet",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
@@ -1186,6 +1185,19 @@ export const en: TranslationMap = {
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
     setIconMenu: "Set icon",
+    setColorMenu: "Color",
+    setIconColorMenu: "Icon & color",
+    sessionColor: "Session color: {color}",
+    colors: {
+      red: "Red",
+      blue: "Blue",
+      green: "Green",
+      yellow: "Yellow",
+      purple: "Purple",
+      orange: "Orange",
+      pink: "Pink",
+      cyan: "Cyan",
+    },
     iconEmojiSection: "Emoji",
     iconGlyphSection: "Icons",
     customEmojiCell: "Custom emoji…",
@@ -1200,10 +1212,20 @@ export const en: TranslationMap = {
     markRead: "Mark as read",
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
-    forkSession: "Fork",
+    forkSession: "Fork conversation",
     forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
-    copySessionId: "Copy session ID",
+    copySessionId: "Session ID",
+    copySessionLink: "Session link",
+    copyMarkdown: "Conversation as Markdown",
+    openNewTab: "New tab",
+    openNewWindow: "New window",
+    splitBelow: "Split below",
+    workspaceEditors: "Workspace · editor",
+    resetAppearance: "Reset to default",
+    copyTranscriptChanged: "Conversation changed while copying. Try again.",
+    openWindowBlocked: "Allow pop-ups for this site, then try again.",
+    splitUnavailable: "Open a conversation on a wide screen to use split view.",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: "Archive session",
@@ -1226,6 +1248,8 @@ export const en: TranslationMap = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    initialTurnPausedByWorkerStop:
+      "Worker stop requested. Review the initial message before retrying.",
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
@@ -1246,6 +1270,7 @@ export const en: TranslationMap = {
     groupByCategory: "Custom groups",
     groupByPerson: "Person",
     showSessionPreview: "Show message preview",
+    hideEmptyGroups: "Hide empty groups",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
@@ -1621,8 +1646,8 @@ export const en: TranslationMap = {
         description: "Gateway server settings (port, auth, binding)",
       },
       wizard: {
-        label: "Setup Wizard",
-        description: "Setup wizard state and history",
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
       },
       meta: {
         label: "Metadata",
@@ -1821,7 +1846,7 @@ export const en: TranslationMap = {
       mcp: "MCP",
       theme: "Theme",
       ui: "UI",
-      wizard: "Setup Wizard",
+      wizard: "Setup",
     },
     themes: {
       claw: {
@@ -1852,6 +1877,10 @@ export const en: TranslationMap = {
         label: "Phosphor",
         description: "Green on glass",
       },
+      crt: {
+        label: "CRT",
+        description: "Console mono",
+      },
     },
     textSizes: {
       small: "Small",
@@ -1866,9 +1895,7 @@ export const en: TranslationMap = {
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
-      hint: "Receive browser push notifications from your gateway.",
-      nativeHint: "Notifications are shown natively by the OpenClaw app on this Mac.",
-      unavailableHint: "Not available in this browser.",
+      unavailableHint: "Browser unsupported.",
       unavailable: "Unavailable",
       checking: "Checking...",
       granted: "Granted",
@@ -1893,10 +1920,31 @@ export const en: TranslationMap = {
       subscribing: "Subscribing...",
       enable: "Enable notifications",
       openSystemSettings: "Open System Settings",
-      blockedHint:
-        "Notifications are blocked. Update your browser site permissions to allow notifications.",
-      nativeBlockedHint:
-        "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
+      blockedHint: "Allow notifications in this site's browser permissions.",
+      nativeBlockedHint: "Allow OpenClaw in macOS System Settings > Notifications.",
+      iosInstallRequired: "On iPhone or iPad, use Share > Add to Home Screen, then open OpenClaw.",
+      accountDefaults: "Account defaults",
+      installedApp: "This browser or app",
+      deliverDevice: "Deliver to this browser or app",
+      notificationLabel: "Notification label",
+      approvalRequested: "Approval requested",
+      agentFinished: "Agent finished",
+      agentQuestion: "Agent question",
+      scheduledTaskFailed: "Scheduled task failed",
+      backgroundTaskFailed: "Background task failed",
+      lockScreenDetail: "Lock-screen detail",
+      lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
+      private: "Private",
+      namesOnly: "Names only",
+      detailed: "Detailed",
+      quietHours: "Quiet hours",
+      quietHoursWindow: "Quiet hours window",
+      timeZone: "Time zone",
+      onlyAgents: "Only these agents",
+      inherit: "Use account default",
+      inheritDetail: "Use account detail level",
+      inheritQuietHours: "Use account quiet hours",
+      overrideAgents: "Override for this device",
     },
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
@@ -1968,6 +2016,8 @@ export const en: TranslationMap = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgressHint: "Keep active task progress collapsed until you open it.",
     },
     sidebarPrefs: {
       title: "Sidebar",
@@ -2636,7 +2686,7 @@ export const en: TranslationMap = {
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
-    appearance: "Theme, UI, and setup wizard settings.",
+    appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
@@ -3122,7 +3172,7 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
@@ -4034,7 +4084,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -4760,6 +4810,7 @@ export const en: TranslationMap = {
       pageNotFound: "No wiki page found for {lookup}.",
       previewTruncated: "Showing the first chunk of this page.",
       previewTruncatedWithTotal: "Showing the first chunk of this page ({count} total lines).",
+      boundedResults: "Showing the newest {returned} of {total} items.",
       importedClusterSummary: "Imported chats clustered around {label}.",
       withheldDigestOne: "{count} digest was withheld pending review.",
       withheldDigests: "{count} digests were withheld pending review.",
@@ -5305,6 +5356,14 @@ export const en: TranslationMap = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     sendErrors: {
+      outboxPayloadCopied:
+        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
+      outboxPayloadCapacity:
+        "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
+      outboxPayloadUnavailable:
+        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+      outboxPayloadMissing:
+        "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",
@@ -5326,6 +5385,8 @@ export const en: TranslationMap = {
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
+      catalogShareUnavailable: "This shared session route is unavailable.",
+      catalogShareInvalid: "This {catalog} share URL is invalid.",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5668,6 +5729,19 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryDescription:
+      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+    outboxRecoveryConfirm:
+      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
+    outboxRecoveryRestore: "Restore here for review",
+    outboxRecoveryConflict:
+      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+    outboxRecoveryStorageFailed:
+      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+    outboxRecoveryFull:
+      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
+    outboxRecoveryMessages: "Queued messages: {count}",
     restartRecoveryTitle: "This session ended during a restart.",
     restartRecoveryDisabled: "Its transcript is safe.",
     resumeInNewSession: "Resume in new session",
@@ -5721,8 +5795,8 @@ export const en: TranslationMap = {
     },
     turnRecap: {
       doneIn: "Done in {duration}",
-      tokens: "{count} tokens",
-      tokensOne: "1 token",
+      tokens: "{count} output tokens",
+      tokensOne: "1 output token",
     },
     commands: {
       arguments: "Command arguments",
@@ -5813,6 +5887,9 @@ export const en: TranslationMap = {
         "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
+      discard: "Discard",
+      discardPendingMessage:
+        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
@@ -5823,6 +5900,8 @@ export const en: TranslationMap = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
+        blockedByUnconfirmed:
+          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
@@ -5923,6 +6002,9 @@ export const en: TranslationMap = {
       tooLargeToDisplay: "This message is too large to display here.",
       unknownDate: "Unknown date",
       toolSender: "Tool",
+      forwardedFrom: "From",
+      forwardedFromAgent: "Forwarded from {agentId}",
+      forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
@@ -5971,15 +6053,16 @@ export const en: TranslationMap = {
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose permissions for new runs.",
-      nextRun: "New permissions apply to the next run.",
+      help: "Choose permissions for this session.",
+      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
+      defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {
         "read-only": {
-          label: "Read only",
+          label: "Read Only",
           description: "Read within the session root; writes and commands are blocked.",
         },
         guarded: {
@@ -5991,7 +6074,7 @@ export const en: TranslationMap = {
           description: "An AI reviewer checks requests beyond the session root.",
         },
         full: {
-          label: "Full access",
+          label: "Full Access",
           description: "No reviewer; files and commands are unrestricted.",
         },
       },
@@ -6104,10 +6187,19 @@ export const en: TranslationMap = {
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
       loading: "Loading chat",
-      earlierHistoryAvailable: "Earlier history available",
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
+    },
+    pendingInputs: {
+      count: "Retained accepted inputs: {count}",
+      queued: "Accepted by the Gateway. Waiting for its turn.",
+      cancelled:
+        "Cancelled before its turn. This input will not run automatically; copy it to send a new message.",
+      interrupted:
+        "Interrupted before its turn. This input will not run automatically; copy it to send a new message.",
+      earlier: "Earlier accepted inputs",
+      latest: "Latest accepted inputs",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",
@@ -6223,7 +6315,10 @@ export const en: TranslationMap = {
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
+      microphoneAccessPending:
+        "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
+      microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
@@ -6249,7 +6344,6 @@ export const en: TranslationMap = {
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
       dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
-      dictationConnecting: "Starting dictation…",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
       dictationFailed: "Dictation failed.",
       dictationInterruptedRecovery:
@@ -6298,6 +6392,7 @@ export const en: TranslationMap = {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
     },

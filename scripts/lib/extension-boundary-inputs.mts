@@ -136,8 +136,7 @@ export class BoundaryInputSnapshot {
       const names: { name: string; directory: string }[] = [];
       const visited = new Map<string, boolean>();
       const active = new Set<string>();
-      const visit = (directory: string, installed = false) => {
-        const realDirectory = fs.realpathSync(directory);
+      const visit = (directory: string, realDirectory: string, installed = false) => {
         if (
           active.has(realDirectory) ||
           visited.get(realDirectory) === true ||
@@ -151,7 +150,7 @@ export class BoundaryInputSnapshot {
         active.add(realDirectory);
         const add = (name: string) => names.push({ name, directory: realDirectory });
         const entries = fs
-          .readdirSync(directory, { withFileTypes: true })
+          .readdirSync(realDirectory, { withFileTypes: true })
           .toSorted((left, right) => (left.name < right.name ? -1 : 1));
         for (const entry of entries) {
           const file = path.join(directory, entry.name);
@@ -160,6 +159,12 @@ export class BoundaryInputSnapshot {
             !installed &&
             [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name)
           ) {
+            continue;
+          }
+          // Tool scratch (.vite-temp bundles, jiti/vitest caches) churns under
+          // installed roots while sibling tasks run and would flip the topology
+          // digest mid-compile. Resolution never enters dot-entries except .pnpm.
+          if (installed && entry.name !== ".pnpm" && entry.name.startsWith(".")) {
             continue;
           }
           if (
@@ -184,7 +189,12 @@ export class BoundaryInputSnapshot {
             add(`${id}:${isDirectory ? "directory" : "file"}`);
           }
           if (isDirectory) {
-            visit(file, installed || entry.name === "node_modules");
+            // Extend the canonical parent path for ordinary children; resolve only links.
+            // Rewalking every ancestor multiplies metadata calls across installed trees.
+            const canonical = entry.isSymbolicLink()
+              ? fs.realpathSync(file)
+              : path.join(realDirectory, entry.name);
+            visit(file, canonical, installed || entry.name === "node_modules");
           } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
             add(id);
           }
@@ -194,8 +204,8 @@ export class BoundaryInputSnapshot {
       // A failed lookup can be outside declared roots. Name/existence changes in
       // the local resolution namespace invalidate conservatively; unrelated byte
       // edits do not. Installed package contents are included, not just lockfiles.
-      visit(this.rootDir);
-      this.topology = names;
+      visit(this.rootDir, fs.realpathSync(this.rootDir));
+      this.topology = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
     }
     // Workspace aliases can expose this producer's outputs as installed inputs.
     // Keep their link identities, and retain the same subtree for other consumers.
@@ -207,7 +217,6 @@ export class BoundaryInputSnapshot {
             (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
         )
         .map(({ name }) => name)
-        .toSorted()
         .join("\0"),
     );
   }

@@ -81,6 +81,7 @@ export type GatewaySessionRow = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  permissionModePending?: boolean;
   sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];
@@ -103,6 +104,8 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   icon?: string;
+  /** Named sidebar tint (SESSION_COLOR_IDS). */
+  color?: string;
   channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;

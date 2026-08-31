@@ -587,7 +587,10 @@ function createSummarizationOptions(
 
 /** Runs one summarization completion and maps abort/error stops to CompactionError. */
 async function runSummarizationCompletion(params: {
-  promptText: string;
+  messages: AgentMessage[];
+  prompt: string;
+  customInstructions?: string;
+  previousSummary?: string;
   model: Model;
   maxTokens: number;
   apiKey: string | undefined;
@@ -598,12 +601,22 @@ async function runSummarizationCompletion(params: {
   runtime?: AgentCoreCompletionRuntimeDeps;
   errorLabel: string;
 }): Promise<Result<string, CompactionError>> {
+  const conversationText = serializeConversation(convertToLlm(params.messages));
+  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+  if (params.previousSummary) {
+    promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
+  }
+  promptText += params.prompt;
+  // SDK callers also pass generated policy here; the host bounds raw operator focus.
+  if (params.customInstructions) {
+    promptText += `\n\nAdditional focus: ${params.customInstructions}`;
+  }
   const context = {
     systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
     messages: [
       {
         role: "user" as const,
-        content: [{ type: "text" as const, text: params.promptText }],
+        content: [{ type: "text" as const, text: promptText }],
         timestamp: Date.now(),
       },
     ],
@@ -619,6 +632,8 @@ async function runSummarizationCompletion(params: {
   const response = params.streamFn
     ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  params.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
@@ -660,20 +675,12 @@ export async function generateSummary(
     Math.floor(0.8 * reserveTokens),
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
   );
-  let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
-  if (customInstructions) {
-    basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
-  }
-  const llmMessages = convertToLlm(currentMessages);
-  const conversationText = serializeConversation(llmMessages);
-  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-  if (previousSummary) {
-    promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-  }
-  promptText += basePrompt;
-
+  const prompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
   return await runSummarizationCompletion({
-    promptText,
+    messages: currentMessages,
+    prompt,
+    customInstructions,
+    previousSummary,
     model,
     maxTokens,
     apiKey,
@@ -696,8 +703,6 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
-  /** Explicit terminal state of the turn whose prefix was split from its retained suffix. */
-  splitTurnCompleted?: boolean;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -708,24 +713,6 @@ export interface CompactionPreparation {
   fileOps: FileOperations;
   /** Settings used to prepare compaction. */
   settings: CompactionSettings;
-}
-
-function latestUserTurnCompleted(messages: AgentMessage[]): boolean {
-  let sawTurnTail = false;
-  let completed = false;
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      return completed;
-    }
-    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
-      sawTurnTail = true;
-      completed =
-        message.role === "assistant" &&
-        message.stopReason === "stop" &&
-        message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
-    }
-  }
-  return false;
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
@@ -837,23 +824,12 @@ export function prepareCompaction(
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
-  const retainedTurnSuffixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
-      }
-    }
-    for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
-      const entry = effectiveEntries.at(i);
-      if (!entry || (i > cutPoint.firstKeptEntryIndex && isTurnStartEntry(entry))) {
-        break;
-      }
-      const msg = getMessageFromEntryForCompaction(entry);
-      if (msg) {
-        retainedTurnSuffixMessages.push(msg);
       }
     }
   }
@@ -872,14 +848,6 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
-    ...(cutPoint.isSplitTurn
-      ? {
-          splitTurnCompleted: latestUserTurnCompleted([
-            ...turnPrefixMessages,
-            ...retainedTurnSuffixMessages,
-          ]),
-        }
-      : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,
@@ -888,7 +856,7 @@ export function prepareCompaction(
   });
 }
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+export const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
 
 Summarize the prefix to provide context for the retained suffix:
 
@@ -968,17 +936,24 @@ export async function compact(
 
   let latestContext = "";
   if (summarizeTurnPrefix) {
-    const turnPrefixResult = await generateTurnPrefixSummary(
-      turnPrefixMessages,
+    const maxTokens = Math.min(
+      Math.floor(0.5 * settings.reserveTokens),
+      model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+    );
+    const turnPrefixResult = await runSummarizationCompletion({
+      messages: turnPrefixMessages,
+      prompt: TURN_PREFIX_SUMMARIZATION_PROMPT,
+      customInstructions,
       model,
-      settings.reserveTokens,
+      maxTokens,
       apiKey,
       headers,
       signal,
       thinkingLevel,
       streamFn,
       runtime,
-    );
+      errorLabel: "Turn prefix summarization",
+    });
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
@@ -1008,37 +983,6 @@ export async function compact(
     firstKeptEntryId,
     tokensBefore,
     details: { readFiles, modifiedFiles } as CompactionDetails,
-  });
-}
-async function generateTurnPrefixSummary(
-  messages: AgentMessage[],
-  model: Model,
-  reserveTokens: number,
-  apiKey: string | undefined,
-  headers?: Record<string, string>,
-  signal?: AbortSignal,
-  thinkingLevel?: ThinkingLevel,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreCompletionRuntimeDeps,
-): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
-    Math.floor(0.5 * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-  );
-  const llmMessages = convertToLlm(messages);
-  const conversationText = serializeConversation(llmMessages);
-  const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-  return await runSummarizationCompletion({
-    promptText,
-    model,
-    maxTokens,
-    apiKey,
-    headers,
-    signal,
-    thinkingLevel,
-    streamFn,
-    runtime,
-    errorLabel: "Turn prefix summarization",
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

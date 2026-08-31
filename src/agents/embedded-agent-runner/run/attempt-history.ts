@@ -105,39 +105,68 @@ export function resolveUserTranscriptMessages(
   messages: AgentMessage[],
   contexts: readonly UserTranscriptContext[] | undefined,
   override: CurrentUserTimestampMatch | undefined,
-): Array<AgentMessage | undefined> {
+): Array<AgentMessage | undefined> | undefined {
+  if (!contexts?.length) {
+    return undefined;
+  }
   const resolved = Array.from(
     { length: messages.length },
     () => undefined as AgentMessage | undefined,
   );
-  if (!contexts?.length) {
-    return resolved;
-  }
-  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   const unusedContexts = new Set(contexts);
+  const byRuntimeMessage = new Map<AgentMessage, UserTranscriptContext[]>();
+  for (const context of unusedContexts) {
+    const bucket = byRuntimeMessage.get(context.runtimeMessage);
+    if (bucket) {
+      bucket.push(context);
+    } else {
+      byRuntimeMessage.set(context.runtimeMessage, [context]);
+    }
+  }
   // Reserve object-identity matches before structural fallback so duplicate
   // timestamp/text turns cannot consume a later message's exact pairing.
   for (const [index, message] of messages.entries()) {
     if (message.role !== "user") {
       continue;
     }
-    const context = [...unusedContexts].find((candidate) => candidate.runtimeMessage === message);
+    const context = byRuntimeMessage.get(message)?.shift();
     if (!context) {
       continue;
     }
     resolved[index] = context.transcriptMessage;
     unusedContexts.delete(context);
   }
+  if (unusedContexts.size === 0) {
+    return resolved;
+  }
+  const byTimestamp = new Map<number, UserTranscriptContext[]>();
+  for (const context of unusedContexts) {
+    const timestamp = context.runtimeMessage.timestamp;
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+      continue;
+    }
+    const bucket = byTimestamp.get(timestamp);
+    if (bucket) {
+      bucket.push(context);
+    } else {
+      byTimestamp.set(timestamp, [context]);
+    }
+  }
+  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   for (const [index, message] of messages.entries()) {
     if (message.role !== "user" || resolved[index]) {
       continue;
     }
-    const context = [...unusedContexts].find((candidate) =>
-      userMessageMatchesTranscriptContext(
-        message,
-        candidate,
-        index === activeUserMessageIndex ? override : undefined,
-      ),
+    const timestamp = message.timestamp;
+    const candidates = typeof timestamp === "number" ? byTimestamp.get(timestamp) : undefined;
+    const context = candidates?.find(
+      (candidate) =>
+        unusedContexts.has(candidate) &&
+        userMessageMatchesTranscriptContext(
+          message,
+          candidate,
+          index === activeUserMessageIndex ? override : undefined,
+        ),
     );
     if (!context) {
       continue;
@@ -156,8 +185,8 @@ function userMessageMatchesTranscriptContext(
   if (message === context.runtimeMessage) {
     return true;
   }
-  const messageTimestamp = (message as { timestamp?: unknown }).timestamp;
-  const runtimeTimestamp = (context.runtimeMessage as { timestamp?: unknown }).timestamp;
+  const messageTimestamp = message.timestamp;
+  const runtimeTimestamp = context.runtimeMessage.timestamp;
   if (
     typeof messageTimestamp !== "number" ||
     !Number.isFinite(messageTimestamp) ||

@@ -252,6 +252,7 @@ export function buildQaGatewayConfig(params: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,

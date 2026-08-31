@@ -16,9 +16,9 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   readTranscriptProjectionGeneration,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import {
@@ -63,6 +63,9 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 };
 
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  // `events` may remain sparse for salvage callers; this count marks the
+  // authoritative newest suffix before the first byte-budget omission.
+  newestContiguousEventCount: number;
   scannedMessages: number;
   serializedBytes: number;
   snapshot: {
@@ -453,40 +456,29 @@ export function readSessionTranscriptBoundedMessageTailPage(
     );
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
-    const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
-    if (positions.length === 0 || maxBytes === 0) {
+    const scannedMessages = endExclusive - start;
+    if (scannedMessages === 0 || maxBytes === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
-        scannedMessages: positions.length,
+        newestContiguousEventCount: 0,
+        scannedMessages,
         serializedBytes: 0,
         snapshot,
         totalMessages,
       };
     }
     const db = getActiveTranscriptKysely(projection.database);
-    const metadata = executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select([
-          "active.message_position",
-          /* kysely-allow-raw: byte budget covers the exact newline-terminated JSON event. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "in", positions)
-        .orderBy("active.message_position", "desc"),
-    ).rows;
+    const metadata = readVisibleMessageMetadata(projection, start, endExclusive).toReversed();
+    if (metadata.length !== scannedMessages) {
+      throw new Error("Active transcript bounded message page is incomplete");
+    }
     const selectedPositions: number[] = [];
+    let newestContiguousEventCount: number | undefined;
     let serializedBytes = 0;
     for (const row of metadata) {
-      if (row.message_position === null || serializedBytes + row.serialized_bytes > maxBytes) {
+      if (serializedBytes + row.serialized_bytes > maxBytes) {
+        newestContiguousEventCount ??= selectedPositions.length;
         continue;
       }
       selectedPositions.push(row.message_position);
@@ -512,7 +504,8 @@ export function readSessionTranscriptBoundedMessageTailPage(
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events,
-      scannedMessages: positions.length,
+      newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
+      scannedMessages,
       serializedBytes,
       snapshot,
       totalMessages,

@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -42,6 +42,7 @@ import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
+  isSessionWorkAdmissionActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
@@ -163,13 +164,14 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
+let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
-  setupGatewaySessionsTestHarness();
+  setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
-let gitWorkspaceTemplateRoot: string;
-let gitWorkspaceTemplate: string;
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -194,17 +196,6 @@ async function waitForCreatedSessionRun(
   }
   return removed;
 }
-
-beforeAll(async () => {
-  gitWorkspaceTemplateRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
-  );
-  gitWorkspaceTemplate = await createGitWorkspace(gitWorkspaceTemplateRoot);
-});
-
-afterAll(async () => {
-  await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
-});
 
 // Read the real implementations back here rather than capturing them inside the
 // mock factories: Vitest runs a factory on first import of the mocked module, and
@@ -1053,6 +1044,18 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
+  let releaseDrainProbe = () => {};
+  let deletionCleanup: Promise<unknown> | undefined;
+  let dispatchAdmissionsReleased: Promise<void> | undefined;
+  const scheduleTitle = await actualDashboardTitleScheduler();
+  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params) => {
+    // Capture chat custody before the independent title admission is created.
+    dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
+      scope: params.storePath,
+      identities: [params.sessionKey, params.admittedSessionId],
+    });
+    scheduleTitle(params);
+  });
   let finishDispatch: (() => void) | undefined;
   const dispatchFinished = new Promise<void>((resolve) => {
     finishDispatch = resolve;
@@ -1102,26 +1105,48 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     );
     await titleStarted;
     finishDispatch?.();
+    expect(dispatchAdmissionsReleased).toBeDefined();
+    await dispatchAdmissionsReleased;
+    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
 
+    const drainStarted = createDeferredCore();
+    const drainProbe = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        drainStarted.resolve();
+        releaseDrainProbe();
+      },
+    });
+    releaseDrainProbe = drainProbe.release;
     let deletionSettled = false;
     const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
       key: sessionKey,
     }).finally(() => {
       deletionSettled = true;
     });
-    await waitForFast(
-      () => expect(isSessionLifecycleMutationActive(storePath, [sessionKey])).toBe(true),
-      { timeout: 5_000 },
-    );
+    deletionCleanup = deletion.catch(() => {});
+    // Deletion drains title work outside its mutation lock; observe the drain owner itself.
+    await Promise.race([
+      drainStarted.promise,
+      deletion.then((result) => {
+        throw new Error(`Deletion returned before draining: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
     expect(deletionSettled).toBe(false);
 
     finishTitle?.();
     const deleted = await deletion;
     expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
+    releaseDrainProbe();
     finishDispatch?.();
     finishTitle?.();
+    await deletionCleanup;
     ws.close();
   }
 });
@@ -1804,6 +1829,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       ownerId: key,
     });
 
+    const retainedDraft = path.join(worktree!.path, "session-draft.txt");
+    await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
+    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
+      .stdout;
+
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
@@ -1815,7 +1845,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(createSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
+      "uncommitted work survives reuse\n",
+    );
+    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
+      originalHead,
+    );
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>

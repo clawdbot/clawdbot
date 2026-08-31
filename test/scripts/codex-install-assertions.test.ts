@@ -18,7 +18,7 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
-const CODEX_VERSION = "0.150.1";
+const CODEX_VERSION = "0.151.0";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",

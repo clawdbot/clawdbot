@@ -25,6 +25,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
   sessionsShowSystem: boolean;
+  sessionsHideEmptyGroups: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;

@@ -65,8 +65,24 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
+  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "preserves invalid duration fallbacks for %s",
+    (durationMs) => {
+      expect(formatDurationCompact(durationMs)).toBeUndefined();
+      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+    },
+  );
+
+  it("keeps zero distinct from a positive duration rounded to zero", () => {
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe("0ms");
+    expect(formatDurationHuman(0)).toBe("0ms");
+  });
+
   it.each([
+    { durationMs: 999.5, expected: "1s" },
     { durationMs: 59_000, expected: "59s" },
+    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
     { durationMs: 3_660_000, expected: "1h 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
@@ -76,6 +92,22 @@ describe("localized durations", () => {
 
   it("switches human durations to days at 24 hours", () => {
     expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  });
+
+  it("uses the active locale for both duration formats", async () => {
+    await i18n.setLocale("fr");
+    try {
+      const minute = new Intl.NumberFormat("fr", {
+        style: "unit",
+        unit: "minute",
+        unitDisplay: "narrow",
+        maximumFractionDigits: 0,
+      }).format(1);
+      expect(formatDurationCompact(60_000)).toBe(minute);
+      expect(formatDurationHuman(60_000)).toBe(minute);
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 });
 

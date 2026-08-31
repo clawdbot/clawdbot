@@ -19,7 +19,10 @@ const pairingDeliveryMocks = vi.hoisted(() => ({
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  // Mention-kind construction is pure and part of the behavior under test, so it
+  // comes from the real module rather than a stub.
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   buildMentionRegexes: () => [],
   isChannelPartialDeliveryError: (error: unknown) =>
     Boolean(
@@ -203,6 +206,9 @@ vi.mock("./bot-message-context.js", () => ({
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
+// Loaded through the same registry epoch as the module under test so both share
+// one instance of the sent-id record.
+let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -315,6 +321,7 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
     ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
+    ({ recordLineSentMessages } = await import("./outbound-message-log.js"));
   });
 
   afterAll(() => {
@@ -1209,6 +1216,60 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("processes a group message that quotes the bot's own message when requireMention is set", async () => {
+    const processMessage = vi.fn();
+    // The id LINE returns for a push is the id a later quote points at.
+    recordLineSentMessages("default", ["m-bot-sent-1"]);
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-quote-1",
+        type: "text",
+        text: "does quoting you count as addressing you",
+        quotedMessageId: "m-bot-sent-1",
+        quoteToken: "q-quote-1",
+      },
+      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
+      webhookEventId: "evt-quote-1",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(processMessage).toHaveBeenCalled();
+  });
+
+  it("skips a group message quoting a message the bot did not send", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-quote-2",
+        type: "text",
+        text: "talking to you, not the bot",
+        quotedMessageId: "m-somebody-else",
+        quoteToken: "q-quote-2",
+      },
+      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
+      webhookEventId: "evt-quote-2",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
   });
 
   it("processes group messages with bot mention when requireMention is set", async () => {

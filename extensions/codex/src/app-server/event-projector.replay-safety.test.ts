@@ -261,11 +261,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         itemId: "mcp-command-1",
         name: "server.exec",
       }).data,
-    ).toMatchObject({
-      commandBearing: true,
-      hideFromChannelProgress: true,
-      isError: false,
-    });
+    ).toMatchObject({ commandBearing: true, isError: false });
   });
 
   it("treats native collaboration calls as side-effect evidence", async () => {

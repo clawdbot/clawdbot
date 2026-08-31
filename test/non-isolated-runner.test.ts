@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -98,8 +99,15 @@ function fixtureFiles(): Record<string, string> {
     path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
   );
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
+  const workAdmissionPath = JSON.stringify(
+    path.join(repoRoot, "src", "process", "gateway-work-admission.ts"),
+  );
+  const activeSessionsPath = JSON.stringify(
+    path.join(repoRoot, "src", "gateway", "active-sessions-shutdown-tracker.ts"),
+  );
   const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
   const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
+  const testEnvPath = JSON.stringify(path.join(repoRoot, "src", "test-utils", "env.ts"));
   const payloadImports = [
     'import { createRequire } from "node:module";',
     'import { queryObjects } from "node:v8";',
@@ -118,12 +126,21 @@ function fixtureFiles(): Record<string, string> {
     ].join("\n"),
     // Evaluate the real importer graph, then fail collection. The following
     // file must still apply its mock after onAfterRunFiles cleanup.
-    "01-a-crash.test.ts": 'import "./01-mid.js";\nthrow new Error("synthetic collect failure");\n',
+    "01-a-crash.test.ts": [
+      'import "./01-mid.js";',
+      'import { expect } from "vitest";',
+      'expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);',
+      `await import(${JSON.stringify(path.join(repoRoot, "src/logging/diagnostic-run-activity.ts"))});`,
+      'throw new Error("synthetic collect failure");',
+      "",
+    ].join("\n"),
     "01-b-mock.test.ts": [
       'import { expect, it, vi } from "vitest";',
       'vi.mock("./01-dep.js", () => ({ flavor: () => "mocked" }));',
       'const { describeFlavor } = await import("./01-mid.js");',
       'it("applies mocks after a sibling collection failure", () => {',
+      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(false);',
+      '  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.diagnosticRunActivityTestApi"))).toBe(false);',
       '  expect(describeFlavor()).toBe("flavor:mocked");',
       "});",
       "",
@@ -142,6 +159,29 @@ function fixtureFiles(): Record<string, string> {
       'it("restores gateway helper env", () => {',
       "  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();",
       "  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();",
+      "});",
+      "",
+    ].join("\n"),
+    "02-c-agent-env.test.ts": [
+      `import { setTestEnvValue } from ${testEnvPath};`,
+      'import { expect, it, vi } from "vitest";',
+      'it("leaves agent selectors for file-completion env unstub", () => {',
+      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
+      "  expect(process.env.OPENCLAW_TEST_HOME).toBeTruthy();",
+      '  for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]) {',
+      "    setTestEnvValue(key, `/tmp/inherited-${key}`);",
+      "    vi.stubEnv(key, undefined);",
+      "    expect(process.env[key]).toBeUndefined();",
+      "  }",
+      "});",
+      "",
+    ].join("\n"),
+    "02-d-agent-env.test.ts": [
+      'import { expect, it } from "vitest";',
+      'it("clears restored agent selectors before the next file", () => {',
+      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
+      "  expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();",
+      "  expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();",
       "});",
       "",
     ].join("\n"),
@@ -183,11 +223,54 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    "04-c-gateway-admission.test.ts": [
+      `import { beginGatewayRootWorkAdmissionWhenOpen, captureGatewayRootWorkAdmissionContinuationScope, getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission, tryBeginGatewaySuspendAdmission } from ${workAdmissionPath};`,
+      'import { expect, it } from "vitest";',
+      'it("seeds file-owned gateway admission and a suspended waiter", async () => {',
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      '  if (!admission) throw new Error("expected gateway root admission");',
+      "  const continuation = await admission.run(async () => captureGatewayRootWorkAdmissionContinuationScope());",
+      "  expect(continuation).not.toBeNull();",
+      "  const suspension = tryBeginGatewaySuspendAdmission(() => {});",
+      '  if (!suspension?.commit()) throw new Error("expected prepared suspension");',
+      "  const pending = beginGatewayRootWorkAdmissionWhenOpen();",
+      "  void pending.catch(() => {});",
+      '  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("fixture.gatewayAdmission")] = { continuation, pending };',
+      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
+      "});",
+      "",
+    ].join("\n"),
+    "04-d-gateway-admission.test.ts": [
+      `import { getActiveGatewayRootWorkCount, isGatewayRestartDraining, tryBeginGatewayRootWorkAdmission, type GatewayRootWorkAdmissionContinuationScope } from ${workAdmissionPath};`,
+      'import { expect, it } from "vitest";',
+      'it("retires gateway admission before the next file", async () => {',
+      "  const state = globalThis as Record<PropertyKey, unknown>;",
+      '  const key = Symbol.for("fixture.gatewayAdmission");',
+      "  const prior = state[key] as { continuation: GatewayRootWorkAdmissionContinuationScope; pending: Promise<unknown> } | undefined;",
+      "  delete state[key];",
+      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
+      "  expect(isGatewayRestartDraining()).toBe(false);",
+      '  if (!prior?.continuation) throw new Error("expected prior gateway continuation");',
+      '  await expect(prior.pending).rejects.toThrow("Gateway is draining");',
+      '  await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");',
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      "  expect(admission).not.toBeNull();",
+      "  admission?.release();",
+      "});",
+      "",
+    ].join("\n"),
     "05-a-agent-run.test.ts": [
+      `import { getActiveGatewayRootWorkCount, markGatewayRestartDraining, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
       `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      `import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("seeds process-global run contexts", () => {',
+      "  expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();",
+      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
+      "  markGatewayRestartDraining();",
+      '  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });',
+      "  expect(listActiveSessionsForShutdown()).toHaveLength(1);",
       '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
       '  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });',
       '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
@@ -202,10 +285,17 @@ function fixtureFiles(): Record<string, string> {
       "",
     ].join("\n"),
     "05-b-agent-run.test.ts": [
+      `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
       `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      `import { listActiveSessionsForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("clears agent run registry state", () => {',
+      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      "  expect(admission).not.toBeNull();",
+      "  admission?.release();",
+      "  expect(listActiveSessionsForShutdown()).toEqual([]);",
       '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
       "  let sequence;",
       "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
@@ -375,6 +465,7 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
   };
 }
@@ -406,6 +497,13 @@ it("cleans every shared runner surface between files", async () => {
         "    isolate: false,",
         "    fileParallelism: false,",
         "    maxWorkers: 1,",
+        // This real source uses only type imports; Node can retain its native generation.
+        `    server: { deps: { external: [new RegExp(${JSON.stringify(
+          `^${path
+            .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
+            .replaceAll("\\", "/")
+            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        )})] } },`,
         "    sequence: { sequencer: AlphabeticalSequencer },",
         `    runner: ${JSON.stringify(path.join(root, "runner.ts"))},`,
         "  },",
@@ -426,6 +524,7 @@ it("cleans every shared runner surface between files", async () => {
         path.join(root, "vitest.config.ts"),
         "--configLoader",
         "runner",
+        "--reporter=verbose",
       ],
       { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
     ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
@@ -434,7 +533,12 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 32 passed");
+    expect(output, output).toContain("1 failed | 43 passed | 1 skipped");
+    expect(output, output).toContain("45 passed | 1 skipped");
+    for (const generation of ["producer", "observer"]) {
+      expect(output).toContain(`test API lifecycle: ${generation} afterAll passed`);
+      expect(output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+    }
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });

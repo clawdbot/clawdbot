@@ -8,7 +8,9 @@ import {
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
@@ -347,6 +349,8 @@ export async function loadProviderScopedThinkingCatalog(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /** Input preparation must resolve modalities for this route, independently of reasoning. */
+  requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
   const scopedParams = {
     config: params.config,
@@ -356,8 +360,19 @@ export async function loadProviderScopedThinkingCatalog(params: {
     readOnly: true,
     providerDiscoveryProviderIds: [params.provider],
   } satisfies LoadPreparedModelCatalogParams;
-  const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
-    hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
+  const entryResolved = (catalog: readonly ModelCatalogEntry[]) => {
+    if (params.requiredInputRoute === undefined) {
+      return hasResolvedThinkingCatalogEntry({
+        catalog,
+        provider: params.provider,
+        model: params.model,
+      });
+    }
+    const entry = findModelInCatalog(catalog, params.provider, params.model);
+    return (
+      entry?.input !== undefined && modelTransportRoutesMatch(entry, params.requiredInputRoute)
+    );
+  };
   const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
@@ -373,7 +388,8 @@ export async function loadProviderScopedThinkingCatalog(params: {
       defaultModel: `${params.provider}/${params.model}`,
       snapshot,
     });
-    return normalizeThinkingCatalogProviders(augmented.entries);
+    const entries = normalizeThinkingCatalogProviders(augmented.entries);
+    return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
   const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {

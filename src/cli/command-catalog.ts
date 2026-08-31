@@ -281,7 +281,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   { commandPath: ["gateway", "start"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "stop"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "stop"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "uninstall"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "usage-cost"],
@@ -501,6 +505,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node", "worker"],
     exact: true,
     policy: {
+      // The app worker owns node startup, not Gateway channel schemas or Doctor preflight.
+      configGuard: "validate",
       hideBanner: true,
       loadPlugins: "never",
       ownsProtocolStdout: true,

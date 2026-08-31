@@ -201,6 +201,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       bundleMcp: false,
       pluginId: provider === "claude-cli" ? "anthropic" : "openai",
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},

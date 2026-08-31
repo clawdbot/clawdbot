@@ -35,6 +35,7 @@ import type {
   CliBackendConfig,
   CliBackendExecute,
   CliBackendExecutionMode,
+  CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
@@ -67,6 +68,13 @@ import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js"
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+
+export type NodeClaudePlacement = { nodeId: string; cwd?: string };
+
+export type CliExecutionTarget =
+  | { kind: "node"; placement: NodeClaudePlacement }
+  | { kind: "plugin"; execute: CliBackendExecute }
+  | { kind: "process" };
 
 type CliSessionRetryParams = {
   provider: string;
@@ -309,8 +317,6 @@ type CliPreparedBackend = {
   cleanup?: () => Promise<void>;
   /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
-  /** Plugin-owned transport bound to this exact prepared local run. */
-  execute?: CliBackendExecute;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
@@ -355,6 +361,7 @@ export type PreparedCliRunContext = {
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
+  executionTarget: CliExecutionTarget;
   reusableCliSession: CliReusableSession;
   /** Resume is safe only while the exact managed Claude stdio child still exists. */
   requiredClaudeLiveSessionGeneration?: string;
@@ -362,6 +369,9 @@ export type PreparedCliRunContext = {
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
   contextEngineTurnPrompt?: string;
+  promptContext?: CliBackendPromptContext;
+  /** Logical model input retained for policy/observation hooks when transport context is separate. */
+  promptForHooks?: string;
   contextEngineDeferredTurnMaintenance?: Promise<void>;
   modelId: string;
   normalizedModel: string;

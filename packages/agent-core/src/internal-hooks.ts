@@ -60,6 +60,9 @@ export type InternalToolExecutionPreparer = (params: {
 
 const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPreparer>();
 
+type InternalToolResultAcknowledgement = () => void;
+const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
+
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
   agent: object,
@@ -130,4 +133,35 @@ export function copyInternalToolExecutionPreparer<T extends object>(source: obje
     toolExecutionPreparerByTool.set(target, preparer);
   }
   return target;
+}
+
+/** Keep a destructive tool-side commit behind the result persistence boundary. */
+export function attachInternalToolResultAcknowledgement<T extends object>(
+  value: T,
+  acknowledge: InternalToolResultAcknowledgement,
+): T {
+  toolResultAcknowledgementByValue.set(value, acknowledge);
+  return value;
+}
+
+/** Carry private commit ownership through result transforms and message construction. */
+export function copyInternalToolResultAcknowledgement<T extends object>(
+  source: object,
+  target: T,
+): T {
+  const acknowledge = toolResultAcknowledgementByValue.get(source);
+  if (acknowledge) {
+    toolResultAcknowledgementByValue.set(target, acknowledge);
+  }
+  return target;
+}
+
+/** Commit one tool result after its owning message has attached. */
+export function acknowledgeInternalToolResult(value: object): void {
+  const acknowledge = toolResultAcknowledgementByValue.get(value);
+  if (!acknowledge) {
+    return;
+  }
+  toolResultAcknowledgementByValue.delete(value);
+  acknowledge();
 }

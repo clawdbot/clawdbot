@@ -1,4 +1,5 @@
 import path from "node:path";
+import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -19,7 +20,9 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
@@ -147,10 +150,15 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
   return gated;
 }
 
-function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAuthority: () => void) {
+function createBoundCallerIdentity(
+  params: AgentHarnessHostAttempt,
+  receiptAuthority: () => void,
+  signal: AbortSignal,
+) {
   return createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: params.admittedRunContext,
     receiptAuthority,
+    approvalSignals: [signal, ...(params.abortSignal ? [params.abortSignal] : [])],
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
@@ -171,6 +179,7 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
@@ -179,11 +188,17 @@ export function createAgentHarnessHostCapabilities(params: {
   if (!delegatedAuthority) {
     throw new Error("agent harness host capability requires active admitted run authority");
   }
+  const { lifecycleGeneration } = delegatedAuthority;
+  const { runId } = delegatedAuthority.operationalRunInstance;
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
-  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  const callerIdentity = createBoundCallerIdentity(
+    attempt,
+    assertActive,
+    capabilityAbortController.signal,
+  );
   function assertActive() {
     if (
       !active ||
@@ -256,8 +271,16 @@ export function createAgentHarnessHostCapabilities(params: {
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
   });
-  const withCaller = async <T>(run: () => Promise<T>): Promise<T> =>
-    await withGatewayToolCallerIdentity(callerIdentity, run);
+  const withCaller = async <T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> =>
+    await withGatewayToolCallerIdentity(
+      callerIdentity && signal
+        ? {
+            ...callerIdentity,
+            approvalSignals: [...(callerIdentity.approvalSignals ?? []), signal],
+          }
+        : callerIdentity,
+      run,
+    );
   const runBeforeToolCallWithAssertion = async (
     assertCurrent: () => void,
     {
@@ -284,7 +307,10 @@ export function createAgentHarnessHostCapabilities(params: {
     return result;
   };
   const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = async (request) =>
-    await withCaller(async () => await runBeforeToolCallWithAssertion(assertActive, request));
+    await withCaller(
+      async () => await runBeforeToolCallWithAssertion(assertActive, request),
+      request.signal,
+    );
   retainedBeforeToolCallRunners.set(runBeforeToolCall, () => {
     const recovery = retainAdmittedRunBeforeToolCallRecovery(attempt.admittedRunContext);
     if (!recovery) {
@@ -339,6 +365,22 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    reportOutputTokens: (outputTokens) => {
+      assertActive();
+      const data = emitAgentRunOutputTokens({
+        runId,
+        lifecycleGeneration,
+        sessionKey,
+        outputTokens,
+      });
+      if (data && onAgentEvent) {
+        runBestEffortCallback({
+          label: "usage agent event",
+          log,
+          callback: () => onAgentEvent({ stream: "usage", data }),
+        });
+      }
+    },
     ...(trajectoryRecorder
       ? {
           trajectory: Object.freeze({
@@ -400,6 +442,7 @@ export function createAgentHarnessHostCapabilities(params: {
     runBeforeToolCall,
     requestApproval: async (request) => {
       assertActive();
+      request.signal?.throwIfAborted();
       const result = await withCaller(
         async () =>
           await withGatewayToolApprovalOwner(
@@ -420,13 +463,15 @@ export function createAgentHarnessHostCapabilities(params: {
                     ? { allowedDecisions: request.allowedDecisions }
                     : {}),
                 },
-                { expectFinal: false, requireAgentRuntimeIdentity: true },
+                { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
               ),
           ),
+        request.signal,
       );
       // Gateway approval calls may outlive their owning attempt. A late
       // request result must not escape after exact authority has closed.
       assertActive();
+      request.signal?.throwIfAborted();
       return result;
     },
     waitForApproval: async (request) => {
@@ -439,6 +484,7 @@ export function createAgentHarnessHostCapabilities(params: {
             { id: request.approvalId },
             { signal: request.signal },
           ),
+        request.signal,
       );
       // An allowed decision is useful only while this exact admitted owner is
       // still live; fail closed if closure raced the awaited Gateway result.

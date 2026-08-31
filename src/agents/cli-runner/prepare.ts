@@ -36,6 +36,7 @@ import type {
   CliBackendConfig,
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
+  CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -68,6 +69,7 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
+  buildBootstrapInjectionStats,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
@@ -90,6 +92,7 @@ import {
 } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   resolvePromptBuildHookResult,
@@ -116,6 +119,7 @@ import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -132,10 +136,12 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
+import { resolveCliExecutionTarget } from "./execution-target.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { composeCliPromptContext } from "./prompt-context.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -939,6 +945,10 @@ export async function prepareCliRunContext(
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
     ? bootstrapFiles
     : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+  const bootstrapInjectionStats = buildBootstrapInjectionStats({
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
+  });
   const {
     bootstrapAnalysis,
     bootstrapMaxChars,
@@ -948,8 +958,7 @@ export async function prepareCliRunContext(
   } = buildBootstrapBudgetState({
     config: params.config,
     agentId: sessionAgentId,
-    bootstrapFiles: bootstrapFilesForInjectionStats,
-    injectedFiles: contextFiles,
+    files: bootstrapInjectionStats,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
@@ -1247,6 +1256,54 @@ export async function prepareCliRunContext(
     const loopbackServerConfig = mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
+    const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
+    const policyAgentId = resolveSessionAgentIds({
+      sessionKey: policySessionKey,
+      config: runtimeConfig,
+      agentId: params.runtimePolicySessionKey ? params.agentId : sessionAgentId,
+    }).sessionAgentId;
+    const sandboxStatus = resolveSandboxRuntimeStatus({
+      cfg: runtimeConfig,
+      sessionKey: policySessionKey,
+      agentId: policyAgentId,
+    });
+    const nativeMcpCapabilityProfile = resolveConversationCapabilityProfile({
+      config: runtimeConfig,
+      sessionKey: policySessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== policySessionKey ? params.sessionKey : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: policyAgentId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: params.messageProvider ?? params.messageChannel,
+      messageChannel: params.messageChannel,
+      chatType: runtimeChatType,
+      currentChannelId: params.currentChannelId,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider,
+      modelId,
+      modelContextWindowTokens: contextWindowInfo.tokens,
+      workspaceDir,
+      cwd,
+      skillsSnapshot: params.skillsSnapshot,
+      sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
+      runtimeToolAllowlist: runtimeToolsAllowPolicy,
+      inheritRuntimeToolAllowlist: true,
+      inputProvenance: params.inputProvenance,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+    });
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
@@ -1271,6 +1328,18 @@ export async function prepareCliRunContext(
             }
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
+      ...(!systemAgentMcpConfig && !restrictedLoopbackToolsAllow
+        ? {
+            nativeMcpPolicy: {
+              sessionId: params.sessionId,
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              capabilityProfile: nativeMcpCapabilityProfile,
+              ...(runtimeToolsAllowPolicy !== undefined
+                ? { runtimeToolsAllow: runtimeToolsAllowPolicy }
+                : {}),
+            },
+          }
+        : {}),
     });
     const cleanupPreparedBackend =
       preparedBackend.cleanup || cleanupMcpClientGrant
@@ -1459,11 +1528,15 @@ export async function prepareCliRunContext(
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
       ...(claimLiveSessionResources ? { claimLiveSessionResources } : {}),
-      ...(preparedExecution?.execute ? { execute: preparedExecution.execute } : {}),
       ...(preparedExecution?.secretInput ? { secretInput: preparedExecution.secretInput } : {}),
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };
+    const executionTarget = resolveCliExecutionTarget({
+      params,
+      backendId: backendResolved.id,
+      execute: preparedExecution?.execute,
+    });
     const promptToolNamesHash =
       bundleMcpEnabled && mcpLoopbackRuntime
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
@@ -1629,6 +1702,8 @@ export async function prepareCliRunContext(
       params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
         ? params.prompt
         : params.transcriptPrompt;
+    let promptContext: CliBackendPromptContext | undefined;
+    let promptForHooks: string | undefined;
     let preparedPrompt = isControlOperation
       ? params.prompt
       : (params.finalizePromptForResolvedTools?.({
@@ -1650,11 +1725,19 @@ export async function prepareCliRunContext(
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
-        if (prependContext) {
-          preparedPrompt = `${prependContext}\n\n${preparedPrompt}`;
-        }
-        if (appendContext) {
-          preparedPrompt = `${preparedPrompt}\n\n${appendContext}`;
+        const logicalPrompt = composeCliPromptContext(preparedPrompt, {
+          prependContext,
+          appendContext,
+        });
+        if ((prependContext || appendContext) && executionTarget.kind === "plugin") {
+          // The plugin transports private context separately; policy hooks still see all of it.
+          promptContext = {
+            ...(prependContext ? { prependContext } : {}),
+            ...(appendContext ? { appendContext } : {}),
+          };
+          promptForHooks = logicalPrompt;
+        } else {
+          preparedPrompt = logicalPrompt;
         }
         const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {
@@ -1687,24 +1770,22 @@ export async function prepareCliRunContext(
         params.currentInboundContext,
         reusableCliSession,
       );
-      const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: currentInboundContext,
-        prompt: preparedPrompt,
-      });
-      const runCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: currentInboundContext,
-        prompt: preparedPrompt,
-        preferResumableText:
-          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId),
-      });
-      historyPromptCurrentTurn = annotateInterSessionPromptText(
-        fullCurrentInboundPrompt,
-        params.inputProvenance,
-      );
-      preparedPrompt = annotateInterSessionPromptText(
-        runCurrentInboundPrompt,
-        params.inputProvenance,
-      );
+      const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>
+        annotateInterSessionPromptText(
+          buildCurrentInboundPrompt({
+            context: currentInboundContext,
+            prompt,
+            preferResumableText,
+          }),
+          params.inputProvenance,
+        );
+      const preferResumableText =
+        params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
+      historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
+      preparedPrompt = renderCurrentPrompt(preparedPrompt, preferResumableText);
+      if (promptForHooks !== undefined) {
+        promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
+      }
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
@@ -1759,14 +1840,15 @@ export async function prepareCliRunContext(
       }),
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
+      injectedWorkspaceFiles: bootstrapInjectionStats,
       skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,
       currentTurn: {
         ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
         promptChars: preparedPrompt.length,
-        runtimeContextChars: 0,
+        runtimeContextChars: [promptContext?.prependContext, promptContext?.appendContext]
+          .filter(Boolean)
+          .join("\n\n").length,
       },
     });
     const contextEngineConfig = params.config ?? getRuntimeConfig();
@@ -1808,6 +1890,7 @@ export async function prepareCliRunContext(
         cwd,
         backendResolved,
         preparedBackend: preparedBackendFinal,
+        executionTarget,
         reusableCliSession,
         hadSessionFile: false,
         contextEngineConfig,
@@ -1909,6 +1992,7 @@ export async function prepareCliRunContext(
       cwd,
       backendResolved,
       preparedBackend: preparedBackendFinal,
+      executionTarget,
       reusableCliSession,
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
@@ -1917,6 +2001,7 @@ export async function prepareCliRunContext(
       contextEngineConfig,
       contextEngine,
       contextEngineTurnPrompt,
+      ...(promptContext ? { promptContext, promptForHooks } : {}),
       modelId,
       normalizedModel,
       contextWindowInfo,

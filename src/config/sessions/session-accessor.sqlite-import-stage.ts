@@ -1,11 +1,12 @@
 // Disposable migration spool: never registered, resumed, or read by the runtime.
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createPrivateSqliteTempDirectorySync } from "../../infra/sqlite-private-directory.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 
 type StagedTranscriptRow = { seq: number; eventJson: string; createdAt: number | null };
 
@@ -69,14 +70,23 @@ export class SqliteSessionImportStage {
     this.database.exec("DELETE FROM seen");
   }
 
-  hasSeen(eventJson: string): boolean {
-    // Hash narrows the lookup; exact bytes decide equality even under a hash collision.
-    return (
-      this.findSeen.get(createHash("sha256").update(eventJson).digest(), eventJson) !== undefined
-    );
+  *iterateUnseenEvents(source: number): Generator<TranscriptEvent, void, boolean> {
+    for (const row of this.rows(source)) {
+      const eventHash = hash("sha256", row.eventJson, "buffer");
+      // Hash narrows the lookup; exact bytes decide equality even under a hash collision.
+      if (this.findSeen.get(eventHash, row.eventJson) !== undefined) {
+        continue;
+      }
+      // SAFETY: staging serialized the caller's TranscriptEvent without transforming its contents.
+      const inserted = yield JSON.parse(row.eventJson) as TranscriptEvent;
+      // Rejected identities stay unseen so later attempts retain their window recency writes.
+      if (inserted) {
+        this.insertSeen.run(eventHash, row.eventJson);
+      }
+    }
   }
 
   addSeen(eventJson: string): void {
-    this.insertSeen.run(createHash("sha256").update(eventJson).digest(), eventJson);
+    this.insertSeen.run(hash("sha256", eventJson, "buffer"), eventJson);
   }
 }

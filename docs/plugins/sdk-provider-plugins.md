@@ -206,6 +206,32 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    A custom interactive auth method that mints a static token or API key can
+    request protected persistence on its returned profile:
+
+    ```typescript
+    return {
+      profiles: [
+        {
+          profileId: "acme-ai:device",
+          credential: { type: "token", provider: "acme-ai", token },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "ACME_AI_TOKEN",
+          },
+        },
+      ],
+    };
+    ```
+
+    OpenClaw keeps the inline value only while staged validation runs. At the
+    final persistence boundary it writes the value to the protected local store
+    and saves a `tokenRef` or `keyRef` in the auth profile. `namePrefix` must be
+    an uppercase environment-style name. OpenClaw adds a stable suffix derived
+    from the provider and final profile id so multiple profiles remain separate.
+    Use this only for provider-minted static credentials, not rotating OAuth
+    credentials or values already supplied as SecretRefs.
+
     ### Live model discovery
 
     If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -811,6 +837,11 @@ catalog, API-key auth, and dynamic model resolution.
         from the same SDK entrypoint.
       </Tab>
       <Tab title="Realtime transcription">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeTranscriptionProviders(cfg, providerIds)`. This discovers
+        providers named in plugin-local config without broadening the active
+        registry or bypassing plugin enablement and allow/deny policy.
+
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` - the shared
         helper handles proxy capture, reconnect backoff, close flushing, ready
         handshakes, audio queueing, and close-event diagnostics. Your plugin
@@ -859,6 +890,14 @@ catalog, API-key auth, and dynamic model resolution.
         compatible transcription APIs.
       </Tab>
       <Tab title="Realtime voice">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
+        ordinary catalog discovery; per-call candidates do not change that catalog.
+        Automatic realtime voice and Voice Call transcription selection uses declared alias config as
+        defaults, with earlier aliases preferred and canonical values taking precedence.
+        An explicitly selected alias still overrides canonical config without inheriting
+        settings from other aliases.
+
         ```typescript
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",

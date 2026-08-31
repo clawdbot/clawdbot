@@ -65,6 +65,8 @@ const fakeRunValueOptionHelp = [
 ]
   .map((option) => `  -${option}\n`)
   .join("");
+const fakeWarmupValueOptionHelp = `${fakeRunValueOptionHelp}  -lease-id string\n`;
+const fakeHydrateValueOptionHelp = `${fakeRunValueOptionHelp}  -field value\n  -job string\n`;
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -109,6 +111,8 @@ async function main() {
   if (process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG, JSON.stringify(args) + "\n");
   if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
+  if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
+  if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
     if (process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS) process.stderr.write(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS + "\n");
@@ -199,6 +203,14 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
         `  printf '%s' ${shellQuote(runHelpText)}`,
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 2 ] && [ "$1" = "warmup" ] && [ "$2" = "--help" ]; then',
+        `  printf '%s' ${shellQuote(`${helpText}${fakeWarmupValueOptionHelp}`)}`,
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 3 ] && [ "$1" = "actions" ] && [ "$2" = "hydrate" ] && [ "$3" = "--help" ]; then',
+        `  printf '%s' ${shellQuote(`${helpText}${fakeHydrateValueOptionHelp}`)}`,
         "  exit 0",
         "fi",
         "fast_run=1",
@@ -1580,6 +1592,51 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).not.toContain("failed fast; reusable leases expire");
   });
 
+  it.each([
+    ["--no-sync"],
+    ["-no-sync=true"],
+    ["--no-sync=false"],
+    ["--id", "tbx_unused", "--no-sync"],
+  ])("rejects unsupported Testbox sync flags before delegation: %j", (...flags) => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper(["run", ...flags, "--", "echo ok"], {
+      configJson: { provider: "blacksmith-testbox" },
+      env: {
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "99",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=blacksmith-testbox does not support --no-sync");
+    expect(readInvocations(invocationLog).filter(([command]) => command === "run")).toEqual([]);
+  });
+
+  it.each([
+    { provider: "aws", flags: ["--no-sync"], command: ["echo", "ok"] },
+    { provider: "blacksmith-testbox", flags: [], command: ["echo", "--no-sync"] },
+    { provider: "blacksmith-testbox", flags: ["--label", "--no-sync"], command: ["echo", "ok"] },
+  ])(
+    "preserves sync flags outside Testbox run options: $provider $flags $command",
+    ({ provider, flags, command }) => {
+      const { output } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        provider,
+        ...flags,
+        "--",
+        ...command,
+      ]);
+
+      if (flags.length > 0) {
+        expect(output.args).toContain("--no-sync");
+      } else {
+        expect(output.args.at(-1)).toContain("echo --no-sync");
+      }
+    },
+  );
+
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
       env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
@@ -2085,21 +2142,38 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
-  it("repairs generic hydrate jobs for native Windows hydrate actions", () => {
-    const { output } = runSuccessfulWindowsHydrate("--job", "hydrate", "--id", "cbx_existing");
+  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+    "repairs generic hydrate jobs for native Windows hydrate actions: %j",
+    (...prefix) => {
+      const { output } = runSuccessfulWindowsHydrate(
+        ...prefix,
+        "--job",
+        "hydrate",
+        "--id",
+        "cbx_existing",
+      );
 
-    expect(output.args).toEqual(
-      windowsHydrateArgs("--job", "hydrate-windows-daemon", "--id", "cbx_existing"),
-    );
-  });
+      expect(output.args).toEqual(
+        windowsHydrateArgs(...prefix, "--job", "hydrate-windows-daemon", "--id", "cbx_existing"),
+      );
+    },
+  );
 
-  it("repairs generic hydrate job assignments for native Windows hydrate actions", () => {
-    const { output } = runSuccessfulWindowsHydrate("--job=hydrate", "--id", "cbx_existing");
+  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+    "repairs generic hydrate job assignments for native Windows hydrate actions: %j",
+    (...prefix) => {
+      const { output } = runSuccessfulWindowsHydrate(
+        ...prefix,
+        "--job=hydrate",
+        "--id",
+        "cbx_existing",
+      );
 
-    expect(output.args).toEqual(
-      windowsHydrateArgs("--job=hydrate-windows-daemon", "--id", "cbx_existing"),
-    );
-  });
+      expect(output.args).toEqual(
+        windowsHydrateArgs(...prefix, "--job=hydrate-windows-daemon", "--id", "cbx_existing"),
+      );
+    },
+  );
 
   it("keeps post-delimiter hydrate payloads untouched for native Windows hydrate actions", () => {
     const { output } = runSuccessfulWindowsHydrate(
@@ -3222,10 +3296,90 @@ describe("scripts/crabbox-wrapper", () => {
     }
   });
 
+  it.each([
+    ["run", "--help"],
+    ["warmup", "--help"],
+    ["actions", "hydrate", "--help"],
+    ["warmup", "--provider", "aws", "--help"],
+    ["actions", "hydrate", "--provider", "aws", "--help"],
+    ["warmup", "--keep", "--help"],
+    ["actions", "hydrate", "--reclaim", "--help"],
+    ["help", "actions", "hydrate"],
+    ["run", "--label", "--", "--help"],
+    ["warmup", "--lease-id", "--", "--help"],
+    ["actions", "hydrate", "--field", "--", "--help"],
+  ])("prints help without provider checks or sparse checkout preparation: %j", (...args) => {
+    const logPath = makeInvocationLog();
+    writeFileSync(logPath, "");
+    const syncRoot = path.join(path.dirname(logPath), "sync");
+    const result = runDefaultWrapper(args, {
+      ...cleanSparseSyncOptions,
+      configJson: managedBrokerConfig("aws"),
+      env: {
+        OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: logPath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const commandLength = args[0] === "actions" ? 2 : 1;
+    if (args.length === commandLength + 1) {
+      const optionHelp =
+        args[0] === "run"
+          ? fakeRunValueOptionHelp
+          : args[0] === "warmup"
+            ? fakeWarmupValueOptionHelp
+            : fakeHydrateValueOptionHelp;
+      expect(result.stdout).toBe(`${defaultProviderHelp}${optionHelp}`);
+    } else {
+      expect(parseFakeCrabboxOutput(result).args).toEqual(args);
+    }
+    expect(existsSync(syncRoot)).toBe(false);
+    expect(
+      readInvocations(logPath).filter(([command]) => command === "config" || command === "doctor"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["run", "--provider", "aws", "--label", "--help", "--", "echo ok"],
+    ["run", "--provider", "aws", "--", "--help"],
+    ["run", "--provider", "aws", "node", "--help"],
+    ["run", "--", "--help"],
+    ["warmup", "--", "--help"],
+    ["actions", "hydrate", "--", "--help"],
+    ["warmup", "--lease-id", "--help"],
+    ["actions", "hydrate", "--field", "--help"],
+    ["run", "--provider", "aws", "-", "--help"],
+    ["warmup", "--provider", "aws", "-", "--help"],
+    ["actions", "hydrate", "--provider", "aws", "-", "--help"],
+  ])("keeps provider gates when help belongs to a payload: %j", (...args) => {
+    const result = runDefaultWrapper(args, {
+      configJson: directBrokerConfig("aws"),
+      env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws" },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
+  });
+
   it("keeps unsupported provider selections rejected", () => {
     const result = runDefaultWrapper(["run", "--provider", "bogus", "--", "echo ok"]);
 
     expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary does not advertise provider bogus");
+  });
+
+  it.each([
+    ["help", "run", "--", "echo ok"],
+    ["help", "actions", "hydrate", "--", "echo ok"],
+  ])("does not bypass preparation for a help alias containing a remote payload: %j", (...args) => {
+    const result = runDefaultWrapper(args, {
+      configJson: managedBrokerConfig("bogus"),
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
   });
 

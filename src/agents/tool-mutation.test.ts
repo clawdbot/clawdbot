@@ -164,7 +164,18 @@ describe("tool mutation helpers", () => {
   });
 
   it("classifies computer observations as replay-safe and input as mutating", () => {
-    for (const action of ["screenshot", "wait"]) {
+    for (const action of [
+      "screenshot",
+      "wait",
+      "list_apps",
+      "list_windows",
+      "get_accessibility_tree",
+      "get_cursor_position",
+      "get_window_state",
+      "zoom",
+      "get_browser_state",
+      "get_recording_state",
+    ]) {
       const state = buildToolMutationState("computer", { action });
       expect(state.mutatingAction, action).toBe(false);
       expect(state.replaySafe, action).toBe(true);
@@ -183,6 +194,23 @@ describe("tool mutation helpers", () => {
       "type",
       "key",
       "hold_key",
+      "set_value",
+      "invoke_menu",
+      "bring_to_front",
+      "launch_app",
+      "kill_app",
+      "escalate_scope",
+      "browser_prepare",
+      "browser_navigate",
+      "browser_click",
+      "browser_pointer",
+      "browser_type",
+      "browser_set_input_files",
+      "browser_download",
+      "start_recording",
+      "stop_recording",
+      "replay_trajectory",
+      "future_action",
     ]) {
       const state = buildToolMutationState("computer", { action });
       expect(state.mutatingAction, action).toBe(true);
@@ -190,6 +218,24 @@ describe("tool mutation helpers", () => {
     }
     expect(isMutatingToolCall("computer", {})).toBe(true);
     expect(isReplaySafeToolCall("computer", {})).toBe(false);
+  });
+
+  it.each(["inspect", "accept", "dismiss", undefined, "future_action"])(
+    "classifies computer dialog %s without granting input replay",
+    (dialogAction) => {
+      expect(
+        buildToolMutationState("computer", { action: "browser_dialog", dialogAction }),
+      ).toEqual({
+        mutatingAction: dialogAction !== "inspect",
+        replaySafe: dialogAction === "inspect",
+      });
+    },
+  );
+
+  it("preserves declared side effects for a computer observation", () => {
+    expect(
+      buildToolMutationState("computer", { action: "list_windows" }, { ownerKey: "plugin-owner" }),
+    ).toEqual({ mutatingAction: true, replaySafe: false });
   });
 
   it("classifies mobile UI observation as replay-safe and act as mutating", () => {

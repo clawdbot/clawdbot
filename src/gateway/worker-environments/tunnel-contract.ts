@@ -65,6 +65,8 @@ export type WorkerWorkspaceSyncRequest = {
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
+  /** Immutable project identity from the owning environment's provisioning snapshot. */
+  projectKey?: string;
 };
 
 export type WorkerWorkspaceSyncResult = {
@@ -122,7 +124,13 @@ export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;
+  measureLaunchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  stageAttachments?(request: {
+    localPath: string;
+    isAuthorized: () => boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
@@ -131,7 +139,11 @@ export type WorkerWorkspaceTunnelHandle = {
   stop(): Promise<void>;
 };
 
-export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+export type WorkerTurnTunnelHandle = Omit<
+  WorkerWorkspaceTunnelHandle,
+  "launchTurn" | "measureLaunchTurn"
+> & {
+  measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

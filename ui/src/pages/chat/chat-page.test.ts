@@ -42,7 +42,7 @@ const CATALOG_KEY = {
   hostId: "gateway:local",
   threadId: "thread-1",
 } satisfies CatalogSessionKey;
-const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY);
+const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY, "research");
 const sessionPath = (sessionKey: string) =>
   sessionNavigationTarget({ face: "chat", sessionKey, fallbackAgentId: "main" }).options.pathname;
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -255,7 +255,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     const { setAgent } = setNavigationContext(page);
     page.data = {
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-1",
+      sessionKey: CATALOG_SESSION_KEY,
       agentId: "research",
     };
 

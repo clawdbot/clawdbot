@@ -12,7 +12,10 @@ import {
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 type PreparedInboundRegistryInput = Pick<
@@ -116,6 +119,7 @@ export function prepareWorkspacePluginRegistries(
   metadataSnapshot: PluginMetadataSnapshot,
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
+  reusableGeneration?: PreparedModelRuntimePluginGeneration,
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -127,15 +131,19 @@ export function prepareWorkspacePluginRegistries(
   }
   const inboundPluginRegistry = input.readOnly
     ? undefined
-    : loadInboundRegistry?.(input, metadataSnapshot);
+    : (reusableGeneration?.inboundPluginRegistry ?? loadInboundRegistry?.(input, metadataSnapshot));
+  const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   const runtimePluginRegistry =
-    input.runtimePluginSelections || !inboundPluginRegistry
+    input.runtimePluginSelections || !baseRegistry
       ? loadAgentRuntimePluginRegistryHandle({
           ...(input.loadRuntimePlugins
             ? { basePluginIds: [] }
-            : inboundPluginRegistry
-              ? { basePluginIds: listRuntimePluginIdsFromRegistry(inboundPluginRegistry) }
+            : baseRegistry
+              ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
               : {}),
+          ...(reusableGeneration?.pluginRegistry
+            ? { reusableRegistry: reusableGeneration.pluginRegistry }
+            : {}),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -144,7 +152,7 @@ export function prepareWorkspacePluginRegistries(
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
         })
-      : inboundPluginRegistry;
+      : baseRegistry;
   return {
     runtimePluginRegistry,
     ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),

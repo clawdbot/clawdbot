@@ -69,7 +69,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: [runId],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -328,7 +328,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: [runId],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -365,12 +365,12 @@ suite.define(() => {
       session: {
         activeRunIds: [],
         hasActiveRun: false,
-        key: "main",
+        key: "agent:main:main",
         kind: "direct",
         status: "done",
         updatedAt: Date.now(),
       },
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     await expect
       .poll(async () => (await gateway.getRequests("chat.history")).length)
@@ -401,7 +401,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: [runId],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 

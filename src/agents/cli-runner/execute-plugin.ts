@@ -397,6 +397,7 @@ export async function executePluginOwnedProcess(params: {
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
+  promptContext?: PreparedCliRunContext["promptContext"];
   useResume: boolean;
   forceNewSession?: boolean;
   sessionId?: string;
@@ -521,6 +522,7 @@ export async function executePluginOwnedProcess(params: {
       cwd,
       env: params.env,
       prompt: params.prompt,
+      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       modelId: params.context.normalizedModel,
       systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),

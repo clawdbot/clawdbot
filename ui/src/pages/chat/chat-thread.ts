@@ -78,6 +78,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
+    previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
+    previous.senderSession?.agentId === next.senderSession?.agentId &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
@@ -195,6 +197,8 @@ function stabilizeChatItems(
         prior.role !== item.role ||
         prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
+        prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
+        prior.senderSession?.agentId !== item.senderSession?.agentId ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
@@ -251,6 +255,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.pendingInputs === next.pendingInputs &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
@@ -384,6 +389,19 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
     }
   }
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
+}
+
+export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  return items.flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.flatMap((entry) =>
+          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
+            args,
+            name,
+          })),
+        )
+      : [],
+  );
 }
 
 export type AssistantMessageExpansionState =

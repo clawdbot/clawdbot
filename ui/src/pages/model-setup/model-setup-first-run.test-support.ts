@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ModelSetupPage, type ModelSetupRouteData } from "./model-setup-page.ts";
+import type { ModelSetupPageState } from "./state.ts";
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -124,22 +126,21 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
 
 export async function mountPage(
   context: ApplicationContext,
-  routeData: Omit<ModelSetupRouteData, "connection"> & { client: GatewayBrowserClient | null },
+  fixture: ModelSetupRouteData & {
+    state: Extract<ModelSetupPageState, { phase: "ready" }>;
+    client: GatewayBrowserClient;
+  },
 ) {
   const provider = createApplicationContextProvider(context);
   const page = new ModelSetupPage();
-  const { client, ...data } = routeData;
-  page.routeData = {
-    ...data,
-    connection: {
-      client,
-      hello: context.gateway.snapshot.hello,
-      agentId: context.agentSelection.state.selectedId,
-    },
-  };
+  // Prime inventory through the real detection boundary; the request fixture
+  // below it continues observing subsequent activation and recovery actions.
+  vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
+  page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
+  await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };
 }
 

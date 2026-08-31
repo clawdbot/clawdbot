@@ -21,6 +21,10 @@ const providerAuthMocks = vi.hoisted(() => ({
   listUsableProviderAuthProfileIds: vi.fn(() => ({ agentDir: "", profileIds: [] as string[] })),
 }));
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
+  throw new Error("xAI web search must not load the broad agent runtime");
+});
+
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
   return {
@@ -146,12 +150,16 @@ function requireXaiWebSearchTool(
   return tool;
 }
 
+const defaultAgentConfig = {
+  agents: {
+    list: [{ id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" }],
+  },
+};
+
 function createAuthSearchTool() {
   return requireXaiWebSearchTool({
     config: {
-      agents: {
-        list: [{ id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" }],
-      },
+      ...defaultAgentConfig,
       tools: { web: { search: { provider: "grok" } } },
     },
   });
@@ -287,9 +295,7 @@ describe("xai web search config resolution", () => {
     const mockFetch = installXaiWebSearchFetch();
     const tool = requireXaiWebSearchTool({
       config: {
-        agents: {
-          list: [{ id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" }],
-        },
+        ...defaultAgentConfig,
         ...xaiPluginConfig({ webSearch: { apiKey: "configured-xai-key" } }),
       },
     });
@@ -299,7 +305,7 @@ describe("xai web search config resolution", () => {
     expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "xai",
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        cfg: expect.objectContaining(defaultAgentConfig),
       }),
     );
     expect(fetchCallHeader(mockFetch, 0, "Authorization")).toBe("Bearer oauth-web-search-token");
@@ -364,7 +370,7 @@ describe("xai web search config resolution", () => {
       2,
       expect.objectContaining({
         provider: "xai",
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        cfg: expect.objectContaining(defaultAgentConfig),
         profileId: "xai:default",
         lockedProfile: true,
         forceRefresh: true,
@@ -407,7 +413,7 @@ describe("xai web search config resolution", () => {
       3,
       expect.objectContaining({
         provider: "xai",
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        cfg: expect.objectContaining(defaultAgentConfig),
         credentialPrecedence: "env-first",
       }),
     );
@@ -513,7 +519,7 @@ describe("xai web search config resolution", () => {
       2,
       expect.objectContaining({
         provider: "xai",
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        cfg: expect.objectContaining(defaultAgentConfig),
         credentialPrecedence: "env-first",
       }),
     );
@@ -664,9 +670,9 @@ describe("xai web search config resolution", () => {
     );
   });
 
-  it("rejects xAI web search success JSON without answer text", async () => {
+  it("reports missing xAI web search answers without blaming JSON decoding", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(jsonResponse({ output: [] })),
+      Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = requireXaiWebSearchTool({
@@ -674,7 +680,7 @@ describe("xai web search config resolution", () => {
     });
 
     await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
-      "xAI web search failed: malformed JSON response",
+      "xAI web search failed: no answer text returned; try a simpler request",
     );
   });
 

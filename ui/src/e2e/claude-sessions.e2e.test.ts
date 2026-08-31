@@ -582,10 +582,7 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     await page.clock.runFor(100);
-    await catalogPane
-      .locator('.chat-virtual-row:not([data-virtual-row-key="history"])')
-      .first()
-      .waitFor();
+    await catalogPane.locator(".chat-virtual-row").first().waitFor();
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
@@ -753,7 +750,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2]);
-      await pane.locator('.chat-history-available[aria-busy="true"]').waitFor();
+      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -773,7 +770,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2, 6]);
-      await pane.locator('.chat-history-available[aria-busy="true"]').waitFor();
+      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -789,7 +786,7 @@ suite.define(() => {
         .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
         .toBe(true);
       await expect
-        .poll(() => pane.locator('.chat-history-available[aria-busy="true"]').count())
+        .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
         .toBe(0);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
@@ -798,6 +795,8 @@ suite.define(() => {
           fullPage: true,
         });
       }
+      // The second applied page staged one background prefetch (offset 22);
+      // the now-scrollable transcript must not consume or chain beyond it.
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 300);
       });
@@ -805,7 +804,7 @@ suite.define(() => {
         (await gateway.getRequests("chat.history")).map(
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
-      ).toEqual([2, 6]);
+      ).toEqual([2, 6, 22]);
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {
@@ -829,9 +828,9 @@ suite.define(() => {
       timestamp: Date.now() + seq,
     });
     const recent = Array.from({ length: 100 }, (_, index) =>
-      historyMessage(index + 41, "recent native message"),
+      historyMessage(index + 1001, "recent native message"),
     );
-    const older = Array.from({ length: 40 }, (_, index) =>
+    const older = Array.from({ length: 1000 }, (_, index) =>
       historyMessage(index + 1, "older native message"),
     );
     const gateway = await installMockGateway(page, {
@@ -841,7 +840,7 @@ suite.define(() => {
           messages: recent,
           hasMore: true,
           nextOffset: 100,
-          totalMessages: 140,
+          totalMessages: 1100,
           sessionId: "native-scrollback",
           thinkingLevel: null,
         },
@@ -852,7 +851,19 @@ suite.define(() => {
               response: {
                 messages: older,
                 hasMore: false,
-                totalMessages: 140,
+                totalMessages: 1100,
+                sessionId: "native-scrollback",
+                thinkingLevel: null,
+              },
+            },
+            {
+              // Served to the background prefetch staged after the successful
+              // older page below reports more history at offset 1100.
+              match: { offset: 1100 },
+              response: {
+                messages: [],
+                hasMore: false,
+                totalMessages: 1140,
                 sessionId: "native-scrollback",
                 thinkingLevel: null,
               },
@@ -863,7 +874,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText(/^recent native message 140\n/).waitFor();
+    await page.getByText(/^recent native message 1100\n/).waitFor();
     const thread = page.locator(".chat-thread");
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
@@ -873,6 +884,17 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     const showEarlier = page.getByRole("button", { name: "Show earlier" });
+    // The boundary is in-flow content above the oldest loaded message: present
+    // in the transcript, above the viewport until the reader scrolls back up.
+    expect(await showEarlier.count()).toBe(1);
+    expect((await showEarlier.boundingBox())?.y ?? 0).toBeLessThan(0);
+    const initialRequestCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.history");
+    await thread.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await showEarlier.waitFor();
     if (artifactDir) {
       await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
@@ -880,25 +902,13 @@ suite.define(() => {
         fullPage: true,
       });
     }
-    const initialRequestCount = (await gateway.getRequests("chat.history")).length;
-    const tailAnchor = await captureTopVisibleVirtualRow(thread);
-    const initialScrollTop = await thread.evaluate((element) => element.scrollTop);
-    await showEarlier.click();
-    await expect
-      .poll(() => thread.evaluate((element) => element.scrollTop))
-      .toBeLessThan(initialScrollTop);
-    const earlierAnchor = await captureTopVisibleVirtualRow(thread);
-    expect(earlierAnchor.index).toBeLessThan(tailAnchor.index);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(initialRequestCount);
-    await gateway.deferNext("chat.history");
     await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.parentElement?.querySelector<HTMLButtonElement>(".chat-history-available")?.click();
+      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
     });
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
-    await page.locator('.chat-history-available[aria-busy="true"]').waitFor();
+    await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
@@ -915,13 +925,13 @@ suite.define(() => {
     await gateway.deferNext("chat.history");
     await showEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
-    await page.locator('.chat-history-available[aria-busy="true"]').waitFor();
+    await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     await gateway.resolveDeferred("chat.history", {
       messages: older,
       hasMore: true,
-      nextOffset: 140,
-      totalMessages: 180,
+      nextOffset: 1100,
+      totalMessages: 1140,
       sessionId: "native-scrollback",
       thinkingLevel: null,
     });
@@ -935,7 +945,7 @@ suite.define(() => {
                 .length,
           ),
       )
-      .toBe(140);
+      .toBe(1100);
     const firstOlderMessage = page.getByText(/^older native message 1\n/);
     await firstOlderMessage.waitFor();
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
@@ -945,35 +955,28 @@ suite.define(() => {
         fullPage: true,
       });
     }
-    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
-      limit: 100,
-      offset: 100,
-    });
-    const firstPageRequestCount = (await gateway.getRequests("chat.history")).length;
+    // The applied page reports more history, so the pane stages the next page
+    // (offset 1100) in the background without entering the loading state.
+    await expect
+      .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
+      .toBe(failedRequestCount + 2);
+    const requestsAfterPrefetch = await gateway.getRequests("chat.history");
+    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 1000, offset: 100 });
+    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 1000, offset: 1100 });
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         }),
     );
-    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
-    await gateway.deferNext("chat.history");
+    // Single staging slot: the parked page must not chain further prefetches.
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
+    // Consuming the staged page needs no round trip: the exhausted empty page
+    // applies instantly and removes the boundary and its sentinel.
     await showEarlier.click();
-    await gateway.waitForRequest("chat.history", { after: firstPageRequestCount });
-    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
-      limit: 100,
-      offset: 140,
-    });
-    await gateway.resolveDeferred("chat.history", {
-      messages: [],
-      hasMore: false,
-      totalMessages: 180,
-      sessionId: "native-scrollback",
-      thinkingLevel: null,
-    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     await page.close();
   });
 });

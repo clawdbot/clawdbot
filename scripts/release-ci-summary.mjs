@@ -18,12 +18,14 @@ import {
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
+  normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
+  validateReleaseTelegramWaiverBinding,
 } from "./full-release-validation-policy.mjs";
 import { execGhRead, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
@@ -383,6 +385,7 @@ export function requiredChildKeysForRerunGroup(
   }
   if (
     rerunGroup === "all" &&
+    !validationInputs.telegramWaiver &&
     ((typeof validationInputs.npmTelegramPackageSpec === "string" &&
       validationInputs.npmTelegramPackageSpec.length > 0) ||
       (typeof validationInputs.releasePackageSpec === "string" &&
@@ -865,6 +868,12 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  normalizeReleaseTelegramWaiver({
+    ...validationInputs,
+    candidateVersion: candidateBinding?.package.version,
+    releaseProfile,
+    rerunGroup: value.rerunGroup,
+  });
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
@@ -2211,6 +2220,7 @@ export function validateReleaseRunEvidence(
         workflowSha: rootEvidence.manifest.workflowSha,
       })
     : undefined;
+  validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );

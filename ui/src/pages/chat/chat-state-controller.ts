@@ -17,7 +17,6 @@ import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = {
-  connectionEpoch: number;
   cancellations: Set<() => void>;
 };
 
@@ -36,7 +35,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private forceScrollAfterUpdate = false;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
-  private renderLifecycleConnectionEpoch = 0;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -54,7 +52,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   createRenderLifecycle(): RenderLifecycle {
     this.cancelRenderLifecycleScope();
     const scope: ChatRenderLifecycleScope = {
-      connectionEpoch: this.renderLifecycleConnectionEpoch,
       cancellations: new Set(),
     };
     this.renderLifecycleScope = scope;
@@ -119,11 +116,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
-    return (
-      this.renderLifecycleConnected &&
-      this.renderLifecycleScope === scope &&
-      scope.connectionEpoch === this.renderLifecycleConnectionEpoch
-    );
+    return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
   private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
@@ -252,7 +245,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostConnected() {
-    this.renderLifecycleConnectionEpoch += 1;
     this.renderLifecycleConnected = true;
     // A lifecycle created while detached must never become active on reconnect.
     this.cancelRenderLifecycleScope();

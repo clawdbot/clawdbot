@@ -1,5 +1,10 @@
+import {
+  isLocallyOptimisticSessionMessage,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,6 +27,7 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -32,12 +38,12 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
+import { collapseSequentialDuplicateMessages } from "./chat-thread-duplicates.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageKeys,
   canvasPreviewBaseIdentity,
-  collapseSequentialDuplicateMessages,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
   findCanvasInsertionIndex,
@@ -54,9 +60,10 @@ import {
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
   type TurnInsertionBounds,
-  userTurnSendIdentity,
+  userTurnRunId,
 } from "./chat-thread-items.ts";
 import {
+  applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
   findRunTurnBounds,
   isKeyedAssistantStreamFallbackMessage,
@@ -84,6 +91,7 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -100,10 +108,16 @@ export type BuildChatItemsProps = {
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
+  const pendingInputs = props.pendingInputs ?? [];
+  const acceptedRunIds = new Set(pendingInputs.map((input) => input.runId));
   const history = composeTranscriptDisplay(
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
+        !(
+          isLocallyOptimisticSessionMessage(message) &&
+          acceptedRunIds.has(readSessionMessageIdentity(message)?.runId ?? "")
+        ) &&
         (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
     ),
   );
@@ -188,7 +202,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ? t(noticeKind.summaryKey)
         : extractTextCached(msg)?.replace(/^\[System\] /u, "");
       if (text?.trim()) {
-        const boundaryId = userTurnSendIdentity(msg);
         items.push({
           kind: "notice",
           key: itemKey,
@@ -198,7 +211,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
           text,
           timestamp: normalized.timestamp,
-          ...(boundaryId ? { boundaryId } : {}),
+          ...optionalBoundaryIdentity(userTurnRunId(msg)),
         });
       }
       continue;
@@ -214,7 +227,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // Once authoritative history carries the send id, that message owns the bubble.
   // Keep the queue row for run progress and delivery retirement, but do not render both copies.
   const threadQueuedSends = queuedSends.filter(
-    (queued) => !chatMessagesContainQueuedSend(history, queued, true),
+    (queued) =>
+      !acceptedRunIds.has(queued.sendRunId ?? "") &&
+      !chatMessagesContainQueuedSend(history, queued, true),
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
     (queued) =>
@@ -591,9 +606,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  // Merge timestamped transient projections into the stable transcript order.
-  // The latest user row is a causal floor: current-run items must not jump
-  // above it under clock skew, then jump back when history materializes them.
+  // Unowned projections keep their user-turn floor despite clock skew;
+  // identified live tools stay in the canonical invocation's interval.
+  applyPersistedToolInvocationBounds(items, toolItems, projectionInsertionBounds);
   insertChatItemsByTimestamp(
     items,
     timestampedProjectionItems,
@@ -673,5 +688,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
+  items.push(
+    ...buildPendingInputItems(
+      pendingInputs,
+      history,
+      props.searchOpen ? props.searchQuery : undefined,
+    ),
+  );
   return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
 }

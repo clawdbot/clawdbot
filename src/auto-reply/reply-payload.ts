@@ -277,6 +277,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
+  /** The model failed after a committed recovery compaction in the same turn. */
+  postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;

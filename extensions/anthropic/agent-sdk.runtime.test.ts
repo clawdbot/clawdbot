@@ -139,6 +139,21 @@ function sdkPreToolUse(options: Record<string, unknown>): SdkPreToolUseCallback 
   return callback;
 }
 
+type SdkPromptHook = (
+  input: { hook_event_name: "UserPromptSubmit"; prompt: string },
+  toolUseId: undefined,
+  request: { signal: AbortSignal },
+) => Promise<unknown>;
+
+function sdkPromptHook(options = sdkOptions()): SdkPromptHook {
+  const hooks = options.hooks as { UserPromptSubmit?: Array<{ hooks: SdkPromptHook[] }> };
+  const callback = hooks.UserPromptSubmit?.[0]?.hooks[0];
+  if (!callback) {
+    throw new Error("Missing native private-context hook");
+  }
+  return callback;
+}
+
 function createLiveCapability(
   fingerprint = "matching-session-policy",
   state: { current?: CliBackendLiveSessionHandle } = {},
@@ -505,6 +520,40 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, { prependContext: "private prefix", appendContext: "private suffix" }])(
+    "keeps one-shot user input separate from private prompt context %j",
+    async (promptContext) => {
+      let hookResult: unknown;
+      const context = createContext({ promptContext });
+      useSdkMessages([SUCCESS_RESULT], async (options) => {
+        hookResult = await sdkPromptHook(options)(
+          { hook_event_name: "UserPromptSubmit", prompt: context.prompt },
+          undefined,
+          { signal: new AbortController().signal },
+        );
+      });
+      await collect(context);
+      expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe(context.prompt);
+      expect(hookResult).toEqual(
+        promptContext
+          ? {
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: "private prefix\n\nprivate suffix",
+              },
+            }
+          : {},
+      );
+      await expect(
+        sdkPromptHook()(
+          { hook_event_name: "UserPromptSubmit", prompt: context.prompt },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      ).resolves.toEqual({});
+    },
+  );
+
   it("preserves native session identity across fresh and resumed turns", async () => {
     useSdkMessages();
 
@@ -551,8 +600,26 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
     const activate = vi.spyOn(capability, "activate");
-    const first = collect(createContext({ prompt: "Remember orange.", liveSession: capability }));
+    const first = collect(
+      createContext({
+        prompt: "Remember orange.",
+        promptContext: { prependContext: "private session note" },
+        liveSession: capability,
+      }),
+    );
     await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const hook = sdkPromptHook();
+    const hookRequest = { signal: new AbortController().signal };
+    for (const prompt of ["Remember orange.", "Rewritten orange prompt.", "Remember orange."]) {
+      await expect(
+        hook({ hook_event_name: "UserPromptSubmit", prompt }, undefined, hookRequest),
+      ).resolves.toEqual({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: "private session note",
+        },
+      });
+    }
     live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Remembered orange." });
 
     await expect(first).resolves.toContainEqual(
@@ -560,6 +627,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     );
     const firstHandle = capability.current();
     expect(firstHandle?.isIdle()).toBe(true);
+    await expect(
+      hook(
+        { hook_event_name: "UserPromptSubmit", prompt: "Remember orange." },
+        undefined,
+        hookRequest,
+      ),
+    ).resolves.toEqual({});
 
     const second = collect(
       createContext({
@@ -569,6 +643,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       }),
     );
     await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    await expect(
+      hook(
+        { hook_event_name: "UserPromptSubmit", prompt: "Which color did I mention?" },
+        undefined,
+        hookRequest,
+      ),
+    ).resolves.toEqual({});
     live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Orange." });
 
     await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "Orange." }));

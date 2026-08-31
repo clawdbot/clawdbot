@@ -156,14 +156,14 @@ suite.define(() => {
       });
 
       const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 100 });
+      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 400 });
       // The first authoritative snapshot can promote the same interim text to
       // a durable row before the distinct terminal reply is committed. That
       // identity change is not a recovered final; retry until new content lands.
       await gateway.setHistoryMessages(persistedHistory);
       await gateway.resolveDeferred("chat.history", {
         messages: persistedInterimHistory,
-        sessionId: "control-ui-e2e-session",
+        sessionId: `session:${sessionKey}`,
         thinkingLevel: null,
       });
       await gateway.waitForRequest("chat.history", { after: historyCount + 1 });

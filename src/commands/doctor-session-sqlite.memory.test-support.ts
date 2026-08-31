@@ -137,7 +137,9 @@ async function main() {
     }),
   );
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node resolves the bundled module through a worktree's shared node_modules
+// symlink; resolve argv too or the child exits without running the proof.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   void main().catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;

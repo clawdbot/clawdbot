@@ -181,7 +181,10 @@ export const boardChatDockLayout = createDockPanelLayout({
 });
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
+// One distance owns both halves of early history loading: upward intent within
+// this range arms the sentinel observer, and the observer's rootMargin fires
+// the same distance out. Splitting them re-creates the wall at the smaller value.
+export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
@@ -210,30 +213,6 @@ export function catalogRawResult(raw: unknown): string | null {
     return text ? clampText(text, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
   } catch {
     return null;
-  }
-}
-export function nativeHistoryMessageIdentity(message: unknown): string | null {
-  const record = catalogRawRecord(message);
-  const metadata = catalogRawRecord(record?.["__openclaw"]);
-  const seq = metadata?.seq;
-  const id = metadata?.id ?? record?.messageId;
-  const sourceIdentity =
-    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-      ? `seq:${seq}`
-      : typeof id === "string" && id.trim()
-        ? `id:${id}`
-        : null;
-  if (!sourceIdentity) {
-    return null;
-  }
-  const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
-  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
-  try {
-    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
-    // Keep every other projection byte so siblings from one transcript row stay distinct.
-    return `${sourceIdentity}:${JSON.stringify(projection)}`;
-  } catch {
-    return sourceIdentity;
   }
 }
 

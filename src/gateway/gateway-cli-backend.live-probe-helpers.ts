@@ -351,7 +351,7 @@ export async function verifyCliCronMcpProbe(params: {
   token: string;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const cronProbe = createLiveCronProbeSpec({ sessionKey: params.sessionKey });
+  const cronProbe = createLiveCronProbeSpec();
   const thinking = getCliBackendProbeThinking(params.providerId);
 
   let createdJob: CronListJob | undefined;
@@ -422,6 +422,7 @@ export async function verifyCliCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
+    expectedSessionTarget: "current",
   });
   if (createdJob?.id) {
     await removeCliCronJobBestEffort({

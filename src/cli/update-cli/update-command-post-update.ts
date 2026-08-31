@@ -41,51 +41,26 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
 import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
   isGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
+  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
-  restoreWindowsTaskAutoStartOrExit,
   shouldPrepareUpdatedInstallRestart,
   stripGatewayServiceMarkerEnv,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+import { resolveUnsafeUpdateRecoveryGuidance } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
-
-const UPDATE_QUIPS = [
-  "Leveled up! New skills unlocked. You're welcome.",
-  "Fresh code, same lobster. Miss me?",
-  "Back and better. Did you even notice I was gone?",
-  "Update complete. I learned some new tricks while I was out.",
-  "Upgraded! Now with 23% more sass.",
-  "I've evolved. Try to keep up.",
-  "New version, who dis? Oh right, still me but shinier.",
-  "Patched, polished, and ready to pinch. Let's go.",
-  "The lobster has molted. Harder shell, sharper claws.",
-  "Update done! Check the changelog or just trust me, it's good.",
-  "Reborn from the boiling waters of npm. Stronger now.",
-  "I went away and came back smarter. You should try it sometime.",
-  "Update complete. The bugs feared me, so they left.",
-  "New version installed. Old version sends its regards.",
-  "Firmware fresh. Brain wrinkles: increased.",
-  "I've seen things you wouldn't believe. Anyway, I'm updated.",
-  "Back online. The changelog is long but our friendship is longer.",
-  "Upgraded! Peter fixed stuff. Blame him if it breaks.",
-  "Molting complete. Please don't look at my soft shell phase.",
-  "Version bump! Same chaos energy, fewer crashes (probably).",
-];
-
-function pickUpdateQuip(): string {
-  return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
-}
 
 export async function finishUpdate(params: {
   result: UpdateRunResult;
@@ -109,52 +84,80 @@ export async function finishUpdate(params: {
   updateStepTimeoutMs: number;
   invocationCwd?: string;
 }): Promise<void> {
-  if (params.result.status !== "ok") {
-    printResult(params.result, { ...params.opts, hideSteps: params.showProgress });
-  }
-
-  if (params.result.status === "error") {
-    if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
-      return;
-    }
+  // Finalization owns the complete outcome, including recovery, restart, and completion work.
+  const printFinalResult = (result: UpdateRunResult) =>
+    printResult(
+      { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) },
+      { ...params.opts, hideSteps: params.showProgress },
+    );
+  const reportResult = async (result: UpdateRunResult, recoverService = false) => {
+    const finalResult = { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) };
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
-      result: params.result,
+      result: finalResult,
       jsonMode: Boolean(params.opts.json),
     });
-    if (params.result.recovery?.serviceRestartSafe === false) {
-      if (!params.opts.json) {
-        defaultRuntime.log(
-          theme.warn(
-            `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
-          ),
-        );
-      }
-    } else {
+    // The recovering Gateway reads this notification at startup. Persist once
+    // before restarting; rewriting a consumed sentinel could deliver it twice.
+    if (recoverService) {
       await maybeRestartServiceAfterFailedMutableUpdate({
-        root: params.result.root,
+        root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
       });
+    }
+    printFinalResult(finalResult);
+  };
+  const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
+    try {
+      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop);
+      return true;
+    } catch (err) {
+      defaultRuntime.error(
+        `Failed to restore Windows Scheduled Task autostart after package update: ${String(err)}`,
+      );
+      await reportResult({
+        ...result,
+        status: "error",
+        reason: "windows-task-autostart-restore-failed",
+      });
+      defaultRuntime.exit(1);
+      return false;
+    }
+  };
+
+  if (params.result.status === "error") {
+    if (!(await restoreWindowsAutoStart(params.result))) {
+      return;
+    }
+    await reportResult(params.result, params.result.recovery?.serviceRestartSafe !== false);
+    if (params.result.recovery?.serviceRestartSafe === false) {
+      if (!params.opts.json) {
+        const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
+        defaultRuntime.log(
+          theme.warn(
+            managedGatewayStopped
+              ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`
+              : `Update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
+          ),
+        );
+        defaultRuntime.log(
+          theme.muted(resolveUnsafeUpdateRecoveryGuidance(params.result.recovery.reason)),
+        );
+        if (managedGatewayStopped) {
+          defaultRuntime.log(theme.muted("Keep the gateway stopped until the update succeeds."));
+        }
+      }
     }
     defaultRuntime.exit(1);
     return;
   }
 
   if (params.result.status === "skipped") {
-    if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
+    if (!(await restoreWindowsAutoStart(params.result))) {
       return;
     }
-    await writeControlPlaneUpdateRestartSentinelBestEffort({
-      meta: params.controlPlaneUpdateSentinelMeta,
-      result: params.result,
-      jsonMode: Boolean(params.opts.json),
-    });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      root: params.result.root,
-      preManagedServiceStop: params.preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-    });
+    await reportResult(params.result, true);
     if (params.result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -235,11 +238,12 @@ export async function finishUpdate(params: {
         }),
     );
     if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
+      if (!(await restoreWindowsAutoStart(params.result))) {
         return;
       }
+      await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
       defaultRuntime.exit(freshProcessResult.exitCode);
-      throw new Error(`post-update process exited with code ${freshProcessResult.exitCode}`);
+      return;
     }
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
@@ -335,24 +339,15 @@ export async function finishUpdate(params: {
     : params.result;
 
   if (postCorePluginUpdate?.status === "error") {
-    if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
+    if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
       return;
     }
-    await writeControlPlaneUpdateRestartSentinelBestEffort({
-      meta: params.controlPlaneUpdateSentinelMeta,
-      result: resultWithPostUpdate,
-      jsonMode: Boolean(params.opts.json),
-    });
     // If strict config became valid despite a fresh-doctor process failure, restore the service
     // stopped by this update. Invalid post-migration config intentionally remains stopped.
-    if (postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON) {
-      await maybeRestartServiceAfterFailedMutableUpdate({
-        root: params.result.root,
-        preManagedServiceStop: params.preManagedServiceStop,
-        jsonMode: Boolean(params.opts.json),
-      });
-    }
-    printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
+    await reportResult(
+      resultWithPostUpdate,
+      postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -371,11 +366,14 @@ export async function finishUpdate(params: {
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
-  const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
-    updateMode: resultWithPostUpdate.mode,
-    processEnv: process.env,
-    preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-  });
+  const serviceStateReadEnv = resolveServiceRefreshEnv(
+    resolvePostUpdateServiceStateReadEnv({
+      updateMode: resultWithPostUpdate.mode,
+      processEnv: process.env,
+      preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
+    }),
+    params.invocationCwd,
+  );
   let serviceMutationAllowed =
     params.preManagedServiceStop?.serviceMutationAllowed !== false &&
     isGatewayServiceManagementAllowedForUpdate(process.env) &&
@@ -460,6 +458,11 @@ export async function finishUpdate(params: {
             ? formatErrorMessage(err)
             : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
         defaultRuntime.error(message);
+        await reportResult({
+          ...resultWithPostUpdate,
+          status: "error",
+          reason: "service-revalidation-failed",
+        });
         defaultRuntime.exit(1);
         return;
       }
@@ -476,7 +479,7 @@ export async function finishUpdate(params: {
     jsonMode: Boolean(params.opts.json),
   });
 
-  if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
+  if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
     return;
   }
   const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
@@ -500,10 +503,17 @@ export async function finishUpdate(params: {
     }),
   );
   if (!restartOk) {
+    // The Gateway may already have consumed the notification. Mark only an
+    // existing sentinel; recreating it would deliver the update twice.
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
       reason: "restart-unhealthy",
       jsonMode: Boolean(params.opts.json),
+    });
+    printFinalResult({
+      ...resultWithPostUpdate,
+      status: "error",
+      reason: "restart-unhealthy",
     });
     defaultRuntime.exit(1);
     return;
@@ -542,25 +552,15 @@ export async function finishUpdate(params: {
         reason: "wrapper-retirement-failed",
         jsonMode: Boolean(params.opts.json),
       });
-      const failedResult: UpdateRunResult = {
+      printFinalResult({
         ...resultWithPostUpdate,
         status: "error",
         reason: "wrapper-retirement-failed",
-      };
-      printResult(failedResult, { ...params.opts, hideSteps: params.showProgress });
+      });
       defaultRuntime.exit(1);
       return;
     }
   }
 
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result: resultWithPostUpdate,
-    jsonMode: Boolean(params.opts.json),
-  });
-
-  printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
-  if (!params.opts.json) {
-    defaultRuntime.log(theme.muted(pickUpdateQuip()));
-  }
+  await reportResult(resultWithPostUpdate);
 }

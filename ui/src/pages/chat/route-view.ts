@@ -61,6 +61,9 @@ export function renderChatRoute(data: unknown) {
   if (routeData.kind === "ambiguous") {
     return renderAmbiguous(routeData);
   }
+  if (routeData.kind === "route-error") {
+    return html`<section class="card"><p role="alert">${routeData.message}</p></section>`;
+  }
   if (routeData.kind === "missing-session") {
     return renderMissingSession(routeData);
   }

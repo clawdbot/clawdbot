@@ -13,6 +13,7 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
+import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import {
   findCrabboxBinary,
   operationLeaseId,
@@ -142,7 +143,7 @@ function providerWithRawRunner(
             setupCode: "secret-setup-value",
             setupId: "setup-id",
             openclawVersion: "2026.8.1",
-            packageSpecs: ["openclaw@2026.8.1"],
+            nodeBootstrap: createNodeBootstrapFixture(),
             displayName: "Cloud worker test",
             waitForDeviceId: async () => "device-1",
           })),
@@ -176,7 +177,7 @@ function failedNodeEnrollment(
       setupCode: "secret-setup-value",
       setupId: "setup-id",
       openclawVersion: "2026.8.1",
-      packageSpecs: ["openclaw@2026.8.1"],
+      nodeBootstrap: createNodeBootstrapFixture(),
       displayName: "Cloud worker test",
       waitForDeviceId: async () => {
         throw error;
@@ -204,6 +205,61 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
+  it.each(["aws", "hetzner", "machine0"])(
+    "resolves %s cleanup without commands or setup environment resolution",
+    async (backend) => {
+      vi.stubEnv("OPENCLAW_TEST_MISSING_SETUP", undefined);
+      const runCommand = vi.fn<CrabboxCommandRunner>();
+      const provider = providerWithRawRunner(runCommand);
+      await expect(
+        provider.resolveAllocation(
+          {
+            ...PROFILE,
+            provider: backend,
+            setup: "true",
+            setupEnv: ["OPENCLAW_TEST_MISSING_SETUP"],
+          },
+          OPERATION_ID,
+        ),
+      ).resolves.toEqual({ leaseId: LEASE_ID, sharedHost: false });
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "cleans the fixed operation after lost warmup (allocated: %s) without replay",
+    async (allocated) => {
+      let live = false;
+      const calls: string[][] = [];
+      const beginNodeEnrollment = vi.fn();
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "warmup") {
+          live = allocated;
+          return commandResult({
+            code: 5,
+            stderr: allocated ? "response lost" : "preflight failed",
+          });
+        }
+        if (argv[1] === "stop") {
+          live = false;
+          return commandResult();
+        }
+        throw new Error(`unexpected cleanup command ${argv[1]}`);
+      });
+      await expect(
+        provider.provision(PROFILE, OPERATION_ID, { beginNodeEnrollment }),
+      ).rejects.toThrow();
+      const allocation = await provider.resolveAllocation(PROFILE, OPERATION_ID);
+      await provider.destroy({ leaseId: allocation.leaseId, profile: PROFILE });
+      expect(allocation).toEqual({ leaseId: LEASE_ID, sharedHost: false });
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "stop"]);
+      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+      expect(beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(live).toBe(false);
+    },
+  );
+
   it("reads large machine catalogs while preserving shapes, order, and configured defaults", async () => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv, options) => {
@@ -772,35 +828,11 @@ describe("Crabbox worker provider", () => {
     );
     expect(enrollmentCall).toBeDefined();
     const setup = String(enrollmentCall?.options.input);
-    const setupCodeCleared = "unset CRABBOX_WORKER_SETUP_CODE";
-    expect(setup).toContain(setupCodeCleared);
-    expect(setup.indexOf(setupCodeCleared)).toBeGreaterThan(setup.indexOf('>"$setup_code_file"'));
-    expect(setup.indexOf(setupCodeCleared)).toBeLessThan(setup.indexOf("setsid -f sh -c"));
-    if (executionMode === "remote-exec") {
-      expect(setup).toContain("plugins inspect codex --json");
-      expect(setup).toContain('require("node:child_process").spawnSync');
-      expect(setup).toContain('[launcher,"--version"]');
-      expect(setup).toContain("codex-cli ${runtime.version}");
-      expect(setup).not.toContain("$state_dir/extensions/codex");
-      expect(setup).toContain("set -- openclaw");
-      expect(setup).toContain('set -- npx --yes --package "$package_spec" -- openclaw');
-      expect(setup).toContain('OPENCLAW_STATE_DIR="$state_dir" "$@" plugins enable codex');
-      expect(setup.match(/plugins inspect codex --json/g)).toHaveLength(1);
-      expect(setup.match(/setsid -f sh -c/g)).toHaveLength(1);
-      expect(setup.indexOf("plugins inspect codex --json")).toBeGreaterThan(
-        setup.indexOf(setupCodeCleared),
-      );
-      expect(setup.indexOf("plugins enable codex")).toBeLessThan(
-        setup.lastIndexOf("setsid -f sh -c"),
-      );
-    } else {
-      expect(setup).not.toContain("plugins inspect codex");
-    }
-    expect(setup).not.toContain("plugins install");
-    expect(setup).not.toContain("npm:@openclaw/codex");
-    expect(setup).toContain("connect --target-file");
-    expect(setup).toContain("--ephemeral");
     expect(setup).not.toContain("secret-setup-value");
+    expect(setup).not.toContain("synthetic-bootstrap-token");
+    expect(enrollmentCall?.argv).toEqual(
+      expect.arrayContaining(["--allow-env", "CRABBOX_WORKER_BOOTSTRAP_TOKEN"]),
+    );
     const commandArguments = calls.flatMap((call) => call.argv);
     for (const forbiddenArgument of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
       expect(commandArguments).not.toContain(forbiddenArgument);
@@ -838,7 +870,7 @@ describe("Crabbox worker provider", () => {
           mode: "resume",
           deviceId: "device-bound",
           openclawVersion: "2026.8.1",
-          packageSpecs: ["openclaw@2026.8.1"],
+          nodeBootstrap: createNodeBootstrapFixture(),
           displayName: "Bound worker",
           waitForDeviceId: async () => "device-bound",
         }),
@@ -979,12 +1011,11 @@ describe("Crabbox worker provider", () => {
       "bind_xfdesktop_renderer",
     );
     expect(desktopSetupText).not.toMatch(/pkill -(?:TERM|KILL) -x xfdesktop/u);
-    const setup = calls.find(
-      (call) => call.argv[1] === "run" && String(call.options.input).includes("node run"),
-    )?.options.input;
-    expect(String(setup)).toContain("node run --ephemeral --display-name 'Bound worker'");
-    expect(String(setup)).not.toContain("config set nodeHost.workerRuns.enabled");
-    expect(String(setup)).not.toContain("setup-code");
+    const enrollment = calls.find(
+      (call) => call.argv[1] === "run" && call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN"),
+    );
+    expect(enrollment).toBeDefined();
+    expect(enrollment?.argv).not.toContain("CRABBOX_WORKER_SETUP_CODE");
     expect(calls.flatMap((call) => call.argv)).not.toContain("ssh");
     expect(calls.flatMap((call) => call.argv)).not.toContain("scp");
     expect(calls.flatMap((call) => call.argv)).not.toContain("rsync");
@@ -1025,7 +1056,10 @@ describe("Crabbox worker provider", () => {
           const expectedEnv =
             options.input === setup
               ? forwardedEnv
-              : { CRABBOX_WORKER_SETUP_CODE: "secret-setup-value" };
+              : {
+                  CRABBOX_WORKER_BOOTSTRAP_TOKEN: createNodeBootstrapFixture().token,
+                  CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
+                };
           const profileFlagIndex = argv.indexOf("--env-from-profile");
           const profilePath = profileFlagIndex < 0 ? undefined : argv[profileFlagIndex + 1];
           if (expectedEnv && profilePath) {
@@ -1054,7 +1088,13 @@ describe("Crabbox worker provider", () => {
       const [setupCall, enrollmentCall] = calls.filter((call) => call.argv[1] === "run");
       for (const [call, expectedEnv] of [
         [setupCall, forwardedEnv],
-        [enrollmentCall, { CRABBOX_WORKER_SETUP_CODE: "secret-setup-value" }],
+        [
+          enrollmentCall,
+          {
+            CRABBOX_WORKER_BOOTSTRAP_TOKEN: createNodeBootstrapFixture().token,
+            CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
+          },
+        ],
       ] as const) {
         expect(call).toBeDefined();
         if (!call) {
@@ -1133,7 +1173,7 @@ describe("Crabbox worker provider", () => {
         OPERATION_ID,
       ),
     ).rejects.toMatchObject({
-      code: "invalid_profile",
+      name: "Error",
       message: expect.stringContaining(missingName),
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1404,24 +1444,11 @@ describe("Crabbox worker provider", () => {
   it.skipIf(process.platform === "win32")(
     "preserves the actual node enrollment diagnosis after setup noise",
     async () => {
-      const diagnosis =
-        "Error: Codex remote-exec requires the exact official @openclaw/codex@2026.8.1 plugin to be installed by cloudWorkers profile setup";
+      const diagnosis = "Cloud worker bootstrap download authority is unavailable";
       const home = tempDirs.make("crabbox-enrollment-");
       const bin = path.join(home, "bin");
       fs.mkdirSync(bin);
       fs.symlinkSync(process.execPath, path.join(bin, "node"));
-      fs.writeFileSync(
-        path.join(bin, "openclaw"),
-        [
-          "#!/bin/sh",
-          'case "$*" in',
-          '  --version) echo "OpenClaw 2026.8.1" ;;',
-          '  "plugins inspect codex --json") echo \'{"ok":false}\'; exit 1 ;;',
-          '  *) echo "unexpected command: $*" >&2; exit 99 ;;',
-          "esac",
-        ].join("\n"),
-        { mode: 0o700 },
-      );
       const calls: string[][] = [];
       const provider = providerWithRunner(async (argv, options) => {
         calls.push(argv);
@@ -1926,7 +1953,7 @@ describe("Crabbox worker provider", () => {
     await expect(
       provider.provision({ ...PROFILE, provider: "hetzner", desktop: true }, OPERATION_ID),
     ).rejects.toMatchObject({
-      code: "invalid_profile",
+      name: "Error",
       message: "Crabbox Hetzner desktop profiles require a managed coordinator",
     });
     expect(calls.map((argv) => argv[1])).toEqual(["config"]);
@@ -2004,7 +2031,7 @@ describe("Crabbox worker provider", () => {
             setupCode: "secret-setup-value",
             setupId: "setup-id",
             openclawVersion: "2026.8.1",
-            packageSpecs: ["openclaw@2026.8.1"],
+            nodeBootstrap: createNodeBootstrapFixture(),
             displayName: "Cloud worker test",
             waitForDeviceId: async () => "device-1",
           };
@@ -2081,7 +2108,7 @@ describe("Crabbox worker provider", () => {
               mode: "resume" as const,
               deviceId: "device-bound",
               openclawVersion: "2026.8.1",
-              packageSpecs: ["openclaw@2026.8.1"],
+              nodeBootstrap: createNodeBootstrapFixture(),
               displayName: "Bound worker",
               waitForDeviceId: async () => {
                 if (failurePoint === "enrollment completion") {
@@ -2108,7 +2135,7 @@ describe("Crabbox worker provider", () => {
       if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
         return commandResult({
           stdout: [
-            "package-spec=openclaw@2026.8.1 node-pid=alive node.log tail:",
+            "node-runtime=installed-source-artifact node-pid=alive node.log tail:",
             `gateway rejected websocket upgrade (HTTP 403): proxy_attribution_required token=${pairingSecret}`,
           ].join(" "),
         });
@@ -2124,7 +2151,7 @@ describe("Crabbox worker provider", () => {
     expect(error).toMatchObject({
       cause: originalError,
       message: expect.stringContaining(
-        "Worker node did not connect before the enrollment deadline; box evidence: package-spec=openclaw@2026.8.1 node-pid=alive node.log tail:",
+        "Worker node did not connect before the enrollment deadline; box evidence: node-runtime=installed-source-artifact node-pid=alive node.log tail:",
       ),
     });
     const message = error instanceof Error ? error.message : "";
@@ -2244,7 +2271,7 @@ describe("Crabbox worker provider", () => {
           String(options.input).includes("node.log tail:")
         ) {
           controller.abort();
-          return commandResult({ stdout: "package-spec=absent node-pid=dead-or-absent" });
+          return commandResult({ stdout: "node-runtime=absent node-pid=dead-or-absent" });
         }
         return argv[1] === "inspect"
           ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
@@ -2262,7 +2289,7 @@ describe("Crabbox worker provider", () => {
               mode: "resume" as const,
               deviceId: "device-bound",
               openclawVersion: "2026.8.1",
-              packageSpecs: ["openclaw@2026.8.1"],
+              nodeBootstrap: createNodeBootstrapFixture(),
               displayName: "Bound worker",
               signal: controller.signal,
               waitForDeviceId: async () => {
@@ -2368,20 +2395,7 @@ describe("Crabbox worker provider", () => {
       ]);
       expect(calls[1]?.options.timeoutMs).toBe(lifecycleTimeoutMs);
       expect(calls[2]?.argv[1]).toBe("run");
-      expect(String(calls[2]?.options.input)).toContain("openclaw@2026.8.1");
-      expect(String(calls[2]?.options.input)).toContain(
-        "'OpenClaw 2026.8.1'|'OpenClaw 2026.8.1 '*",
-      );
-      expect(String(calls[2]?.options.input)).toContain(
-        'npx --yes --package "$package_spec" -- openclaw',
-      );
-      expect(String(calls[2]?.options.input)).toContain(
-        "OpenClaw worker bootstrap could not install Gateway version 2026.8.1",
-      );
-      expect(String(calls[2]?.options.input)).toContain(
-        'connect --target-file "$setup_code_file" --ephemeral',
-      );
-      expect(String(calls[2]?.options.input)).toContain("setsid -f sh -c");
+      expect(String(calls[2]?.options.input)).toContain(createNodeBootstrapFixture().sha256);
       expect(String(calls[2]?.options.input)).not.toContain(
         "config set nodeHost.workerRuns.enabled",
       );
@@ -2389,6 +2403,7 @@ describe("Crabbox worker provider", () => {
       expect(String(calls[2]?.options.input)).not.toContain("secret-setup-value");
       expect(calls[2]?.options.env).toStrictEqual({
         CRABBOX_WORKER_SETUP_CODE: undefined,
+        CRABBOX_WORKER_BOOTSTRAP_TOKEN: undefined,
         CRABBOX_ENV_ALLOW: ",",
       });
       expect(calls[2]?.options.env?.CRABBOX_ENV_ALLOW).toBe(",");
@@ -2497,7 +2512,7 @@ describe("Crabbox worker provider", () => {
             mode: "resume" as const,
             deviceId: "device-bound",
             openclawVersion: "2026.8.1",
-            packageSpecs: ["openclaw@2026.8.1"],
+            nodeBootstrap: createNodeBootstrapFixture(),
             displayName: "Bound worker",
             waitForDeviceId: async () => {
               elapsedMs = 75 * 60_000;
@@ -2732,32 +2747,10 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    [
-      "unsupported backend",
-      2,
-      "provider=daytona does not support fixed idempotent lease IDs",
-      "provider=daytona does not support fixed idempotent lease IDs",
-    ],
-    [
-      "old CLI",
-      2,
-      "unknown flag: --lease-id",
-      "Crabbox 0.41.1 or newer with fixed lease ID support is required",
-    ],
-    [
-      "intent drift",
-      4,
-      "lease_id_conflict: lease is bound to another create intent",
-      "lease_id_conflict",
-    ],
-    [
-      "terminal reuse",
-      4,
-      "lease_id_conflict: fixed lease is terminal and cannot be replayed",
-      "lease_id_conflict",
-    ],
-  ])("reports %s accurately before enrollment", async (_name, code, stderr, diagnosis) => {
-    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult({ code, stderr }));
+    ["unsupported backend", "provider=daytona does not support fixed idempotent lease IDs"],
+    ["old CLI", "unknown flag: --lease-id"],
+  ])("reports %s accurately before enrollment", async (_name, stderr) => {
+    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult({ code: 2, stderr }));
     const provider = providerWithRunner(runCommand);
     const beginNodeEnrollment = vi.fn();
 
@@ -2766,8 +2759,8 @@ describe("Crabbox worker provider", () => {
         beginNodeEnrollment,
       }),
     ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: expect.stringContaining(diagnosis),
+      name: "Error",
+      message: `Crabbox warmup failed with exit code 2: ${stderr}`,
     });
     expect(beginNodeEnrollment).not.toHaveBeenCalled();
     expect(runCommand).toHaveBeenCalledOnce();
@@ -2776,22 +2769,55 @@ describe("Crabbox worker provider", () => {
     expect(argv).not.toContain("--class");
   });
 
-  it("keeps unresolved direct AWS inventory convergence retryable", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({
-        code: 4,
-        stderr:
-          "lease_id_conflict: fixed AWS lease has an unresolved launch attempt; retry after provider inventory converges",
+  it.each([
+    ["intent drift", 4, "lease_id_conflict: lease is bound to another create intent"],
+    ["terminal reuse", 4, "lease_id_conflict: fixed lease is terminal and cannot be replayed"],
+    [
+      "unresolved launch",
+      4,
+      "lease_id_conflict: fixed AWS lease has an unresolved launch attempt; retry after provider inventory converges",
+    ],
+    [
+      "unresolved create",
+      4,
+      `lease_id_conflict: fixed Machine0 lease ${LEASE_ID} has an unresolved create attempt; retain the claim and retry inspection or stop after provider inventory converges`,
+    ],
+    [
+      "capacity refusal",
+      2,
+      'machine0 size "4xl" is not currently available in region "eu"; available regions: none',
+    ],
+  ] as const)(
+    "classifies %s without discarding uncertain allocations",
+    async (_name, code, stderr) => {
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return argv[1] === "stop" ? commandResult() : commandResult({ code, stderr });
       });
-    });
-
-    const error = await provider.provision(PROFILE, OPERATION_ID).catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toMatchObject({ code: "invalid_profile" });
-    expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
-  });
+      const profile = { ...PROFILE, provider: "machine0", class: "large" };
+      const beginNodeEnrollment = vi.fn();
+      const error = await provider
+        .provision(profile, OPERATION_ID, { executionMode: "worker-turn", beginNodeEnrollment })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WorkerProviderError);
+      expect(beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+      expect(calls[0]).toEqual(
+        expect.arrayContaining(["--class", "large", "--lease-id", LEASE_ID]),
+      );
+      expect(error).toMatchObject({
+        message: `Crabbox warmup failed with exit code ${code}: ${stderr}`,
+      });
+      const allocation = await provider.resolveAllocation(profile, OPERATION_ID);
+      expect(allocation).toEqual({ leaseId: LEASE_ID, sharedHost: false });
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+      await provider.destroy({ leaseId: allocation.leaseId, profile });
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.slice(1)).toEqual(["stop", "--provider", "machine0", "--id", LEASE_ID]);
+    },
+  );
 
   it("rejects legacy unleased provision state before invoking Crabbox", async () => {
     let invoked = false;
@@ -2800,8 +2826,12 @@ describe("Crabbox worker provider", () => {
       return commandResult();
     });
 
-    await expect(provider.provision(PROFILE, `provision:${"0".repeat(64)}`)).rejects.toMatchObject({
-      code: "invalid_profile",
+    const error = await provider
+      .provision(PROFILE, `provision:${"0".repeat(64)}`)
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(WorkerProviderError);
+    expect(error).toMatchObject({
       message: expect.stringContaining("cannot be replayed safely"),
     });
     expect(invoked).toBe(false);
@@ -2922,88 +2952,6 @@ describe("Crabbox worker provider", () => {
       code: "invalid_profile",
     });
     expect(invoked).toBe(false);
-  });
-
-  it("rejects a provider unknown to the Crabbox binary as an invalid profile", async () => {
-    const provider = providerWithRunner(async () =>
-      commandResult({ code: 2, stderr: 'unknown provider "missing-provider"' }),
-    );
-
-    await expect(
-      provider.provision({ ...PROFILE, provider: "missing-provider" }, OPERATION_ID),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
-  });
-
-  it("rejects a Crabbox backend without warmup support as an invalid profile", async () => {
-    const provider = providerWithRunner(async (argv) => {
-      if (argv[1] === "warmup") {
-        return commandResult({ code: 2, stderr: "provider=wandb does not support warmup" });
-      }
-      return commandResult({
-        code: 4,
-        stderr: `wandb sandbox "${argv[argv.indexOf("--id") + 1]}" has no matching local ownership claim`,
-      });
-    });
-
-    await expect(
-      provider.provision({ ...PROFILE, provider: "wandb" }, OPERATION_ID),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
-  });
-
-  it("rejects a Crabbox backend without persistent status as an invalid profile", async () => {
-    const provider = providerWithRunner(async () =>
-      commandResult({
-        code: 2,
-        stderr:
-          "provider=windows-sandbox does not expose persistent status; close the Windows Sandbox window",
-      }),
-    );
-
-    await expect(
-      provider.provision({ ...PROFILE, provider: "windows-sandbox" }, OPERATION_ID),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
-  });
-
-  it("rejects a machine class unsupported by the selected Crabbox backend", async () => {
-    const provider = providerWithRunner(async (argv) => {
-      if (argv[1] === "warmup") {
-        return commandResult({
-          code: 2,
-          stderr: "--class is not supported for provider=vast; use --vast-gpu-name",
-        });
-      }
-      return commandResult({
-        code: 4,
-        stderr: `lease/instance not found: ${argv[argv.indexOf("--id") + 1]}`,
-      });
-    });
-
-    await expect(
-      provider.provision({ ...PROFILE, provider: "vast" }, OPERATION_ID),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
-  });
-
-  it("rejects a one-shot Crabbox backend as an invalid worker profile", async () => {
-    const provider = providerWithRunner(async () =>
-      commandResult({
-        code: 2,
-        stderr: "provider=mxc is one-shot and does not support status",
-      }),
-    );
-
-    await expect(
-      provider.provision({ ...PROFILE, provider: "mxc" }, OPERATION_ID),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
   });
 
   it("routes lifecycle calls from the passed profile context", async () => {

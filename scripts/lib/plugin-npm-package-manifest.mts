@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
@@ -521,7 +522,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
     !hasPackageRuntimeDependencies(packageJson) ||
     listConfiguredBundledDependencyNames(packageJson).length === 0
   ) {
-    return () => {};
+    return;
   }
 
   const packageLockPath = path.join(params.packageDir, "package-lock.json");
@@ -599,9 +600,6 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
     fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
     fs.rmSync(packageLockPath, { force: true });
   }
-  return () => {
-    fs.rmSync(nodeModulesPath, { recursive: true, force: true });
-  };
 }
 
 /**
@@ -822,6 +820,40 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
+  const packageJson = fs.existsSync(packageJsonPath) ? readJsonFile(packageJsonPath) : undefined;
+  if (
+    !packageJson ||
+    !shouldBundleDependencies(params.bundleDependencies, packageJson) ||
+    !hasPackageRuntimeDependencies(packageJson)
+  ) {
+    return withPluginNpmManifestOverlay(params, callback);
+  }
+
+  // pnpm owns the source install. npm bundling needs a separate tree so its
+  // production-only install and cleanup cannot replace source versions or links.
+  const stagingRoot = fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-"));
+  const stagedPackageDir = path.join(stagingRoot, path.basename(packageDir));
+  try {
+    fs.cpSync(packageDir, stagedPackageDir, {
+      recursive: true,
+      filter: (source) => path.basename(source) !== "node_modules",
+    });
+    return withPluginNpmManifestOverlay(
+      { ...params, repoRoot, packageDir: stagedPackageDir },
+      callback,
+    );
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+function withPluginNpmManifestOverlay<T>(
+  params: PluginPackageParams,
+  callback: (context: ManifestOverlayContext) => T,
+): T {
+  const repoRoot = path.resolve(params.repoRoot ?? ".");
+  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const packageJsonPath = resolvePackageJsonPath(packageDir);
   const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
     ? readJsonFile(packageJsonPath)
     : undefined;
@@ -872,10 +904,9 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
     );
     writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
   }
-  let cleanupBundledDependencies = () => {};
   try {
     if (bundleDependencies && resolvedPackageJson.packageJson) {
-      cleanupBundledDependencies = installPackageLocalBundledDependencies({
+      installPackageLocalBundledDependencies({
         packageDir,
         packageJson: resolvedPackageJson.packageJson,
         pluginDir: resolvedPackageJson.pluginDir ?? path.basename(packageDir),
@@ -889,7 +920,6 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
       packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
-    cleanupBundledDependencies();
     if (originalManifest !== undefined) {
       fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
     }
@@ -954,7 +984,29 @@ function main(argv: string[] = process.argv.slice(2)) {
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
     },
     ({ packageDir: cwd }) => {
-      const result = spawnCommandSync(command, args, {
+      const commandArgs = [...args];
+      if (command === "npm" && args[0] === "pack" && cwd !== path.resolve(packageDir)) {
+        // Pack output outlives the temporary dependency tree. Preserve npm's
+        // source-relative destination, including its default current directory.
+        const destinationIndex = args.findLastIndex(
+          (arg) => arg === "--pack-destination" || arg.startsWith("--pack-destination="),
+        );
+        const destinationArg = args[destinationIndex];
+        if (destinationArg === undefined) {
+          commandArgs.push("--pack-destination", path.resolve(packageDir));
+        } else if (destinationArg === "--pack-destination") {
+          const destination = args[destinationIndex + 1];
+          if (destination && !destination.startsWith("-")) {
+            commandArgs[destinationIndex + 1] = path.resolve(packageDir, destination);
+          }
+        } else {
+          commandArgs[destinationIndex] = `--pack-destination=${path.resolve(
+            packageDir,
+            destinationArg.slice("--pack-destination=".length),
+          )}`;
+        }
+      }
+      const result = spawnCommandSync(command, commandArgs, {
         cwd,
         env: process.env,
         stdio: "inherit",

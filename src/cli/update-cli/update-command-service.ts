@@ -46,8 +46,6 @@ import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
-import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -68,7 +66,10 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  resolveUpdatedInstallCommandEnv,
+} from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
@@ -446,21 +447,6 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
   stopState.windowsTaskAutoStartRecovery = undefined;
 }
 
-export async function restoreWindowsTaskAutoStartOrExit(
-  stopState: PreManagedServiceStop | undefined,
-): Promise<boolean> {
-  try {
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopState);
-    return true;
-  } catch (err) {
-    defaultRuntime.error(
-      `Failed to restore Windows Scheduled Task autostart after package update: ${String(err)}`,
-    );
-    defaultRuntime.exit(1);
-    return false;
-  }
-}
-
 export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   updateInstallKind: "git" | "package";
   root: string;
@@ -678,42 +664,23 @@ type PackageRuntimePreflight = {
 };
 
 export async function resolvePackageRuntimePreflight(params: {
-  tag: string;
+  target?: { version: string; nodeEngine: string | null };
   timeoutMs?: number;
   nodeRunner?: string;
   fallbackNodeRunner?: string;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<Result<PackageRuntimePreflight, string>> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
   const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
-  const target = params.tag.trim();
-  if (
-    !target ||
-    !canResolveRegistryVersionForPackageTarget(params.tag) ||
-    (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec))
-  ) {
-    return ok(unchanged());
-  }
-  const status = await fetchNpmPackageTargetStatus({
-    target,
-    spec: params.spec,
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-  });
-  if (status.error) {
+  const target = params.target;
+  if (!target) {
     return ok(unchanged());
   }
   const runtime = await resolvePackageRuntimeForPreflight({
     nodeRunner,
     timeoutMs: params.timeoutMs,
   });
-  const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
-  const targetVersion = status.version ?? target;
+  const satisfies = nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
+  const targetVersion = target.version;
   const unchangedRuntime = { ...unchanged(), targetVersion };
   if (satisfies === true) {
     return ok(unchangedRuntime);
@@ -726,7 +693,7 @@ export async function resolvePackageRuntimePreflight(params: {
     });
     const fallbackSatisfies = nodeVersionSatisfiesEngine(
       fallbackRuntime.version,
-      status.nodeEngine,
+      target.nodeEngine,
     );
     if (fallbackSatisfies === true) {
       return ok({
@@ -745,7 +712,7 @@ export async function resolvePackageRuntimePreflight(params: {
   return resultError(
     [
       `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
-      `The requested package requires ${status.nodeEngine}.`,
+      `The requested package requires ${target.nodeEngine}.`,
       runtime.nodeRunner
         ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
         : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
@@ -821,7 +788,7 @@ export function resolvePostUpdateServiceStateReadEnv(params: {
 // Use the candidate's version guards for both refresh and activation. The parsed
 // preservation option makes older targets reject before repair, without a retry.
 async function runUpdatedInstallGatewayCommand(
-  params: Parameters<typeof maybeRestartService>[0],
+  params: Parameters<typeof maybeRestartService>[0] & { invocationEnv: NodeJS.ProcessEnv },
   action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<boolean> {
@@ -850,7 +817,9 @@ async function runUpdatedInstallGatewayCommand(
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv({
-        processEnv: installing ? (params.serviceInstallEnv ?? process.env) : process.env,
+        processEnv: installing
+          ? (params.serviceInstallEnv ?? params.invocationEnv)
+          : params.invocationEnv,
         serviceEnv: installing ? undefined : params.serviceEnv,
         invocationCwd: params.invocationCwd,
       }),
@@ -1096,20 +1065,21 @@ export async function maybeRestartService(params: {
   serviceMutationSkipMessage?: string;
   timeoutMs: number;
 }): Promise<boolean> {
-  if (
-    params.shouldRestart &&
-    (!isGatewayServiceManagementAllowedForUpdate(process.env) ||
-      !isGatewayServiceManagementAllowedForUpdate(params.serviceEnv ?? process.env))
-  ) {
+  const invocationEnv = resolveServiceRefreshEnv(process.env, params.invocationCwd);
+  const serviceEnv = resolveServiceRefreshEnv(
+    params.serviceEnv ?? invocationEnv,
+    params.invocationCwd,
+  );
+  if (params.shouldRestart) {
     const message =
-      resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
-      resolveGatewayServiceManagementBlockMessageForUpdate(params.serviceEnv ?? process.env);
+      resolveGatewayServiceManagementBlockMessageForUpdate(invocationEnv) ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
     if (message) {
       defaultRuntime.error(message);
+      return false;
     }
-    return false;
   }
-  let activation = params;
+  let activation = { ...params, invocationEnv, serviceEnv };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
@@ -1220,7 +1190,7 @@ export async function maybeRestartService(params: {
       }
     }
 
-    if (requiresVerifiedRestart() || opts.requireRunningService) {
+    if (requiresVerifiedRestart() || opts.requireRunningService || expectedGatewayBuildId) {
       return false;
     }
 

@@ -5,6 +5,7 @@ import {
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
+  implicitMentionKindWhen,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -50,8 +51,9 @@ import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
+import { quotesLineBotMessage } from "./outbound-message-log.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 type FollowEvent = webhook.FollowEvent;
@@ -85,7 +87,10 @@ interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (
     ctx: LineInboundContext,
-    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      cfg: OpenClawConfig;
+      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
+    },
   ) => Promise<void>;
   turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
   groupHistories?: Map<string, HistoryEntry[]>;
@@ -94,17 +99,6 @@ interface LineHandlerContext {
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
-}
-
-function resolveLineGroupConfig(params: {
-  config: ResolvedLineAccount["config"];
-  groupId?: string;
-  roomId?: string;
-}): LineGroupConfig | undefined {
-  return resolveLineGroupConfigEntry(params.config.groups, {
-    groupId: params.groupId,
-    roomId: params.roomId,
-  });
 }
 
 async function sendLinePairingReply(params: {
@@ -178,7 +172,7 @@ async function resolveLineEventAdmission(
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
-  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+  const groupConfig = resolveLineGroupConfigEntry(account.config.groups, { groupId, roomId });
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -201,7 +195,12 @@ async function resolveLineEventAdmission(
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
-      return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
+      return {
+        canDetectMention: false,
+        wasMentioned: false,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      };
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -218,6 +217,10 @@ async function resolveLineEventAdmission(
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       hasAnyMention: hasAnyLineMention(event.message),
+      implicitMentionKinds: implicitMentionKindWhen(
+        "quoted_bot",
+        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+      ),
     };
   })();
   const resolveAccess = async (contextBinding?: ChannelIngressContextBinding) =>
@@ -248,7 +251,7 @@ async function resolveLineEventAdmission(
               canDetectMention: mentionFacts.canDetectMention,
               wasMentioned: mentionFacts.wasMentioned,
               hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: [],
+              implicitMentionKinds: mentionFacts.implicitMentionKinds,
             }
           : undefined,
       event: { kind: event.type === "join" ? "system" : event.type },
@@ -351,6 +354,13 @@ async function resolveLineEventAdmission(
     })`,
   );
   return null;
+}
+
+// LINE reports a quote only on the message kinds a person can quote from.
+function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | undefined {
+  return message.type === "text" || message.type === "sticker"
+    ? message.quotedMessageId
+    : undefined;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): string {
@@ -478,10 +488,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       return;
     }
 
-    await processMessage(
-      messageContext,
-      context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-    );
+    await processMessage(messageContext, {
+      cfg,
+      ...(context.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+        : {}),
+    });
     historyReservation.commit();
   } finally {
     historyReservation.release();
@@ -567,10 +579,12 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(
-    postbackContext,
-    context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-  );
+  await context.processMessage(postbackContext, {
+    cfg: context.cfg,
+    ...(context.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+      : {}),
+  });
 }
 
 export async function handleLineWebhookEvents(

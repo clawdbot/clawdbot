@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-// Regenerates package.json plugin-sdk export entries from the canonical entry list
+// Regenerates package.json plugin-sdk exports and private artifact exclusions
 // and keeps workspace facade exports and private declaration aliases aligned.
 import fs from "node:fs";
 import path from "node:path";
 import {
   buildPluginSdkPackageExports,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
   pluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
@@ -27,11 +28,12 @@ function writeOrCheckJson(relativePath: string, value: unknown) {
   );
 }
 
-function syncRootPackageExports() {
+function syncRootPackageMetadata() {
   const packageJsonPath = path.join(repoRoot, "package.json");
-  const packageJson: Record<string, unknown> & { exports?: Record<string, unknown> } = JSON.parse(
-    fs.readFileSync(packageJsonPath, "utf8"),
-  );
+  const packageJson: Record<string, unknown> & {
+    exports?: Record<string, unknown>;
+    files: string[];
+  } = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
   const currentExports = packageJson.exports ?? {};
   const syncedPluginSdkExports = buildPluginSdkPackageExports();
 
@@ -56,10 +58,25 @@ function syncRootPackageExports() {
     Object.assign(nextExports, syncedPluginSdkExports);
   }
 
-  if (JSON.stringify(currentExports) === JSON.stringify(nextExports)) {
+  const pendingExclusions = new Set(
+    listUnpackagedPrivatePluginSdkDistArtifacts().map((artifact) => `!${artifact}`),
+  );
+  // Own literal flat JS/declaration exclusions, including retired names; nested paths, globs and
+  // other package rules stay owner-managed. Retain existing order for npm matching.
+  const nextFiles = packageJson.files.filter(
+    (file) =>
+      !/^!dist\/plugin-sdk\/[^/\\*?[\]{}()]*\.(?:js|d\.ts)$/u.test(file) ||
+      pendingExclusions.delete(file),
+  );
+  nextFiles.push(...pendingExclusions);
+  if (
+    JSON.stringify(currentExports) === JSON.stringify(nextExports) &&
+    JSON.stringify(packageJson.files) === JSON.stringify(nextFiles)
+  ) {
     return;
   }
   packageJson.exports = nextExports;
+  packageJson.files = nextFiles;
   writeOrCheckJson("package.json", packageJson);
 }
 
@@ -167,7 +184,7 @@ const facadeSubpaths = collectFacadeSubpaths();
 if (facadeSubpaths === null) {
   process.exit(1);
 }
-syncRootPackageExports();
+syncRootPackageMetadata();
 syncFacadePackageExports(facadeSubpaths);
 syncPrivateDeclarationAliases("extensions/tsconfig.package-boundary.paths.json", "../");
 // XAI's independent package boundary contract intentionally excludes these two
@@ -180,5 +197,5 @@ if (failed) {
   process.exit(1);
 }
 if (checkOnly) {
-  console.log("plugin-sdk exports synced.");
+  console.log("plugin-sdk registration synced.");
 }
