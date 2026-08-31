@@ -1,4 +1,7 @@
 // Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createChannelIngressQueue,
@@ -19,6 +22,8 @@ import {
   createExternalChatDeletePlugin,
 } from "./channels.plugin-install.test-helpers.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
 
@@ -115,15 +120,29 @@ describe("channelsRemoveCommand", () => {
     ({ channelsRemoveCommand } = await import("./channels.js"));
   });
 
-  // Each seeding case drains its own queue today, so the store never leaks between
-  // cases — but that is discipline, not a mechanism. Close it the way the sibling
-  // purge suite does, so a future case that seeds without draining cannot silently
-  // change a later case's counts.
-  afterEach(() => {
+  // Give every case its own state directory. Closing the handle is not isolation —
+  // it releases the connection and clears the cache but deletes nothing, so a case
+  // that seeded without draining would still be readable by the next one. Both the
+  // seeding queues and the command's own purge read the ambient state dir, so
+  // pointing that at a fresh directory per case isolates them together.
+  let stateDir: string | undefined;
+
+  afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      stateDir = undefined;
+    }
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-channels-remove-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     resetPluginRuntimeStateForTest();
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
