@@ -5304,6 +5304,10 @@ server.listen(0, "127.0.0.1", () => {
       (step: WorkflowStep) => step.name === "Warm transform and compile caches",
     );
     const warmerSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    const buildStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Warm build cache"),
+      "cache warm build",
+    );
     const warmAssertionStep = expectDefined(
       warmerSteps.find((step) => step.name === "Assert cache warming succeeded"),
       "final cache warming assertion",
@@ -5317,9 +5321,54 @@ server.listen(0, "127.0.0.1", () => {
     expect(warmer.on.push.branches).toEqual(["main"]);
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
-    expect(warmer.jobs.warm["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
-    );
+    expect(warmer.jobs.warm.strategy).toEqual({
+      "fail-fast": false,
+      matrix: { platform: ["linux", "macos"] },
+    });
+    expect(warmer.on).not.toHaveProperty("pull_request");
+    expect(warmer.on).not.toHaveProperty("pull_request_target");
+    for (const eventName of ["push", "workflow_dispatch"] as const) {
+      for (const runnerBackend of ["blacksmith", "hybrid", "github"] as const) {
+        for (const platform of warmer.jobs.warm.strategy.matrix.platform) {
+          const context = {
+            eventName,
+            matrix: { platform },
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+          };
+          const full = platform === "linux";
+          const expectedRunner = full
+            ? runnerBackend === "github"
+              ? "ubuntu-24.04"
+              : "blacksmith-8vcpu-ubuntu-2404"
+            : "macos-15";
+          expect(evaluateWorkflowExpression(warmer.jobs.warm["runs-on"], context)).toBe(
+            expectedRunner,
+          );
+          const setupInputs = Object.fromEntries(
+            Object.entries(warmerSetup.with).map(([key, value]) => [
+              key,
+              typeof value === "string" && value.startsWith("${{")
+                ? evaluateWorkflowExpression(value, context)
+                : value,
+            ]),
+          );
+          expect(setupInputs).toMatchObject({
+            "build-all-cache-scope": full ? "full" : "",
+            "cache-mode": "read-write",
+            "dependency-cache": String(full),
+            "install-bun": "false",
+            "node-compile-cache-scope": "test",
+            "node-compile-cache": String(full),
+            "vitest-fs-cache": String(full),
+          });
+          for (const step of [buildStep, seedStep, warmStep, warmAssertionStep]) {
+            expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
+          }
+        }
+      }
+    }
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
@@ -5337,14 +5386,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(warmStep.env).toMatchObject({
       OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1",
       OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1",
-    });
-    expect(warmerSetup.with).toMatchObject({
-      "build-all-cache-scope": "full",
-      "cache-mode": "read-write",
-      "dependency-cache": "true",
-      "node-compile-cache-scope": "test",
-      "node-compile-cache": "true",
-      "vitest-fs-cache": "true",
     });
     expect(warmerSetup["continue-on-error"]).not.toBe(true);
     for (const legacyInput of [
@@ -5377,9 +5418,8 @@ server.listen(0, "127.0.0.1", () => {
         saveStep.name === "Save Node toolchain cache" ||
         saveStep.name === "Save exact dependency cache"
       ) {
-        const buildStep = warmerSteps.find((step) => step.name === "Warm build cache");
         expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
-          warmerSteps.indexOf(expectDefined(buildStep, "cache warm build")),
+          warmerSteps.indexOf(buildStep),
         );
         // A normal step condition retains Actions' implicit success() gate,
         // so failed setup cannot publish even if it produced cache outputs.
@@ -5404,15 +5444,33 @@ server.listen(0, "127.0.0.1", () => {
         warmerSteps.indexOf(warmAssertionStep),
       );
     }
-    expect(warmAssertionStep.if).toBe("${{ always() }}");
+    expect(warmAssertionStep.if).toBe("${{ always() && matrix.platform == 'linux' }}");
     expect(warmAssertionStep.run).toContain("steps.warm-caches.outcome");
     expect(warmAssertionStep.run).toContain("exit 1");
     expect(warmerSteps.at(-1)).toBe(warmAssertionStep);
     // No close-time cleanup workflow is needed; Actions cache LRU/TTL expires
     // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
-    expect(seedStep.if).toBeUndefined();
-    expect(warmStep.if).toBeUndefined();
+    expect(seedStep.if).toBe("${{ matrix.platform == 'linux' }}");
+    expect(warmStep.if).toBe("${{ matrix.platform == 'linux' }}");
+    const distSave = expectDefined(
+      saveSteps.find((step) => step.name === "Save dist build cache"),
+      "Linux dist publication",
+    );
+    expect(distSave.if).toBe(
+      "${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' }}",
+    );
+    const storeSave = expectDefined(
+      saveSteps.find((step) => step.name === "Save pnpm store cache"),
+      "platform pnpm store publication",
+    );
+    expect(storeSave.if).not.toContain("matrix.platform");
+    expect(storeSave.if).toContain("steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true'");
+    expect(storeSave.if).not.toMatch(/\b(?:always|failure|cancelled)\(/u);
+    expect(storeSave.with).toEqual({
+      path: "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}",
+      key: "${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}",
+    });
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
