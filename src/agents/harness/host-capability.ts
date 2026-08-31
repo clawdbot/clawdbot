@@ -1,6 +1,11 @@
 import path from "node:path";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  withInstallationTarget,
+} from "../../infra/installation-target-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -195,6 +200,8 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const installationTarget = getInstallationTarget();
+  const localProcessEnv = installationTargetEnv(installationTarget);
   const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
@@ -430,6 +437,7 @@ export function createAgentHarnessHostCapabilities(params: {
         credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
         localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
         managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
+        ...(localProcessEnv ? { localProcessEnv } : {}),
       });
     },
     bindToolSurface,
@@ -438,7 +446,9 @@ export function createAgentHarnessHostCapabilities(params: {
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
-        createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        withInstallationTarget(installationTarget, () =>
+          createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        ),
         bindingOptions,
         observeCoreTtsToolResult,
       );
