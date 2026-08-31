@@ -209,7 +209,14 @@ export function createUserTurnTranscriptRecorder(
   let hasReplacementSessionDeliveryAckIds = false;
 
   const replaceSessionDeliveryAckIds = (deliveryIds: readonly string[]): boolean => {
-    if (selfPersistencePromise || runtimePersistencePromise || runtimePersisted || persisted) {
+    if (
+      pendingInput ||
+      staging ||
+      selfPersistencePromise ||
+      runtimePersistencePromise ||
+      runtimePersisted ||
+      persisted
+    ) {
       return false;
     }
     hasReplacementSessionDeliveryAckIds = true;
