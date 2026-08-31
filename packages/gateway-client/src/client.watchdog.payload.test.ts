@@ -10,6 +10,7 @@ type ProtocolHarness = {
   hasPendingRequests: boolean;
   stopped: boolean;
   generation: number;
+  helloReceived: boolean;
   reconnectSupervisor: { reset(initialMs?: number): void };
   handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
 };
@@ -73,6 +74,10 @@ function handleGatewayMessage(client: GatewayClient, payload: Record<string, unk
   protocol.handleMessage(protocol.socket, protocol.generation, JSON.stringify(payload));
 }
 
+function markHelloReceived(client: GatewayClient): void {
+  Object.assign(protocolHarness(client), { helloReceived: true });
+}
+
 describe("GatewayClient", () => {
   test("rejects oversized pre-auth connect frames before sending", async () => {
     const { client, send } = createOpenGatewayClient(25);
@@ -98,6 +103,16 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
+  test("rejects oversized pre-hello request frames before sending", async () => {
+    const { client, send } = createOpenGatewayClient(25);
+    await expect(client.request("status", { jsonl: "x".repeat(70 * 1024) })).rejects.toThrow(
+      "gateway request status exceeds pre-auth max payload",
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(getPendingCount(client)).toBe(0);
+    client.stop();
+  });
+
   test("keeps the default request payload limit for an invalid policy", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const harness = payloadHarness(client);
@@ -109,6 +124,7 @@ describe("GatewayClient", () => {
       },
       {},
     );
+    markHelloReceived(client);
 
     const request = client.request<{ status: string }>("node.invoke", {
       jsonl: "x".repeat(128),
@@ -137,6 +153,7 @@ describe("GatewayClient", () => {
       },
       {},
     );
+    markHelloReceived(client);
 
     const request = client.request<{ status: string }>("node.invoke", {
       jsonl: "x".repeat(128),
@@ -168,6 +185,7 @@ describe("GatewayClient", () => {
     expect(harness.maxPayloadBytes).toBe(128);
 
     harness.handleConnectHello({ auth: { role: "operator", scopes: [] } }, {});
+    markHelloReceived(client);
 
     const request = client.request<{ status: string }>("node.invoke", {
       jsonl: "x".repeat(128),
@@ -196,6 +214,7 @@ describe("GatewayClient", () => {
       },
       {},
     );
+    markHelloReceived(client);
 
     await expect(client.request("node.invoke", { jsonl: "x".repeat(128) })).rejects.toThrow(
       "gateway request node.invoke exceeds negotiated max payload",

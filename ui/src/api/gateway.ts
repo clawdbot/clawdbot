@@ -251,9 +251,9 @@ export class GatewayBrowserClient {
         return gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
-      validateRequestFrame: (frame, method) => {
+      validateRequestFrame: (frame, method, isPreAuth) => {
         try {
-          gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes);
+          gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, isPreAuth);
         } catch (error) {
           throw normalizeGatewayPayloadError(error);
         }

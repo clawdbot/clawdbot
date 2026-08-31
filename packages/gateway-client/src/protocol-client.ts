@@ -136,7 +136,7 @@ export class GatewayProtocolClient<TPlan> {
     return this.requests.request<T>(
       {
         send: (frame) => {
-          this.opts.validateRequestFrame?.(frame, method);
+          this.opts.validateRequestFrame?.(frame, method, !this.helloReceived);
           socket.send(frame);
         },
       },

@@ -17,16 +17,18 @@ export function validateGatewayRequestFrame(
   frame: string,
   method: string,
   maxPayloadBytes: number | undefined,
+  isPreAuth = method === "connect",
 ): void {
-  const isConnect = method === "connect";
-  const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : maxPayloadBytes;
+  // The Gateway caps every unauthenticated WebSocket frame, not only connect.
+  const usesPreAuthLimit = isPreAuth || method === "connect";
+  const limit = usesPreAuthLimit ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : maxPayloadBytes;
   if (limit === undefined) {
     return;
   }
   const frameBytes = new TextEncoder().encode(frame).byteLength;
   if (frameBytes > limit) {
     throw new RangeError(
-      `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+      `gateway request ${method} exceeds ${usesPreAuthLimit ? "pre-auth" : "negotiated"} max payload ` +
         `(${frameBytes} > ${limit} bytes). Remove one or more attachments and retry.`,
     );
   }

@@ -392,8 +392,8 @@ export class GatewayClient {
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
-      validateRequestFrame: (frame, method) =>
-        validateGatewayRequestFrame(frame, method, this.maxPayloadBytes),
+      validateRequestFrame: (frame, method, isPreAuth) =>
+        validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, isPreAuth),
       buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
