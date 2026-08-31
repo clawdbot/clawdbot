@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { constants } from "node:fs";
 import { lstat, open, readFile, type FileHandle } from "node:fs/promises";
@@ -144,6 +144,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     this.#gatewayEnvironment = {
       HOME: params.isolation.homePath,
       OPENCLAW_CONFIG_PATH: params.isolation.configPath,
+      OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex"),
       OPENCLAW_STATE_DIR: params.isolation.statePath,
     };
     this.#port = params.runtimeConfig.gateway?.port ?? DEFAULT_GATEWAY_PORT;
