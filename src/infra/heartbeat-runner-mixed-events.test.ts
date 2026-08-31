@@ -11,7 +11,12 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -79,6 +84,7 @@ describe("heartbeat mixed event ownership", () => {
         hasExecCompletion: resolution.hasExecCompletion,
         hasCronEvents: resolution.hasCronEvents,
         hasGenericEvents: resolution.hasGenericEvents,
+        handledSystemEvents: resolution.handledSystemEvents,
       });
 
       expect(resolution.prompt).toContain("Gateway restart ok");
@@ -88,6 +94,62 @@ describe("heartbeat mixed event ownership", () => {
         testCase.specialized,
       ]);
       expect(peekSystemEvents(sessionKey)).toEqual(["Gateway restart ok", testCase.specialized]);
+    });
+  });
+
+  it("leaves generic events omitted by the prompt budget queued", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "none" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const oversizedEvent = `Gateway startup report ${"x".repeat(8_100)}`;
+      const omittedEvent = "Gateway restart ok";
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+      enqueueSystemEvent(oversizedEvent, { sessionKey });
+      enqueueSystemEvent(omittedEvent, { sessionKey });
+
+      const preflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: "main",
+        heartbeat: cfg.agents?.defaults?.heartbeat,
+        source: "hook",
+        reason: "gateway-restart",
+      });
+      const resolution = resolveHeartbeatRunPrompt({
+        cfg,
+        heartbeat: cfg.agents?.defaults?.heartbeat,
+        preflight,
+        canRelayToUser: true,
+        startedAt: Date.now(),
+        scheduledTasks: [],
+        useHeartbeatResponseTool: false,
+      });
+      const consumed = selectSystemEventsConsumedByHeartbeat({
+        preflight,
+        hasExecCompletion: resolution.hasExecCompletion,
+        hasCronEvents: resolution.hasCronEvents,
+        hasGenericEvents: resolution.hasGenericEvents,
+        handledSystemEvents: resolution.handledSystemEvents,
+      });
+
+      expect(resolution.prompt).toContain("[truncated]");
+      expect(resolution.prompt).not.toContain(omittedEvent);
+      expect(consumed.map((event) => event.text)).toEqual([oversizedEvent]);
+
+      consumeSelectedSystemEventEntries(sessionKey, consumed);
+      expect(peekSystemEvents(sessionKey)).toEqual([omittedEvent]);
     });
   });
 });

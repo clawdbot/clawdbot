@@ -1,11 +1,17 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
-  buildHeartbeatEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
+  resolveHeartbeatEventPrompt,
 } from "./heartbeat-events-filter.js";
+
+function buildHeartbeatEventPrompt(
+  params: Parameters<typeof resolveHeartbeatEventPrompt>[0],
+): string {
+  return resolveHeartbeatEventPrompt(params).prompt;
+}
 
 describe("heartbeat event prompts", () => {
   it.each([
@@ -170,6 +176,52 @@ describe("heartbeat event prompts", () => {
     expect(prompt.length).toBeLessThanOrEqual(16_000);
     expect(prompt).toContain("[truncated]");
     expect(prompt).toContain("Please relay this reminder to the user");
+  });
+
+  it.each([
+    {
+      name: "exec",
+      params: {
+        execEvents: [`Exec finished: ${"e".repeat(8_100)}`, "Exec finished: omitted"],
+      },
+      kind: "exec" as const,
+    },
+    {
+      name: "generic",
+      params: {
+        genericEvents: [`Gateway startup ${"g".repeat(8_100)}`, "Gateway restart omitted"],
+      },
+      kind: "generic" as const,
+    },
+  ])("tracks the $name entries retained by its class budget", ({ params, kind }) => {
+    const resolution = resolveHeartbeatEventPrompt(params);
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.prompt).not.toContain("omitted");
+    expect(resolution.handledEventIndexes[kind]).toEqual([0]);
+  });
+
+  it("tracks cron entries retained by aggregate head and tail truncation", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      cronEvents: [
+        `First reminder ${"a".repeat(12_000)}`,
+        "Middle reminder omitted",
+        `Last reminder ${"z".repeat(12_000)}`,
+      ],
+    });
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.prompt).not.toContain("Middle reminder omitted");
+    expect(resolution.handledEventIndexes.cron).toEqual([0, 2]);
+  });
+
+  it("keeps metadata-only exec completions explicitly handled", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: ["Exec completed (abc12345, code 0)"],
+    });
+
+    expect(resolution.prompt).toContain("no command output was found");
+    expect(resolution.handledEventIndexes.exec).toEqual([0]);
   });
 
   it("embeds generic system events in the heartbeat prompt", () => {

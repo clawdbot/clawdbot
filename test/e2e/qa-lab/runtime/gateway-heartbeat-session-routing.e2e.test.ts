@@ -207,7 +207,7 @@ describe("Gateway heartbeat session routing", () => {
   afterEach(resetGatewayState);
 
   it(
-    "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
+    "routes monitor and explicit wakes while preserving prompt-omitted events",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -260,6 +260,10 @@ describe("Gateway heartbeat session routing", () => {
       const explicitQueuedEvent = nextId("explicit-queued-event");
       const explicitWakeText = nextId("explicit-wake-event");
       const explicitReply = nextId("explicit-heartbeat-reply");
+      const overflowEventPrefix = nextId("overflow-visible-event");
+      const overflowEvent = `${overflowEventPrefix} ${"x".repeat(8_100)}`;
+      const overflowOmittedEvent = nextId("overflow-omitted-event");
+      const overflowReply = nextId("overflow-heartbeat-reply");
       const mainSessionKey = "agent:main:main";
       const mainSessionId = nextId("main-session");
       const providerRequests: Array<Record<string, unknown>> = [];
@@ -281,11 +285,13 @@ describe("Gateway heartbeat session routing", () => {
           const serialized = JSON.stringify(body);
           writeAssistantResponse(
             response,
-            serialized.includes(configuredEvent)
-              ? configuredReply
-              : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
-                ? explicitReply
-                : nextId("unexpected-heartbeat-reply"),
+            serialized.includes(overflowEventPrefix)
+              ? overflowReply
+              : serialized.includes(configuredEvent)
+                ? configuredReply
+                : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
+                  ? explicitReply
+                  : nextId("unexpected-heartbeat-reply"),
           );
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -586,6 +592,89 @@ describe("Gateway heartbeat session routing", () => {
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
           "main-destination",
         );
+
+        await disconnectGatewayClient(client);
+        await gateway.server.close({ reason: "Restart with isolated heartbeat session enabled" });
+        gateway = undefined;
+        resetGatewayState();
+
+        const isolatedConfig: OpenClawConfig = {
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              heartbeat: {
+                ...config.agents?.defaults?.heartbeat,
+                isolatedSession: true,
+              },
+            },
+          },
+        };
+        gateway = await startGatewayWithClient({
+          cfg: isolatedConfig,
+          configPath,
+          token,
+          clientDisplayName: "vitest-gateway-heartbeat-overflow-routing",
+        });
+        const isolatedRuntimeConfig = getRuntimeConfigSnapshot();
+        if (!isolatedRuntimeConfig) {
+          throw new Error("isolated Gateway runtime config snapshot was not initialized");
+        }
+        markCompleteReplyConfig(isolatedRuntimeConfig, { runtimeMode: "full" });
+        const isolatedClient = gateway.client;
+        await seedSession({
+          sessionId: configuredSessionId,
+          sessionKey: configuredSessionKey,
+          to: "configured-destination",
+        });
+
+        await expect(
+          isolatedClient.request<{ ok: boolean }>("system-event", {
+            text: overflowEvent,
+            sessionKey: configuredSessionKey,
+            wake: false,
+          }),
+        ).resolves.toEqual({ ok: true });
+        expect(peekSystemEvents(configuredSessionKey)).toEqual([overflowEvent]);
+
+        const overflowRequestBaseline = providerRequests.length;
+        await expect(
+          isolatedClient.request<{ ok: boolean }>("system-event", {
+            text: overflowOmittedEvent,
+            sessionKey: configuredSessionKey,
+            wake: true,
+          }),
+        ).resolves.toEqual({ ok: true });
+        await expect
+          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
+          .toBeGreaterThan(overflowRequestBaseline);
+        const overflowRequest = JSON.stringify(providerRequests[overflowRequestBaseline]);
+        expect(overflowRequest).toContain(overflowEventPrefix);
+        expect(overflowRequest).not.toContain(overflowOmittedEvent);
+        expect(
+          loadSessionEntry({
+            agentId: "main",
+            sessionKey: `${configuredSessionKey}:heartbeat`,
+            readConsistency: "latest",
+          })?.heartbeatIsolatedBaseSessionKey,
+        ).toBe(configuredSessionKey);
+        await expect
+          .poll(() => peekSystemEvents(configuredSessionKey).includes(overflowEvent), {
+            timeout: 15_000,
+            interval: 50,
+          })
+          .toBe(false);
+        expect(peekSystemEvents(configuredSessionKey)).toEqual([overflowOmittedEvent]);
+        await expect
+          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
+          .toHaveLength(3);
+        expect((await readDeliveryTrace(deliveryTracePath)).at(-1)).toEqual({
+          accountId: "default",
+          text: overflowReply,
+          threadId: null,
+          to: "configured-destination",
+        });
       } finally {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
