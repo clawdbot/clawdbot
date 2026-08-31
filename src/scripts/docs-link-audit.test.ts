@@ -27,15 +27,15 @@ describe("docs-link-audit", () => {
     expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
   });
 
-  it("ignores fenced links but audits links after indented code", () => {
+  it("ignores fences nested in MDX and lists but audits links after code", () => {
     const tempDirs: string[] = [];
     const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-fence-");
     const docsRoot = path.join(fixtureRoot, "docs");
     fs.mkdirSync(docsRoot, { recursive: true });
     fs.writeFileSync(path.join(docsRoot, "docs.json"), '{"navigation":[]}', "utf8");
     fs.writeFileSync(
-      path.join(docsRoot, "page.md"),
-      "# Page\n\n~~~bash\n[not a real link](/not-a-published-route)\n~~~not-a-closer\n[still not a real link](/still-not-a-published-route)\n~~~\n\n````md\n```text\n[not another real link](/another-not-a-published-route)\n```\n````\n\n    ~~~\n[after indented code](/must-be-reported)\n\n[page](/page)\n",
+      path.join(docsRoot, "page.mdx"),
+      "# Page\n\n<Accordion>\n    ~~~bash\n    [not a real link](/not-a-published-route)\n    ~~~not-a-closer\n    [still not a real link](/still-not-a-published-route)\n    ~~~\n</Accordion>\n\n- List example\n\n    ````md\n    ```text\n    [not another real link](/another-not-published-route)\n    ```\n    ````\n\n[after nested code](/must-be-reported)\n\n[page](/page)\n",
       "utf8",
     );
 

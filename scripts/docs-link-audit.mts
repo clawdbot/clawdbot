@@ -487,23 +487,44 @@ function collectNavPageEntries(node: unknown): string[] {
 
 const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
-type FenceDelimiter = { marker: "`" | "~"; length: number };
+/**
+ * Derive code ranges from the MDX tree so container-relative fences keep their
+ * indentation context. Fall back to tolerant Markdown token ranges for legacy
+ * malformed pages that the MDX parser cannot read.
+ */
+function collectCodeLines(rawText: string): Set<number> {
+  const codeLines = new Set<number>();
+  const addRange = (startLine: number, endLine: number) => {
+    for (let line = startLine; line <= endLine; line += 1) {
+      codeLines.add(line - 1);
+    }
+  };
 
-function parseFenceDelimiter(line: string): FenceDelimiter | null {
-  const match = /^(?: {0,3})(?<token>`{3,}|~{3,})/u.exec(line);
-  const token = match?.groups?.token;
-  if (!token) {
-    return null;
+  try {
+    const tree = MDX_PROCESSOR.parse(rawText);
+    const visit = (node: Nodes): void => {
+      if (node.type === "code" && node.position) {
+        addRange(node.position.start.line, node.position.end.line);
+      }
+      if ("children" in node) {
+        for (const child of node.children) {
+          visit(child);
+        }
+      }
+    };
+    visit(tree);
+    return codeLines;
+  } catch {
+    const tokens = MARKDOWN_PARSER.parse(rawText, {});
+    for (const token of tokens) {
+      if ((token.type === "fence" || token.type === "code_block") && token.map) {
+        for (let line = token.map[0]; line < token.map[1]; line += 1) {
+          codeLines.add(line);
+        }
+      }
+    }
+    return codeLines;
   }
-  const marker = token[0];
-  if (marker !== "`" && marker !== "~") {
-    return null;
-  }
-  return { marker, length: token.length };
-}
-
-function isClosingFence(line: string, fence: FenceDelimiter): boolean {
-  return line.trimStart().slice(fence.length).trim() === "";
 }
 
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown {
@@ -739,8 +760,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
     const baseDir = normalizeSlashes(path.dirname(rel));
     const rawText = fs.readFileSync(abs, "utf8");
     const lines = rawText.split("\n");
-
-    let codeFence: FenceDelimiter | null = null;
+    const codeLines = collectCodeLines(rawText);
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
       let line = lines[lineNum];
@@ -748,20 +768,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
         continue;
       }
 
-      const fence = parseFenceDelimiter(line);
-      if (fence) {
-        if (!codeFence) {
-          codeFence = fence;
-        } else if (
-          fence.marker === codeFence.marker &&
-          fence.length >= codeFence.length &&
-          isClosingFence(line, fence)
-        ) {
-          codeFence = null;
-        }
-        continue;
-      }
-      if (codeFence) {
+      if (codeLines.has(lineNum)) {
         continue;
       }
 
