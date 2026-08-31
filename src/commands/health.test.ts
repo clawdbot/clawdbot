@@ -1,6 +1,7 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
@@ -634,6 +635,7 @@ describe("healthCommand", () => {
         ok: false,
         kind: "connect",
         error: TEST_AUTH_CLOSE_ERROR,
+        gatewayReached: true,
       });
 
       await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
@@ -680,6 +682,7 @@ describe("healthCommand", () => {
         retryable: true,
         retryAfterMs: 60_000,
       });
+      retainGatewayResponsePayload(error, undefined);
       callGatewayMock.mockRejectedValueOnce(error);
 
       await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
@@ -714,6 +717,7 @@ describe("healthCommand", () => {
         kind: "connect",
         error: "connect failed",
         connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+        gatewayReached: true,
       });
 
       await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
@@ -733,6 +737,20 @@ describe("healthCommand", () => {
       expect(output).not.toContain("devices rotate");
     },
   );
+
+  it("does not report reachable from a locally constructed rate-limit error", async () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: { code: "AUTH_RATE_LIMITED" },
+    });
+    callGatewayMock.mockRejectedValueOnce(error);
+
+    await expect(healthCommand({ config: {} }, runtime as never)).rejects.toBe(error);
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+  });
 
   it("keeps credential failures machine-readable when the gateway is unreachable", async () => {
     const error = new Error("gateway health requires credentials");
@@ -789,6 +807,7 @@ describe("healthCommand", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
 
     await healthCommand(
@@ -830,6 +849,7 @@ describe("healthCommand", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
 
     await expect(
