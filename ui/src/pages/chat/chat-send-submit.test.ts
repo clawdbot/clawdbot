@@ -16,7 +16,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";

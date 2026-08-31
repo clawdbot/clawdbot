@@ -31,7 +31,7 @@ function fencedProse(language: "text" | "md" | "markdown"): string {
 
 const shortFence = `\`\`\`json
 {
-  "status": "ok",
+  "status": "${"ready-for-staging-".repeat(4)}",
   "items": [
     "alpha"
   ]
@@ -133,7 +133,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
   });
 
   it.each(["dark", "light"] as const)(
-    "previews long fences, reveals them, and wraps overflowing lines in %s mode",
+    "keeps code controls correct through disclosure, resize, and virtual remount in %s mode",
     async (theme) => {
       const context = await browser.newContext({
         colorScheme: theme,
@@ -147,47 +147,53 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       const page = await context.newPage();
       await installMockGateway(page, {
         historyMessages: [
+          ...Array.from({ length: 40 }, (_, index) => ({
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: [{ type: "text", text: `Earlier diagnostic turn ${index}` }],
+            timestamp: Date.now() - 40 + index,
+            __openclaw: { id: `earlier-diagnostic-${index}`, seq: index + 1 },
+          })),
           {
             role: "user",
             content: [{ type: "text", text: "Show the full diagnostic payload." }],
             timestamp: Date.now(),
-            __openclaw: { id: "user-fence-long", seq: 1 },
+            __openclaw: { id: "user-fence-long", seq: 41 },
           },
           {
             role: "assistant",
             content: [{ type: "text", text: fencedJson(41) }],
             timestamp: Date.now() + 1,
-            __openclaw: { id: "assistant-fence-long", seq: 2 },
+            __openclaw: { id: "assistant-fence-long", seq: 42 },
           },
           {
             role: "user",
             content: [{ type: "text", text: "Return the deployment receipt." }],
             timestamp: Date.now() + 2,
-            __openclaw: { id: "user-fence-short", seq: 3 },
+            __openclaw: { id: "user-fence-short", seq: 43 },
           },
           {
             role: "assistant",
             content: [{ type: "text", text: shortFence }],
             timestamp: Date.now() + 3,
-            __openclaw: { id: "assistant-fence-short", seq: 4 },
+            __openclaw: { id: "assistant-fence-short", seq: 44 },
           },
           {
             role: "user",
             content: [{ type: "text", text: "Show the launch command." }],
             timestamp: Date.now() + 4,
-            __openclaw: { id: "user-fence-wide", seq: 5 },
+            __openclaw: { id: "user-fence-wide", seq: 45 },
           },
           {
             role: "assistant",
             content: [{ type: "text", text: wideFence }],
             timestamp: Date.now() + 5,
-            __openclaw: { id: "assistant-fence-wide", seq: 6 },
+            __openclaw: { id: "assistant-fence-wide", seq: 46 },
           },
           ...(["text", "md", "markdown"] as const).map((language, index) => ({
             role: "assistant",
             content: [{ type: "text", text: fencedProse(language) }],
             timestamp: Date.now() + 6 + index,
-            __openclaw: { id: `assistant-fence-${language}`, seq: 7 + index },
+            __openclaw: { id: `assistant-fence-${language}`, seq: 47 + index },
           })),
         ],
       });
@@ -257,6 +263,31 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
             () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
           ),
         ).toBe(true);
+
+        // Resize must update existing code controls without another chat message.
+        const shortWrapper = shortBubble.locator(".code-block-wrapper");
+        const shortWrap = shortWrapper.locator(".code-block-wrap");
+        await shortBubble.scrollIntoViewIfNeeded();
+        expect(await shortWrap.isVisible()).toBe(false);
+        await page.setViewportSize({ width: 560, height: 900 });
+        await shortBubble.scrollIntoViewIfNeeded();
+        await expect.poll(() => shortWrap.isVisible()).toBe(true);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await shortBubble.scrollIntoViewIfNeeded();
+        await expect.poll(() => shortWrap.isVisible()).toBe(false);
+
+        // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
+        const thread = page.locator(".chat-thread");
+        // Focused rows stay mounted offscreen; move focus out of the wrap control first.
+        await page.locator(".agent-chat__composer-combobox textarea").click();
+        await thread.hover();
+        await page.mouse.wheel(0, -100_000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+        await expect.poll(() => wideBubble.count()).toBe(0);
+        await page.mouse.wheel(0, 100_000);
+        await wideBubble.waitFor({ state: "visible" });
+        await expect.poll(() => wideWrapper.locator(".code-block-wrap").isVisible()).toBe(true);
+        expect(await shortWrapper.locator(".code-block-wrap").isVisible()).toBe(false);
       } finally {
         await context.close();
       }

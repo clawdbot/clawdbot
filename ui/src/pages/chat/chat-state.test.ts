@@ -13,7 +13,8 @@ import {
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";

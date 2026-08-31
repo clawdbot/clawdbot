@@ -1,6 +1,10 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import {
+  captureChatOutboxAdmission,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -23,7 +27,6 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
-import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,

@@ -9,6 +9,7 @@ import {
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
@@ -263,6 +264,12 @@ async function resolveLineEventAdmission(
         activation: {
           requireMention: isGroup && event.type === "message" && requireMention,
           allowTextCommands: true,
+          // Apply quote policy in the shared gate, preserving explicit mentions.
+          implicitMentions: resolveChannelImplicitMentions({
+            cfg,
+            channel: "line",
+            accountId: account.accountId,
+          }),
         },
       },
       allowFrom: normalizeStringEntries(account.config.allowFrom),

@@ -367,6 +367,7 @@ export const sharedVitestConfig = {
           "model-catalog-normalize.ts",
         ),
       },
+      sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(

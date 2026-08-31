@@ -8,6 +8,12 @@ import {
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
+import { applyChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
+import {
+  admitInitialUserMessageHandoff,
+  reduceChatSessionProjection,
+} from "../pages/chat/history-merge.ts";
 import {
   createPlacementStartupHarness,
   createStartupPlacement,
@@ -421,9 +427,38 @@ describe("application session placement startup", () => {
       pendingRunId: "message-stable",
       message: {
         role: "user",
-        __openclaw: { idempotencyKey: "message-stable:user", seq: 7 },
+        __openclaw: { idempotencyKey: "message-stable:user" },
       },
     });
+    const handoff = initialUserMessage.read(input.recovery.sessionKey, client)!;
+    expect(handoff.message["__openclaw"]).not.toHaveProperty("seq");
+    const pane = makeChatHost({
+      sessionKey: input.recovery.sessionKey,
+      initialUserMessage,
+      client: client as never,
+    });
+    admitInitialUserMessageHandoff(pane, pane.sessionKey);
+    expect(pane.chatMessages).toHaveLength(1);
+    applyChatPendingInputs(pane, {
+      total: 1,
+      items: [
+        {
+          id: "remote-custody",
+          runId: input.recovery.messageId,
+          acceptedAt: 1000,
+          state: "queued",
+          message: handoff.message,
+        },
+      ],
+    });
+    expect(pane.chatMessages).toEqual([]);
+    reduceChatSessionProjection(
+      pane,
+      { type: "snapshotLoaded", messages: [] },
+      { runActive: true },
+    );
+    expect(admitInitialUserMessageHandoff(pane, pane.sessionKey)).toBe(false);
+    expect(pane.chatMessages).toEqual([]);
     expect(sessions.refresh).not.toHaveBeenCalled();
     startup.dispose();
   });

@@ -141,6 +141,107 @@ function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
 }
 
 describe("doctor invalid config process exit", () => {
+  it("migrates legacy exec approvals before repairing a partially valid config", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-legacy-approvals-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const approvalsPath = path.join(stateDir, "exec-approvals.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: {
+          list: [
+            {
+              id: "jup",
+              memorySearch: { enabled: true },
+              tools: { message: { allowCrossContextSend: true } },
+            },
+          ],
+        },
+      }),
+    );
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        agents: {
+          jup: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/rg",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+              {
+                pattern: "=command:durable",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const runtimeRoot = createSourceRuntime(root);
+    const uiDir = path.join(runtimeRoot, "dist", "control-ui");
+    fs.mkdirSync(uiDir, { recursive: true });
+    fs.writeFileSync(path.join(uiDir, "index.html"), "<!doctype html>\n");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(runtimeRoot, "src", "entry.ts"),
+        "doctor",
+        "--repair",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+      ],
+      { cwd: runtimeRoot, encoding: "utf8", env, timeout: 45_000 },
+    );
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(0);
+    expect(result.signal, output).toBeNull();
+    expect(output).toContain("Imported legacy exec approvals into shared SQLite state.");
+    expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
+    expect(output).toContain("Doctor complete.");
+
+    expect(fs.existsSync(approvalsPath)).toBe(false);
+    const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      const row = database
+        .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
+        .get() as { raw_json?: string } | undefined;
+      expect(row?.raw_json).not.toContain('"pattern": "/usr/bin/rg"');
+      expect(row?.raw_json).toContain('"pattern": "=command:durable"');
+      expect(row?.raw_json).not.toContain("lastUsedAt");
+      expect(row?.raw_json).not.toContain("lastUsedCommand");
+    } finally {
+      database.close();
+    }
+  }, 45_000);
+
   it("exits after a complete best-effort report for an unparseable config", () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-doctor-invalid-config-exit-"));
     const stateDir = path.join(root, "state");

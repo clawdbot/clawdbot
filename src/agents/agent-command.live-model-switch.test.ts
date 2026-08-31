@@ -402,11 +402,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("./agent-runtime-config.js", () => {
   return {
-    resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    }),
+    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   };
 });
 

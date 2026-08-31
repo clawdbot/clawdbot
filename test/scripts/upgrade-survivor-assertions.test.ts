@@ -1,4 +1,5 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -821,87 +822,108 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 describe("upgrade survivor assertions", () => {
   it.each([
     {
-      name: "default-only export",
+      name: "legacy default-only doctor export",
+      sdkPath: "runtime-doctor",
       declaresTypes: false,
       runtime: 'throw new Error("undeclared SDK must not be imported");\n',
       failure: undefined,
     },
     {
       name: "declared constructor missing at runtime",
+      sdkPath: "runtime-doctor",
       declaresTypes: true,
       runtime: "export {};\n",
       failure: "declared a keyed store constructor but did not export it",
     },
     {
       name: "declared SDK import failure",
+      sdkPath: "runtime-doctor",
       declaresTypes: true,
       runtime: 'throw new Error("synthetic SDK import failure");\n',
       failure: "synthetic SDK import failure",
     },
-  ])("classifies baseline shared state for $name", ({ declaresTypes, runtime, failure }) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
-    try {
-      const packageRoot = join(root, "package");
-      const stateDir = join(root, "state");
-      const version = "1.0.0";
-      mkdirSync(packageRoot);
-      mkdirSync(stateDir);
-      writeJson(join(packageRoot, "package.json"), {
-        name: "openclaw",
-        version,
-        type: "module",
-        exports: {
-          "./plugin-sdk/runtime-doctor": {
-            ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
-            default: "./runtime-doctor.js",
-          },
-        },
-      });
-      // An undeclared sibling file must not become a guessed declaration fallback.
-      writeFileSync(
-        join(packageRoot, "runtime-doctor.d.ts"),
-        "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
-      );
-      writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
-      const baselinePath = join(stateDir, "survivor-baseline.json");
-      writeJson(baselinePath, { marker: "existing fixture" });
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
-          "seed-baseline-plugin-state",
-          packageRoot,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
-          },
-        },
-      );
-      const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-      if (failure) {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(failure);
-        expect(baseline).toEqual({ marker: "existing fixture" });
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(baseline).toEqual({
-          marker: "existing fixture",
-          sharedState: {
-            status: "not-applicable",
-            packageVersion: version,
-            reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+    {
+      name: "dedicated default-only store export missing its constructor",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime: "export {};\n",
+      failure: "declared a keyed store constructor but did not export it",
+    },
+    {
+      name: "dedicated default-only store constructor failure",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime:
+        'export function createPluginStateSyncKeyedStore() { throw new Error("synthetic store failure"); }\n',
+      failure: "synthetic store failure",
+    },
+  ])(
+    "classifies baseline shared state for $name",
+    ({ sdkPath, declaresTypes, runtime, failure }) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
+      try {
+        const packageRoot = join(root, "package");
+        const stateDir = join(root, "state");
+        const version = "1.0.0";
+        mkdirSync(packageRoot);
+        mkdirSync(stateDir);
+        writeJson(join(packageRoot, "package.json"), {
+          name: "openclaw",
+          version,
+          type: "module",
+          exports: {
+            [`./plugin-sdk/${sdkPath}`]: {
+              ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
+              default: "./runtime-doctor.js",
+            },
           },
         });
-        expect(result.stdout).toContain("not-applicable");
+        // An undeclared sibling file must not become a guessed declaration fallback.
+        writeFileSync(
+          join(packageRoot, "runtime-doctor.d.ts"),
+          "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
+        );
+        writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
+        const baselinePath = join(stateDir, "survivor-baseline.json");
+        writeJson(baselinePath, { marker: "existing fixture" });
+        const result = spawnSync(
+          process.execPath,
+          [
+            "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
+            "seed-baseline-plugin-state",
+            packageRoot,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+            },
+          },
+        );
+        const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+        if (failure) {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(failure);
+          expect(baseline).toEqual({ marker: "existing fixture" });
+        } else {
+          expect(result.status, result.stderr).toBe(0);
+          expect(baseline).toEqual({
+            marker: "existing fixture",
+            sharedState: {
+              status: "not-applicable",
+              packageVersion: version,
+              reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+            },
+          });
+          expect(result.stdout).toContain("not-applicable");
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
       }
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("verifies legacy auth import in the current shared owner without losing credentials or state", () => {
     const fixture = JSON.parse(
@@ -1066,70 +1088,91 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it("seeds recent ordered legacy session timestamps", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
-    try {
-      const stateDir = join(root, "state");
-      const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
+  it.each(["base", "sqlite-volume"])(
+    "seeds recent ordered session timestamps for %s",
+    (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+      try {
+        const stateDir = join(root, "state");
+        const workspace = join(root, "workspace");
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
 
-      const beforeSeed = Date.now();
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-        },
-        stdio: "pipe",
-      });
-      const afterSeed = Date.now();
+        const beforeSeed = Date.now();
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          },
+          stdio: "pipe",
+        });
+        const afterSeed = Date.now();
 
-      const sessions = JSON.parse(
-        readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"),
-      ) as Record<string, { sessionId?: unknown; updatedAt?: unknown }>;
-      const seededRows = [
-        sessions.main,
-        sessions["+15551234567"],
-        sessions["slack:channel:CUPGRADE"],
-      ];
-      expect(seededRows.map((row) => row?.sessionId)).toEqual([
-        "upgrade-main-session",
-        "upgrade-direct-session",
-        "upgrade-group-session",
-      ]);
+        const sessionsDir = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
+        );
+        const otherStore = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
+          "sessions.json",
+        );
+        expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
+        const sessions = JSON.parse(
+          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
+        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
+        const keys =
+          scenario === "sqlite-volume"
+            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
+            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
+        expect(Object.keys(sessions)).toEqual(keys);
+        const seededRows = keys.map((key) => sessions[key]);
+        expect(seededRows.map((row) => row?.sessionId)).toEqual([
+          "upgrade-main-session",
+          "upgrade-direct-session",
+          "upgrade-group-session",
+        ]);
 
-      const timestamps = seededRows.map((row) => row?.updatedAt);
-      for (const timestamp of timestamps) {
-        expect(typeof timestamp).toBe("number");
+        for (const row of seededRows) {
+          assert(row);
+          const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
+          expect(row.sessionFile).toBe(transcriptPath);
+          expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
+        }
+
+        const timestamps = seededRows.map((row) => row?.updatedAt);
+        for (const timestamp of timestamps) {
+          expect(typeof timestamp).toBe("number");
+        }
+        const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+          number,
+          number,
+          number,
+        ];
+        expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+        expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+        expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+        expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+        const dayMs = 24 * 60 * 60 * 1000;
+        const thirtyDaysMs = 30 * dayMs;
+        for (const [timestamp, offset] of [
+          [mainUpdatedAt, 0],
+          [directUpdatedAt, 100],
+          [groupUpdatedAt, 200],
+        ] as const) {
+          expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+          expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
       }
-      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
-        number,
-        number,
-        number,
-      ];
-      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
-      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
-      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
-      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
-
-      const dayMs = 24 * 60 * 60 * 1000;
-      const thirtyDaysMs = 30 * dayMs;
-      for (const [timestamp, offset] of [
-        [mainUpdatedAt, 0],
-        [directUpdatedAt, 100],
-        [groupUpdatedAt, 200],
-      ] as const) {
-        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
-        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed);
-      }
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));

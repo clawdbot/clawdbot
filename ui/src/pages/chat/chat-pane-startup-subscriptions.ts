@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resetChatHistoryProjection } from "./chat-history.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitInitialUserMessageHandoff } from "./history-merge.ts";

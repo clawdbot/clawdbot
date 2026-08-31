@@ -21,7 +21,8 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-catalog.ts";
-import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -37,8 +38,10 @@ import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-ima
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
-import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
-import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
+import {
+  renderChatTaskSuggestionTray,
+  type ChatTaskSuggestionTrayProps,
+} from "./components/chat-task-suggestions.ts";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,
