@@ -20,7 +20,9 @@ describe("replaceOversizedChatHistoryMessages provenance preservation", () => {
       sourceTool: "main_session_restart_recovery",
     });
     // placeholder should still have truncated marker
-    expect((result.messages[0] as { __openclaw?: { truncated?: boolean } })["__openclaw"]?.truncated).toBe(true);
+    expect(
+      (result.messages[0] as { __openclaw?: { truncated?: boolean } })["__openclaw"]?.truncated,
+    ).toBe(true);
   });
 
   it("preserves provenance without sourceTool", () => {
@@ -71,10 +73,14 @@ describe("replaceOversizedChatHistoryMessages provenance preservation", () => {
       maxSingleMessageBytes: 1_000,
     });
     expect(result.messages).toHaveLength(1);
-    expect(((result.messages[0] as Record<string, unknown>)["__openclaw"] as unknown)).toBeUndefined();
+    expect(
+      (result.messages[0] as Record<string, unknown>)["__openclaw"] as unknown,
+    ).toBeUndefined();
     expect((result.messages[0] as Record<string, unknown>).provenance).toBeUndefined();
     // sentinel text
-    expect(((result.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text) ?? "").toContain("chat.history unavailable");
+    expect(
+      (result.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "",
+    ).toContain("chat.history unavailable");
   });
 
   it("pending flow uses same placeholder logic (oversized pending input)", () => {

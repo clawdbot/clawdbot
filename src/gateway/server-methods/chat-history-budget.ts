@@ -65,11 +65,11 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
   const rawProvenance =
     message && typeof message === "object"
-      ? (message as Record<string, unknown>).provenance
+      ? (message as Record<string, unknown>).provenance // SAFETY: message verified as object before accessing optional provenance field
       : undefined;
   const provenanceRecord =
     rawProvenance && typeof rawProvenance === "object" && !Array.isArray(rawProvenance)
-      ? (rawProvenance as Record<string, unknown>)
+      ? (rawProvenance as Record<string, unknown>) // SAFETY: rawProvenance verified as non-array object before record projection
       : undefined;
   const provenance =
     provenanceRecord?.kind === "internal_system"

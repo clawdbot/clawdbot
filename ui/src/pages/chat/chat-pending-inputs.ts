@@ -1,5 +1,5 @@
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
@@ -10,19 +10,19 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import {
   adoptInitialUserMessage,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   setChatSessionProjection,
 } from "./history-merge.ts";
+import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 
 type PendingInputView = {
   sessionKey: string;

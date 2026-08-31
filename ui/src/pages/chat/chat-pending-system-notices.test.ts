@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it } from "vitest";
+import { t } from "../../i18n/index.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { t } from "../../i18n/index.ts";
 
 describe("pending internal_system notice regression", () => {
   const acceptedAt = 1_234_567;
@@ -66,7 +66,11 @@ describe("pending internal_system notice regression", () => {
       timestamp: acceptedAt,
     });
     // genuine pending must not be message
-    expect(items.some((it) => it.kind === "message" && it.key === `pending-input:${pendingInternal.id}`)).toBe(false);
+    expect(
+      items.some(
+        (entry) => entry.kind === "message" && entry.key === `pending-input:${pendingInternal.id}`,
+      ),
+    ).toBe(false);
   });
 
   it("unknown sourceTool internal_system becomes generic notice without summary", () => {
@@ -92,7 +96,6 @@ describe("pending internal_system notice regression", () => {
   });
 
   it("handles search filter for pending internal_system unchanged", () => {
-    const matching = buildPendingInputItems([pendingInternal], [], "gateway restart");
     // raw message text contains stripped payload? but messageMatchesSearchQuery checks raw content
     // pendingInternal content includes "gateway restart" via summary? original content has it, but filtered via original message
     // The implementation filters via original message before conversion, so query matching raw text should keep notice
@@ -137,13 +140,16 @@ describe("pending internal_system notice regression", () => {
       showToolCalls: true,
     });
     // Should have single notice (canonical), not duplicate pending notice
-    const notices = items.filter((it) => it.kind === "notice" && (it as { text?: string }).text !== undefined);
-    // Count notices that correspond to system recovery; pending should have been deduped
-    const recoveryNotices = notices.filter((n) => (n as { key?: string }).key?.includes(pendingInternal.id) || (n as { text?: string }).text === t("chat.systemNotice.restartRecovery.summary"));
     // The dedup ensures pending-input key not present; history notice present
-    expect(items.some((it) => it.kind === "notice" && (it as { key?: string }).key === `pending-input:${pendingInternal.id}`)).toBe(false);
+    expect(
+      items.some(
+        (entry) =>
+          entry.kind === "notice" &&
+          (entry as { key?: string }).key === `pending-input:${pendingInternal.id}`,
+      ),
+    ).toBe(false);
     // There should be exactly one system notice for the canonical id
-    const canonicalNotices = items.filter((it) => it.kind === "notice");
+    const canonicalNotices = items.filter((entry) => entry.kind === "notice");
     expect(canonicalNotices.length).toBeGreaterThan(0);
   });
 
@@ -166,6 +172,12 @@ describe("pending internal_system notice regression", () => {
       streamStartedAt: null,
       showToolCalls: true,
     });
-    expect(items.some((it) => it.kind === "notice" && (it as { text?: string }).text === t("chat.systemNotice.restartRecovery.summary"))).toBe(true);
+    expect(
+      items.some(
+        (entry) =>
+          entry.kind === "notice" &&
+          (entry as { text?: string }).text === t("chat.systemNotice.restartRecovery.summary"),
+      ),
+    ).toBe(true);
   });
 });
