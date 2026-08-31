@@ -2299,7 +2299,10 @@ describe("handleSlackAction", () => {
       title: "Updated",
       emoji: "rotating_light",
     });
-    expectRecordFields(requireDetails(result).bookmark, { id: "B1", title: "Updated" });
+    expectRecordFields(requireRecord(requireDetails(result).bookmark, "bookmark"), {
+      id: "B1",
+      title: "Updated",
+    });
   });
 
   it("removes a Slack channel bookmark by id", async () => {

@@ -37,6 +37,7 @@ vi.mock("./client.js", async (importOriginal) => {
 });
 
 const { handleSlackAction } = await import("./action-runtime.js");
+type TraceResult = Awaited<ReturnType<typeof handleSlackAction>>;
 
 function recordingClient(): Record<string, unknown> {
   const record = (method: string, args: Record<string, unknown>) => {
@@ -93,8 +94,11 @@ const trustedContext = {
   requesterAccountId: "default",
 };
 
-function detailsOf(result: { content: Array<{ text?: string }> }): Record<string, unknown> {
-  return JSON.parse(result.content[0]?.text ?? "{}");
+function detailsOf(result: TraceResult): Record<string, unknown> {
+  const text = result.content[0];
+  return JSON.parse(
+    typeof text === "object" && text && "text" in text ? ((text.text as string) ?? "{}") : "{}",
+  );
 }
 
 describe("Slack channel bookmark real-behavior trace", () => {
