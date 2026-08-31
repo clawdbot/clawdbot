@@ -58,7 +58,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
+    const { memo: hashMemo, metrics, owner = "gateway" } = activeWorkspaceHashContext() ?? {};
     const before = await handle.stat({ bigint: true });
     const realPath = await resolveOpenedFileRealPathForHandle(handle, expectedPath);
     if (!before.isFile() || (root && !isPathInside(root, realPath))) {
@@ -67,7 +67,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
     if (before.size > BigInt(maxBytes)) {
       return { type: "unsupported" };
     }
-    const identity = workspaceStatIdentity("gateway", before);
+    const identity = workspaceStatIdentity(owner, before);
     let sha256 = hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
@@ -97,7 +97,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
       }
     }
     const after = await handle.stat({ bigint: true });
-    if (after.size !== BigInt(size) || workspaceStatIdentity("gateway", after) !== identity) {
+    if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
     hashMemo?.set(identity, sha256);

@@ -141,8 +141,11 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       return;
     }
     if (options.repair === true || options.yes === true) {
-      // Migration warnings also cover optional archives; certify required runtime
-      // schemas independently before reporting success or a recoverable advisory.
+      // Contributions can report optional migration warnings, but repair must not
+      // complete while startup would still reject a legacy session store.
+      const { assertSessionStoreMigrationComplete } =
+        await import("../config/sessions/startup-migration.js");
+      assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
       const { assertOpenClawDatabasesReady } =
         await import("../state/openclaw-database-preflight.js");
       const { resolveConfiguredAgentDatabaseTargets } =

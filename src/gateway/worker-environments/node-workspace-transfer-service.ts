@@ -13,6 +13,7 @@ import {
 import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 import {
   MAX_UPLOAD_BYTES,
+  NodeWorkspaceTransferInvalidError,
   NodeWorkspaceTransferLimitError,
   RequestByteReader,
   streamUploadFile,
@@ -34,7 +35,10 @@ import {
 } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
-export { isNodeWorkspaceTransferLimitError } from "./node-workspace-upload-reader.js";
+export {
+  isNodeWorkspaceTransferLimitError,
+  nodeWorkspaceTransferInvalidReason,
+} from "./node-workspace-upload-reader.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -599,13 +603,30 @@ export function createNodeWorkspaceTransferService(options: {
           }
           const raw = (await reader.readExactly(bytes)).toString("utf8");
           const ref = expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-          return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+          try {
+            return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+          } catch (error) {
+            throw new NodeWorkspaceTransferInvalidError(
+              "manifest",
+              "Workspace transfer manifest is invalid",
+              { cause: error },
+            );
+          }
         };
         const base = await readManifest(operation.baseManifestRef);
         assertCurrent();
         const current = await readManifest();
         assertCurrent();
-        const transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
+        let transferPaths: string[];
+        try {
+          transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
+        } catch (error) {
+          throw new NodeWorkspaceTransferInvalidError(
+            "manifest",
+            "Workspace transfer manifests cannot be reconciled",
+            { cause: error },
+          );
+        }
         const transferPathSet = new Set(transferPaths);
         stagingRoot = await fsp.mkdtemp(path.join(authorization.context.temporaryRoot, "upload-"));
         const currentByPath = new Map(current.manifest.entries.map((entry) => [entry.path, entry]));
@@ -614,32 +635,57 @@ export function createNodeWorkspaceTransferService(options: {
           if (!entry) {
             continue;
           }
-          const destination = entryPath(stagingRoot, relative);
-          await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-          assertCurrent();
-          if (entry.type === "symlink") {
-            await fsp.symlink(entry.target, destination);
+          try {
+            const destination = entryPath(stagingRoot, relative);
+            await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
             assertCurrent();
-          } else {
-            const handle = await fsp.open(destination, "wx", entry.mode);
-            try {
-              await streamUploadFile({ reader, handle, entry, assertCurrent });
-            } finally {
-              await handle.close();
+            if (entry.type === "symlink") {
+              await fsp.symlink(entry.target, destination);
+              assertCurrent();
+            } else {
+              const handle = await fsp.open(destination, "wx", entry.mode);
+              try {
+                await streamUploadFile({ reader, handle, entry, assertCurrent });
+              } finally {
+                await handle.close();
+              }
+              assertCurrent();
             }
-            assertCurrent();
+          } catch (error) {
+            if (error instanceof NodeWorkspaceTransferInvalidError) {
+              throw error;
+            }
+            if (params.signal.aborted || !authorizationCurrent(authorization)) {
+              throw error;
+            }
+            throw new NodeWorkspaceTransferInvalidError(
+              "staging",
+              "Workspace transfer payload could not be staged",
+              { cause: error },
+            );
           }
         }
         await reader.assertEnd();
         assertCurrent();
         if (reader.bytesRead !== contentLength) {
-          throw new Error("Workspace transfer upload length is inconsistent");
+          throw new NodeWorkspaceTransferInvalidError(
+            "content_length",
+            "Workspace transfer upload length is inconsistent",
+          );
         }
-        await assertWorkspaceMatchesManifest({
-          root: stagingRoot,
-          manifest: current.manifest,
-          entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
-        });
+        try {
+          await assertWorkspaceMatchesManifest({
+            root: stagingRoot,
+            manifest: current.manifest,
+            entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
+          });
+        } catch (error) {
+          throw new NodeWorkspaceTransferInvalidError(
+            "staging",
+            "Workspace transfer payload did not match its staged result",
+            { cause: error },
+          );
+        }
         assertCurrent();
         operation.uploaded = {
           base: base.manifest,
