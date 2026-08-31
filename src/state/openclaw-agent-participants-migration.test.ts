@@ -90,6 +90,37 @@ describe("participant identity migration", () => {
     });
   });
 
+  it("upgrades a v17 database when the route-context trigger is absent", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const databasePath = initial.path;
+      initial.db.exec(`
+        DROP TABLE session_participants;
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
+        DROP INDEX idx_agent_transcript_event_identity_sequence;
+        PRAGMA user_version = 17;
+        UPDATE schema_meta SET schema_version = 17;
+      `);
+      closeOpenClawAgentDatabasesForTest();
+
+      const result = await compactDoctorSessionSqliteTarget(
+        { agentId: "main", storePath: databasePath },
+        { env: state.env, operation: "import-finalize" },
+      );
+      expect(result.skipped).toBe(false);
+      const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_conversations_route_context_invalidate_after_update'",
+          )
+          .get(),
+      ).toEqual({ name: "session_conversations_route_context_invalidate_after_update" });
+    });
+  });
+
   it.each(["absent", "rollback", "unknown-column", "marker-mismatch"] as const)(
     "handles %s atomically",
     async (scenario) => {

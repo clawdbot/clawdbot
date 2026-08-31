@@ -705,16 +705,15 @@ export function ensureOpenClawAgentDatabaseSchema(
   options: OpenClawAgentDatabaseOptions & { register?: boolean },
 ): void {
   const agentId = normalizeAgentId(options.agentId);
-  const databaseOptions = { ...options, agentId };
-  const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
-  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  ensureOpenClawAgentDatabasePermissions(pathname, options);
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   if (readSqliteUserVersion(db) === AGENT_MEDIA_SCHEMA_VERSION) {
     maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
     const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-    // Keep canonical index recovery reachable before rebuilding the v17 identity table.
+    ensureSessionAdditiveColumns(db);
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
       allowMissingColumns: true,
       validateAfterRepair: () =>
@@ -730,7 +729,7 @@ export function ensureOpenClawAgentDatabaseSchema(
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
   ensureAgentSchema(db, agentId, pathname);
-  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  ensureOpenClawAgentDatabasePermissions(pathname, options);
   if (options.register === true) {
     registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
   }
