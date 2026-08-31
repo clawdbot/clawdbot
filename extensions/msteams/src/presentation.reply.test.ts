@@ -169,6 +169,43 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
+  it("keeps an unmappable control's label in a card built for the others", () => {
+    const [message] = renderReply({
+      text: "Deploy finished",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Open run", url: "https://example.com/run" },
+              {
+                label: "Approve",
+                action: { type: "question", questionId: "deploy-gate", optionValue: "Approve" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // The card exists for the button Teams can render. Skipping the other one silently
+    // would leave the user a card that offers less than the reply did.
+    expect(message?.card?.actions).toEqual([
+      { type: "Action.OpenUrl", title: "Open run", url: "https://example.com/run" },
+    ]);
+    expect(message?.card?.body).toEqual(
+      expect.arrayContaining([
+        {
+          type: "TextBlock",
+          text: "Actions:\n- Approve",
+          wrap: true,
+          isSubtle: true,
+          size: "Small",
+        },
+      ]),
+    );
+  });
+
   it("sends prose instead of a card when Teams can render none of the controls", () => {
     const messages = renderReply({
       text: "Where should this deploy?\n\n1. Staging\n2. Production",
