@@ -2814,7 +2814,7 @@ src/gateway/chat-display-projection.canvas.ts	14
 src/gateway/chat-display-projection.core.ts	6
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
-src/gateway/chat-display-projection.sanitize.ts	16
+src/gateway/chat-display-projection.sanitize.ts	15
 src/gateway/chat-sanitize.ts	3
 src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
@@ -3968,7 +3968,7 @@ ui/src/lib/board/widgets/workboard-widget.ts	2
 ui/src/lib/channels/index.ts	3
 ui/src/lib/chat/heartbeat-display.ts	4
 ui/src/lib/chat/message-extract.ts	7
-ui/src/lib/chat/message-normalizer.ts	3
+ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
