@@ -8,16 +8,15 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import {
+  applyCommandLaneCapacity,
   canAdmitInGroup,
   type CommandLaneBlockReason,
   type CommandLaneGroupSpec,
   drainGroupSiblings,
   getGroupRegistry,
   getLaneGroup,
-  getMemberActiveCount,
   installCommandLaneGroup,
   type LaneGroupState,
-  resolveLaneBlockReason,
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
@@ -142,30 +141,6 @@ function isQuietProbeLane(lane: string): boolean {
 
 function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
-}
-
-function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
-  const snapshot: CommandLaneSnapshot = {
-    lane: state.lane,
-    queuedCount: state.queue.length,
-    activeCount: state.activeTaskIds.size,
-    maxConcurrent: state.maxConcurrent,
-    draining: state.draining,
-    generation: state.generation,
-    blockedBy: resolveLaneBlockReason(state.lane),
-  };
-  const group = getLaneGroup(state.lane);
-  if (group) {
-    let groupActive = 0;
-    for (const member of group.members) {
-      groupActive += getMemberActiveCount(member);
-    }
-    snapshot.group = group.group;
-    snapshot.groupActive = groupActive;
-    snapshot.groupBudget = group.budget;
-    snapshot.reservedForLane = group.reservations.get(state.lane) ?? 0;
-  }
-  return snapshot;
 }
 
 function getLaneState(lane: string): LaneState {
@@ -619,33 +594,18 @@ export function getQueueSize(lane: string = CommandLane.Main) {
 export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);
-  if (!state) {
-    // The lane may not exist yet (first enqueue) or may have been retired while
-    // idle, but it can still be a configured group member — and a caller asking
-    // "can this lane start work?" needs the group answer, not a bare default.
-    const group = getLaneGroup(resolved);
-    const empty: CommandLaneSnapshot = {
-      lane: resolved,
-      queuedCount: 0,
-      activeCount: 0,
-      maxConcurrent: 1,
-      draining: false,
-      generation: 0,
-      blockedBy: resolveLaneBlockReason(resolved),
-    };
-    if (group) {
-      let groupActive = 0;
-      for (const member of group.members) {
-        groupActive += getMemberActiveCount(member);
-      }
-      empty.group = group.group;
-      empty.groupActive = groupActive;
-      empty.groupBudget = group.budget;
-      empty.reservedForLane = group.reservations.get(resolved) ?? 0;
-    }
-    return empty;
-  }
-  return createCommandLaneSnapshot(state);
+  const snapshot: CommandLaneSnapshot = {
+    lane: state?.lane ?? resolved,
+    queuedCount: state?.queue.length ?? 0,
+    activeCount: state?.activeTaskIds.size ?? 0,
+    maxConcurrent: state?.maxConcurrent ?? 1,
+    draining: state?.draining ?? false,
+    generation: state?.generation ?? 0,
+    blockedBy: null,
+  };
+  // Missing or retired lanes can still be group members; never recreate them to read capacity.
+  applyCommandLaneCapacity(snapshot);
+  return snapshot;
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
