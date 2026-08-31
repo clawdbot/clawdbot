@@ -2412,7 +2412,21 @@ describe("package acceptance workflow", () => {
       "Attest Android release approval",
       "Upload Android release approval",
     ]) {
-      expect(workflowStep(publishJob, stepName).if).toContain("inputs.publish_openclaw_npm");
+      expect(workflowStep(publishJob, stepName).if).toBe(
+        "${{ inputs.publish_openclaw_npm && inputs.publish_android && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}",
+      );
+    }
+
+    expect(
+      readWorkflow(RELEASE_PUBLISH_WORKFLOW).on?.workflow_dispatch?.inputs?.publish_android,
+    ).toMatchObject({
+      type: "boolean",
+      default: true,
+    });
+    for (const stepName of ["Dispatch publish workflows", "Complete publish workflows"]) {
+      expect(workflowStep(publishJob, stepName).env?.PUBLISH_ANDROID).toBe(
+        "${{ inputs.publish_android && 'true' || 'false' }}",
+      );
     }
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
@@ -2441,12 +2455,15 @@ describe("package acceptance workflow", () => {
   });
 
   it.each([
-    [false, false],
-    [true, false],
-    [false, true],
+    [false, false, undefined, "v2026.8.1"],
+    [true, false, "true", "v2026.8.1"],
+    [false, true, "true", "v2026.8.1"],
+    [false, false, "false", "v2026.8.1"],
+    [false, true, "false", "v2026.8.1"],
+    [false, false, "true", "v2026.8.1-beta.1"],
   ])(
-    "does not block core publication on Android completion (dispatch failure: %s, existing assets: %s)",
-    (dispatchFailure, assetsVerified) => {
+    "honors Android publication scope without blocking core (dispatch failure: %s, existing assets: %s, enabled: %s, tag: %s)",
+    (dispatchFailure, assetsVerified, publishAndroid, tag) => {
       const script = releasePublishOrchestration(
         workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
       ).run;
@@ -2455,15 +2472,16 @@ describe("package acceptance workflow", () => {
       const end = script.indexOf('if [[ ( -n "${openclaw_npm_run_id}"', start);
       if (start < 0 || end < start) throw new Error("Missing native publication stage");
       const root = tempDirs.make("android-detached-publish-");
+      writeFileSync(join(root, "summary"), "");
       const result = spawnSync(
         "bash",
         [
           "-c",
           `
 set -euo pipefail
-is_android_release() { return 0; }
-verify_android_release_asset_contract() { return ${assetsVerified ? 0 : 1}; }
-dispatch_workflow_at_ref() { ${dispatchFailure ? "return 1" : "echo 456"}; }
+${shellFunctionSource(script, "is_android_release")}
+verify_android_release_asset_contract() { echo assets >> "$RUNNER_TEMP/android-calls"; return ${assetsVerified ? 0 : 1}; }
+dispatch_workflow_at_ref() { echo dispatch >> "$RUNNER_TEMP/android-calls"; ${dispatchFailure ? "return 1" : "echo 456"}; }
 wait_for_run() { echo unexpected-android-wait >&2; return 1; }
 promote_windows_release_assets() { echo 789 > "$RUNNER_TEMP/windows-node-run-id.txt"; }
 ${shellFunctionSource(script, "promote_android_release_asset")}
@@ -2480,12 +2498,13 @@ printf 'core_failed=%s\n' "$failed"
             GITHUB_REPOSITORY: "openclaw/openclaw",
             GITHUB_RUN_ID: "123",
             GITHUB_RUN_ATTEMPT: "2",
-            RELEASE_TAG: "v2026.8.1",
+            RELEASE_TAG: tag,
             TARGET_SHA: "a".repeat(40),
             PARENT_WORKFLOW_BRANCH: "main",
             PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
             PARENT_WORKFLOW_SHA: "d".repeat(40),
             PUBLISH_OPENCLAW_NPM: "true",
+            ...(publishAndroid === undefined ? {} : { PUBLISH_ANDROID: publishAndroid }),
             openclaw_npm_run_id: "",
             clawhub_pid: "",
             clawhub_result: "",
@@ -2498,7 +2517,15 @@ printf 'core_failed=%s\n' "$failed"
       expect(result.stdout).toContain("core_failed=0");
       expect(result.stderr).not.toContain("unexpected-android-wait");
       const summary = readFileSync(join(root, "summary"), "utf8");
-      if (assetsVerified) {
+      expect(readFileSync(join(root, "windows-node-run-id.txt"), "utf8").trim()).toBe("789");
+      if (publishAndroid === "false" || tag.includes("-beta.")) {
+        expect(readdirSync(root)).not.toContain("android-calls");
+        expect(summary).not.toContain("actions/runs/456");
+        expect(summary).not.toContain("previously published assets verified");
+        if (publishAndroid === "false") {
+          expect(summary).toContain("Android APK: skipped by input (publish_android=false)");
+        }
+      } else if (assetsVerified) {
         expect(summary).toContain("previously published assets verified");
         expect(summary).toContain("releases/download/v2026.8.1/OpenClaw-Android.apk");
         expect(summary).not.toContain("actions/runs/456");

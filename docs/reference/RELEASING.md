@@ -598,7 +598,9 @@ release needs:
 4. Dispatch `Plugin NPM Release` with `publish_scope=all-publishable` and `ref=<release-sha>`.
 5. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
 6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and saved `preflight_run_id` after verifying the saved `full_release_validation_run_id` and exact run attempt.
-7. Verify the published npm package and selector readback, then call reusable `Docker Release` with the immutable tag and SHA. For stable releases, create or update the GitHub release as a draft, dispatch `Windows Node Release` with the explicit `windows_node_tag` and candidate-approved `windows_node_installer_digests`, and verify the canonical Windows installer/checksum assets. Also dispatch `Android Release` to build the exact-tag signed APK plus checksum and provenance. Finalize the GitHub release after Docker and the Windows asset contract succeed; Android completion is independent and does not hold the core release.
+7. Verify the published npm package and selector readback, then call reusable `Docker Release` with the immutable tag and SHA. For stable releases, create or update the GitHub release as a draft, dispatch `Windows Node Release` with the explicit `windows_node_tag` and candidate-approved `windows_node_installer_digests`, and verify the canonical Windows installer/checksum assets. By default, also dispatch `Android Release` to build the exact-tag signed APK plus checksum and provenance. Pass `publish_android=false` when Android publication is outside the approved release scope. Finalize the GitHub release after Docker and the Windows asset contract succeed; Android completion is independent and does not hold the core release.
+
+Set `-f publish_android=false` on `OpenClaw Release Publish` to omit Android approval, attestation, and child dispatch. The workflow records this exclusion in its summary and release verification notes; npm, plugins, Docker, and Windows retain their normal publication gates. This does not cancel an Android run dispatched by an earlier parent. The explicit failed-publisher closeout recovery path still requires complete platform assets, including Android.
 
 Android approval binds the release tag and target SHA to the approving parent's
 run ID, exact attempt, full ref, and workflow SHA. The child verifies the attested
@@ -610,8 +612,7 @@ completed failed parent. Before provenance publication and each asset upload,
 Android rechecks the live release tag target and stable classification, protected
 tooling identity, and exact parent attempt/state. These are fresh boundary checks,
 not an atomic GitHub validation-and-write transaction. A dispatched run link is
-pending publication evidence, not an APK download claim. Monitor and approve the
-linked Android run separately;
+pending publication evidence, not an APK download claim. Monitor the linked Android run separately;
 if dispatch cannot be confirmed, inspect existing runs before retrying.
 For explicit Android recovery, pass `release_publish_run_attempt`,
 `release_publish_full_ref`, and `release_publish_workflow_sha` from that same
@@ -782,6 +783,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the workflow as a plugin-only repair orchestrator
+- `publish_android`: defaults to `true`; set `false` to omit Android authorization and publication from this parent run
 - `release_profile`: release coverage profile used for release evidence summaries; defaults to `from-validation`, which reads it from the validation manifest, or override with `beta`, `stable`, or `full`
 - `wait_for_clawhub`: defaults to `false` so npm availability is not blocked by the ClawHub sidecar; set `true` only when workflow completion must include ClawHub completion
 

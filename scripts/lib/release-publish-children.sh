@@ -885,6 +885,11 @@ promote_android_release_asset() {
   if ! is_android_release; then
     return 0
   fi
+  if [[ "${PUBLISH_ANDROID:-true}" == "false" ]]; then
+    android_release_note="- Android APK: skipped by input (publish_android=false)"
+    echo "${android_release_note}" >> "${GITHUB_STEP_SUMMARY}"
+    return 0
+  fi
   # Retry-safe: the asset contract is the done-condition, so a prior
   # publish run's verified APK promotion is reused instead of
   # re-running the Android child workflow.

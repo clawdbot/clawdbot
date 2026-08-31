@@ -83,6 +83,11 @@ on:
         required: true
         default: true
         type: boolean
+      publish_android:
+        description: Authorize and dispatch Android APK publication for stable core releases
+        required: true
+        default: true
+        type: boolean
       publish_docker_only:
         description: Publish Docker only after independently verifying an already-published beta, stable, or extended-stable npm package
         required: true
@@ -1250,7 +1255,7 @@ jobs:
             --output "${notes_file}"
 
       - name: Write Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.publish_android && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         env:
           RELEASE_PUBLISH_BRANCH: ${{ github.ref_name }}
           RELEASE_PUBLISH_FULL_REF: ${{ github.ref }}
@@ -1286,13 +1291,13 @@ jobs:
           NODE
 
       - name: Attest Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.publish_android && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
       - name: Upload Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.publish_android && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-release-approval-${{ github.run_id }}
@@ -1321,6 +1326,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PUBLISH_ANDROID: ${{ inputs.publish_android && 'true' || 'false' }}
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
@@ -1352,7 +1358,11 @@ jobs:
               echo "- OpenClaw npm publish: skipped by input"
             fi
             if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Android APK: dispatched alongside the OpenClaw npm publish; monitor and approve its run separately, completion does not block core publication"
+              if [[ "${PUBLISH_ANDROID}" == "true" ]]; then
+                echo "- Android APK: dispatched alongside the OpenClaw npm publish; monitor its run separately, completion does not block core publication"
+              else
+                echo "- Android APK: skipped by input (publish_android=false)"
+              fi
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- Windows Hub promotion: promoted concurrently with the OpenClaw npm publish; required before the GitHub release can be published"
@@ -1496,6 +1506,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PUBLISH_ANDROID: ${{ inputs.publish_android && 'true' || 'false' }}
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
