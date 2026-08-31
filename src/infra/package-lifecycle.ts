@@ -81,9 +81,13 @@ async function acquireLifecycleLock(paths: ReturnType<typeof resolveLifecyclePat
         continue;
       }
       if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for another OpenClaw package lifecycle");
+        throw new Error("timed out waiting for another OpenClaw package lifecycle", {
+          cause: error,
+        });
       }
-      await new Promise((resolve) => setTimeout(resolve, PACKAGE_LIFECYCLE_LOCK_POLL_MS));
+      await new Promise((resolve) => {
+        setTimeout(resolve, PACKAGE_LIFECYCLE_LOCK_POLL_MS);
+      });
     }
   }
   return null;
