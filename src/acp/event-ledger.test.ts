@@ -149,7 +149,7 @@ describe("ACP event ledger", () => {
   });
 
   it("does not downgrade complete SQLite replay state when resuming a session", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const ledger = createSqliteAcpEventLedger({
         path: path.join(dir, "openclaw.sqlite"),
       });

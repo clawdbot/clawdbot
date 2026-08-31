@@ -16,7 +16,7 @@ import type {
 import type { SessionAcpIdentity } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { withTimeout } from "../../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
@@ -56,7 +56,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
     try {
       runtimeStatus = await withAcpRuntimeErrorBoundary({
         run: async () =>
-          await withTimeout(
+          await runAbortableTimeout(
             async (signal) =>
               await params.runtime.getStatus!({
                 handle: params.handle,

@@ -3511,7 +3511,6 @@ describe("task-registry", () => {
 
   it("keeps terminal parent-owned one-shot ACP sessions with a stable resume identity", async () => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:resumable-oneshot";
@@ -3525,7 +3524,7 @@ describe("task-registry", () => {
         deliveryStatus: "delivered",
         lastEventAt: now - 60_000,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-terminal-acp-resumable-oneshot",
         runtime: "acp",
         status: "succeeded",
@@ -3560,7 +3559,6 @@ describe("task-registry", () => {
 
   it("closes terminal one-shot ACP sessions before resume is confirmed ready", async () => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:codex:acp:unmaterialized-oneshot";
@@ -3574,7 +3572,7 @@ describe("task-registry", () => {
         deliveryStatus: "delivered",
         lastEventAt: now - 60_000,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-terminal-acp-unmaterialized-oneshot",
         runtime: "acp",
         status: "cancelled",
@@ -3610,7 +3608,6 @@ describe("task-registry", () => {
 
   it("closes terminal one-shot ACP sessions when the agent cannot resume", async () => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:non-resumable-oneshot";
@@ -3624,7 +3621,7 @@ describe("task-registry", () => {
         deliveryStatus: "delivered",
         lastEventAt: now - 60_000,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-terminal-acp-non-resumable-oneshot",
         runtime: "acp",
         status: "succeeded",
@@ -3804,7 +3801,6 @@ describe("task-registry", () => {
 
   it("keeps orphaned parent-owned one-shot ACP sessions with a stable resume identity", async () => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:orphaned-resumable-oneshot";
       const closeAcpSession = vi.fn().mockResolvedValue(undefined);
