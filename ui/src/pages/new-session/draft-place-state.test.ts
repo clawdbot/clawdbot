@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import type { NewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const REMOTE_PROJECT = {
@@ -21,8 +24,8 @@ function createRepositoryFixture(
 ) {
   const requestUpdate = vi.fn();
   const persistPreference = vi.fn();
-  const readPreference = vi.fn(() => ({ worktree: true }));
-  const request = vi.fn(async (method: string) =>
+  const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
+  const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
     method === "fs.listDir"
       ? { path: "/plain", entries: [] }
       : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
@@ -49,6 +52,7 @@ function createRepositoryFixture(
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
+    cloudProfilesReady: true,
     environments: [
       {
         id: "node:desktop",
@@ -81,10 +85,130 @@ function createRepositoryFixture(
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
-  return { state, browser, persistPreference, requestUpdate };
+  return { state, browser, persistPreference, readPreference, request, requestUpdate };
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it.each(["git", "unavailable", "rejected"] as const)(
+    "preserves an edited base branch through reconnect discovery (%s)",
+    async (result) => {
+      const { state, request, persistPreference } = createRepositoryFixture({ workspaceGit: true });
+      const git = { repositoryStatus: "git", branches: [], defaultBranch: "main" };
+      request.mockResolvedValue(git);
+      state.adoptAgentDefaults();
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      state.setBaseRef("my-branch");
+      state.setWorktreeName("my-checkout");
+
+      state.invalidateGatewayDiscovery(false);
+      expect(state.baseRef).toBe("my-branch");
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockReturnValue(discovery.promise);
+      state.adoptAgentDefaults();
+      expect(state.baseRef).toBe("my-branch");
+      if (result === "rejected") {
+        discovery.reject(new Error("Git unavailable"));
+      } else {
+        discovery.resolve({ ...git, repositoryStatus: result });
+      }
+      await vi.waitFor(() =>
+        expect(state.repository.kind).toBe(result === "git" ? "git" : "unavailable"),
+      );
+      expect(state.baseRef).toBe("my-branch");
+      expect(state.worktreeName).toBe("my-checkout");
+
+      state.invalidateGatewayDiscovery(false);
+      request.mockResolvedValue(git);
+      state.adoptAgentDefaults();
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.baseRef).toBe("my-branch");
+      state.clearProjectSelection();
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.baseRef).toBe("my-branch");
+      state.applyFolder("/another-repo");
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.baseRef).toBe("main");
+      expect(state.worktreeName).toBe("");
+      expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
+        baseRef: "",
+        worktreeName: "",
+      });
+    },
+  );
+
+  it("preserves edited details when identity preferences arrive after discovery", async () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    request.mockResolvedValue({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+    state.adoptAgentDefaults();
+    await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+    state.setBaseRef("my-branch");
+    state.setWorktreeName("my-checkout");
+
+    readPreference.mockReturnValue({
+      worktree: true,
+      baseRef: "saved-branch",
+      worktreeName: "saved-checkout",
+    });
+    state.adoptAgentDefaults();
+
+    expect(state.baseRef).toBe("my-branch");
+    expect(state.worktreeName).toBe("my-checkout");
+  });
+
+  it.each([false, true])(
+    "adopts a preference arriving during repository discovery without overwriting user edits (%s)",
+    async (edited) => {
+      const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockImplementation(async (method) =>
+        method === "worktrees.branches" ? discovery.promise : {},
+      );
+      state.adoptAgentDefaults();
+      expect(state.repository.kind).toBe("checking");
+
+      readPreference.mockReturnValue({ worktree: true, baseRef: "release/next" });
+      state.adoptAgentDefaults();
+      if (edited) {
+        state.setBaseRef("my-branch");
+      }
+      discovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.baseRef).toBe(edited ? "my-branch" : "release/next");
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+        1,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "finishes restoring a saved cloud preference for a non-Git workspace (unavailable: %s)",
+    async (unavailable) => {
+      const { state, readPreference, persistPreference } = createRepositoryFixture({
+        workspaceGit: unavailable,
+        unavailable,
+      });
+      readPreference.mockReturnValue({ where: { kind: "cloud", id: "aws" } });
+      state.adoptAgentDefaults();
+      await vi.waitFor(() =>
+        expect(state.repository.kind).toBe(unavailable ? "unavailable" : "direct"),
+      );
+
+      state.restorePreferenceSelections();
+
+      expect(state.placementPreferenceReady).toBe(true);
+      expect(state.cloudProfileId).toBe("");
+      expect(state.worktree).toBe(false);
+      if (unavailable) {
+        expect(persistPreference).not.toHaveBeenCalled();
+      } else {
+        expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
+          where: { kind: "local" },
+        });
+      }
+    },
+  );
+
   it.each([false, true])(
     "reconciles group defaults with cached repository discovery (unavailable: %s)",
     async (unavailable) => {

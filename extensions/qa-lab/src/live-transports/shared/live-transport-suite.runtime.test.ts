@@ -1,9 +1,11 @@
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 
 vi.mock("../../cli.runtime.js", () => ({ runQaSuiteCommand }));
 
+import { matrixQaCliRegistration } from "../matrix/cli.js";
 import { runLiveTransportQaSuiteCommand } from "./live-transport-suite.runtime.js";
 
 describe("live transport suite runtime", () => {
@@ -15,6 +17,52 @@ describe("live transport suite runtime", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each([undefined, 1, 2])(
+    "forwards the dedicated Matrix concurrency %s through parsing and the live suite host",
+    async (concurrency) => {
+      vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
+      const qa = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      matrixQaCliRegistration.register(qa);
+
+      await qa.parseAsync([
+        "node",
+        "openclaw",
+        "matrix",
+        "--provider-mode",
+        "mock-openai",
+        "--scenario",
+        "matrix-allowlist-hot-reload",
+        ...(concurrency === undefined ? [] : ["--concurrency", String(concurrency)]),
+      ]);
+
+      expect(runQaSuiteCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelDriver: "live",
+          channel: "matrix",
+          scenarioIds: ["matrix-allowlist-hot-reload"],
+          ...(concurrency === undefined ? {} : { concurrency }),
+        }),
+      );
+      if (concurrency === undefined) {
+        expect(runQaSuiteCommand.mock.calls[0]?.[0]).not.toHaveProperty("concurrency");
+      }
+    },
+  );
+
+  it.each(["0", "1.5", "2junk"])(
+    "rejects invalid dedicated Matrix concurrency %s before suite dispatch",
+    async (concurrency) => {
+      vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
+      const qa = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      matrixQaCliRegistration.register(qa);
+
+      await expect(
+        qa.parseAsync(["node", "openclaw", "matrix", "--concurrency", concurrency]),
+      ).rejects.toThrow("--concurrency must be a positive integer.");
+      expect(runQaSuiteCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("normalizes one live command into the shared suite host", async () => {
     await runLiveTransportQaSuiteCommand({
@@ -52,7 +100,6 @@ describe("live transport suite runtime", () => {
       failFast: true,
       channelDriver: "live",
       channel: "slack",
-      concurrency: 1,
       scenarioIds: ["slack-canary"],
       sutAccountId: "slack-sut",
       credentialFile: "/secure/slack-qa.json",

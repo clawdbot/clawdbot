@@ -51,7 +51,7 @@ export type VitestReportCapture = {
   processTimedOut: boolean;
   passWithNoTests: boolean;
   ignoreUnhandledErrors: boolean;
-  ended?: { reason: string; unhandledErrors: number; failedModules: number };
+  ended?: { reason: string; unhandledErrors: number; failedModules: number; suiteErrors: number };
 };
 
 const sorted = (values: unknown[]) => values.map((value) => JSON.stringify(value)).toSorted();
@@ -137,6 +137,10 @@ export default class VitestReportCaptureReporter implements Reporter {
       reason,
       unhandledErrors: errors.length,
       failedModules: modules.filter((module) => !module.ok()).length,
+      // Native JSON keeps only the first file error and omits nested suite errors.
+      suiteErrors: modules
+        .flatMap((module) => [module, ...module.children.allSuites()])
+        .reduce((count, suite) => count + suite.errors().length, 0),
     };
     this.writeCapture();
   }

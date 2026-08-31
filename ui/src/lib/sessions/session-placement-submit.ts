@@ -17,7 +17,7 @@ import {
 } from "./session-placement-startup.ts";
 
 export type SessionPlacementDraftAdvanceResult =
-  | { status: "started"; messageId: string; messageSeq?: number }
+  | { status: "started"; messageId: string }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
   | { status: "interrupted" }

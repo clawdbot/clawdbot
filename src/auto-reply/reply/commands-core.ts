@@ -1,4 +1,5 @@
 // Dispatches chat commands to registered handlers and formats their results.
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
@@ -47,8 +48,16 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       : params.sessionEntry
         ? { ...params.sessionEntry }
         : undefined);
+  // Native command targets can differ from the inbound owner; prepare one owner for every handler.
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    fallbackAgentId: params.agentId,
+  });
   const commandParams: HandleCommandsParams = {
     ...params,
+    agentId,
+    agentDir: agentId === params.agentId ? params.agentDir : resolveAgentDir(params.cfg, agentId),
     initialSessionEntry,
     allowCreateSessionEntry,
   };

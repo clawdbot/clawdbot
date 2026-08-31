@@ -395,7 +395,7 @@ struct MacNodeHostWorkerTests {
               IFS= read -r unavailable
               printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
               printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
-              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}'
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli","generations":[0,1,9007199254740993,18446744073709551615],"flags":[false,true]}}}'
               ;;
           esac
         done
@@ -408,9 +408,22 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        #expect(response.ok)
-        #expect(response.payload != nil)
         await worker.stop()
+        #expect(response.ok)
+
+        struct Response: Decodable {
+            struct Payload: Decodable {
+                let owner: String
+                let generations: [UInt64]
+                let flags: [Bool]
+            }
+
+            let payload: Payload
+        }
+        let decoded = try JSONDecoder().decode(Response.self, from: JSONEncoder().encode(response))
+        #expect(decoded.payload.owner == "cli")
+        #expect(decoded.payload.generations == [0, 1, 9_007_199_254_740_993, UInt64.max])
+        #expect(decoded.payload.flags == [false, true])
     }
 
     @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {

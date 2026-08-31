@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
@@ -82,17 +83,6 @@ async function rewriteRestartSentinel(
   );
 }
 
-function commitsMatch(expected: string, actual: string): boolean {
-  const normalizedExpected = expected.trim().toLowerCase();
-  const normalizedActual = actual.trim().toLowerCase();
-  return (
-    normalizedExpected.length >= 7 &&
-    normalizedActual.length >= 7 &&
-    (normalizedExpected.startsWith(normalizedActual) ||
-      normalizedActual.startsWith(normalizedExpected))
-  );
-}
-
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
@@ -144,12 +134,15 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       const expectedSha = typeof after.sha === "string" ? after.sha.trim() : "";
       const actualSha = commit?.trim() ?? "";
       const verifiesGitRevision =
-        stats.mode !== "git" || (expectedSha.length > 0 && commitsMatch(expectedSha, actualSha));
+        stats.mode !== "git" ||
+        (expectedSha.length > 0 && gitCommitPrefixesMatch(expectedSha, actualSha));
       const verifiesInstallRoot =
         expectedRoot !== null && actualRoot !== null && expectedRoot === actualRoot;
       const changedInstall =
         stats.mode !== "git" ||
-        (beforeSha.length > 0 && expectedSha.length > 0 && !commitsMatch(beforeSha, expectedSha));
+        (beforeSha.length > 0 &&
+          expectedSha.length > 0 &&
+          !gitCommitPrefixesMatch(beforeSha, expectedSha));
       if (payload.status === "ok" && expectedRoot && !verifiesInstallRoot) {
         payload.status = "error";
         stats.reason = actualRoot ? "restart-root-mismatch" : "restart-root-unavailable";

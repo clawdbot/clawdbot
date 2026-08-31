@@ -225,7 +225,7 @@ Allowlists and policies:
   `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
 - `channels.line.groups."*"` is the defaults entry for every group and room, not a fallback that a named entry replaces. A named entry overrides `"*"` field by field, so each field the named entry omits is taken from `"*"`. This matches how `requireMention` already resolves through the shared group scope tree; see [Groups](/channels/groups).
 - Upgrade check: if you set `enabled` or `allowFrom` only on `channels.line.groups."*"` while also listing a named group or room, those wildcard values now apply to that named entry as well. Earlier releases returned the named entry alone, so wildcard-only fields never reached it. Before upgrading, review any `"*"` entry that sets `enabled: false` or narrows `allowFrom`, and repeat the value on a named entry that should keep its current access.
-- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. LINE does not read the `implicitMentions` flags, so this always counts; see [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
+- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. Set `channels.defaults.implicitMentions.quotedBot: false` to stop it from bypassing the mention requirement; LINE reads that shared default and has no channel-scoped `implicitMentions` block of its own. See [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
 - Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
@@ -267,6 +267,9 @@ as untrusted.
   member who has not added the bot as a friend. If either lookup fails the raw
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
+- LINE describes inline emoji with metadata and alternative text. Empty `()`
+  alternatives reach the agent as `[emoji]`; meaningful alternatives such as
+  `(hello)` and parentheses typed by the sender are preserved.
 
 ## Structured rich messages
 

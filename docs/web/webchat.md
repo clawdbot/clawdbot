@@ -43,6 +43,17 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 ### Transcript and delivery model
 
+Admission and transcript persistence are separate. A `chat.send`, `sessions.send`,
+or initial `sessions.create` acknowledgment can arrive while approved input
+waits in durable pending-input custody, including during workspace preparation.
+An optional `messageSeq` comes only from a committed transcript receipt; clients
+must not predict it from history length or treat `status: "started"` as persistence.
+The Control UI replaces its provisional source with accepted custody, then with
+the canonical row. Retained initial attachment bytes may enrich that exact row
+without recreating a pending bubble on later snapshots or pane remounts.
+Submission identity stays separate from the execution run, so two intentionally
+identical sends remain two inputs.
+
 WebChat has two separate data paths:
 
 - The SQLite transcript rows are the durable model/runtime transcript. For normal agent runs, the embedded OpenClaw runtime persists model-visible `user`, `assistant`, and `toolResult` messages through the session accessor. WebChat does not write arbitrary delivery, status, or helper text into that transcript.
@@ -80,7 +91,7 @@ Related global options:
   Serve identity headers when enabled.
 - `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients behind an identity-aware **non-loopback** proxy source (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
-- `session.*`: session storage and main key defaults.
+- `session.*`: session routing and storage.
 
 ## Related
 

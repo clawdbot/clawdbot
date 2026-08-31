@@ -23,7 +23,6 @@ import {
 } from "../reply-payload.js";
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
-import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -36,6 +35,7 @@ import {
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
@@ -48,6 +48,7 @@ import {
   prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
+import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
@@ -91,32 +92,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
   const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
-  const notifiedSessionMetadataChangeKeys = new Set<string>();
-  const routeState: { sessionMetadataChangesForResult?: CommandSessionMetadataChange[] } = {};
-  const notifySessionMetadataChanges = (
-    changes: CommandSessionMetadataChange[] | undefined,
-  ): void => {
-    if (!changes?.length) {
-      return;
-    }
-    const freshChanges: CommandSessionMetadataChange[] = [];
-    for (const change of changes) {
-      const key = JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]);
-      if (notifiedSessionMetadataChangeKeys.has(key)) {
-        continue;
-      }
-      notifiedSessionMetadataChangeKeys.add(key);
-      freshChanges.push(change);
-    }
-    if (freshChanges.length === 0) {
-      return;
-    }
-    routeState.sessionMetadataChangesForResult = [
-      ...(routeState.sessionMetadataChangesForResult ?? []),
-      ...freshChanges,
-    ];
-    params.onSessionMetadataChanges?.(freshChanges);
-  };
+  const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
+    params.onSessionMetadataChanges,
+  );
   const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
     state.suppressAutomaticSourceDelivery &&
     state.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -136,6 +114,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !state.sendPolicyDenied;
   let finalReplyDeliveryStarted = false;
+  const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
+    isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
     if (!finalReplyDeliveryStarted) {
       return false;
@@ -293,6 +273,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
+    sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
   }> => {
     const abortSignal =
@@ -411,6 +392,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
       }
     }
+    if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
+      return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
+    }
     const result = await state.routeReplyToOriginating(normalizedPayload, {
       abortSignal,
       kind: "final",
@@ -433,8 +417,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           ? normalizeOptionalString(normalizedPayload.text)
           : undefined;
       if (fallbackText && !isRoutedReplyDelivered(result)) {
+        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
+          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
+        }
         const fallbackResult = await state.routeReplyToOriginating(
-          { text: fallbackText },
+          copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
           {
             abortSignal,
             kind: "final",
@@ -491,6 +478,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             normalizedPayload,
           )
         : undefined);
+    if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
+      return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
+    }
     markInboundDedupeReplayUnsafe();
     const finalDeliveryCapture = transcriptMirror ? {} : undefined;
     const deliveredTranscriptMirror = transcriptMirror
@@ -705,6 +695,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     recordRoutedBlockReplyDelivery,
     wasReplyDeliveredAsBlock,
     sendFinalPayload,
+    isSessionWriterDeliveryAuthorized,
     deferFinalTtsText,
     routeState,
   });

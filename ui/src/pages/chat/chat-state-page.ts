@@ -61,7 +61,8 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
-import { resetToolStream, type RunOutputUsage } from "./tool-stream.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;
@@ -376,7 +377,10 @@ export function createPageState(
       );
   };
   state.cancelQueuedChatMessageEdit = () => {
-    cancelQueuedMessageEdit(state);
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

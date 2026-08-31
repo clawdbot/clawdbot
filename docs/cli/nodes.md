@@ -12,7 +12,7 @@ Manage paired nodes (devices) and invoke node capabilities.
 
 Related: [Nodes overview](/nodes) - [Active computer presence](/nodes/presence) - [Camera nodes](/nodes/camera) - [Image nodes](/nodes/images)
 
-Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default `10000`), `--json`.
+Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default varies by command), `--json`.
 
 ## Status
 
@@ -60,6 +60,7 @@ Flags:
 - `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
+- `--timeout <ms>`: Gateway transport timeout (default `30000`).
 - `--idempotency-key <key>`: optional idempotency key.
 
 `system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.

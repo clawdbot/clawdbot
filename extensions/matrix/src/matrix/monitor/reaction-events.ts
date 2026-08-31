@@ -264,7 +264,6 @@ export async function handleInboundMatrixReaction(params: {
     isDirectMessage: params.isDirectMessage,
     dmSessionScope: accountConfig.dm?.sessionScope ?? "per-user",
     threadId: thread.threadId,
-    eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
   if (runtimeBindingId) {

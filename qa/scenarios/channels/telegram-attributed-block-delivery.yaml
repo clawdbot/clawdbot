@@ -12,8 +12,8 @@ scenario:
       groupChat:
         visibleReplies: message_tool
   successCriteria:
-    - The mock provider calls message(action=send) with the complete attributed HTML and literal code.
-    - Default Telegram delivery sends one payload reply with both block boundaries and an escaped inline code element; auxiliary progress remains recorded.
+    - The mock provider calls message(action=send) with the complete HTML and literal code.
+    - Default Telegram delivery sends one payload reply with block boundaries and the correct surviving code; auxiliary progress remains recorded.
     - Each group turn settles with exactly one durably recorded successful message-tool result.
   docsRefs:
     - docs/channels/telegram.md
@@ -28,7 +28,7 @@ scenario:
     channel: telegram
     suiteIsolation: isolated
     isolationReason: The message-tool-only group policy and per-case session counts belong to this delivery proof.
-    summary: Drive attributed p and div payloads through the Gateway, mock provider, and Telegram Bot API recorder.
+    summary: Drive attributed block and hidden-code payloads through the Gateway, mock provider, and Telegram Bot API recorder.
     config:
       requiredProviderMode: mock-openai
       requiredChannelDriver: crabline
@@ -43,10 +43,18 @@ scenario:
           conversationId: "-1001234567892"
           text: 'before<div title=''a>b''>inside</div>after `<p class="literal">code</p>`'
           expected: "before\ninside\nafter <code>&lt;p class=\"literal\"&gt;code&lt;/p&gt;</code>"
+        - name: consumed hidden code before visible code
+          conversationId: "-1001234567893"
+          text: 'before<a href="`hidden`">click</a> then `visible`'
+          expected: "beforeclick then <code>visible</code>"
+        - name: consumed code between visible spans
+          conversationId: "-1001234567894"
+          text: 'before `first` <a href="`hidden`">click</a> then `last`'
+          expected: "before <code>first</code> click then <code>last</code>"
 
 flow:
   steps:
-    - name: delivers complete attributed blocks through the default Telegram transport
+    - name: delivers sanitized HTML and surviving code through the default Telegram transport
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode && transport.id === config.requiredChannelDriver"

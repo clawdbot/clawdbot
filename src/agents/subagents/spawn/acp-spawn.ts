@@ -24,9 +24,7 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
-  normalizeAgentId,
   normalizeOptionalAgentId,
-  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import {
@@ -34,6 +32,7 @@ import {
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -189,6 +188,7 @@ const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
+  requesterAgentId: string;
   requesterSessionKey?: string;
   requesterSandboxed?: boolean;
   sandbox?: SpawnAcpSandboxMode;
@@ -197,6 +197,7 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterSessionKey,
+    agentId: params.requesterAgentId,
   });
   const requesterSandboxed = params.requesterSandboxed === true || requesterRuntime.sandboxed;
   return resolveSpawnSandboxError({
@@ -237,9 +238,6 @@ export async function spawnAcpDirect(
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
   });
-  const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
-  );
   if (!isAcpEnabledByPolicy(cfg)) {
     return createAcpSpawnFailure({
       status: "forbidden",
@@ -258,8 +256,14 @@ export async function spawnAcpDirect(
   }
 
   const requestThreadBinding = params.thread === true;
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterInternalKey,
+    agentId: ctx.requesterAgentIdOverride,
+  });
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
+    requesterAgentId,
     requesterSessionKey: ctx.agentSessionKey,
     requesterSandboxed: ctx.sandboxed,
     sandbox: params.sandbox,
@@ -571,22 +575,24 @@ export async function spawnAcpDirect(
         requesterSessionKey: requesterInternalKey,
         agentId: targetAgentId,
       });
-      if (effectiveStreamToParent && parentSessionKey) {
-        state.parentRelay = startAcpSpawnParentStreamRelay({
-          runId: childIdem,
-          parentSessionKey,
-          childSessionKey: sessionKey,
-          childSessionId: state.initializedSession.sessionId,
-          agentId: targetAgentId,
-          env: parentRelayStateEnv,
-          mainKey: cfg.session?.mainKey,
-          sessionScope: cfg.session?.scope,
-          eventRouting: parentEventRouting,
-          deliveryContext: parentDeliveryCtx,
-          emitStartNotice: false,
-          cfg,
-        });
-      }
+      const startParentRelay = (runId: string) =>
+        effectiveStreamToParent && parentSessionKey
+          ? startAcpSpawnParentStreamRelay({
+              runId,
+              parentSessionKey,
+              childSessionKey: sessionKey,
+              childSessionId: state.initializedSession.sessionId,
+              agentId: targetAgentId,
+              env: parentRelayStateEnv,
+              mainKey: cfg.session?.mainKey,
+              sessionScope: cfg.session?.scope,
+              eventRouting: parentEventRouting,
+              deliveryContext: parentDeliveryCtx,
+              emitStartNotice: false,
+              cfg,
+            })
+          : undefined;
+      state.parentRelay = startParentRelay(childIdem);
       const response = await launchAcpChildThroughGateway({
         task: params.task,
         sessionKey,
@@ -614,22 +620,9 @@ export async function spawnAcpDirect(
         }),
       });
       const runId = readGatewayRunId(response) ?? childIdem;
-      if (state.parentRelay && runId !== childIdem && parentSessionKey) {
+      if (state.parentRelay && runId !== childIdem) {
         state.parentRelay.dispose();
-        state.parentRelay = startAcpSpawnParentStreamRelay({
-          runId,
-          parentSessionKey,
-          childSessionKey: sessionKey,
-          childSessionId: state.initializedSession.sessionId,
-          agentId: targetAgentId,
-          env: parentRelayStateEnv,
-          mainKey: cfg.session?.mainKey,
-          sessionScope: cfg.session?.scope,
-          eventRouting: parentEventRouting,
-          deliveryContext: parentDeliveryCtx,
-          emitStartNotice: false,
-          cfg,
-        });
+        state.parentRelay = startParentRelay(runId);
       }
       state.parentRelay?.notifyStarted();
       return { runId };

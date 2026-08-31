@@ -18,7 +18,11 @@ import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
+import {
+  createCliExitFailoverError,
+  createCliFailoverError,
+  resolveCliResumeAtError,
+} from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
@@ -100,6 +104,9 @@ export async function executeCliProcess(params: {
     lane: runParams.lane,
   };
   const outputErrorContext = { ...failoverContext, runId: runParams.runId };
+  // buildCliArgs emits this option only for an actual checkpointed resume.
+  const resumeAtArg =
+    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
 
   const streamingParser = hasJsonlOutput
@@ -233,6 +240,11 @@ export async function executeCliProcess(params: {
             },
           }
         : {}),
+    }).catch((error: unknown) => {
+      if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
+        throw error;
+      }
+      throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
     });
   } else {
     const supervisor = params.deps.getProcessSupervisor();
@@ -449,11 +461,13 @@ export async function executeCliProcess(params: {
         "cli_overall_timeout",
       );
     }
+    const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
     throw createCliExitFailoverError({
       context: failoverContext,
       candidates: [stderr, stdout, stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
-      retryEmptyFailure: result.reason === "exit" && !params.events.hasObservedCliActivity(),
+      retryEmptyFailure,
+      resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
     });
   }
 

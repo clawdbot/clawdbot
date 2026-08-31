@@ -1,8 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -122,6 +129,7 @@ describe("worker session tool topology", () => {
   let spawn: ReturnType<typeof getFixture>["spawn"];
 
   beforeEach(() => {
+    resetGlobalHookRunner();
     ({
       placements,
       identity,
@@ -133,6 +141,78 @@ describe("worker session tool topology", () => {
       setEntry,
       spawn,
     } = getFixture());
+  });
+
+  afterEach(() => resetGlobalHookRunner());
+
+  it("blocks a worker spawn before child effects and replays the decision", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const receipts: DecisionReceiptV1[] = [];
+    const clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    const beforeToolCall = vi.fn(() => ({
+      block: true,
+      blockReason: "blocked by worker session policy",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", matcher: ["sessions_spawn"], handler: beforeToolCall },
+      ]),
+    );
+
+    const [first, replay] = await (async () => {
+      try {
+        return [await spawn("blocked-worker-spawn"), await spawn("blocked-worker-spawn")] as const;
+      } finally {
+        clearReceipts();
+      }
+    })();
+
+    expect(replay.resultJson).toBe(first.resultJson);
+    expect(JSON.parse(first.resultJson)).toMatchObject({
+      details: { status: "blocked", reason: "blocked by worker session policy" },
+    });
+    expect(beforeToolCall).toHaveBeenCalledOnce();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      contextId: PARENT_EXECUTION_IDENTITY_TOKEN.contextId,
+      executionId: PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
+      runId: PARENT_EXECUTION_IDENTITY_TOKEN.runId,
+      action: { family: "plugin", operation: "before_tool_call" },
+      decision: { outcome: "denied", reasonCode: "plugin_hook_blocked" },
+      enforcement: { coverageState: "enforced" },
+      source: { owner: "plugin-hook" },
+    });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("blocks an invalid worker policy rewrite before child effects", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["sessions_spawn"],
+          handler: async () => ({ params: { task: "" } }),
+        },
+      ]),
+    );
+
+    const result = await spawn("invalid-worker-policy-rewrite");
+
+    expect(JSON.parse(result.resultJson)).toMatchObject({
+      details: {
+        status: "blocked",
+        reason: "Tool call blocked because before_tool_call returned invalid sessions_spawn input.",
+      },
+    });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
   });
 
   it("records publication intent with the exact claim and no credential fields", async () => {

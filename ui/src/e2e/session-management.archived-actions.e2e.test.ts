@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -10,7 +11,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   uiProofArtifactDir,
   waitForPatch,
@@ -138,6 +138,19 @@ suite.define(() => {
         expect(await rewind.count()).toBe(1);
         await rewind.click();
         await page.locator(".chat-confirm-popover").waitFor({ state: "visible" });
+
+        const confirmation = page.locator(".chat-confirm-popover");
+        const remember = confirmation.getByRole("checkbox");
+        await remember.check();
+        expect(await remember.isChecked()).toBe(true);
+        await remember.uncheck();
+        await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+        await confirmation.waitFor({ state: "detached" });
+        expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
+        expect(await initialMenu.isVisible()).toBe(true);
+        expect(await rewind.evaluate((element) => element === document.activeElement)).toBe(true);
+        await rewind.click();
+        await confirmation.waitFor({ state: "visible" });
 
         await gateway.emitGatewayEvent("sessions.changed", {
           ...session,

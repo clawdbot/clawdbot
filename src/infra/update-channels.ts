@@ -167,7 +167,7 @@ export function resolveEffectiveUpdateChannel(params: {
 }
 
 /** Formats an operator-facing channel label that includes the deciding source. */
-export function formatUpdateChannelLabel(params: {
+function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
   gitTag?: string | null;

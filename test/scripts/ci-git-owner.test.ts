@@ -1,9 +1,16 @@
 import { readFileSync } from "node:fs";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
-const linuxIt = it.skipIf(process.platform !== "linux");
+// Each case owns its checkout and process trees. Overlap their real timeout and
+// drain waits, but keep subprocess pressure bounded on the four-core CI runner.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
+
+const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 const base = "c".repeat(40);
 const head = "a".repeat(40);
 const policyImport =
@@ -384,7 +391,7 @@ it("preserves no per-operation deadline on all six CI remote lookups", () => {
   expect(calls.map((call) => call[1])).toEqual(Array(6).fill("0"));
 });
 
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
 const branch = "refs/remotes/origin/main";
 const auditObjects = Object.fromEntries(

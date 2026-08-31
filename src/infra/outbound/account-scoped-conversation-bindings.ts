@@ -265,7 +265,9 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       ),
     stop: () => {
       // Registrations are process-local; SQLite-owned bindings must survive manager shutdown.
-      state.managersByAccountId.delete(accountId);
+      if (state.managersByAccountId.get(accountId) === manager) {
+        state.managersByAccountId.delete(accountId);
+      }
       unregisterSessionBindingAdapter({
         channel: params.channel,
         accountId,
