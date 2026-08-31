@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -14,7 +15,7 @@ const checkerSource = path.resolve(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runChecker(scriptPath: string, workspace: string) {
+async function runChecker(scriptPath: string, workspace: string, stateDirectory = workspace) {
   const preloadPath = path.join(path.dirname(workspace), "mock-fetch.mjs");
   await writeFile(
     preloadPath,
@@ -33,7 +34,7 @@ async function runChecker(scriptPath: string, workspace: string) {
     process.execPath,
     ["--import", pathToFileURL(preloadPath).href, scriptPath],
     {
-      env: { ...process.env, OPENCLAW_STATE_DIR: workspace },
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDirectory },
       maxBuffer: 1024 * 1024,
     },
   );
@@ -45,7 +46,7 @@ async function runChecker(scriptPath: string, workspace: string) {
 }
 
 test.each([".clawhub", ".clawdhub"])(
-  "%s metadata: an auxiliary-file edit selects the forced update path",
+  "%s metadata: updates require a core-valid link and preserve the global target",
   async (metadataDirectory) => {
     const fixture = tempDirs.make("release-validation-update-check-");
     const workspace = path.join(fixture, "workspace");
@@ -62,6 +63,10 @@ test.each([".clawhub", ".clawdhub"])(
     await writeFile(scriptPath, await readFile(checkerSource));
 
     const fileTreeSha256 = await digestClawHubSkillTree(skillDirectory);
+    const skillFile = {
+      path: "SKILL.md",
+      sha256: createHash("sha256").update("# Release validation\n").digest("hex"),
+    };
     await mkdir(path.join(skillDirectory, metadataDirectory));
     const originPath = path.join(skillDirectory, metadataDirectory, "origin.json");
     const origin = {
@@ -71,20 +76,25 @@ test.each([".clawhub", ".clawdhub"])(
       ownerHandle: "openclaw",
       installedVersion: "0.1.6",
       installedAt: 1,
+      skillFile,
       fileTreeSha256,
     };
     await writeFile(originPath, JSON.stringify(origin));
     await mkdir(path.join(workspace, metadataDirectory));
+    const lockPath = path.join(workspace, metadataDirectory, "lock.json");
+    const lockEntry = {
+      version: "0.1.6",
+      installedAt: 1,
+      ownerHandle: "openclaw",
+      skillFile,
+      fileTreeSha256,
+    };
     await writeFile(
-      path.join(workspace, metadataDirectory, "lock.json"),
+      lockPath,
       JSON.stringify({
         version: 1,
         skills: {
-          "release-validation": {
-            version: "0.1.6",
-            installedAt: 1,
-            fileTreeSha256,
-          },
+          "release-validation": lockEntry,
         },
       }),
     );
@@ -97,6 +107,11 @@ test.each([".clawhub", ".clawdhub"])(
         command: ["openclaw", "skills", "update", "@openclaw/release-validation", "--global"],
       },
     });
+
+    const stateLink = path.join(fixture, "state-link");
+    await symlink(workspace, stateLink, process.platform === "win32" ? "junction" : "dir");
+    const throughStateLink = await runChecker(scriptPath, workspace, stateLink);
+    expect(throughStateLink.update?.command).toContain("--global");
 
     await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "locally edited\n");
     const modified = await runChecker(scriptPath, workspace);
@@ -132,5 +147,26 @@ test.each([".clawhub", ".clawdhub"])(
     const ownerless = await runChecker(scriptPath, workspace);
     expect(ownerless.status).toBe("different-source");
     expect(ownerless.update).toBeUndefined();
+
+    await writeFile(originPath, JSON.stringify(origin));
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        skills: { "release-validation": { ...lockEntry, ownerHandle: "other-owner" } },
+      }),
+    );
+    const mismatched = await runChecker(scriptPath, workspace);
+    expect(mismatched.status).toBe("untracked");
+    expect(mismatched.update).toBeUndefined();
+
+    const { fileTreeSha256: _tree, skillFile: _skillFile, ...legacyLockEntry } = lockEntry;
+    await writeFile(
+      lockPath,
+      JSON.stringify({ version: 1, skills: { "release-validation": legacyLockEntry } }),
+    );
+    const preDigest = await runChecker(scriptPath, workspace);
+    expect(preDigest.status).toBe("untracked");
+    expect(preDigest.update).toBeUndefined();
   },
 );

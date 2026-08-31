@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OWNER = "openclaw";
@@ -37,36 +37,6 @@ async function sha256(path) {
   return createHash("sha256")
     .update(await readFile(path))
     .digest("hex");
-}
-
-async function clawHubFingerprint(directory, root = directory) {
-  const files = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await clawHubFingerprint(path, root)));
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    const bytes = await readFile(path);
-    if (bytes.includes(0)) continue;
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, 4096));
-    } catch {
-      continue;
-    }
-    files.push({
-      path: relative(root, path).split("\\").join("/"),
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-    });
-  }
-  if (root !== directory) return files;
-  const payload = files
-    .sort((left, right) => left.path.localeCompare(right.path))
-    .map((file) => `${file.path}:${file.sha256}`)
-    .join("\n");
-  return createHash("sha256").update(payload).digest("hex");
 }
 
 async function collectOpenClawTreeEntries(directory, root = directory) {
@@ -145,44 +115,87 @@ function compareSemver(leftValue, rightValue) {
   return 0;
 }
 
-async function hasLocalModifications(lockEntry, origin, directory = skillDirectory) {
-  const originTree = origin?.fileTreeSha256;
-  const lockedTree = lockEntry?.fileTreeSha256;
-  if (typeof originTree === "string" || typeof lockedTree === "string") {
-    if (
-      typeof originTree !== "string" ||
-      typeof lockedTree !== "string" ||
-      originTree !== lockedTree
-    ) {
-      return undefined;
-    }
-    return (await digestOpenClawSkillTree(directory)) !== originTree;
+// Installed skill copies run outside OpenClaw's package graph, so mirror only
+// the ClawHub metadata trimming needed for update-command equivalence here.
+function trimClawHubMetadataText(value) {
+  if (typeof value !== "string") return undefined;
+  return value.trim() || undefined;
+}
+
+function normalizeRegistry(value) {
+  const normalized = trimClawHubMetadataText(value);
+  return normalized?.replace(/\/+$/, "") || normalized;
+}
+
+function normalizeArtifact(value) {
+  if (
+    (value?.kind === "archive" || value?.kind === "clawpack") &&
+    trimClawHubMetadataText(value.sha256) &&
+    trimClawHubMetadataText(value.integrity)
+  ) {
+    return { kind: value.kind, sha256: value.sha256, integrity: value.integrity };
   }
-  if (typeof origin?.fingerprint === "string") {
-    return (await clawHubFingerprint(directory)) !== origin.fingerprint;
+  return undefined;
+}
+
+function normalizeSkillFile(value) {
+  return trimClawHubMetadataText(value?.path) && trimClawHubMetadataText(value?.sha256)
+    ? { path: value.path, sha256: value.sha256 }
+    : undefined;
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function hasCoreValidLink(origin, lockEntry) {
+  const originRegistry = normalizeRegistry(origin?.registry);
+  const lockedRegistry =
+    lockEntry?.registry === undefined ? originRegistry : normalizeRegistry(lockEntry.registry);
+  const originSkillFile = normalizeSkillFile(origin?.skillFile);
+  const lockedSkillFile = normalizeSkillFile(lockEntry?.skillFile);
+  const originTree = trimClawHubMetadataText(origin?.fileTreeSha256);
+  const lockedTree = trimClawHubMetadataText(lockEntry?.fileTreeSha256);
+
+  return (
+    origin?.version === 1 &&
+    lockEntry !== undefined &&
+    lockEntry.version === origin.installedVersion &&
+    lockEntry.installedAt === origin.installedAt &&
+    lockedRegistry === originRegistry &&
+    trimClawHubMetadataText(lockEntry.ownerHandle) ===
+      trimClawHubMetadataText(origin.ownerHandle)?.toLowerCase() &&
+    trimClawHubMetadataText(origin.requestedReference) === undefined &&
+    trimClawHubMetadataText(lockEntry.requestedReference) === undefined &&
+    origin.trustState === undefined &&
+    lockEntry.trustState === undefined &&
+    trimClawHubMetadataText(lockEntry.sourceUrl) === trimClawHubMetadataText(origin.sourceUrl) &&
+    sameJson(normalizeArtifact(lockEntry.artifact), normalizeArtifact(origin.artifact)) &&
+    originSkillFile !== undefined &&
+    sameJson(lockedSkillFile, originSkillFile) &&
+    originTree !== undefined &&
+    lockedTree === originTree
+  );
+}
+
+async function hasLocalModifications(origin, directory = skillDirectory) {
+  return (await digestOpenClawSkillTree(directory)) !== origin.fileTreeSha256;
+}
+
+function canonicalExistingPath(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
   }
-  const recordedFiles = lockEntry?.verification?.artifact?.files;
-  if (Array.isArray(recordedFiles) && recordedFiles.length > 0) {
-    for (const file of recordedFiles) {
-      if (typeof file?.path !== "string" || typeof file?.sha256 !== "string") return true;
-      const path = resolve(directory, file.path);
-      const relativePath = relative(directory, path);
-      if (relativePath.startsWith("..") || isAbsolute(relativePath) || !existsSync(path))
-        return true;
-      if ((await sha256(path)) !== file.sha256) return true;
-    }
-    return false;
-  }
-  const expectedSkillHash = origin?.skillFile?.sha256;
-  if (typeof expectedSkillHash !== "string") return undefined;
-  return (await sha256(join(directory, "SKILL.md"))) !== expectedSkillHash;
 }
 
 function updateCommand({ force = false } = {}) {
   const configuredStateRoot = resolve(
     process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw"),
   );
-  const globalInstall = installRoot === configuredStateRoot;
+  const globalInstall =
+    canonicalExistingPath(installRoot) === canonicalExistingPath(configuredStateRoot);
   return [
     "openclaw",
     "skills",
@@ -223,8 +236,7 @@ async function main() {
     const origin = await readMetadataJson(skillDirectory, "origin.json");
     const lock = await readMetadataJson(installRoot, "lock.json");
     const installedVersion = origin?.installedVersion;
-    const originRegistry =
-      typeof origin?.registry === "string" ? origin.registry.trim().replace(/\/+$/, "") : undefined;
+    const originRegistry = normalizeRegistry(origin?.registry);
     const originOwner =
       typeof origin?.ownerHandle === "string" ? origin.ownerHandle.trim().toLowerCase() : undefined;
     const sourceMatches =
@@ -254,6 +266,12 @@ async function main() {
       artifactSha256: origin?.artifact?.sha256 ?? null,
     };
 
+    const lockEntry = lock?.skills?.[SLUG];
+    if (!hasCoreValidLink(origin, lockEntry)) {
+      print({ source, canonical, status: "untracked", localModifications: null });
+      return;
+    }
+
     const detailUrl = new URL(`${REGISTRY}/api/v1/skills/${encodeURIComponent(SLUG)}`);
     detailUrl.searchParams.set("ownerHandle", OWNER);
     const response = await fetch(detailUrl, {
@@ -272,8 +290,7 @@ async function main() {
       throw new Error("ClawHub returned a different skill owner");
     canonical = { ref: EXPECTED_REF, version: latestVersion };
 
-    const lockEntry = lock?.skills?.[SLUG];
-    const modified = await hasLocalModifications(lockEntry, origin);
+    const modified = await hasLocalModifications(origin);
     const comparison = compareSemver(installedVersion, latestVersion);
     const status = determineStatus({ comparison, modified });
 
