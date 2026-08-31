@@ -267,6 +267,16 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
+// Shortcut menus own only advertised, enabled keys; every other printable key
+// can still transfer to the composer through the normal browser input pipeline.
+function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
+  return (
+    /^[a-z0-9]$/iu.test(key) &&
+    target.matches("wa-dropdown, [data-chat-autotype-shortcuts]") &&
+    target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
+  );
+}
+
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
@@ -281,13 +291,17 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
       (target) =>
         target instanceof HTMLElement &&
         (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+          keyboardShortcutTargetOwnsKey(target, event.key) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
 
-function hasOpenDropdown(root: ParentNode): boolean {
-  return [...root.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
-    (dropdown) => dropdown.open === true,
+function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
+  const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
+  return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
+    (dropdown) =>
+      dropdown.open === true &&
+      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
 }
 
@@ -301,7 +315,7 @@ export function focusChatComposerFromPrintableKeydown(
     event.metaKey ||
     event.ctrlKey ||
     event.altKey ||
-    (CHAT_DROPDOWN_KEYS.has(event.key) && hasOpenDropdown(root)) ||
+    openDropdownOwnsKey(root, event.key) ||
     event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
     document.openClawModalLayers?.size ||
