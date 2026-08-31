@@ -1040,7 +1040,7 @@ extension ApplicationRelocator {
         }
 
         do {
-            try releaseQuarantine(at: destination, fileManager: fileManager)
+            try self.releaseQuarantine(at: destination, fileManager: fileManager)
         } catch {
             self.logger.error(
                 "Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
@@ -1051,10 +1051,10 @@ extension ApplicationRelocator {
 
         // Quarantine metadata is outside the sealed code signature. Revalidate
         // the same filesystem object before granting the child handoff authority.
-        guard bundleFileReference(
+        guard self.bundleFileReference(
             bundleURL: destination,
             executableURL: installedApp.executableURL) == launchReference,
-            trustedCodeDirectoryHash(
+            self.trustedCodeDirectoryHash(
                 at: destination,
                 executableURL: installedApp.executableURL,
                 matching: runningIdentity.requirementData) == installedCodeDirectoryHash,
