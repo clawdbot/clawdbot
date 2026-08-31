@@ -348,12 +348,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
 
     <Note>
-      The `plugins.entries.voice-call.config.*` rows above are normalized by
-      the Voice Call plugin itself on every config load, not by `openclaw
-      doctor`. The plugin also logs a startup warning pointing at `openclaw
-      doctor --fix`, but doctor does not currently rewrite
-      `openclaw.json` for these keys; the plugin's own normalization is what
-      applies the change at runtime.
+      The Voice Call plugin supplies the migration for its legacy config keys.
+      `openclaw doctor --fix` invokes it and persists the canonical shape in
+      `openclaw.json`; runtime config parsing accepts only current keys.
+      Existing canonical settings win over legacy values, including streaming
+      provider credentials, models, and timing. Doctor reports retained
+      destinations instead of claiming those legacy values were moved.
     </Note>
 
     Account-default guidance for multi-account channels:
@@ -426,6 +426,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; Gateway startup also performs this verified import for valid legacy identities, while Doctor retains repair authority for invalid canonical rows; the separate device-auth file is left untouched
 
     Legacy session-file import and repair belong to explicit Doctor runs. Gateway and local CLI startup use SQLite; they do not import, restore, or rewrite session JSON/JSONL files. When startup finds a legacy session store, it refuses readiness and prints the Doctor command for the active profile instead of serving empty history. Stop the Gateway, back up its state, and run `openclaw doctor --fix` before restarting it to upgrade old session history. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
+
+    Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. A startup migration warning still blocks Gateway readiness; resolve the reported failure and run `openclaw doctor --fix` before retrying startup.
 
     Doctor emits warnings when migrations leave legacy folders behind as backups. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
 

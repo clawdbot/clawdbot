@@ -36,7 +36,12 @@ import {
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
 import {
   createReadToolDetails,
@@ -242,7 +247,7 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveToCwd(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
 async function resolveReadToolInputPath(

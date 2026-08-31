@@ -1,6 +1,7 @@
 // Run Opengrep tests cover run opengrep script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { devNull } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -45,6 +46,84 @@ function installOpengrepStub(repo: string): { argsPath: string; binDir: string }
   );
   fs.chmodSync(path.join(binDir, "opengrep"), 0o755);
   return { argsPath, binDir };
+}
+
+type OpengrepWorkflowStep = {
+  name: string;
+  id?: string;
+  run?: string;
+  uses?: string;
+  env?: Record<string, string>;
+  with?: Record<string, string>;
+};
+
+function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.ProcessEnv) {
+  const workflow = parse(fs.readFileSync(".github/workflows/opengrep-precise.yml", "utf8"));
+  const steps: OpengrepWorkflowStep[] = workflow.jobs.scan.steps;
+  const values = new Map([
+    ["github.event.pull_request.base.sha", base],
+    ["github.event.pull_request.base.ref", "main"],
+  ]);
+  const output = path.join(repo, "step-output.txt");
+  const interpolate = (value: string) =>
+    value.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_match, expression: string) => {
+      const resolved = values.get(expression);
+      if (resolved === undefined) {
+        throw new Error(`Unbound workflow expression: ${expression}`);
+      }
+      return resolved;
+    });
+  const renderEnv = (bindings: Record<string, string> = {}) =>
+    Object.fromEntries(Object.entries(bindings).map(([key, value]) => [key, interpolate(value)]));
+  const run = (step: OpengrepWorkflowStep) => {
+    let command = step.run;
+    let commandEnv = renderEnv(step.env);
+    if (step.uses) {
+      const actionPath = path.join(repo, step.uses);
+      values.set("github.action_path", actionPath);
+      for (const [key, value] of Object.entries(step.with ?? {})) {
+        values.set(`inputs.${key}`, interpolate(value));
+      }
+      const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
+      const actionStep: OpengrepWorkflowStep = action.runs.steps[0];
+      command = actionStep.run;
+      commandEnv = { ...commandEnv, ...renderEnv(actionStep.env) };
+    }
+    if (!command) {
+      throw new Error(`Workflow step has no executable command: ${step.name}`);
+    }
+    fs.writeFileSync(output, "");
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", interpolate(command)], {
+      cwd: repo,
+      env: { ...env, ...commandEnv, GITHUB_OUTPUT: output },
+      encoding: "utf8",
+    });
+    if (step.id) {
+      for (const line of fs.readFileSync(output, "utf8").trim().split("\n")) {
+        const separator = line.indexOf("=");
+        if (separator >= 0) {
+          values.set(
+            `steps.${step.id}.outputs.${line.slice(0, separator)}`,
+            line.slice(separator + 1),
+          );
+        }
+      }
+    }
+    return result;
+  };
+  const ensureIndex = steps.findIndex((step) => step.name === "Ensure PR base commit");
+  expect(ensureIndex).toBeGreaterThan(0);
+  for (const step of steps.slice(1, ensureIndex + 1)) {
+    const result = run(step);
+    if (result.status !== 0) {
+      return result;
+    }
+  }
+  const scan = steps.find((step) => step.name === "Run opengrep on PR diff");
+  if (!scan) {
+    throw new Error("Workflow has no scan step");
+  }
+  return run(scan);
 }
 
 describe("run-opengrep.sh", () => {
@@ -212,47 +291,90 @@ describe("run-opengrep.sh", () => {
     },
   );
 
-  it("scans PR files instead of main-only files when the payload base is stale", () => {
-    const repo = createTempDir("openclaw-run-opengrep-merge-");
-    git(repo, "init", "-q", "--initial-branch=main");
-    git(repo, "config", "user.email", "test@example.com");
-    git(repo, "config", "user.name", "Test User");
+  it.each([
+    { shape: "merge", branch: "main", depth: 2, passes: true },
+    { shape: "linear", branch: "feature", depth: 2, passes: true },
+    { shape: "merge without parents", branch: "main", depth: 1, passes: false },
+    { shape: "linear without base", branch: "feature", depth: 1, passes: false },
+  ])(
+    "prepares and scans a shallow $shape checkout without unrelated base fetches",
+    ({ branch, depth, passes }) => {
+      const source = createTempDir("openclaw-opengrep-source-");
+      git(source, "init", "-q", "--initial-branch=main");
+      git(source, "config", "user.email", "test@example.com");
+      git(source, "config", "user.name", "Test User");
+      copyRunOpengrepFiles(source);
+      for (const name of ["ensure-base-commit", "git-owner"]) {
+        fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
+          recursive: true,
+        });
+      }
+      writeFile(path.join(source, "security/opengrep/precise.yml"), "rules: []\n");
+      git(source, "add", ".");
+      git(source, "commit", "-qm", "base");
+      const staleBase = git(source, "rev-parse", "HEAD");
+      git(source, "switch", "-q", "-c", "feature");
+      writeFile(path.join(source, "src/pr.ts"), "export const pr = true;\n");
+      git(source, "add", ".");
+      git(source, "commit", "-qm", "feature");
+      git(source, "switch", "-q", "main");
+      writeFile(path.join(source, "src/main-only.ts"), "export const mainOnly = true;\n");
+      git(source, "add", ".");
+      git(source, "commit", "-qm", "main only");
+      git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
 
-    copyRunOpengrepFiles(repo);
-    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
-    writeFile(path.join(repo, "README.md"), "base\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-qm", "base");
-    const staleBase = git(repo, "rev-parse", "HEAD");
-
-    git(repo, "switch", "-q", "-c", "feature");
-    writeFile(path.join(repo, "src/pr.ts"), "export const pr = true;\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-qm", "feature");
-
-    git(repo, "switch", "-q", "main");
-    writeFile(path.join(repo, "src/main-only.ts"), "export const mainOnly = true;\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-qm", "main only");
-    git(repo, "merge", "--no-ff", "feature", "-m", "synthetic merge");
-
-    const { argsPath, binDir } = installOpengrepStub(repo);
-
-    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed"], {
-      cwd: repo,
-      env: {
+      const repo = createTempDir("openclaw-opengrep-shallow-");
+      git(
+        source,
+        "clone",
+        "--quiet",
+        "--no-local",
+        `--depth=${depth}`,
+        "--branch",
+        branch,
+        source,
+        repo,
+      );
+      expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
+      const hasPayloadBase =
+        spawnSync("git", ["cat-file", "-e", `${staleBase}^{commit}`], { cwd: repo }).status === 0;
+      expect(hasPayloadBase).toBe(branch === "feature" && depth === 2);
+      const { argsPath, binDir } = installOpengrepStub(repo);
+      const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
+      const result = runChangedPathsWorkflow(repo, staleBase, {
         ...process.env,
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        OPENCLAW_OPENGREP_BASE_REF: `${staleBase}...HEAD`,
-        OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1",
-      },
-      encoding: "utf8",
-    });
-
-    const args = fs.readFileSync(argsPath, "utf8");
-    expect(args).toContain("src/pr.ts");
-    expect(args).not.toContain("src/main-only.ts");
-  });
+        RUNNER_OS:
+          process.platform === "win32"
+            ? "Windows"
+            : process.platform === "darwin"
+              ? "macOS"
+              : "Linux",
+        GIT_CONFIG_GLOBAL: devNull,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ALLOW_PROTOCOL: "",
+        GIT_TRACE2_EVENT: trace,
+      });
+      const fetches = fs
+        .readFileSync(trace, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((event) => event.event === "cmd_name" && event.name === "fetch");
+      if (!passes) {
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stdout).toContain("Base commit still unavailable");
+        expect(fetches).toHaveLength(5);
+        expect(fs.existsSync(argsPath)).toBe(false);
+        return;
+      }
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(fetches).toEqual([]);
+      const args = fs.readFileSync(argsPath, "utf8");
+      expect(args).toContain("src/pr.ts");
+      expect(args).not.toContain("src/main-only.ts");
+    },
+  );
 });
 
 describe("OpenGrep GitHub SARIF uploads", () => {

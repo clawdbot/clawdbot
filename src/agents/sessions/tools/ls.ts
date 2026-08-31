@@ -11,7 +11,7 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
@@ -95,6 +95,7 @@ export function createLsToolDefinition(
   options?: LsToolOptions,
 ): ToolDefinition<typeof lsSchema, LsToolDetails | undefined> {
   const ops = options?.operations ?? defaultLsOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "ls",
     label: "ls",
@@ -117,7 +118,7 @@ export function createLsToolDefinition(
 
       const runListing = async () => {
         try {
-          const dirPath = resolveToCwd(path || ".", cwd);
+          const dirPath = resolvePath(path || ".", cwd);
           const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
 
           // Check if path exists.

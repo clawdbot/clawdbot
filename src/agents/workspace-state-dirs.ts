@@ -1,25 +1,26 @@
+import os from "node:os";
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveUserPath } from "./home-dir.js";
+import { listAgentIds, resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
+import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
+import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js";
 
-export function listSandboxWorkspaceDirs(params: {
+/** Select configured workspaces and active sandbox copies for migration and readiness. */
+export function listWorkspaceStateDirs(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   stateDir: string;
 }): string[] {
-  const dirs = new Set<string>();
+  const dirs = new Set(listAgentWorkspaceDirs(params.cfg, params.env));
 
   for (const agentId of listAgentIds(params.cfg)) {
     const sandbox = resolveSandboxConfigForAgent(params.cfg, agentId);
@@ -79,4 +80,20 @@ export function listSandboxWorkspaceDirs(params: {
   }
 
   return [...dirs];
+}
+
+/** Refuse completion before channels accept work that a workspace cannot execute. */
+export function assertConfiguredWorkspaceStateReady(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const env = params.env ?? process.env;
+  const homedir = os.homedir;
+  const workspaceDirs = listWorkspaceStateDirs({
+    cfg: params.cfg,
+    env,
+    homedir,
+    stateDir: resolveStateDir(env, homedir),
+  });
+  assertWorkspaceStateMigrationReady({ workspaceDirs, env, homedir });
 }

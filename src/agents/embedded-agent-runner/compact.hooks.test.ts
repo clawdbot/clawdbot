@@ -1123,9 +1123,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it.each([undefined, "global", "agent:main:policy"])(
-    "prepares global compaction with the selected sandbox policy (%s)",
-    async (sandboxSessionKey) => {
+  it.each([
+    ["global", undefined, undefined],
+    ["global", "global", undefined],
+    ["global", "agent:main:policy", undefined],
+    ["agent:marketing:review", "global", "marketing"],
+  ] as const)(
+    "prepares compaction with the selected sandbox policy (%s / %s)",
+    async (sessionKey, sandboxSessionKey, sandboxAgentId) => {
       const agentScope =
         await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
       const { resolveSandboxContext } = await import("../sandbox/context.js");
@@ -1150,9 +1155,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         config,
         agentId: "marketing",
         sessionId: TEST_SESSION_ID,
-        sessionKey: "global",
+        sessionKey,
         sandboxSessionKey,
-        sessionFile: "global",
+        sandboxAgentId,
+        sessionFile: sessionKey,
         workspaceDir: TEST_WORKSPACE_DIR,
         preparedModelRuntime: snapshot as never,
       });
