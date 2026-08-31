@@ -135,6 +135,22 @@ describe("base config schema", () => {
     });
   });
 
+  it.each([
+    ["global", ["agents", "defaults", "sandbox", "docker", "runtime"]],
+    ["per-agent", ["agents", "entries", "*", "sandbox", "docker", "runtime"]],
+  ])("publishes the $scope Docker runtime metadata", (_scope, path) => {
+    const fieldPath = path.join(".");
+    expect(schemaAt(BASE_SCHEMA, path), fieldPath).toMatchObject({
+      enum: ["runc", "sysbox-runc"],
+      title: expect.stringContaining("Docker Runtime"),
+      description: expect.stringContaining("approved Docker runtime"),
+    });
+    expect(BASE_CONFIG_SCHEMA.uiHints[fieldPath]).toMatchObject({
+      label: expect.stringContaining("Docker Runtime"),
+      help: expect.stringContaining("approved Docker runtime"),
+    });
+  });
+
   it("includes explicit URL-secret tags for sensitive URL fields", () => {
     expect(BASE_CONFIG_SCHEMA.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(BASE_CONFIG_SCHEMA.uiHints["models.providers.*.baseUrl"]?.tags).toContain(

@@ -188,6 +188,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
   "agents.entries.*.sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
+  "agents.defaults.sandbox.docker.runtime":
+    'Optional approved Docker runtime for sandbox tool containers. Choose "runc" for Docker\'s standard runtime or "sysbox-runc" only when it is installed and approved for your sandbox security posture. Omit to use Docker\'s configured default runtime.',
+  "agents.entries.*.sandbox.docker.runtime":
+    "Per-agent override for the approved Docker runtime used by sandbox tool containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.entries.*.sandbox.browser.cdpSourceRange":
