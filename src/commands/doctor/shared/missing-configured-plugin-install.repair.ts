@@ -11,6 +11,8 @@ import {
 import {
   requestDeferredPluginInstall,
   resolvePluginInstallTransaction,
+  settlePluginInstallTransactions,
+  type PluginInstallTransaction,
 } from "../../../plugins/install-transaction.js";
 import type { PluginNpmInstallArtifactPrecommitHandler } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
@@ -151,13 +153,22 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, () =>
-    repairMissingPluginInstallsWithLease(params),
-  );
+  return await withPluginLifecycleLease({ env: params.env }, async () => {
+    const pendingInstallTransactions: PluginInstallTransaction[] = [];
+    try {
+      const result = await repairMissingPluginInstallsWithLease(params, pendingInstallTransactions);
+      await settlePluginInstallTransactions(pendingInstallTransactions, "commit");
+      return result;
+    } catch (error) {
+      await settlePluginInstallTransactions(pendingInstallTransactions, "rollback");
+      throw error;
+    }
+  });
 }
 
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
+  pendingInstallTransactions: PluginInstallTransaction[],
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
@@ -608,7 +619,9 @@ async function repairMissingPluginInstallsWithLease(
             },
           };
         }
-        await installTransaction?.commit();
+        if (installTransaction) {
+          pendingInstallTransactions.push(installTransaction);
+        }
       }
     }
     if (shouldReplaceBrokenOfficialInstall) {
