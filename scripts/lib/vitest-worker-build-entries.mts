@@ -1,10 +1,17 @@
 import { fileURLToPath } from "node:url";
+import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
   ...runtimeProcessBuildEntries,
+  ...Object.fromEntries(
+    cliCompactionBackendEntrypoints.map((entry) => [
+      entry.distWorkerPath.replace(/\.js$/u, ""),
+      fileURLToPath(new URL(`./${entry.sourceWorkerName}.ts`, entry.currentModuleUrl)),
+    ]),
+  ),
   ...Object.fromEntries(
     Object.values(tuiPtyRuntimeEntrypoints).map((entry) => [
       entry.distWorkerPath.replace(/\.js$/u, ""),

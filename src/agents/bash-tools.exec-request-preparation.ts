@@ -9,6 +9,11 @@ import {
   normalizeHostOverrideEnvVarKey,
   sanitizeHostExecEnvWithDiagnostics,
 } from "../infra/host-env-security.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../infra/installation-target-context.js";
 import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
@@ -169,13 +174,14 @@ export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): bo
 }
 
 export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
-  return (
-    defaults?.preparedRunEnvironment ??
-    prepareGitHubToolEnvironment({
-      config: defaults?.config ?? {},
-      agentId: defaults?.agentId ?? "main",
-    })
-  );
+  return {
+    ...(defaults?.preparedRunEnvironment ??
+      prepareGitHubToolEnvironment({
+        config: defaults?.config ?? {},
+        agentId: defaults?.agentId ?? "main",
+      })),
+    localProcessEnv: installationTargetEnv(getInstallationTarget()),
+  };
 }
 
 export function createExecRequestPreparation(params: {
@@ -366,8 +372,12 @@ export function resolvePreparedExecEnvironment(params: {
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
   managedLocalIdentity?: boolean;
+  localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
+  if (params.localProcessEnv && params.host !== "gateway") {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
   const inheritedBaseEnv = coerceEnv(process.env);
   if (params.secretEgressEnv) {
     Object.assign(inheritedBaseEnv, params.secretEgressEnv);
@@ -513,6 +523,7 @@ export function resolvePreparedExecEnvironment(params: {
     Object.assign(env, params.secretEgressEnv);
   }
   const preparedEnv = {
+    ...params.localProcessEnv,
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };

@@ -93,12 +93,6 @@ import {
   resolveSessionPermissionExecPolicy,
 } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
@@ -623,14 +617,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     imageSanitization,
     modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    ...(includeBaseCodingTools
-      ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }
-      : {}),
-    baseToolFactories: {
-      createEditTool,
-      createReadTool,
-      createWriteTool,
-    },
     applyPatchEnabled,
     applyPatchWorkspaceOnly,
     execDefaults: {

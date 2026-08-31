@@ -54,6 +54,7 @@ export type TabAccessChromeApi = {
 export type TabAccessPolicy = {
   initialize(initialMode?: TabAccessMode, initialEnabled?: boolean): Promise<void>;
   readonly mode: TabAccessMode;
+  readonly discoveryRevision: number;
   setMode(nextMode: TabAccessMode): TabAccessMode;
   setEnabled(nextEnabled: boolean): void;
   beginTransition(): void;

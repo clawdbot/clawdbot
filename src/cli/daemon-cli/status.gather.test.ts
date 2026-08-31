@@ -102,6 +102,13 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
     filePath?: string;
   }) => Promise<Record<string, unknown>>
 >(async (_params?) => ({}));
+const fetchNpmPackageTargetStatus = vi.fn(
+  async (params: { packageName?: string; target: string }) => ({
+    target: params.target,
+    version: params.target,
+    nodeEngine: null,
+  }),
+);
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
@@ -319,6 +326,12 @@ vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: (opts: unknown) => inspectWindowsGatewayFirewall(opts),
 }));
 
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: (params: { packageName?: string; target: string }) =>
+    fetchNpmPackageTargetStatus(params),
+}));
+
 vi.mock("./probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
 }));
@@ -424,6 +437,12 @@ describe("gatherDaemonStatus", () => {
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    fetchNpmPackageTargetStatus.mockClear();
+    fetchNpmPackageTargetStatus.mockImplementation(async (params) => ({
+      target: params.target,
+      version: params.target,
+      nodeEngine: null,
+    }));
     inspectGatewayTlsCertificate.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortUsage.mockReset();
@@ -1677,6 +1696,37 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
+
+  it.each([false, true])(
+    "collects local drift without registry lookups (deep=%s)",
+    async (deep) => {
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: true,
+        url: "ws://127.0.0.1:19001",
+        error: null,
+        server: { version: "2026.7.1-2", connId: "c1" },
+      } as never);
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+        brave: {
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+          resolvedName: "@openclaw/brave-plugin",
+          resolvedVersion: "2026.7.1-beta.2",
+        },
+      } as never);
+      fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+        target: "2026.7.1",
+        version: "2026.7.1",
+        nodeEngine: null,
+      });
+
+      const status = await gatherStatus({ deep });
+
+      expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+      expect(status.pluginVersionDrift?.drifts[0]?.pluginId).toBe("brave");
+      expect(status.pluginVersionDrift?.drifts[0]?.targetResolution).toBeUndefined();
+    },
+  );
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
     await gatherStatus({ deep: true });

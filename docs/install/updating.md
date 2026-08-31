@@ -108,6 +108,20 @@ resuming interrupted deletion.
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
+If a CLI update fails after installing a usable replacement, recovery uses the
+newly installed CLI to restart the Gateway it stopped, preserving the managed
+service definition. A rejected staged candidate leaves the original package intact,
+and recovery restarts that usable installation. A failed staged swap can also
+recover when the updater verifies that the original package and every changed
+launcher were restored. Incomplete rollback keeps the Gateway stopped and retains
+available backups for repair. After the live package has been modified, a blocking
+lifecycle, verification, or Doctor failure also leaves the Gateway stopped because
+the replacement is not known to be runnable. Repair the reported failure, rerun
+`openclaw update`, and check `openclaw gateway status --deep`.
+If an older target does not support preserving the service definition, automatic
+recovery stops and reports the error; inspect the service before restarting it
+manually.
+
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+import { normalizePluginsConfigWithResolverCore } from "../../plugins/config-normalization-shared.js";
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
@@ -69,12 +70,16 @@ function resolveSelectedMemoryPluginIds(params: {
   if (isTestDefaultMemorySlotDisabled(params.config ?? {})) {
     return [];
   }
-  const registry = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.metadataSnapshot?.workspaceDir ?? params.workspaceDir,
-    ...(params.metadataSnapshot ? { index: params.metadataSnapshot.index } : {}),
-  });
-  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const registry =
+    params.metadataSnapshot?.index ??
+    loadPluginRegistrySnapshot({ config: params.config, workspaceDir: params.workspaceDir });
+  // The generation owns aliases; activation still follows this call's config.
+  const plugins = params.metadataSnapshot
+    ? normalizePluginsConfigWithResolverCore(
+        params.config?.plugins,
+        params.metadataSnapshot.normalizePluginId,
+      )
+    : normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const memorySlot = plugins.slots.memory;
   if (
     typeof memorySlot !== "string" ||

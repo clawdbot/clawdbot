@@ -109,7 +109,10 @@ describe("ClawRouter cold prepared catalog", () => {
       env: state.env,
       skipCredentials: true,
     };
-    const prepared = await prepareWorkspaceBuildGroup([input], "static");
+    // The E2E owner builds the real plugin artifacts before the catalog deadline starts.
+    const prepared = await prepareWorkspaceBuildGroup([input], "static", {
+      preferBuiltPluginArtifacts: true,
+    });
     const value = createPreparedModelCatalogWorkerInput({
       agentFacts: prepared.agentFacts[0]!,
       pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,

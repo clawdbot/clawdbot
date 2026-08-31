@@ -520,7 +520,7 @@ describe("Crabbox profile warm images", () => {
         ...(machineClass ? { class: machineClass } : {}),
       };
       const lease = await provisionWarmProfile(initial.provider, profile, OPERATION_ID, "fast");
-      initial.provider.dispose();
+      await initial.provider.dispose();
 
       const restarted = createWarmProvider(undefined, initial.stateDir);
       await restarted.provider.inspect({ leaseId: lease.leaseId, profile });

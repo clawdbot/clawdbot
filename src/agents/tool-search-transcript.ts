@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transferMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
+import { transferToolEffectReceipt } from "./tool-effect-receipt.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 
 function freezeJsonSnapshot(value: unknown): unknown {
@@ -28,8 +30,7 @@ export function snapshotToolSearchTargetTranscriptResult(
     snapshot.details =
       result.details === undefined ? undefined : toToolSearchJsonSafe(result.details);
   }
-  return transferMcpCodeModeGuestResult(
-    result,
-    freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>,
-  );
+  const target = freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>;
+  transferToolEffectReceipt(result, target);
+  return transferMcpCodeModeGuestResult(result, copyInternalToolResultState(result, target));
 }

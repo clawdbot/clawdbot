@@ -129,6 +129,11 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
+Provider auth aliases are normalized and indexed with the snapshot. Lookups
+select among those prepared candidates using the current workspace trust config;
+they do not cache trust decisions or credentials. Callers supplying a partial
+manifest view keep fresh per-call projection rather than sharing mutable metadata.
+
 Explicit install, update, registry refresh, and doctor operations use isolated
 generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
 installed index, but cannot clear or replace the running Gateway's inventory.

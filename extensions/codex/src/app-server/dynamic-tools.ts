@@ -883,6 +883,7 @@ export function createCodexDynamicToolBridge(params: {
           result,
           mediaTrustResult: telemetryRawResult,
           telemetry,
+          signal,
           isError: resultIsError,
           autoDeliveryTtsMediaUrls,
           coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
@@ -951,13 +952,6 @@ export function createCodexDynamicToolBridge(params: {
           toolCallOrdinal: options?.toolCallOrdinal,
         });
         notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
-        collectToolTelemetry({
-          toolName,
-          args: executedArgs,
-          result: undefined,
-          telemetry,
-          isError: true,
-        });
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
@@ -1398,6 +1392,7 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  signal: AbortSignal;
   autoDeliveryTtsMediaUrls?: readonly string[];
   coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
@@ -1415,7 +1410,8 @@ function collectToolTelemetry(params: {
       params.telemetry.heartbeatToolResponse = response;
     }
   }
-  if (!params.isError && params.result) {
+  // Only a live invocation may accept new media; committed effects remain evidence.
+  if (params.result && !params.signal.aborted) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
       const mediaUrls = filterToolResultMediaUrls(

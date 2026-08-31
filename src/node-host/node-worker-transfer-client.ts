@@ -7,7 +7,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
-import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
+import {
+  replaceWorkerWorkspaceHashMemoEntries,
+  withWorkerWorkspaceHashMemo,
+  type WorkspaceHashMemo,
+} from "../gateway/worker-environments/workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
@@ -408,55 +412,58 @@ async function downloadWorkspace(params: {
       }
     }
     const blobApplyStartedAt = performance.now();
+    const stagingHashMemo: WorkspaceHashMemo = new Map();
     for (const directory of manifest.directories ?? []) {
       await fsp.mkdir(workspacePath(staging, directory), {
         recursive: true,
         mode: 0o700,
       });
     }
-    for (const entry of manifest.entries) {
-      const destination = workspacePath(staging, entry.path);
-      const materializedEntry =
-        process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
-          ? { ...entry, mode: 0o644 }
-          : entry;
-      if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
-        continue;
+    await withWorkerWorkspaceHashMemo(stagingHashMemo, async () => {
+      for (const entry of manifest.entries) {
+        const destination = workspacePath(staging, entry.path);
+        const materializedEntry =
+          process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
+            ? { ...entry, mode: 0o644 }
+            : entry;
+        if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
+          continue;
+        }
+        await fsp.mkdir(path.dirname(destination), {
+          recursive: true,
+          mode: 0o700,
+        });
+        await fsp.rm(destination, { recursive: true, force: true });
+        if (entry.type === "symlink") {
+          await fsp.symlink(entry.target, destination);
+          continue;
+        }
+        await downloadFile({
+          request: {
+            gatewayUrl: params.gatewayUrl,
+            tlsFingerprint: params.tlsFingerprint,
+            cloudflareAccess: params.cloudflareAccess,
+            routePath: nodeWorkspaceTransferBlobPath(params.environmentId, entry.sha256),
+            method: "GET",
+            token: params.transfer.token,
+            signal: params.signal,
+          },
+          destination,
+          expectedBytes: entry.size,
+          expectedSha256: entry.sha256,
+        });
+        await fsp.chmod(destination, entry.mode);
       }
-      await fsp.mkdir(path.dirname(destination), {
-        recursive: true,
-        mode: 0o700,
-      });
-      await fsp.rm(destination, { recursive: true, force: true });
-      if (entry.type === "symlink") {
-        await fsp.symlink(entry.target, destination);
-        continue;
-      }
-      await downloadFile({
-        request: {
-          gatewayUrl: params.gatewayUrl,
-          tlsFingerprint: params.tlsFingerprint,
-          cloudflareAccess: params.cloudflareAccess,
-          routePath: nodeWorkspaceTransferBlobPath(params.environmentId, entry.sha256),
-          method: "GET",
-          token: params.transfer.token,
-          signal: params.signal,
-        },
-        destination,
-        expectedBytes: entry.size,
-        expectedSha256: entry.sha256,
-      });
-      await fsp.chmod(destination, entry.mode);
-    }
+    });
     const blobApplyMs = performance.now() - blobApplyStartedAt;
-    // Staging identities are fresh, so this capture re-hashes; its memo output
-    // survives the rename into workspaceDir and seeds the next upload capture.
+    // Reuse only hashes validated on this staging filesystem. Capture still checks
+    // the complete tree and current handle identities before the atomic replacement.
     const observed = await captureManifest({
       workspaceDir: staging,
       manifestHome: params.manifestHome,
       baseCommit: manifest.baseCommit,
       referenceManifestRef: params.transfer.manifestRef,
-      ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
+      hashMemo: stagingHashMemo,
       signal: params.signal,
     });
     if (observed !== params.transfer.manifestRef) {
@@ -491,6 +498,9 @@ async function downloadWorkspace(params: {
       }
     } else {
       await replaceWorkspace(params.workspaceDir, staging);
+    }
+    if (params.hashMemo) {
+      replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
     }
     transferLog.debug("node worker workspace transfer completed", {
       environmentId: params.environmentId,

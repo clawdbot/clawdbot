@@ -9137,6 +9137,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -9842,7 +9843,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         OPENCLAW_BUILD_PRIVATE_QA: "${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}",
         VITEST: "1",
       },
-      run: "pnpm build:ci-artifacts",
+      run: "pnpm build qaRuntime",
     });
     expect(installRipgrepStep).toMatchObject({
       if: "matrix.requires_ripgrep == true && runner.os == 'Linux'",

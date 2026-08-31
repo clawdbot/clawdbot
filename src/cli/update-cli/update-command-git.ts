@@ -279,6 +279,7 @@ export async function updateGitInstall(params: {
       ...updateResult,
       status: packageUpdate.failedStep ? "error" : "ok",
       reason: packageUpdate.failedStep?.name,
+      recovery: packageUpdate.recovery,
       steps,
       durationMs: Date.now() - params.startedAt,
     };

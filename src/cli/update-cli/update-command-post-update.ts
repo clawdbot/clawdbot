@@ -11,6 +11,7 @@ import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
+  resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -112,12 +113,18 @@ export async function finishUpdate(params: {
         root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
       });
     }
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
     printFinalResult(recoverService ? completedResult(result) : finalResult);
   };
-  const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
+  const restoreWindowsAutoStart = async (
+    result: UpdateRunResult,
+    failureExitCode = resolveManagedServiceUpdateFailureExitCode(result),
+  ) => {
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop);
       return true;
@@ -130,7 +137,7 @@ export async function finishUpdate(params: {
         status: "error",
         reason: "windows-task-autostart-restore-failed",
       });
-      defaultRuntime.exit(1);
+      defaultRuntime.exit(failureExitCode);
       return false;
     }
   };
@@ -158,7 +165,7 @@ export async function finishUpdate(params: {
         }
       }
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(params.result));
     return;
   }
 
@@ -247,7 +254,7 @@ export async function finishUpdate(params: {
         }),
     );
     if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsAutoStart(params.result))) {
+      if (!(await restoreWindowsAutoStart(params.result, freshProcessResult.exitCode))) {
         return;
       }
       await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
