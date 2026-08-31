@@ -20,10 +20,8 @@ import {
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
@@ -105,7 +103,6 @@ function cancelTrackedTextResponse(
 
 describe("Twilio SMS helpers", () => {
   afterEach(() => {
-    assertSmsCredentialOwnerAvailable.mockReset();
     fetchWithSsrFGuardMock.mockReset();
     clearRuntimeConfigSnapshot();
   });
@@ -498,75 +495,41 @@ describe("Twilio SMS helpers", () => {
   });
 
   it.each([
-    { name: "before dispatch", unavailableAfterDispatch: false, dispatches: 0 },
-    { name: "after dispatch", unavailableAfterDispatch: true, dispatches: 1 },
-  ])("stops a send when the owner becomes unavailable $name", async (testCase) => {
-    const onPlatformSendDispatch = vi.fn(async () => {});
+    ["before the first request", false, true],
+    ["before a redirect hop", true, false],
+  ] as const)("classifies credential replacement %s", async (_name, redirect, notDispatched) => {
+    const account = createAccount();
+    setRuntimeConfigSnapshot({ channels: { sms: account } } as never);
+    const replacement = { ...account, authToken: "replacement" };
     const fetchImpl = vi.fn<typeof fetch>();
-    if (testCase.unavailableAfterDispatch) {
-      assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {});
+    if (redirect) {
+      fetchWithSsrFGuardMock.mockImplementationOnce(async (params) => {
+        expect(params.beforeRequest).toBeTypeOf("function");
+        params.beforeRequest?.();
+        setRuntimeConfigSnapshot({ channels: { sms: replacement } } as never);
+        params.beforeRequest?.();
+        throw new Error("expected credential rejection");
+      });
     }
-    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
-      throw new Error("SMS credential owner unavailable");
-    });
 
     const rejection = await sendSmsViaTwilio({
-      account: createAccount(),
+      account,
       to: "+15551234567",
       text: "hello",
-      onPlatformSendDispatch,
-      fetchImpl,
+      onPlatformSendDispatch: async () => {
+        if (!redirect) {
+          setRuntimeConfigSnapshot({ channels: { sms: replacement } } as never);
+        }
+      },
+      ...(!redirect ? { fetchImpl } : {}),
     }).then(
       () => undefined,
       (error: unknown) => error,
     );
 
     expect(rejection).toBeInstanceOf(Error);
-    expect(rejection).toHaveProperty(
-      "message",
-      expect.stringContaining("SMS credential owner unavailable"),
-    );
-    if (testCase.unavailableAfterDispatch) {
-      expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    } else {
-      expect(rejection).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-    }
-
-    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(testCase.dispatches);
+    expect(rejection instanceof PlatformMessageNotDispatchedError).toBe(notDispatched);
     expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("classifies final guarded credential loss as not dispatched", async () => {
-    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {});
-    fetchWithSsrFGuardMock.mockImplementationOnce(async (params) => {
-      params.beforeRequest?.();
-      throw new Error("unreachable");
-    });
-    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
-      throw new Error("SMS credential owner unavailable");
-    });
-
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-        onPlatformSendDispatch: async () => undefined,
-      }),
-    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
-  });
-
-  it("rejects retained credentials after recovery activates a replacement", async () => {
-    const account = createAccount();
-    const current = { ...account, authToken: "replacement" };
-    setRuntimeConfigSnapshot({ channels: { sms: current } } as never);
-    const actual = await vi.importActual<typeof import("./credential-availability.js")>(
-      "./credential-availability.js",
-    );
-
-    expect(() => actual.assertSmsCredentialOwnerAvailable(account)).toThrow(
-      "SMS credentials changed for account default",
-    );
   });
 
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {
@@ -731,9 +694,6 @@ describe("Twilio SMS helpers", () => {
     const [url] = fetchImpl.mock.calls[0] ?? [];
     expect(url).toBe(
       "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
-    );
-    expect(assertSmsCredentialOwnerAvailable).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ accountId: "default" }),
     );
   });
 
@@ -932,7 +892,6 @@ describe("Twilio SMS helpers", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "sms-twilio-api",
-        beforeRequest: expect.any(Function),
         policy: { allowedHostnames: ["api.twilio.com"] },
         requireHttps: true,
         timeoutMs: 30_000,
@@ -1102,5 +1061,3 @@ describe("Twilio SMS helpers", () => {
     ).toBe("https://gateway.example.com:443/webhooks/sms");
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

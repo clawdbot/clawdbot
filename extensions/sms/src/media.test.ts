@@ -137,24 +137,6 @@ function twilioMediaUrl(
   }/Messages/${params.messageSid ?? MESSAGE_SID}/Media/${params.mediaSid ?? MEDIA_SID}`;
 }
 
-function materializeInboundMedia(
-  saveRemoteMedia: PluginRuntime["channel"]["media"]["saveRemoteMedia"],
-  media: Parameters<typeof materializeSmsInboundMedia>[0]["msg"]["media"],
-) {
-  return materializeSmsInboundMedia({
-    account: createAccount(),
-    msg: {
-      accountSid: ACCOUNT_SID,
-      from: "+15551234567",
-      to: "+15557654321",
-      body: "",
-      messageSid: MESSAGE_SID,
-      media,
-    },
-    mediaRuntime: { media: { saveRemoteMedia } },
-  });
-}
-
 function installRuntime() {
   const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStoreForTests("sms", { ...options, env: testStateEnv }),
@@ -778,32 +760,6 @@ describe("SMS inbound MMS materialization", () => {
     expect(result.body).toContain("[2 Twilio MMS attachments unavailable]");
   });
 
-  it("rechecks the owner before each authenticated MMS download", async () => {
-    let dispatches = 0;
-    const saveRemoteMedia = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
-      async (options) => {
-        options.beforeRequest?.();
-        dispatches += 1;
-        return { id: "first.jpg", path: "/tmp/first.jpg", size: 1024 };
-      },
-    );
-    assertSmsCredentialOwnerAvailable
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("SMS credential owner became unavailable");
-      });
-
-    await expect(
-      materializeInboundMedia(saveRemoteMedia, [
-        { url: twilioMediaUrl(), contentType: "image/jpeg" },
-        { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
-      ]),
-    ).rejects.toThrow("SMS credential owner became unavailable");
-
-    expect(saveRemoteMedia).toHaveBeenCalledTimes(2);
-    expect(dispatches).toBe(1);
-  });
-
   it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
     const saveRemoteMedia = vi.fn();
 
@@ -973,25 +929,34 @@ describe("SMS inbound MMS materialization", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it.each(["claim cancellation", "retryable provider failure"])(
+  it.each(["claim cancellation", "retryable provider failure", "credential loss"])(
     "cleans already-saved files when a later attachment ends with %s",
     async (failureKind) => {
       const abortController = new AbortController();
       const abortReason =
         failureKind === "claim cancellation"
           ? new Error("SMS ingress claim superseded")
-          : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+          : failureKind === "credential loss"
+            ? new Error("SMS credential owner became unavailable")
+            : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+      if (failureKind === "credential loss") {
+        assertSmsCredentialOwnerAvailable
+          .mockImplementationOnce(() => {})
+          .mockImplementationOnce(() => {
+            throw abortReason;
+          });
+      }
       const saveRemoteMedia = vi
         .fn()
-        .mockResolvedValueOnce({
-          path: "/tmp/first.jpg",
-          size: 128,
-          contentType: "image/jpeg",
+        .mockImplementationOnce(async (options) => {
+          options.beforeRequest?.();
+          return { path: "/tmp/first.jpg", size: 128, contentType: "image/jpeg" };
         })
-        .mockImplementationOnce(async () => {
+        .mockImplementationOnce(async (options) => {
           if (failureKind === "claim cancellation") {
             abortController.abort(abortReason);
           }
+          options.beforeRequest?.();
           throw abortReason;
         });
 

@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -78,11 +79,8 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
-  /**
-   * Final synchronous dispatch check. Runs for every redirect hop and again
-   * for every media retry; throwing prevents that request.
-   */
-  beforeRequest?: () => void | undefined;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;

@@ -410,11 +410,18 @@ async function requestTwilioApi(params: {
     };
   }
 
+  let requestDispatched = false;
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
     beforeRequest: () => {
+      if (requestDispatched) {
+        assertSmsCredentialOwnerAvailable(params.account);
+        return;
+      }
       assertTwilioRequestCredentialsAvailable(params.account);
+      // A later callback means the preceding request returned a redirect response.
+      requestDispatched = true;
     },
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },

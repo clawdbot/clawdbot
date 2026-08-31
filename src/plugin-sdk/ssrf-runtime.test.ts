@@ -3,10 +3,8 @@ import { fetchWithSsrFGuard, isLoopbackHost, isPrivateOrLoopbackHost } from "./s
 
 it("accepts synchronous final dispatch callbacks and rejects asynchronous ones", () => {
   type BeforeRequest = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["beforeRequest"]>;
-  type AcceptsSync = (() => void) extends BeforeRequest ? true : false;
-  type AcceptsAsync = (() => Promise<void>) extends BeforeRequest ? true : false;
-  expectTypeOf<AcceptsSync>().toEqualTypeOf<true>();
-  expectTypeOf<AcceptsAsync>().toEqualTypeOf<false>();
+  expectTypeOf<() => void>().toMatchTypeOf<BeforeRequest>();
+  expectTypeOf<() => Promise<void>>().not.toMatchTypeOf<BeforeRequest>();
 });
 
 describe("isLoopbackHost", () => {
