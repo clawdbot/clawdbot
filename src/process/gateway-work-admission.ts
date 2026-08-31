@@ -383,8 +383,8 @@ export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Pro
 /**
  * Detaches required follow-up from the current admitted transaction.
  * A live parent synchronously reserves a tracked root even after restart or
- * suspension closes admission; callers without a live parent use the normal
- * independent-root fence.
+ * suspension closes admission. The detached root keeps its caller origin
+ * because it can outlive the parent; otherwise the normal fence applies.
  */
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
@@ -394,7 +394,7 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
   if (!parent || parent.released) {
     return runWithGatewayIndependentRootWorkAdmission(run, origin);
   }
-  const admission = createGatewayRootWorkAdmission(`${parent.origin}:continuation`);
+  const admission = createGatewayRootWorkAdmission(origin);
   return admission.run(run).finally(admission.release);
 }
 

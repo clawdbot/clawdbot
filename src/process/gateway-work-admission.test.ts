@@ -236,13 +236,13 @@ it("synchronously reserves a tracked continuation across a closed suspension fen
       "runtime:detached",
     );
     expect(getActiveGatewayRootWorkCount()).toBe(2);
-    expect(getActiveGatewayRootWorkHolders()).toEqual(["ws:agent", "ws:agent:continuation"]);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached", "ws:agent"]);
     expect(suspension?.rollback()).toBe(true);
   });
 
   root?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
-  expect(getActiveGatewayRootWorkHolders()).toEqual(["ws:agent:continuation"]);
+  expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
   releaseContinuation();
   await continuation;
   expect(getActiveGatewayRootWorkCount()).toBe(0);

@@ -189,9 +189,7 @@ export function createSubagentRegistrySweeper(params: {
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
     void runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
-      (error: unknown) => {
-        params.warn(`subagent sweep ${label} failed`, { runId, error });
-      },
+      (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
     );
   }
 
