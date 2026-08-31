@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -24,7 +25,9 @@ const PROFILE_GATED_STATIC_MATRIX_ALLOWLIST = [
 ];
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   env?: Record<string, string>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -166,6 +169,97 @@ function staticProfileMatrixJobs() {
 }
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
+  it.each([
+    ["validate_docker_e2e", "Run Docker E2E chunk"],
+    ["validate_docker_lanes", "Run targeted Docker E2E lanes"],
+  ])("drains diagnostics after credential failure in %s", (jobName, runStepName) => {
+    const job = requiredJob(workflow(), jobName);
+    const credentials = expectDefined(
+      job.steps.find((step) => step.name === "Validate Docker E2E credentials"),
+      "credential validation step",
+    );
+    const run = expectDefined(
+      job.steps.find((step) => step.name === runStepName),
+      "Docker execution step",
+    );
+    // Credential validation must be reached only after every setup/binding step
+    // succeeds; nothing fallible may intervene before diagnostic continuation.
+    expect(job.steps.indexOf(run)).toBe(job.steps.indexOf(credentials) + 1);
+    expect(credentials["continue-on-error"]).not.toBe(true);
+    expect(credentials.if ?? "").not.toMatch(/\b(?:always|cancelled|failure|success)\s*\(/u);
+
+    const preflight = expectDefined(credentials.run, "credential validation command");
+    for (const key of [undefined, "synthetic-openai-key"]) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", preflight], {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          CREDENTIALS: "openai",
+          ...(key ? { OPENAI_API_KEY: key } : {}),
+        },
+      });
+      expect(result.status, result.stderr).toBe(key ? 0 : 1);
+      if (!key) {
+        expect(result.stderr).toContain("Missing credential for OpenAI");
+      }
+      expect(result.stdout + result.stderr).not.toContain("synthetic-openai-key");
+    }
+
+    for (const state of [
+      { label: "success", success: true, cancelled: false, outcome: "success", selected: true },
+      {
+        label: "credential failure",
+        success: false,
+        cancelled: false,
+        outcome: "failure",
+        selected: true,
+      },
+      {
+        label: "setup failure",
+        success: false,
+        cancelled: false,
+        outcome: "skipped",
+        selected: true,
+      },
+      { label: "cancelled", success: false, cancelled: true, outcome: "failure", selected: true },
+      {
+        label: "unselected profile",
+        success: true,
+        cancelled: false,
+        outcome: "skipped",
+        selected: false,
+      },
+    ]) {
+      const evaluate = (step: WorkflowStep) => {
+        const expression = (step.if ?? "success()").replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u, "$1");
+        // GitHub implicitly adds success() unless a status function is present.
+        const implicitSuccess = /\b(?:always|cancelled|failure|success)\s*\(/u.test(expression)
+          ? true
+          : state.success;
+        return (
+          implicitSuccess &&
+          runInNewContext(expression, {
+            always: () => true,
+            cancelled: () => state.cancelled,
+            failure: () => !state.success && !state.cancelled,
+            success: () => state.success,
+            contains: (value: string, item: string) => value.includes(item),
+            inputs: { release_test_profile: "full" },
+            matrix: { profiles: state.selected ? "stable full" : "beta" },
+            steps: { [credentials.id ?? ""]: { outcome: state.outcome } },
+          })
+        );
+      };
+      const profileSelected = jobName === "validate_docker_lanes" || state.selected;
+      expect(evaluate(credentials), `${state.label}: preflight`).toBe(
+        state.success && profileSelected,
+      );
+      expect(evaluate(run), `${state.label}: diagnostics`).toBe(
+        !state.cancelled && profileSelected && (state.success || state.outcome === "failure"),
+      );
+    }
+  });
+
   it("builds provider owners used by every direct and Gateway Docker live lane", () => {
     const definition = workflow();
     const outputDir = tempDirs.make("openclaw-live-image-selection-");
