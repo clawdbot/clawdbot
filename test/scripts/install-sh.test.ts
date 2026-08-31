@@ -1932,6 +1932,25 @@ EOF
     expect(result.stdout).not.toContain("Upgrade complete");
   });
 
+  it("keeps dry runs from downloading the optional gum interface", () => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      DRY_RUN=1; INSTALL_METHOD=npm; NO_ONBOARD=1; NO_PROMPT=1
+      bootstrap_gum_temp() { printf 'unexpected-gum-bootstrap\n'; return 1; }
+      print_installer_banner() { :; }
+      print_gum_status() { printf 'unexpected-gum-status\n'; }
+      detect_os_or_die() { OS=linux; }
+      detect_openclaw_checkout() { return 1; }
+      show_install_plan() { printf 'dry-run-plan\n'; }
+      main
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("dry-run-plan");
+    expect(result.stdout).toContain("Dry run complete (no changes made)");
+    expect(result.stdout).not.toContain("unexpected-gum");
+  });
+
   it.each([
     {
       name: "fresh retained config rejects failed Doctor before success",
