@@ -1,4 +1,5 @@
 /** Channel recovery replies preserve decisions from the real account lifecycle owner. */
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import "../secrets/runtime-telegram.test-support.ts";
@@ -13,6 +14,7 @@ import {
   connectWebchatClient,
   getGatewayTestPort,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   setTestPluginRegistry,
   startTestGatewayServer,
@@ -25,6 +27,19 @@ type TestAccount = {
   enabled?: boolean;
   token?: string;
 };
+
+async function rpcReqWithActiveRuntime(ws: WebSocket, method: string, params: unknown) {
+  const id = randomUUID();
+  const response = onceMessage<{
+    type: "res";
+    id: string;
+    ok: boolean;
+    payload?: Record<string, unknown>;
+    error?: { message?: string; code?: string; details?: unknown };
+  }>(ws, (value) => value?.type === "res" && value.id === id);
+  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  return await response;
+}
 
 describe("channels.start account outcomes", () => {
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
@@ -51,20 +66,24 @@ describe("channels.start account outcomes", () => {
               abortSignal.addEventListener("abort", () => resolve(), { once: true });
             }),
         );
+        const resolveAccount: ChannelPlugin<TestAccount>["config"]["resolveAccount"] = (
+          config,
+          accountId,
+        ) => {
+          const id = accountId ?? "plaintext";
+          const configured = config.channels?.telegram?.accounts?.[id];
+          return {
+            accountId: id,
+            enabled: configured?.enabled !== false,
+            token: typeof configured?.botToken === "string" ? configured.botToken : undefined,
+          };
+        };
         const plugin: ChannelPlugin<TestAccount> = {
           ...createChannelTestPluginBase({ id: "telegram" }),
           config: {
             listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
             defaultAccountId: () => "plaintext",
-            resolveAccount: (config, accountId) => {
-              const id = accountId ?? "plaintext";
-              const configured = config.channels?.telegram?.accounts?.[id];
-              return {
-                accountId: id,
-                enabled: configured?.enabled !== false,
-                token: typeof configured?.botToken === "string" ? configured.botToken : undefined,
-              };
-            },
+            resolveAccount,
             isEnabled: (account) => account.enabled !== false,
             isConfigured: (account) => Boolean(account.token),
           },
@@ -129,7 +148,7 @@ describe("channels.start account outcomes", () => {
 
         const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
         try {
-          const plaintext = await rpcReq(ws, "channels.start", {
+          const plaintext = await rpcReqWithActiveRuntime(ws, "channels.start", {
             channel: "telegram",
             accountId: "plaintext",
           });
@@ -151,7 +170,20 @@ describe("channels.start account outcomes", () => {
             expect.arrayContaining([{ accountId: "plaintext", token: "plaintext-channel-token" }]),
           );
 
-          const unavailable = await rpcReq(ws, "channels.start", {
+          const resolved = await rpcReqWithActiveRuntime(ws, "channels.start", {
+            channel: "telegram",
+            accountId: "resolved",
+          });
+          expect(resolved, JSON.stringify(resolved)).toMatchObject({
+            ok: true,
+            payload: {
+              accountId: "resolved",
+              started: true,
+              outcome: { status: "handed-off" },
+            },
+          });
+
+          const unavailable = await rpcReqWithActiveRuntime(ws, "channels.start", {
             channel: "telegram",
             accountId: "unavailable",
           });
@@ -159,7 +191,7 @@ describe("channels.start account outcomes", () => {
             ok: false,
             error: { code: "UNAVAILABLE" },
           });
-          expect(startAccount).toHaveBeenCalledOnce();
+          expect(startAccount).toHaveBeenCalledTimes(2);
         } finally {
           ws.close();
         }
