@@ -352,11 +352,7 @@ describe("scheduled Codex app authority", () => {
         },
       }),
     );
-    expect(request).toHaveBeenCalledWith(
-      "account/rateLimits/read",
-      {},
-      expect.any(Object),
-    );
+    expect(request).toHaveBeenCalledWith("account/rateLimits/read", {}, expect.any(Object));
   });
 
   it("refuses configured app authority when the account identity is unavailable", async () => {

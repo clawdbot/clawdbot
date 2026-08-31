@@ -131,7 +131,10 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
     expect(() =>
       assertScheduledCodexAppAuthorityRuntime(
         scheduledConnection({
-          appServer: { ...appServer, start: { ...appServer.start, url: "wss://other.example.com" } },
+          appServer: {
+            ...appServer,
+            start: { ...appServer.start, url: "wss://other.example.com" },
+          },
           agentDir,
           startupPreparedAuth: undefined,
         }),

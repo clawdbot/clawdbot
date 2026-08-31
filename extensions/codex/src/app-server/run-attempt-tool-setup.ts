@@ -152,10 +152,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
   const scheduledAppAuthoritySourceRef: {
-    current?: Omit<
-      Parameters<typeof captureScheduledCodexAppAuthority>[0],
-      "auth"
-    >;
+    current?: Omit<Parameters<typeof captureScheduledCodexAppAuthority>[0], "auth">;
   } = {};
   const preparedChatgptAuth =
     connection.startupPreparedAuth?.kind === "profile" &&
