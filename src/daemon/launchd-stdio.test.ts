@@ -36,4 +36,18 @@ describe("launchd stdio advertisement", () => {
     expect(guidance).toContain(formatCliCommand("openclaw gateway install --force"));
     expect(guidance).not.toMatch(/openclaw gateway install(?! --force)/);
   });
+
+  it("formats rewrite commands for the diagnosed service owner", () => {
+    const guidance = formatLaunchdStderrRewriteGuidance(
+      {},
+      {
+        restartCommand: "openclaw node restart",
+        forceInstallCommand: "openclaw node install --force",
+      },
+    );
+    expect(guidance).toContain(formatCliCommand("openclaw node restart"));
+    expect(guidance).toContain(formatCliCommand("openclaw node install --force"));
+    expect(guidance).not.toContain("openclaw gateway restart");
+    expect(guidance).not.toContain("openclaw gateway install");
+  });
 });

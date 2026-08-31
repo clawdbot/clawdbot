@@ -7,6 +7,7 @@ import {
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   resolveNodeLaunchAgentLabel,
+  resolveNodeServiceIdentityEnvironment,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "../../daemon/constants.js";
@@ -77,9 +78,16 @@ function renderNodeServiceStartHints(): string[] {
 
 function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   return buildPlatformRuntimeLogHints({
-    env,
+    env: {
+      ...env,
+      ...resolveNodeServiceIdentityEnvironment(),
+    },
     systemdServiceName: resolveNodeSystemdServiceName(),
     windowsTaskName: resolveNodeWindowsTaskName(),
+    rewriteCommands: {
+      restartCommand: "openclaw node restart",
+      forceInstallCommand: "openclaw node install --force",
+    },
   });
 }
 

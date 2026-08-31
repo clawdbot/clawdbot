@@ -4,6 +4,7 @@ import {
   formatLaunchdStderrRewriteGuidance,
   readPersistedLaunchdStderrPath,
   resolveAdvertisedLaunchdStderr,
+  type LaunchdStderrRewriteCommands,
 } from "./launchd-stdio.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
@@ -12,6 +13,7 @@ export function buildPlatformRuntimeLogHints(params: {
   env?: NodeJS.ProcessEnv;
   systemdServiceName: string;
   windowsTaskName: string;
+  rewriteCommands?: LaunchdStderrRewriteCommands;
 }): string[] {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
@@ -21,7 +23,7 @@ export function buildPlatformRuntimeLogHints(params: {
     const stderrHint =
       advertisedStderr.kind === "file"
         ? `Launchd stderr (if installed): ${advertisedStderr.path}`
-        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env)}`;
+        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env, params.rewriteCommands)}`;
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout (if installed): ${logs.stdoutPath}`,

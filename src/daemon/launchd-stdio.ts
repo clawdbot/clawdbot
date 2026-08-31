@@ -31,7 +31,20 @@ export function resolveAdvertisedLaunchdStderr(
   return { kind: "file", path: persistedStderrPath };
 }
 
+export type LaunchdStderrRewriteCommands = {
+  restartCommand: string;
+  forceInstallCommand: string;
+};
+
+const GATEWAY_LAUNCHD_STDERR_REWRITE_COMMANDS: LaunchdStderrRewriteCommands = {
+  restartCommand: "openclaw gateway restart",
+  forceInstallCommand: "openclaw gateway install --force",
+};
+
 /** Loaded LaunchAgents skip a plain install; restart or install --force rewrites stderr. */
-export function formatLaunchdStderrRewriteGuidance(env: GatewayServiceEnv = process.env): string {
-  return `Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway restart", env)} or ${formatCliCommand("openclaw gateway install --force", env)}.`;
+export function formatLaunchdStderrRewriteGuidance(
+  env: GatewayServiceEnv = process.env,
+  commands: LaunchdStderrRewriteCommands = GATEWAY_LAUNCHD_STDERR_REWRITE_COMMANDS,
+): string {
+  return `Rewrite the LaunchAgent with ${formatCliCommand(commands.restartCommand, env)} or ${formatCliCommand(commands.forceInstallCommand, env)}.`;
 }

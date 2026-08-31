@@ -52,6 +52,28 @@ describe("buildPlatformRuntimeLogHints", () => {
     expect(hints[1]).not.toContain("gateway.err.log");
   });
 
+  it("uses Node rewrite commands for a suppressed Node LaunchAgent", () => {
+    readPersistedLaunchdStderrPath.mockReturnValue("/dev/null");
+    const hints = buildPlatformRuntimeLogHints({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+        OPENCLAW_LOG_PREFIX: "node",
+      },
+      systemdServiceName: "openclaw-node",
+      windowsTaskName: "OpenClaw Node",
+      rewriteCommands: {
+        restartCommand: "openclaw node restart",
+        forceInstallCommand: "openclaw node install --force",
+      },
+    });
+    expect(hints[1]).toContain(formatCliCommand("openclaw node restart"));
+    expect(hints[1]).toContain(formatCliCommand("openclaw node install --force"));
+    expect(hints[1]).not.toContain("openclaw gateway restart");
+    expect(hints[1]).not.toContain("openclaw gateway install");
+  });
+
   it("advertises the persisted LaunchAgent stderr path after rewrite", () => {
     readPersistedLaunchdStderrPath.mockReturnValue(
       "/Users/test/Library/Logs/openclaw/gateway.err.log",
