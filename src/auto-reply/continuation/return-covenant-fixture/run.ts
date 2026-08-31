@@ -217,7 +217,7 @@ export class ReturnCovenantFixtureRun {
     if (
       activeStates.length !== 1 ||
       activeStates[0]?.phase !== "dispatched" ||
-      activeStates[0].casePlan.restartBetweenAcceptanceAndRelease !== true
+      !activeStates[0].casePlan.restartBetweenAcceptanceAndRelease
     ) {
       throw new Error("return-covenant restart snapshot requires one dispatched restart case");
     }
@@ -462,7 +462,7 @@ export class ReturnCovenantFixtureRun {
     invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     if (request.fallback === true) {
-      for (const state of [...this.#states.values()]) {
+      for (const state of this.#states.values()) {
         await cleanupReturnCovenantCase({
           context: this.#context,
           state,

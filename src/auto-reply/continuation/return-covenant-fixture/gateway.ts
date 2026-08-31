@@ -350,7 +350,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       throw new Error("return-covenant request targets a stopped gateway generation");
     }
     let helloBootId: string | undefined;
-    const response = await callGateway<Record<string, unknown>>({
+    const response = await callGateway({
       clientDisplayName: "return-covenant-fixture",
       config: this.#config,
       configPath: this.#configPath,

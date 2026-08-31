@@ -84,7 +84,7 @@ describe("return-covenant authenticated Gateway seam", () => {
       ),
     );
     const request = (requestToken: string, params: Record<string, unknown>, timeoutMs = 30_000) =>
-      callGateway<Record<string, unknown>>({
+      callGateway({
         config,
         deviceIdentity: null,
         ignoreEnvUrlOverride: true,

@@ -79,14 +79,14 @@ export async function restoreReturnCovenantActiveState(params: {
     request.phase !== "prepare" ||
     snapshot.closed ||
     snapshot.phase !== "dispatched" ||
-    snapshot.casePlan.restartBetweenAcceptanceAndRelease !== true ||
+    !snapshot.casePlan.restartBetweenAcceptanceAndRelease ||
     request.caseId !== snapshot.casePlan.id ||
     request.form !== snapshot.form
   ) {
     throw new Error("return-covenant active restart snapshot is malformed");
   }
   const casePlan = plan.cases.find((entry) => entry.id === request.caseId);
-  if (!casePlan || casePlan.restartBetweenAcceptanceAndRelease !== true) {
+  if (!casePlan || !casePlan.restartBetweenAcceptanceAndRelease) {
     throw new Error("return-covenant active restart case is not in the frozen plan");
   }
   const prepareGateway = parseReturnCovenantGatewayBinding(snapshot.gatewayPhases.prepare);
