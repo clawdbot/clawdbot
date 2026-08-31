@@ -36,13 +36,14 @@ describe("pending input read boundary", () => {
             content: [{ type: "input_image", image_url: imageUrl }],
             timestamp: 1,
             idempotencyKey: "pending-image:user",
-          },
+            // Persisted provider-native blocks are wider than the admission type.
+          } as never,
         }),
         "pending image receipt",
       );
       try {
         const page = readChatPendingInputs(scope, { limit: 1, maxChars: 1_000 });
-        expect(page.items[0]?.message.content).toEqual(redactedContent);
+        expect(page.items[0]?.message).toMatchObject({ content: redactedContent });
         expect(JSON.stringify(page)).not.toContain(imageUrl);
 
         const respond = vi.fn();
