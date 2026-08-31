@@ -72,16 +72,19 @@ it("refreshes a retained pane from a persisted profile-only selection through th
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
     const transcript = retained.chatMessages;
-    const unsubscribe = onSessionLifecycleEvent(
-      createLifecycleEventBroadcastHandler({
-        sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-        chatAbortControllers: new Map(),
-        broadcastToConnIds: (event, payload) => {
-          handlePageGatewayEvent(retained, { type: "event", event, payload });
-          handlePageGatewayEvent(sibling, { type: "event", event, payload });
-        },
-      }),
-    );
+    const lifecycleHandler = createLifecycleEventBroadcastHandler({
+      sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: (event, payload) => {
+        handlePageGatewayEvent(retained, { type: "event", event, payload });
+        handlePageGatewayEvent(sibling, { type: "event", event, payload });
+      },
+    });
+    let lifecycleDispatch = Promise.resolve();
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      lifecycleDispatch = lifecycleDispatch.then(() => lifecycleHandler(event));
+      void lifecycleDispatch.catch(() => {});
+    });
     try {
       await expect(
         applySessionModelSelection({
@@ -107,6 +110,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
           },
         }),
       ).resolves.toMatchObject({ status: "applied", changed: true });
+      await lifecycleDispatch;
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
@@ -114,6 +118,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       expect(retained.chatMessages).toBe(transcript);
     } finally {
       unsubscribe();
+      await lifecycleDispatch.catch(() => {});
       retireChatMetadataRequests(retained);
       retireChatMetadataRequests(sibling);
     }

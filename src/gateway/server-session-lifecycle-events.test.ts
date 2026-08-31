@@ -28,14 +28,14 @@ describe("createLifecycleEventBroadcastHandler", () => {
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
   });
-  it("keeps delayed key-only deletes as invalidations without borrowing a replacement", () => {
+  it("keeps delayed key-only deletes as invalidations without borrowing a replacement", async () => {
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
       chatAbortControllers: new Map(),
     });
-    handler({ sessionKey: sessionRow.key, reason: "delete" });
+    await handler({ sessionKey: sessionRow.key, reason: "delete" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       { sessionKey: sessionRow.key, agentId: "main", reason: "delete", ts: expect.any(Number) },
@@ -45,7 +45,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
 
-  it.each(["phase", "log"] as const)("projects swarm %s payload fields", (kind) => {
+  it.each(["phase", "log"] as const)("projects swarm %s payload fields", async (kind) => {
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
@@ -53,7 +53,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       chatAbortControllers: new Map(),
     });
 
-    handler({
+    await handler({
       sessionKey: "agent:main:main",
       reason: "swarm-note",
       swarmGroupId: "swarm:agent:main:main:run-1",
@@ -84,7 +84,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     });
 
     try {
-      handler({
+      await handler({
         sessionKey: "agent:main:main",
         reason: "rename",
         label: "Renamed session",
@@ -104,7 +104,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
   it.each([
     { name: "projects configured persisted state without publishing its goal" },
     { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
-  ])("$name through capacity transitions without a refresh", ({ agentId }) => {
+  ])("$name through capacity transitions without a refresh", async ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
@@ -121,7 +121,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       chatAbortControllers: new Map([["run-before-finalize", activeRun]]),
     });
 
-    handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
+    await handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
 
     expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("global", { agentId: "ops" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -162,7 +162,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     }
   });
 
-  it("publishes only a private invalidation for a retired fixed-store lifecycle owner", () => {
+  it("publishes only a private invalidation for a retired fixed-store lifecycle owner", async () => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
@@ -171,7 +171,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       chatAbortControllers: new Map(),
     });
 
-    handler({ sessionKey: "global", reason: "updated" });
+    await handler({ sessionKey: "global", reason: "updated" });
 
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledWith(

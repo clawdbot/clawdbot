@@ -15,6 +15,7 @@ import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-sele
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
@@ -160,7 +161,6 @@ async function executeSessionPatchMutations(params: {
       };
       continue;
     }
-    const requestedAgentId = requestedAgent.agentId;
     const canonicalKey = resolved.canonicalKey ?? key;
     const candidateKeys = resolved.storeKeys;
     let initialEntry: SessionEntry | undefined;
@@ -197,8 +197,7 @@ async function executeSessionPatchMutations(params: {
       };
       continue;
     }
-    // Commit guards are core control state; construct the protocol patch from
-    // its public identity fields so closures can never reach hooks or entries.
+    // Public identity fields keep protocol patches from exposing commit guards or entries.
     const { commitGuard: _commitGuard, ...identity } = input;
     const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
     const expectationError =
@@ -242,7 +241,7 @@ async function executeSessionPatchMutations(params: {
       initialStoreKeys: [...candidateKeys],
       key,
       lifecycleIdentities,
-      ...(requestedAgentId ? { requestedAgentId } : {}),
+      ...(requestedAgent.agentId ? { requestedAgentId: requestedAgent.agentId } : {}),
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
     };
@@ -251,12 +250,10 @@ async function executeSessionPatchMutations(params: {
   }
 
   const modelCatalogByAgent = new Map<string, Promise<ModelCatalog>>();
-  const loadModelCatalog = (agentId: string) => {
-    const promise =
-      modelCatalogByAgent.get(agentId) ?? params.context.loadGatewayModelCatalog({ agentId });
-    modelCatalogByAgent.set(agentId, promise);
-    return promise;
-  };
+  const loadModelCatalog = (agentId: string) =>
+    getOrCreatePromise(modelCatalogByAgent, agentId, () =>
+      params.context.loadGatewayModelCatalog({ agentId }),
+    );
   if (prepared.length > 0) {
     const releaseArchiveDrains = async () =>
       prepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
