@@ -31,6 +31,11 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
+      // Opening initializes the selected row after its animation completes.
+      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
+      await expect
+        .poll(() => selected.evaluate((element) => document.activeElement === element))
+        .toBe(true);
       await page.keyboard.press("ArrowDown");
       const option = picker.getByRole("menuitemradio", { name: "research", exact: true });
       await expect
@@ -50,6 +55,8 @@ suite.define(() => {
             .evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
+      // The open property clears before the closing popup retires.
+      await picker.locator('wa-dropdown-item[aria-label="research"]').waitFor({ state: "hidden" });
 
       await trigger.focus();
       await page.keyboard.press("Enter");

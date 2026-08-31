@@ -9001,7 +9001,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         pluginPrereleaseTimeoutFloor(pluginPrerelease, liveE2e, profile),
       ]),
     ) as Record<(typeof profiles)[number], number>;
-    expect(pluginChildTimeouts).toEqual({ beta: 175, stable: 175, full: 205 });
+    expect(pluginChildTimeouts).toEqual({ beta: 170, stable: 170, full: 200 });
     for (const profile of profiles) {
       expect(
         diagnosticDrainTimeout - pluginChildTimeouts[profile],
@@ -9027,15 +9027,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"))).toEqual([
       "validate_selected_ref",
     ]);
-    expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "docker_e2e_image_ready"))).toEqual([
-      "prepare_docker_e2e_image",
-    ]);
     expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"))).toEqual(
-      expect.arrayContaining([
-        "validate_selected_ref",
-        "prepare_docker_e2e_image",
-        "docker_e2e_image_ready",
-      ]),
+      expect.arrayContaining(["validate_selected_ref", "prepare_docker_e2e_image"]),
     );
     expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary"))).toContain(
       "docker_acceptance",
@@ -9062,7 +9055,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
           ),
           timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], profile),
           timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], profile),
-          timeoutForProfile(liveE2e.jobs?.docker_e2e_image_ready?.["timeout-minutes"], profile),
           Math.max(
             ...evaluatedJobTimeouts(
               LIVE_E2E_WORKFLOW,
@@ -9076,9 +9068,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ]),
     ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 5, 90, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 5, 90, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 5, 90, 5, 5],
+      beta: [30, 15, 60, 10, 30, 60, 90, 5, 5],
+      stable: [30, 15, 60, 10, 30, 60, 90, 5, 5],
+      full: [30, 15, 60, 10, 30, 90, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
@@ -9091,7 +9083,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
       full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
     };
-    expect(releasePackageTimeouts).toEqual({ beta: 310, stable: 310, full: 340 });
+    expect(releasePackageTimeouts).toEqual({ beta: 305, stable: 305, full: 335 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
       expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(
         diagnosticDrainTimeout,

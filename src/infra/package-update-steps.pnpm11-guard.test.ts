@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -318,8 +319,12 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               await fs.rm(path.join(globalRoot, "hash-openclaw"), { force: true });
               await fs.rm(path.join(globalRoot, "old"), { recursive: true, force: true });
               await writePackageRoot(newPackageRoot, "2.0.0");
-              await fs.mkdir(path.join(newPackageRoot, "scripts"), { recursive: true });
+              await fs.mkdir(path.join(newPackageRoot, "scripts", "lib"), { recursive: true });
               await Promise.all([
+                fs.writeFile(
+                  path.join(newPackageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
+                  "export {};\n",
+                ),
                 fs.writeFile(
                   path.join(newPackageRoot, ".openclaw-lifecycle-pending"),
                   "pending\n",
@@ -803,8 +808,12 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
           if (name === "global update" && firstAttempt) {
             await writePackageRoot(packageRoot, "2.0.0");
-            await fs.mkdir(path.join(packageRoot, "scripts"), { recursive: true });
+            await fs.mkdir(path.join(packageRoot, "scripts", "lib"), { recursive: true });
             await Promise.all([
+              fs.writeFile(
+                path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
+                "export {};\n",
+              ),
               fs.writeFile(
                 path.join(packageRoot, ".openclaw-lifecycle-pending"),
                 "pending\n",
@@ -852,6 +861,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const failed = await runGlobalPackageUpdateSteps(updateParams);
         expect(failed.failedStep?.name).toBe(failedLifecycleStep);
         expect(failed).toMatchObject({
+          afterVersion: "2.0.0",
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         });
         await expect(
