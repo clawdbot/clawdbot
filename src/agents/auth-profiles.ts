@@ -10,6 +10,7 @@ export type {
 } from "./auth-profiles/credential-state.js";
 export type { AuthProfileEligibilityReasonCode } from "./auth-profiles/order.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+export { resolveAuthProfileMetadata } from "./auth-profiles/identity.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 export {
   externalCliDiscoveryForConfigStatus,
@@ -26,6 +27,7 @@ export {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
+  resolveExplicitAuthOrderSelection,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
 export {
@@ -33,6 +35,7 @@ export {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles/paths.js";
 export {
+  AuthProfileOrderChangedError,
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
@@ -45,6 +48,8 @@ export {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
+export { getRuntimeLocalProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
+export { getRuntimeLocalOrderProviders } from "./auth-profiles/runtime-snapshot-owner.js";
 export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 export {
   repairOAuthProfileIdMismatch,

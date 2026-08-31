@@ -57,12 +57,20 @@ export function setRuntimeLocalProfileMetadata(
   store: AuthProfileStore,
   localProfileIds: Iterable<string>,
   runtimeInheritsMainState = false,
+  localOrderProviders: Iterable<string> = Object.keys(store.order ?? {}),
 ): RuntimeAuthProfileStore {
   return {
     ...store,
     runtimeLocalProfileIds: [...new Set(localProfileIds)].toSorted(),
+    runtimeLocalOrderProviders: [...new Set(localOrderProviders)].toSorted(),
     ...(runtimeInheritsMainState ? { runtimeInheritsMainState: true } : {}),
   };
+}
+
+export function getRuntimeLocalOrderProviders(store: AuthProfileStore): string[] {
+  return "runtimeLocalOrderProviders" in store && Array.isArray(store.runtimeLocalOrderProviders)
+    ? store.runtimeLocalOrderProviders
+    : Object.keys(store.order ?? {});
 }
 
 export function runtimeStoreInheritsMainState(
@@ -107,6 +115,7 @@ export function mergeLocalAuthProfileStoreWithInheritedStore(
     stripRuntimeExternalProfileMetadata(merged),
     listRuntimeLocalProfileIds(localStore, inheritedStore),
     runtimeStoreInheritsMainState(merged, localStore),
+    Object.keys(localStore.order ?? {}),
   );
 }
 
@@ -283,6 +292,7 @@ export function runtimeAuthOwnerState(
       | "runtimeExternalProfileIdsAuthoritative"
       | "runtimeExternalCliProfileIds"
       | "runtimeLocalProfileIds"
+      | "runtimeLocalOrderProviders"
       | "runtimeInheritsMainState"
     >
   | undefined {
@@ -297,6 +307,7 @@ export function runtimeAuthOwnerState(
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
     runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
+    runtimeLocalOrderProviders: store.runtimeLocalOrderProviders,
     runtimeInheritsMainState: store.runtimeInheritsMainState,
   };
 }

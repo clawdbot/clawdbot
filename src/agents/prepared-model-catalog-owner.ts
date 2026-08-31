@@ -58,6 +58,7 @@ export function resolvePublishedModelCatalogOwner(
     catalogOwner,
     agentId,
     agentDir: snapshot.agentDir,
+    ...(snapshot.inheritedAuthDir ? { inheritedAuthDir: snapshot.inheritedAuthDir } : {}),
     workspaceDir,
     config: snapshot.config,
     authModes: snapshot.authModes,

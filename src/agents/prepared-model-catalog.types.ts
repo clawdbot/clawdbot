@@ -9,6 +9,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   catalogOwner: Readonly<{ agentId: string; workspaceDir: string }> | undefined;
   agentId?: string;
   agentDir: string;
+  inheritedAuthDir?: string;
   workspaceDir?: string;
   config: OpenClawConfig;
   authModes: PreparedAgentCredentialModes;
@@ -21,6 +22,7 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   catalogOwner: NonNullable<PublishedModelCatalogOwnerCandidate["catalogOwner"]>;
   agentId: string;
   agentDir: string;
+  inheritedAuthDir?: string;
   workspaceDir: string;
   config: OpenClawConfig;
   authModes: PreparedAgentCredentialModes;

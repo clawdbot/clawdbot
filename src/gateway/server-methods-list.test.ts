@@ -77,7 +77,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-66)).toEqual([
+    expect(listGatewayMethods().slice(-67)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -144,6 +144,7 @@ describe("listGatewayMethods", () => {
       "diagnostics.lanes",
       "session.members.listEvidence",
       "plugins.inspect",
+      "models.authOrderSet",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -226,6 +227,18 @@ describe("listGatewayMethods", () => {
     }
   });
 
+  it("protects provider priority as an administrative control-plane write", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "models.authOrderSet",
+    );
+
+    expect(descriptor).toMatchObject({
+      name: "models.authOrderSet",
+      scope: "operator.admin",
+      controlPlaneWrite: true,
+    });
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("node.runnerInventory.update");
@@ -266,7 +279,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-73)).toEqual([
+    expect(coreMethods.slice(-74)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -340,6 +353,7 @@ describe("listGatewayMethods", () => {
       "diagnostics.lanes",
       "session.members.listEvidence",
       "plugins.inspect",
+      "models.authOrderSet",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

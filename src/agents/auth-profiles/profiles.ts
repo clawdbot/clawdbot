@@ -7,8 +7,12 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { mergeAuthProfileStores } from "./persisted.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   getRuntimeExternalCliProfileIds,
@@ -19,6 +23,7 @@ import {
 } from "./runtime-external-profile-references.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
@@ -39,22 +44,31 @@ export {
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
+export class AuthProfileOrderChangedError extends Error {
+  constructor() {
+    super("auth profiles changed while priority was being saved");
+    this.name = "AuthProfileOrderChangedError";
+  }
+}
+
 function listProviderAuthStateEntries<T>(
   entries: Record<string, T> | undefined,
   provider: string,
+  authAliasLookupParams?: ProviderAuthAliasLookupParams,
 ): Array<[string, T]> {
-  const canonicalProvider = resolveProviderIdForAuth(provider);
+  const canonicalProvider = resolveProviderIdForAuth(provider, authAliasLookupParams);
   return Object.entries(entries ?? {})
-    .filter(([key]) => resolveProviderIdForAuth(key) === canonicalProvider)
+    .filter(([key]) => resolveProviderIdForAuth(key, authAliasLookupParams) === canonicalProvider)
     .toSorted(([left], [right]) => left.localeCompare(right));
 }
 
 function readProviderAuthState<T>(
   entries: Record<string, T> | undefined,
   provider: string,
+  authAliasLookupParams?: ProviderAuthAliasLookupParams,
 ): T | undefined {
-  const canonicalProvider = resolveProviderIdForAuth(provider);
-  const matches = listProviderAuthStateEntries(entries, canonicalProvider);
+  const canonicalProvider = resolveProviderIdForAuth(provider, authAliasLookupParams);
+  const matches = listProviderAuthStateEntries(entries, canonicalProvider, authAliasLookupParams);
   return (
     matches.find(([key]) => normalizeProviderId(key) === canonicalProvider)?.[1] ?? matches[0]?.[1]
   );
@@ -64,11 +78,12 @@ function replaceProviderAuthState<T>(
   entries: Record<string, T> | undefined,
   provider: string,
   value?: T,
+  authAliasLookupParams?: ProviderAuthAliasLookupParams,
 ): Record<string, T> | undefined {
-  const canonicalProvider = resolveProviderIdForAuth(provider);
+  const canonicalProvider = resolveProviderIdForAuth(provider, authAliasLookupParams);
   const next = Object.fromEntries(
     Object.entries(entries ?? {}).filter(
-      ([key]) => resolveProviderIdForAuth(key) !== canonicalProvider,
+      ([key]) => resolveProviderIdForAuth(key, authAliasLookupParams) !== canonicalProvider,
     ),
   ) as Record<string, T>;
   if (value !== undefined) {
@@ -92,16 +107,72 @@ function updateSuccessfulUsageStatsEntry(
 /** Sets or clears explicit auth profile order for a provider. */
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
+  inheritedAuthDir?: string;
   provider: string;
   order?: string[] | null;
+  /** Effective provider profiles observed from the prepared runtime owner. */
+  expectedProviderProfileIds?: readonly string[];
+  /** Provider profiles whose effective owner was the local store. */
+  expectedLocalProviderProfileIds?: readonly string[];
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
 }): Promise<AuthProfileStore | null> {
-  const providerKey = resolveProviderIdForAuth(params.provider);
+  const providerKey = resolveProviderIdForAuth(params.provider, params.authAliasLookupParams);
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
+  const expectedProvider = params.expectedProviderProfileIds
+    ? [...new Set(params.expectedProviderProfileIds)].toSorted()
+    : undefined;
+  let expectedPersisted: string[] | undefined;
+  const validateMembership = (inheritedStore: AuthProfileStore, localStore: AuthProfileStore) => {
+    if (!expectedProvider) {
+      return;
+    }
+    const currentPersisted = Object.entries(
+      mergeAuthProfileStores(inheritedStore, localStore, {
+        preserveBaseRuntimeExternalProfiles: true,
+      }).profiles,
+    )
+      .filter(
+        ([, credential]) =>
+          resolveProviderIdForAuth(credential.provider, params.authAliasLookupParams) ===
+          providerKey,
+      )
+      .map(([profileId]) => profileId)
+      .toSorted();
+    const runtimeStore = getPreparedRuntimeAuthProfileStoreSnapshot(
+      params.agentDir,
+      params.inheritedAuthDir,
+    );
+    const currentRuntimeExternal = (runtimeStore?.runtimeExternalProfileIds ?? [])
+      .filter((profileId) => {
+        const credential = runtimeStore?.profiles[profileId];
+        return (
+          credential &&
+          resolveProviderIdForAuth(credential.provider, params.authAliasLookupParams) ===
+            providerKey
+        );
+      })
+      .toSorted();
+    const currentEffective = [
+      ...new Set([...currentPersisted, ...currentRuntimeExternal]),
+    ].toSorted();
+    if (!isDeepStrictEqual(currentEffective, expectedProvider)) {
+      throw new AuthProfileOrderChangedError();
+    }
+    expectedPersisted = currentPersisted;
+  };
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    ...(expectedProvider
+      ? {
+          guardStore: {
+            ...(params.inheritedAuthDir ? { agentDir: params.inheritedAuthDir } : {}),
+            validate: validateMembership,
+          },
+        }
+      : {}),
     // Preserve requested IDs that the agent inherits (not owns) so the local
     // save path does not prune them from the order. Without this, a secondary
     // agent's `models auth order set --agent` accepts an inherited profile ID
@@ -112,14 +183,46 @@ export async function setAuthProfileOrder(params: {
     // (deduped.length === 0) must not preserve anything.
     ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
+      if (expectedPersisted && params.expectedLocalProviderProfileIds) {
+        const expectedProvider = new Set(expectedPersisted);
+        const expectedLocal = new Set(params.expectedLocalProviderProfileIds);
+        const expected = [...expectedLocal].toSorted();
+        const current = Object.entries(store.profiles)
+          .filter(
+            ([profileId, credential]) =>
+              resolveProviderIdForAuth(credential.provider, params.authAliasLookupParams) ===
+                providerKey &&
+              // A secondary store can physically retain the same OAuth row whose effective owner
+              // is main. Ignore that duplicate, but retain any newly introduced profile id.
+              (expectedLocal.has(profileId) || !expectedProvider.has(profileId)),
+          )
+          .map(([profileId]) => profileId)
+          .toSorted();
+        if (!isDeepStrictEqual(current, expected)) {
+          throw new AuthProfileOrderChangedError();
+        }
+      }
       if (deduped.length === 0) {
-        if (listProviderAuthStateEntries(store.order, providerKey).length === 0) {
+        if (
+          listProviderAuthStateEntries(store.order, providerKey, params.authAliasLookupParams)
+            .length === 0
+        ) {
           return false;
         }
-        store.order = replaceProviderAuthState(store.order, providerKey);
+        store.order = replaceProviderAuthState(
+          store.order,
+          providerKey,
+          undefined,
+          params.authAliasLookupParams,
+        );
         return true;
       }
-      store.order = replaceProviderAuthState(store.order, providerKey, deduped);
+      store.order = replaceProviderAuthState(
+        store.order,
+        providerKey,
+        deduped,
+        params.authAliasLookupParams,
+      );
       return true;
     },
   });

@@ -86,6 +86,7 @@ const CURRENT_TRAIN_METHODS = [
   "device.pair.setupStatus",
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
+  "models.authOrderSet",
   "sessions.patchMany",
   "sessions.goal.update",
   "sessions.goal.clear",

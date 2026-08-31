@@ -184,6 +184,11 @@ HTTP status follows the error code:
 
 Other Gateway methods are blocked until they are intentionally added.
 
+`models.authOrderSet` is intentionally not exposed through this HTTP plugin. An
+`operator.admin` WebSocket client can use it to save a provider's complete
+account order; omit `profileIds` to clear the saved override and return to
+automatic selection.
+
 ## WebSocket comparison
 
 The normal Gateway WebSocket RPC path remains the preferred control-plane API for OpenClaw clients. Use admin HTTP RPC only for host tooling that needs a request/response HTTP surface.

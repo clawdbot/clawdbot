@@ -176,6 +176,7 @@ describe("gateway prepared model catalog", () => {
     const config = ownerConfig("worker");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
       ...ownerSnapshot(config, snapshot, "worker"),
+      inheritedAuthDir: "/tmp/auth-owner",
       workspaceDir: "/tmp/gateway-workspace",
     }));
 
@@ -193,7 +194,16 @@ describe("gateway prepared model catalog", () => {
       workspaceDir: "/tmp/gateway-workspace",
     } satisfies Partial<GatewayModelCatalogSnapshot>);
     expect(projected).not.toHaveProperty("authStore");
+    expect(projected).not.toHaveProperty("inheritedAuthDir");
     expect(projected).not.toHaveProperty("metadataSnapshot");
+
+    await expect(
+      loadPreparedGatewayModelCatalogSnapshot({
+        agentId: "worker",
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toMatchObject({ inheritedAuthDir: "/tmp/auth-owner" });
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
