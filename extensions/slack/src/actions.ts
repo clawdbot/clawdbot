@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { z } from "zod";
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
+import { getClient, resolveToken, type SlackActionClientOpts } from "./actions-client.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
@@ -31,14 +32,6 @@ import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
-
-export type SlackActionClientOpts = {
-  cfg?: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  teamId?: string;
-  client?: WebClient;
-};
 
 export type SlackMessageSummary = {
   ts?: string;
@@ -75,8 +68,8 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-export { getClient, resolveToken } from "./actions-client.js";
-
+export { getClient, resolveToken };
+export type { SlackActionClientOpts };
 const SLACK_EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
 const SLACK_EMOJI_VARIATION_SELECTOR_RE = /[\uFE0E\uFE0F]/g;
 const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([

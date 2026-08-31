@@ -1,15 +1,23 @@
 // Shared Slack WebClient resolution for action helpers, split out of actions.ts
 // so action modules (actions.ts and actions-bookmarks.ts) can share getClient
 // without forming an import cycle through the actions.ts barrel.
+import type { WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
-import type { SlackActionClientOpts } from "./actions.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { resolveSlackBotToken } from "./token.js";
+
+export type SlackActionClientOpts = {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  token?: string;
+  teamId?: string;
+  client?: WebClient;
+};
 
 export function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfig): string {
   if (explicit?.trim()) {
