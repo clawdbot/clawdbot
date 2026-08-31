@@ -286,7 +286,7 @@ describe("chat pane native history pagination", () => {
       state,
       { items: [], total: 0 },
       {
-        consumptions: [{ runId, consumedByEventId: "collected-turn" }],
+        receipts: [{ runId, state: "consumed", consumedByEventId: "collected-turn" }],
       },
     );
     const prefix = [nativeHistoryMessage(1), nativeHistoryMessage(2)];
