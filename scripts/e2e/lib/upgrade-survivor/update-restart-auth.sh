@@ -326,10 +326,16 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    [ "$property" = 'Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent' ] || {
-      echo "systemctl shim unsupported user-scope show: $*" >&2
-      exit 1
-    }
+    case "$property" in
+      Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent | \
+        Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent)
+        ;;
+      *)
+        echo "systemctl shim unsupported user-scope show: $*" >&2
+        exit 1
+        ;;
+    esac
+    node "$manager_script" load-state
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\n' "$(cat "$pid_file")"
     else

@@ -168,6 +168,10 @@ function run() {
     readUnit(true);
     return;
   }
+  if (operation === "load-state" && !args.length) {
+    console.log(`Id=${unitName}\nLoadState=${readUnit() ? "loaded" : "not-found"}`);
+    return;
+  }
   if (operation === "command" && !args.length) {
     const unit = readUnit();
     if (!unit) {
