@@ -17,12 +17,24 @@ describe("json-parse repairJson invalid \\u escapes", () => {
   it.each([
     ['{"path":"C:\\bin\\app.exe"}', "C:\\bin\\app.exe"],
     ['{"path":"C:\\temp\\x"}', "C:\\temp\\x"],
-    ['{"path":"C:\\new\\file"}', "C:\\new\\file"],
     ['{"path":"D:\\reports\\q"}', "D:\\reports\\q"],
     ['{"path":"C:\\users\\bob"}', "C:\\users\\bob"],
   ])("preserves unescaped Windows path control-letter segments: %s", (input, expected) => {
     expect(parseStreamingJson(input)).toEqual({ path: expected });
     expect(parseJsonWithRepair(input)).toEqual({ path: expected });
+  });
+
+  it("honors already-valid JSON control escapes after a `<letter>:` (fixes #14452)", () => {
+    // `{"path":"C:\new\file"}` is *valid* JSON: \n and \f are legal escapes, so
+    // it must parse to real control characters, not be re-interpreted as a
+    // Windows path. A `<letter>:` followed by a valid escape is byte-identical
+    // to the Python `as f:\n` idiom, so re-corrupting it would reintroduce
+    // #14452. A model that means the literal path must escape the backslashes
+    // ("C:\\new\\file"), which stays valid JSON and round-trips unchanged.
+    // Expected value written with explicit escapes: drive letter, LF, "ew", FF, "ile".
+    const expected = "C:\u000Aew\u000Cile";
+    expect(parseStreamingJson('{"path":"C:\\new\\file"}')).toEqual({ path: expected });
+    expect(parseJsonWithRepair('{"path":"C:\\new\\file"}')).toEqual({ path: expected });
   });
 
   it("preserves legitimate JSON control escapes outside Windows paths", () => {

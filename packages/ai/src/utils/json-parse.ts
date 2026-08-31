@@ -106,12 +106,28 @@ export function repairJson(json: string): string {
 }
 
 export function parseJsonWithRepair(json: string): unknown {
-  return JSON.parse(repairJson(json)) as unknown;
+  // Prefer a faithful parse. `repairJson` is a best-effort recovery pass for
+  // malformed model output; running it on JSON that is already valid can
+  // *corrupt* it. In particular `looksLikeWindowsPathPrefix` cannot tell a real
+  // drive letter (`C:`) from an ordinary `<letter>:` token (e.g. Python
+  // `with open(x) as f:`), so a valid `\n` escape right after such a token gets
+  // doubled into a literal backslash-n. Only fall back to repair when the input
+  // genuinely fails to parse.
+  try {
+    return JSON.parse(json) as unknown;
+  } catch {
+    return JSON.parse(repairJson(json)) as unknown;
+  }
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
-  const tail = prefix.slice(-160);
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
+  // Only treat the value as a Windows path when the drive letter is at the very
+  // start of the string value (e.g. "C:\\..."). That is the only position a
+  // real drive letter appears; a `<letter>:` deeper in the string is almost
+  // always ordinary text (e.g. Python `with open(x) as f:`) and must not be
+  // rewritten. Together with parseJsonWithRepair only running repair on invalid
+  // JSON, this recovers malformed Windows paths without corrupting code.
+  return /^[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
 /**
