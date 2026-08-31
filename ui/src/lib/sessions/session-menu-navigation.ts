@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatHistoryResult } from "../../pages/chat/chat-history.ts";
+import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
 import type { SessionSplitHost } from "../../pages/chat/split-layout-types.ts";
 import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";

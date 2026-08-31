@@ -13,13 +13,11 @@ import {
 } from "../../lib/chat/message-visibility.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
-import {
-  chatScopedEventSessionMatches,
-  materializeVisibleAssistantStreamMessages,
-  type ChatEventPayload,
-  type ChatState,
-} from "./chat-history.ts";
+import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
+import type { ChatEventPayload } from "./chat-history.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,

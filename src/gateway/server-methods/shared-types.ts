@@ -39,6 +39,7 @@ import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
+  ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
@@ -357,7 +358,7 @@ type GatewayResidentBridgeContext = {
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
     opts?: StartChannelOptions,
-  ) => Promise<void>;
+  ) => Promise<ReadonlyMap<string, ChannelAccountStartOutcome>>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,

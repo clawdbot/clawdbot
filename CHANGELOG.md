@@ -1,7 +1,7 @@
 ﻿# Changelog
 
 Docs: https://docs.openclaw.ai
-Latest release notes: https://docs.openclaw.ai/releases/2026.8.1
+2026.8.1 release notes: https://docs.openclaw.ai/releases/2026.8.1
 
 ## Unreleased
 
@@ -71,6 +71,7 @@ Latest release notes: https://docs.openclaw.ai/releases/2026.8.1
 
 ### Fixes
 
+- Provider error handling: reuse prepared or already loaded provider hooks instead of cold-loading plugins during error classification, avoiding long stalls in failure reporting and model fallback.
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Cloud session lifecycle:** prevent archive, delete, and restart recovery from deadlocking behind an earlier worker move, keep work admission closed through cleanup, and preserve the same successor for concurrent recovery requests.

@@ -41,6 +41,10 @@ export function normalizeDisplayText(text: string): string {
   return text.replace(/\r/g, "");
 }
 
+export function trimTrailingEmptyLines(lines: readonly string[]): string[] {
+  return lines.slice(0, lines.findLastIndex((line) => line !== "") + 1);
+}
+
 /** Extracts text output and image placeholders from a tool result. */
 export function getTextOutput(
   result:

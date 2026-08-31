@@ -355,6 +355,37 @@ describe("channel-auth", () => {
     expect(readFirstLogMessage(runtime)).toContain("Gateway is in remote mode");
   });
 
+  it.each([
+    { status: "skipped", reason: "unconfigured" },
+    { status: "retry", reason: "stop-in-flight" },
+  ] as const)("reports a $reason start decision after saving login", async (outcome) => {
+    mocks.callGateway.mockResolvedValue({ started: false, outcome });
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.login).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(readFirstLogMessage(runtime)).toContain(`whatsapp/acct-1`);
+    expect(readFirstLogMessage(runtime)).toContain(outcome.reason);
+    expect(readFirstLogMessage(runtime)).toContain(
+      "openclaw channels status --channel whatsapp --probe",
+    );
+  });
+
+  it.each([true, false])(
+    "accepts an older Gateway start response (started=%s)",
+    async (started) => {
+      mocks.callGateway.mockResolvedValue({ channel: "whatsapp", accountId: "acct-1", started });
+
+      await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledOnce();
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps login successful when local gateway runtime reconcile fails", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
 

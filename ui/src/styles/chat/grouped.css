@@ -214,18 +214,14 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:hover .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-confirm-wrap,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-timestamp,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .msg-meta__summary,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-footer-actions {
+.chat-group:hover
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group:focus-within
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group-footer--persistent-identity:has(.msg-meta[open])
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions) {
   position: static;
   opacity: 1;
   pointer-events: auto;

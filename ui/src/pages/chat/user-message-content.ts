@@ -69,7 +69,6 @@ type LocalUserMessageInput = {
   replyToId?: string;
   runId?: string;
   sender?: SenderIdentity;
-  sequence?: number;
   text: string;
 };
 
@@ -79,7 +78,6 @@ type LocalUserMessage = {
   timestamp: number;
   __openclaw: Record<string, unknown> & {
     idempotencyKey?: string;
-    seq?: number;
   };
 };
 
@@ -111,7 +109,6 @@ export function buildLocalUserMessage(input: LocalUserMessageInput): LocalUserMe
       ...(input.sender?.profileAvatarUrl
         ? { senderProfileAvatarUrl: input.sender.profileAvatarUrl }
         : {}),
-      ...(input.sequence === undefined ? {} : { seq: input.sequence }),
     },
   };
 }

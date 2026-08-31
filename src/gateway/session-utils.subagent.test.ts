@@ -250,7 +250,6 @@ describe("session list subagent metadata", () => {
     expect(
       buildSingleRowStoreChildSessionsByKey({
         store,
-        storePath: "/tmp/sessions.json",
         key: navigationParentKey,
         now,
       }).get(navigationParentKey),

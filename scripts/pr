@@ -61,7 +61,20 @@ pr_wrapper_components=(
   scripts/watch-pr-ci.mts
   .github/workflows/pr-crabbox-gate-publisher.yml
 )
-if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+# Anchor-exec handoff: this process was exec'd from wrapper bytes materialized
+# out of refs/remotes/origin/main by the selection logic below in a previous
+# wrapper. The env var conveys repository addressing only — code trust came
+# from the parent's per-blob verification of the materialized copy, the same
+# verify-then-exec contract as the canonical-checkout substitution. Skip
+# re-selection: the running bytes ARE the anchor, and the temp copy has no git
+# context of its own to select against.
+if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+  if ! git -C "$OPENCLAW_PR_ANCHOR_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "OPENCLAW_PR_ANCHOR_REPO_ROOT is not a git work tree: $OPENCLAW_PR_ANCHOR_REPO_ROOT" >&2
+    exit 1
+  fi
+  canonical_repo_root="$OPENCLAW_PR_ANCHOR_REPO_ROOT"
+elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
@@ -119,6 +132,53 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
           [ "$canonical_wrapper_clean" = "1" ]; then
           echo "scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
           exec "$canonical_self" "$@"
+        fi
+        # Neither this worktree nor the canonical checkout matches the fetched
+        # origin/main anchor. Materialize the anchor wrapper bytes directly
+        # from refs/remotes/origin/main and exec that copy: trust flows from
+        # the fetched ref itself, so a queued PR stops paying a rebase + CI lap
+        # for unrelated wrapper drift on main. Requires the anchor entrypoint
+        # to understand the handoff; older anchors fall through to the refusal.
+        # Archive emits paths relative to its cwd, so run it (and the
+        # verification listing) from the worktree toplevel to keep component
+        # paths intact in the materialized tree.
+        anchor_git_root=$(git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
+        if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
+          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
+          anchor_extraction_valid=0
+          if git -C "$anchor_git_root" archive refs/remotes/origin/main -- \
+            "${pr_wrapper_components[@]}" 2>/dev/null |
+            tar -x -C "$anchor_exec_dir" 2>/dev/null; then
+            anchor_extraction_valid=1
+            anchor_verified_entries=0
+            # Verify every extracted file byte-matches its anchor blob so an
+            # archive/extract fault can never smuggle different code past the
+            # trust boundary. The temp dir is 0700 and exec'd immediately —
+            # the same TOCTOU class as the canonical-substitution exec above.
+            while IFS=$'\t' read -r anchor_meta anchor_path; do
+              anchor_blob="${anchor_meta##* }"
+              extracted_blob=$(git -C "$anchor_git_root" hash-object -- \
+                "$anchor_exec_dir/$anchor_path" 2>/dev/null || true)
+              if [ -z "$extracted_blob" ] || [ "$extracted_blob" != "$anchor_blob" ]; then
+                anchor_extraction_valid=0
+                break
+              fi
+              anchor_verified_entries=$((anchor_verified_entries + 1))
+            done < <(git -C "$anchor_git_root" ls-tree -r --full-tree refs/remotes/origin/main -- "${pr_wrapper_components[@]}")
+            # An empty listing means the anchor read failed; never exec unverified bytes.
+            if [ "$anchor_verified_entries" = "0" ]; then
+              anchor_extraction_valid=0
+            fi
+          fi
+          if [ "$anchor_extraction_valid" = "1" ] &&
+            grep -q "OPENCLAW_PR_ANCHOR_REPO_ROOT" "$anchor_exec_dir/scripts/pr" 2>/dev/null; then
+            # Not cleaned by trap: exec replaces this shell, and bash re-reads
+            # the script file during execution, so the copy must outlive the
+            # whole supervised run. OS tmp reaping owns the ~200 KiB dir.
+            echo "scripts/pr wrapper in this worktree differs from origin/main; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(git -C "$script_parent_dir" rev-parse --short refs/remotes/origin/main)." >&2
+            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" exec "$anchor_exec_dir/scripts/pr" "$@"
+          fi
+          rm -rf "$anchor_exec_dir"
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so

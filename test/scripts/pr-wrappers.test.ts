@@ -456,6 +456,97 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  // Parks the canonical checkout on a diverging branch so neither the linked
+  // worktree nor canonical matches the fetched origin/main anchor — the shape
+  // that previously refused and forced a rebase.
+  function parkCanonicalOffAnchor(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+    fixture.git(fixture.canonical, ["checkout", "-b", "parked"]);
+    writeFileSync(
+      join(fixture.canonical, "scripts", "pr-lib", "gates.sh"),
+      'ci_dispatch() { echo "parked canonical executed"; }\n',
+    );
+    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/gates.sh"]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: parked canonical wrapper"]);
+  }
+
+  it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      // The anchor (pushed main) marker proves materialized anchor code ran,
+      // not the linked worktree's wrapper and not the parked canonical one.
+      expect(result.stdout).toContain("canonical wrapper executed");
+      expect(result.stdout).not.toContain("local wrapper executed");
+      expect(result.stdout).not.toContain("parked canonical executed");
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("routes a mismatched landing subcommand through the materialized anchor", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["prepare-run", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      // The stubbed gh reports a non-main base: reaching this gate proves the
+      // materialized anchor wrapper ran the landing subcommand.
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps the refusal when the anchor wrapper predates the handoff contract", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      // Rewrite origin/main's scripts/pr to an entrypoint without the
+      // OPENCLAW_PR_ANCHOR_REPO_ROOT handoff, as pre-fix anchors are.
+      fixture.git(fixture.canonical, ["checkout", "main"]);
+      const legacy = readScript(join(fixture.canonical, "scripts", "pr")).replaceAll(
+        "OPENCLAW_PR_ANCHOR_REPO_ROOT",
+        "OPENCLAW_PR_LEGACY_UNSUPPORTED",
+      );
+      writeFileSync(join(fixture.canonical, "scripts", "pr"), legacy);
+      fixture.git(fixture.canonical, ["add", "scripts/pr"]);
+      fixture.git(fixture.canonical, ["commit", "-m", "test: legacy anchor wrapper"]);
+      fixture.git(fixture.canonical, ["push", "origin", "main"]);
+      fixture.git(fixture.linked, ["fetch", "origin", "main"]);
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Refusing to silently substitute");
+      expect(result.stdout).not.toContain("canonical wrapper executed");
+      expect(result.stdout).not.toContain("local wrapper executed");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("keeps merge wrapper modes delegated to the main PR helper", () => {
     const script = readScript("scripts/pr-merge");
 

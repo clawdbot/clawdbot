@@ -13,7 +13,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveConfigDir } from "../utils.js";
 import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
-import { saveCronQuarantinedJobs } from "./store/quarantine.js";
+import {
+  deleteCronQuarantinedJobsFromDatabase,
+  saveCronQuarantinedJobs,
+} from "./store/quarantine.js";
 import {
   assertCronStoreCanPersist,
   deleteStaleCronJobFamilyRows,
@@ -242,6 +245,7 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
   };
+  deleteQuarantineEntries?: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
 };
 
 type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
@@ -261,7 +265,10 @@ export async function saveCronJobsStore(
 ): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const stateOnly = opts?.stateOnly === true && !opts.quarantine?.entries.length;
+  const stateOnly =
+    opts?.stateOnly === true &&
+    !opts.quarantine?.entries.length &&
+    !opts.deleteQuarantineEntries?.length;
   if (!stateOnly) {
     assertCronStoreCanPersist(store);
   }
@@ -273,6 +280,13 @@ export async function saveCronJobsStore(
         entries: opts.quarantine.entries,
         nowMs: opts.quarantine.nowMs,
         database,
+      });
+    }
+    if (opts?.deleteQuarantineEntries?.length) {
+      deleteCronQuarantinedJobsFromDatabase({
+        database: database.db,
+        storePath: resolvedStorePath,
+        entries: opts.deleteQuarantineEntries,
       });
     }
     // Hot-path timer updates mutate runtime columns only; malformed-row
@@ -298,6 +312,7 @@ export async function saveCronJobsStoreWithMetadata(
   store: CronStoreFile,
   acquireMetadata: (db: DatabaseSync) => boolean,
   quarantine?: SaveCronJobsStoreOptions["quarantine"],
+  deleteQuarantineEntries?: SaveCronJobsStoreOptions["deleteQuarantineEntries"],
 ): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
@@ -312,6 +327,13 @@ export async function saveCronJobsStoreWithMetadata(
         entries: quarantine.entries,
         nowMs: quarantine.nowMs,
         database,
+      });
+    }
+    if (deleteQuarantineEntries?.length) {
+      deleteCronQuarantinedJobsFromDatabase({
+        database: database.db,
+        storePath: resolvedStorePath,
+        entries: deleteQuarantineEntries,
       });
     }
     const normalizedJobs = replaceCronRows(database.db, storeKey, store);

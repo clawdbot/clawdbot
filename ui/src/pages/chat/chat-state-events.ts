@@ -24,13 +24,10 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import {
-  chatScopedEventSessionMatches,
-  loadChatBranches,
-  loadChatHistory,
-  retireChatBranchRequests,
-} from "./chat-history.ts";
+import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
   refreshPullRequestsForStreamedLinks,
@@ -64,7 +61,8 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
-import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
 const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
