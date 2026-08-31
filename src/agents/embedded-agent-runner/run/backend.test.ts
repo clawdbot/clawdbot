@@ -20,20 +20,22 @@ vi.mock("../../subagents/registry/subagent-registry.js", () => ({
 
 describe("embedded attempt backend", () => {
   it("preserves core TTS delivery provenance through backend projection", async () => {
+    const operationalRunInstance = {};
     const attempt = markCoreTtsAttemptResult(
       {
         agentHarnessId: "openclaw",
         toolMediaUrls: ["/tmp/reply.opus"],
       },
       ["/tmp/reply.opus"],
+      operationalRunInstance,
     );
     harnessMocks.runAttempt.mockResolvedValueOnce(attempt);
 
     const result = await runEmbeddedAttemptWithBackend({} as never);
 
-    expect(getCoreTtsAttemptResultMediaUrls(result, result.toolMediaUrls)).toEqual([
-      "/tmp/reply.opus",
-    ]);
+    expect(
+      getCoreTtsAttemptResultMediaUrls(result, result.toolMediaUrls, operationalRunInstance),
+    ).toEqual(["/tmp/reply.opus"]);
   });
 
   it.each([

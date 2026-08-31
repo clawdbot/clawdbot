@@ -232,7 +232,11 @@ export function prepareEmbeddedRunTerminal(input: {
     // Preserve harness provenance through terminal delivery. Without it,
     // message-tool-only routes silently drop native runtime artifacts.
     hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
-    toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(attempt, attempt.toolMediaUrls),
+    toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+      attempt,
+      attempt.toolMediaUrls,
+      runParams.admittedRunContext.operationalRunInstance,
+    ),
     toolAudioAsVoice: attempt.toolAudioAsVoice,
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,

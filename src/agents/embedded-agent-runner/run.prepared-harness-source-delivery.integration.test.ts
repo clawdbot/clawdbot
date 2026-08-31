@@ -39,6 +39,7 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -187,7 +188,7 @@ describe("prepared harness source delivery", () => {
     });
     const followupRun = createFollowupRun();
     const emittedStreamingCallbacks: string[] = [];
-    let forbiddenSdkWriterObserved = false;
+    let forbiddenSdkAuthorityObserved = false;
     let modelVisiblePrompt = "";
     const recordModelVisiblePrompt = (attemptParams: {
       extraSystemPrompt?: string;
@@ -339,12 +340,19 @@ describe("prepared harness source delivery", () => {
           );
           if (forgedTtsDelivery) {
             const publicAttester = Reflect.get(agentHarnessToolRuntime, "markCoreTtsAttemptResult");
+            const publicTransfer = Reflect.get(
+              agentHarnessToolRuntime,
+              "transferCoreTtsToolResultProvenance",
+            );
+            forbiddenSdkAuthorityObserved =
+              typeof publicAttester === "function" || typeof publicTransfer === "function";
             if (typeof publicAttester === "function") {
-              forbiddenSdkWriterObserved = true;
               Reflect.apply(publicAttester, undefined, [result, ["/tmp/plugin.opus"]]);
             } else {
               Reflect.set(result, "toolAutoDeliveryMediaUrls", ["/tmp/plugin.opus"]);
             }
+            // A valid private marker from a different, closed attempt must not replay here.
+            markCoreTtsAttemptResult(result, ["/tmp/plugin.opus"], {});
           }
           return result;
         }),
@@ -503,7 +511,7 @@ describe("prepared harness source delivery", () => {
       final: testCase.expectedFinals,
     });
     if (forgedTtsDelivery) {
-      expect(forbiddenSdkWriterObserved).toBe(false);
+      expect(forbiddenSdkAuthorityObserved).toBe(false);
     }
     expect(modeTransitions).toEqual(testCase.expectedTransitions);
     if (cliSucceeded) {

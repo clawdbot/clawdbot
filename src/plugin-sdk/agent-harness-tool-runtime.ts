@@ -9,10 +9,7 @@ import {
   type AgentHarnessToolSurfaceRuntime as CoreAgentHarnessToolSurfaceRuntime,
 } from "../agents/harness/tool-surface-bridge.js";
 
-export {
-  getCoreTtsToolResultMediaUrls,
-  transferCoreTtsToolResultProvenance,
-} from "../agents/tools/tts-tool-result-provenance.js";
+export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<typeof import("./agent-harness.js").createOpenClawCodingTools>[0]

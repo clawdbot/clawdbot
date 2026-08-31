@@ -185,10 +185,11 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("preserves core TTS delivery provenance through lifecycle normalization", async () => {
+    const operationalRunInstance = {};
     const params = createAttemptParams();
     const result = createAttemptResult();
     result.toolMediaUrls = ["/tmp/reply.opus"];
-    markCoreTtsAttemptResult(result, ["/tmp/reply.opus"]);
+    markCoreTtsAttemptResult(result, ["/tmp/reply.opus"], operationalRunInstance);
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
@@ -199,9 +200,13 @@ describe("AgentHarness lifecycle runner", () => {
 
     const normalized = await runAgentHarnessLifecycleAttempt(harness, params);
 
-    expect(getCoreTtsAttemptResultMediaUrls(normalized, normalized.toolMediaUrls)).toEqual([
-      "/tmp/reply.opus",
-    ]);
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        normalized,
+        normalized.toolMediaUrls,
+        operationalRunInstance,
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
   });
 
   it("backfills omitted current-attempt provenance from the harness assistant", async () => {

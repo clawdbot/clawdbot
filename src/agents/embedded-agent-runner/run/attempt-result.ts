@@ -497,7 +497,11 @@ export function completeEmbeddedAttemptResult(
   };
   const resultWithAutoDeliveryMedia =
     toolAutoDeliveryMediaUrls.length > 0
-      ? markCoreTtsAttemptResult(result, toolAutoDeliveryMediaUrls)
+      ? markCoreTtsAttemptResult(
+          result,
+          toolAutoDeliveryMediaUrls,
+          attempt.admittedRunContext.operationalRunInstance,
+        )
       : result;
   return finalizeEmbeddedAttempt({
     result: resultWithAutoDeliveryMedia,

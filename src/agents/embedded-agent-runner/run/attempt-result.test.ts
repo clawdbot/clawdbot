@@ -4,6 +4,8 @@ import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
+
 function completeResult(params?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
   messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
@@ -35,6 +37,7 @@ function completeResult(params?: {
   return completeEmbeddedAttemptResult({
     attempt: {
       runId: "run-1",
+      admittedRunContext: { operationalRunInstance: TEST_OPERATIONAL_RUN_INSTANCE },
       sessionId: "session-1",
       provider: "test",
       modelId: "model",
@@ -336,7 +339,11 @@ describe("attempt result projection", () => {
       toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
     });
     expect(
-      getCoreTtsAttemptResultMediaUrls(autoDeliveryResult, autoDeliveryResult.toolMediaUrls),
+      getCoreTtsAttemptResultMediaUrls(
+        autoDeliveryResult,
+        autoDeliveryResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
     ).toEqual(["/tmp/reply.opus"]);
     const alreadySentResult = completeResult({
       pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
@@ -344,7 +351,11 @@ describe("attempt result projection", () => {
       messagingToolSentMediaUrls: ["/tmp/reply.opus"],
     });
     expect(
-      getCoreTtsAttemptResultMediaUrls(alreadySentResult, alreadySentResult.toolMediaUrls),
+      getCoreTtsAttemptResultMediaUrls(
+        alreadySentResult,
+        alreadySentResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
     ).toEqual([]);
   });
 

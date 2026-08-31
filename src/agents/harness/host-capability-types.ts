@@ -49,6 +49,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,
   ) => AnyAgentTool[];
+  /** Transfers TTS delivery provenance observed by this exact active host attempt. */
+  transferCoreTtsToolResultProvenance?: <T extends object>(
+    toolResult: unknown,
+    attemptResult: T,
+    eligibleMediaUrls: readonly string[],
+  ) => T;
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
     | {

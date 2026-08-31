@@ -4,9 +4,13 @@ import {
 } from "../runtime/internal-hooks.js";
 
 const coreTtsMediaByProvenance = new WeakMap<object, readonly string[]>();
-// Attempt attestation stays on the exact result object. Public harness fields
-// cannot create the source-suppression delivery authority checked at terminal output.
-const coreTtsMediaByAttemptResult = new WeakMap<object, readonly string[]>();
+// Attempt attestation stays on the exact result and operational run instance.
+// Public fields and retained results cannot authorize a later run's delivery.
+type CoreTtsAttemptProvenance = Readonly<{
+  mediaUrls: readonly string[];
+  operationalRunInstance: object;
+}>;
+const coreTtsProvenanceByAttemptResult = new WeakMap<object, CoreTtsAttemptProvenance>();
 
 export function markCoreTtsToolResult<T extends object>(result: T, mediaUrls: string[]): T {
   const provenance = {};
@@ -25,8 +29,12 @@ export function getCoreTtsToolResultMediaUrls(result: unknown): readonly string[
 export function markCoreTtsAttemptResult<T extends object>(
   result: T,
   mediaUrls: readonly string[],
+  operationalRunInstance: object,
 ): T {
-  coreTtsMediaByAttemptResult.set(result, Object.freeze([...mediaUrls]));
+  coreTtsProvenanceByAttemptResult.set(
+    result,
+    Object.freeze({ mediaUrls: Object.freeze([...mediaUrls]), operationalRunInstance }),
+  );
   return result;
 }
 
@@ -35,6 +43,7 @@ export function transferCoreTtsToolResultProvenance<T extends object>(
   toolResult: unknown,
   attemptResult: T,
   eligibleMediaUrls: readonly string[],
+  operationalRunInstance: object,
 ): T {
   const toolMediaUrls = getCoreTtsToolResultMediaUrls(toolResult);
   if (!toolMediaUrls) {
@@ -45,15 +54,19 @@ export function transferCoreTtsToolResultProvenance<T extends object>(
   if (transferred.length === 0) {
     return attemptResult;
   }
-  const existing = coreTtsMediaByAttemptResult.get(attemptResult) ?? [];
-  return markCoreTtsAttemptResult(attemptResult, [...new Set([...existing, ...transferred])]);
+  const existing = coreTtsProvenanceByAttemptResult.get(attemptResult)?.mediaUrls ?? [];
+  return markCoreTtsAttemptResult(
+    attemptResult,
+    [...new Set([...existing, ...transferred])],
+    operationalRunInstance,
+  );
 }
 
 /** Core lifecycle copies preserve attestation; plugin-created result copies stay untrusted. */
 export function copyCoreTtsAttemptResultProvenance<T extends object>(source: object, target: T): T {
-  const mediaUrls = coreTtsMediaByAttemptResult.get(source);
-  if (mediaUrls) {
-    coreTtsMediaByAttemptResult.set(target, mediaUrls);
+  const provenance = coreTtsProvenanceByAttemptResult.get(source);
+  if (provenance) {
+    coreTtsProvenanceByAttemptResult.set(target, provenance);
   }
   return target;
 }
@@ -61,7 +74,12 @@ export function copyCoreTtsAttemptResultProvenance<T extends object>(source: obj
 export function getCoreTtsAttemptResultMediaUrls(
   result: object,
   deliveredMediaUrls: readonly string[] | undefined,
+  operationalRunInstance: object | undefined,
 ): string[] {
+  const provenance = coreTtsProvenanceByAttemptResult.get(result);
+  if (!provenance || provenance.operationalRunInstance !== operationalRunInstance) {
+    return [];
+  }
   const delivered = new Set(deliveredMediaUrls?.map((url) => url.trim()));
-  return (coreTtsMediaByAttemptResult.get(result) ?? []).filter((url) => delivered.has(url.trim()));
+  return provenance.mediaUrls.filter((url) => delivered.has(url.trim()));
 }

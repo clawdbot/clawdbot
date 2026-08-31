@@ -77,6 +77,7 @@ function attemptResult(
 
 async function prepareAttempt(input: {
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
+  admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
   terminalState: EmbeddedRunTerminalState;
@@ -84,7 +85,7 @@ async function prepareAttempt(input: {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
   return prepareEmbeddedRunTerminal({
     runParams: {
-      admittedRunContext: createTestAdmittedRunContext("run-focused"),
+      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
       sessionId: "session-focused",
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
@@ -160,8 +161,13 @@ describe("prepareEmbeddedRunTerminal", () => {
       toolAudioAsVoice: true,
       toolTrustedLocalMedia: true,
     });
+    const admittedRunContext = createTestAdmittedRunContext("run-focused");
     if (testCase.attestedMediaUrls.length > 0) {
-      markCoreTtsAttemptResult(attempt, testCase.attestedMediaUrls);
+      markCoreTtsAttemptResult(
+        attempt,
+        testCase.attestedMediaUrls,
+        admittedRunContext.operationalRunInstance,
+      );
     }
     if (testCase.forgePublicField) {
       Reflect.set(attempt, "toolAutoDeliveryMediaUrls", ["/tmp/reply.opus"]);
@@ -171,11 +177,17 @@ describe("prepareEmbeddedRunTerminal", () => {
         testCase.transferToolResult === "core"
           ? markCoreTtsToolResult({}, ["/tmp/reply.opus"])
           : {};
-      transferCoreTtsToolResultProvenance(toolResult, attempt, ["/tmp/reply.opus"]);
+      transferCoreTtsToolResultProvenance(
+        toolResult,
+        attempt,
+        ["/tmp/reply.opus"],
+        admittedRunContext.operationalRunInstance,
+      );
     }
 
     const prepared = await prepareAttempt({
       attempt,
+      admittedRunContext,
       sourceReplyDeliveryMode: "message_tool_only",
       terminalState: {
         outcome: { reason: "completed", status: "ok", stopReason: "stop" },
