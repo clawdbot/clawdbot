@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawKit
@@ -10,9 +11,20 @@ enum GatewayDiscoverySelectionSupport {
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
         state: AppState)
     {
+        self.applyRemoteSelection(
+            gateway: gateway,
+            state: state,
+            routeBindingKey: GatewayDiscoveryPreferences.defaultRouteBindingKey())
+    }
+
+    static func applyRemoteSelection(
+        gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        state: AppState,
+        routeBindingKey: SymmetricKey?)
+    {
         let previousRoute = Self.routeBinding(state: state)
-        let previousRouteWasDiscoveryOwned = GatewayDiscoveryPreferences
-            .preferredGatewayOwnsRoute(previousRoute)
+        let previousRouteWasVerified = GatewayDiscoveryPreferences
+            .preferredGatewayVerifiedForRoute(previousRoute, key: routeBindingKey)
         let preferredTransport = self.preferredTransport(for: gateway)
         if preferredTransport != state.remoteTransport {
             state.remoteTransport = preferredTransport
@@ -24,9 +36,12 @@ enum GatewayDiscoverySelectionSupport {
             state.remoteUrl = self.sshTunnelGatewayUrl(current: state.remoteUrl)
         }
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(
+            gateway.stableID,
+            state: state,
+            routeBindingKey: routeBindingKey)
         guard let selectedRoute = Self.routeBinding(state: state),
-              selectedRoute != previousRoute || !previousRouteWasDiscoveryOwned
+              selectedRoute != previousRoute || !previousRouteWasVerified
         else { return }
         // Selection establishes ownership before persistence. A failed atomic
         // save leaves routing unavailable; retry still removes both auth kinds.
@@ -41,7 +56,7 @@ enum GatewayDiscoverySelectionSupport {
             remoteTarget: state.remoteTarget)
     }
 
-    private static func sshTunnelGatewayUrl(current: String) -> String {
+    static func sshTunnelGatewayUrl(current: String) -> String {
         let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let url = URL(string: trimmed),

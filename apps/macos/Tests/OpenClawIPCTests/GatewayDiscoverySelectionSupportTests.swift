@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -6,6 +7,8 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayDiscoverySelectionSupportTests {
+    private let routeBindingKey = SymmetricKey(data: Data(repeating: 0xA5, count: 32))
+
     private func withIsolation<T>(
         configPath: String,
         _ body: () async throws -> T) async rethrows -> T
@@ -296,16 +299,206 @@ struct GatewayDiscoverySelectionSupportTests {
                 remoteTarget: state.remoteTarget)
             GatewayDiscoveryPreferences.setPreferredStableID(
                 "bonjour|gateway-a",
-                routeBinding: routeBinding)
+                routeBinding: routeBinding,
+                key: self.routeBindingKey)
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
                 gateway: self.makeGateway(
                     serviceHost: "gateway-a.local",
                     servicePort: 18789,
                     stableID: "bonjour|gateway-a"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteToken == "gateway-a-token")
+        }
+    }
+
+    @Test func `route binding is persisted only as a domain separated verifier`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let routeBinding = "remote:direct:wss://gateway-a.example.test:443"
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: routeBinding,
+                key: self.routeBindingKey)
+
+            let verifier = try #require(GatewayDiscoveryPreferences.preferredRouteBindingVerifier())
+            #expect(verifier.hasPrefix("hmac-sha256:gateway-discovery-route-binding:v1:"))
+            #expect(!verifier.contains(routeBinding))
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                routeBinding,
+                key: self.routeBindingKey) == .match)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                "remote:direct:wss://gateway-b.example.test:443",
+                key: self.routeBindingKey) == .mismatch)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                routeBinding,
+                key: nil) == .unverifiable)
+        }
+    }
+
+    @Test func `legacy raw route binding is never accepted as proof`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await self.withIsolation(configPath: configPath) {
+            let routeBinding = "remote:direct:ws://gateway-a.local:18789"
+            GatewayDiscoveryPreferences.setPreferredStableID("bonjour|gateway-a")
+            AppDefaults.standard.set(
+                routeBinding,
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                routeBinding,
+                key: self.routeBindingKey) == .unverifiable)
+        }
+    }
+
+    @Test func `legacy discovery direct config is sanitized before hydration`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "ws://gateway-a.local:18789",
+                        "sshTarget": "user@gateway-a.local",
+                        "token": "legacy-token",
+                        "password": "legacy-password",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            let legacyBinding = try #require(GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "ws://gateway-a.local:18789",
+                remoteTarget: "user@gateway-a.local"))
+            GatewayDiscoveryPreferences.setPreferredStableID("bonjour|gateway-a")
+            AppDefaults.standard.set(
+                legacyBinding,
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { OpenClawConfigFile.saveDict($0) },
+                key: self.routeBindingKey)
+
+            #expect(startup.migrationChanged)
+            #expect(startup.migrationPersisted)
+            let remote = try #require(
+                (startup.root["gateway"] as? [String: Any])?["remote"] as? [String: Any])
+            #expect(remote["transport"] as? String == "ssh")
+            #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+            #expect(remote["token"] == nil)
+            #expect(remote["password"] == nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .ssh,
+                    remoteURL: "ws://127.0.0.1:18789",
+                    remoteTarget: "user@gateway-a.local"),
+                key: self.routeBindingKey) == .match)
+        }
+    }
+
+    @Test func `failed legacy migration persistence remains unavailable`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "ws://gateway-a.local:18789",
+                        "token": "legacy-token",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            GatewayDiscoveryPreferences.setPreferredStableID("bonjour|gateway-a")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { _ in false },
+                key: self.routeBindingKey)
+
+            #expect(startup.migrationChanged)
+            #expect(!startup.migrationPersisted)
+            let inMemoryRemote = try #require(
+                (startup.root["gateway"] as? [String: Any])?["remote"] as? [String: Any])
+            #expect(inMemoryRemote["transport"] as? String == "ssh")
+            #expect(inMemoryRemote["token"] == nil)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: OpenClawConfigFile.loadDict()) == "legacy-token")
+        }
+    }
+
+    @Test func `manual direct config is unchanged without a discovery receipt`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await self.withIsolation(configPath: configPath) {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://manual.example.test",
+                        "token": "manual-token",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            var saveCount = 0
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { _ in
+                    saveCount += 1
+                    return true
+                },
+                key: self.routeBindingKey)
+
+            #expect(!startup.migrationChanged)
+            #expect(startup.migrationPersisted)
+            #expect(saveCount == 0)
+            #expect(GatewayRemoteConfig.resolveTransport(root: startup.root) == .direct)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: startup.root) == "manual-token")
+        }
+    }
+
+    @Test func `legacy exact tailscale serve route keeps direct transport but drops credentials`() async {
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let configPath = TestIsolation.tempConfigPath()
+        await self.withIsolation(configPath: configPath) {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://\(tailnetHost)",
+                        "token": "legacy-token",
+                        "password": "legacy-password",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            GatewayDiscoveryPreferences.setPreferredStableID("tailscale-serve|\(tailnetHost)")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { OpenClawConfigFile.saveDict($0) },
+                key: self.routeBindingKey)
+
+            let remote = (startup.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+            #expect(remote?["transport"] as? String == "direct")
+            #expect(remote?["url"] as? String == "wss://\(tailnetHost)")
+            #expect(remote?["token"] == nil)
+            #expect(remote?["password"] == nil)
         }
     }
 }

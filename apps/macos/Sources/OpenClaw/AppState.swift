@@ -569,7 +569,10 @@ final class AppState {
             AppDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let configRoot = OpenClawConfigFile.loadDict()
+        let startupConfig = GatewayDiscoveryPreferences.prepareStartupConfig(
+            isPreview: self.isPreview,
+            saver: self.gatewayConfigSaver)
+        let configRoot = startupConfig.root
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
@@ -638,11 +641,13 @@ final class AppState {
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
 
-        if !self.isPreview {
+        if !self.isPreview, startupConfig.migrationPersisted {
             self.reconcilePreferredGatewayRouteBinding()
+        } else if !self.isPreview {
+            self.gatewayConfigSyncState = .failed
         }
         self.isInitializing = false
-        if !self.isPreview {
+        if !self.isPreview, startupConfig.migrationPersisted {
             self.startConfigWatcher()
         }
     }

@@ -4,19 +4,20 @@ import Testing
 
 private struct StoredGatewayPreference {
     let stableID: String?
-    let routeBinding: String?
+    let routeBindingVerifier: String?
 }
 
 private func captureGatewayPreference() -> StoredGatewayPreference {
     StoredGatewayPreference(
         stableID: GatewayDiscoveryPreferences.preferredStableID(),
-        routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding())
+        routeBindingVerifier: GatewayDiscoveryPreferences.preferredRouteBindingVerifier())
 }
 
 private func restoreGatewayPreference(_ preference: StoredGatewayPreference) {
-    GatewayDiscoveryPreferences.setPreferredStableID(
-        preference.stableID,
-        routeBinding: preference.routeBinding)
+    GatewayDiscoveryPreferences.setPreferredStableID(preference.stableID)
+    if let verifier = preference.routeBindingVerifier {
+        AppDefaults.standard.set(verifier, forKey: "gateway.preferredStableIDRouteBinding.v1")
+    }
 }
 
 private actor GatewayConfigReadGate {
@@ -125,7 +126,7 @@ struct AppStateRemoteConfigTests {
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-b")
 
         #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-b")
-        #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+        #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
     }
 
     @Test
@@ -785,7 +786,7 @@ struct AppStateRemoteConfigTests {
             #expect(state.remoteUrl == "wss://gateway-b.example.test")
             #expect(state._testReconcilePreferredGatewayRouteBinding())
             #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-            #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
         }
     }
 
@@ -831,7 +832,7 @@ struct AppStateRemoteConfigTests {
                 #expect(settings.identity == "/tmp/gateway-b-id")
                 #expect(state._testReconcilePreferredGatewayRouteBinding())
                 #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-                #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+                #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
             }
     }
 

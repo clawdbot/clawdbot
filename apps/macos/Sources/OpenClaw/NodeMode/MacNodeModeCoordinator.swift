@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
@@ -295,14 +296,18 @@ final class MacNodeModeCoordinator: NSObject {
 
     func setPreferredGatewayStableID(
         _ stableID: String?,
-        state: AppState = AppStateStore.shared)
+        state: AppState = AppStateStore.shared,
+        routeBindingKey: SymmetricKey? = GatewayDiscoveryPreferences.defaultRouteBindingKey())
     {
         let routeBinding = stableID == nil ? nil : GatewayDiscoveryPreferences.routeBinding(
             connectionMode: .remote,
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget)
-        GatewayDiscoveryPreferences.setPreferredStableID(stableID, routeBinding: routeBinding)
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            stableID,
+            routeBinding: routeBinding,
+            key: routeBindingKey)
         // Revoke a suspended endpoint attempt before its preference change is
         // reflected back through GatewayEndpointStore's async subscription.
         self.enqueueRouteInvalidation(mode: .reconnectRefresh)
