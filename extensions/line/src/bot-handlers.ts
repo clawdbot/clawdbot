@@ -44,6 +44,7 @@ import {
 import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
+  resolveLineConversationId,
   buildLinePostbackContext,
   getLineSourceInfo,
   readLineTextMessageBody,
@@ -229,8 +230,11 @@ async function resolveLineEventAdmission(
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
-        resolveLineQuotedMessage(account.accountId, readLineQuotedMessageId(event.message))
-          ?.fromBot === true,
+        resolveLineQuotedMessage(
+          account.accountId,
+          readLineQuotedMessageId(event.message),
+          resolveLineConversationId(event.source),
+        )?.fromBot === true,
       ),
     };
   })();
@@ -439,6 +443,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       if (recorded.length > 0) {
         recordLineAgentVisibleMessage(account.accountId, {
           id: message.id,
+          conversationId: resolveLineConversationId(event.source),
           body: quotableBody,
           ...(userId ? { senderId: userId } : {}),
         });
@@ -523,6 +528,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     // This message is on its way to the agent, so a later quote of it may name it.
     recordLineAgentVisibleMessage(account.accountId, {
       id: message.id,
+      conversationId: resolveLineConversationId(event.source),
       body: quotableBody,
       ...(userId ? { senderId: userId } : {}),
     });

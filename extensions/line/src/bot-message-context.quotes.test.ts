@@ -99,6 +99,7 @@ describe("buildLineMessageContext quotes", () => {
     );
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
+      conversationId: "group-quote",
       body: "staging is on 10.0.0.5",
       senderId: "U-teammate",
     });
@@ -119,9 +120,32 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToSender).toBe("Mika");
   });
 
+  it("names the quoted author by raw id when LINE will not name them", async () => {
+    getUserProfileMock.mockImplementation(async () => null);
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      conversationId: "group-quote",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-teammate",
+    });
+
+    const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
+      event: quotingEvent("m-quoted", "ping this one"),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToSender).toBe("user:U-teammate");
+  });
+
   it("hides a quote body once its sender left the group allowlist", async () => {
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
+      conversationId: "group-quote",
       body: "staging is on 10.0.0.5",
       senderId: "U-teammate",
     });
@@ -148,6 +172,7 @@ describe("buildLineMessageContext quotes", () => {
     );
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
+      conversationId: "group-quote",
       body: "staging is on 10.0.0.5",
       senderId: "U-teammate",
     });
@@ -169,6 +194,7 @@ describe("buildLineMessageContext quotes", () => {
   it("keeps an explicitly quoted body under allowlist_quote", async () => {
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
+      conversationId: "group-quote",
       body: "staging is on 10.0.0.5",
       senderId: "U-teammate",
     });

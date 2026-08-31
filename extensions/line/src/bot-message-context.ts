@@ -1,5 +1,6 @@
 // Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
+import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildChannelInboundEventContext,
@@ -100,7 +101,8 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   return { userId, groupId, roomId, isGroup };
 }
 
-function buildPeerId(source: EventSource): string {
+/** The chat a LINE event belongs to: its group, its room, or the direct peer. */
+export function resolveLineConversationId(source: EventSource): string {
   if (!source) {
     return "unknown";
   }
@@ -135,7 +137,7 @@ async function resolveLineInboundRoute(params: {
   });
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
-  const peerId = buildPeerId(params.source);
+  const peerId = resolveLineConversationId(params.source);
   let route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "line",
@@ -281,11 +283,12 @@ function isLineQuoteSenderAllowed(
   if (quoted.fromBot) {
     return true;
   }
-  const allow = normalizeAllowFrom([...allowFrom]);
-  return (
-    allow.hasWildcard ||
-    (quoted.senderId !== undefined &&
-      allow.entries.includes(normalizeLineAllowEntry(quoted.senderId)))
+  // An empty group allowlist under an allowlist policy names nobody, so an
+  // unresolvable sender stays out rather than defaulting open.
+  return isSenderIdAllowed(
+    normalizeAllowFrom([...allowFrom]),
+    quoted.senderId ? normalizeLineAllowEntry(quoted.senderId) : undefined,
+    false,
   );
 }
 
@@ -322,8 +325,13 @@ async function finalizeLineInboundContext(params: {
   };
   // LINE names a quoted message by id alone, so its text and author come from
   // what this account already saw. An id it no longer holds still reaches the
-  // agent as a bare quote rather than disappearing.
-  const quoted = resolveLineQuotedMessage(params.account.accountId, params.quote?.messageId);
+  // agent as a bare quote under the default visibility mode; a restrictive mode
+  // has no sender to clear and drops the quote with it.
+  const quoted = resolveLineQuotedMessage(
+    params.account.accountId,
+    params.quote?.messageId,
+    params.source.peerId,
+  );
   // A LINE webhook carries no display name and no group name, so both are
   // separate lookups. They are cached, they run in parallel, and either one
   // failing degrades to the raw id rather than failing the turn.
@@ -340,10 +348,13 @@ async function finalizeLineInboundContext(params: {
     params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
     resolveDisplayName(quoted?.senderId),
   ]);
+  // An unreachable LINE profile must not erase the author: the quoted sender
+  // degrades to the raw id the same way the turn's own sender does below.
+  const quotedSenderLabel =
+    quotedSenderName ?? (quoted?.senderId ? `user:${quoted.senderId}` : undefined);
   // Admission only proves the quoted sender passed the gate when the message was
   // stored. That gate can narrow while the store still holds their text, so the
-  // active allowlist decides again here; an id the store no longer resolves has
-  // no sender to clear and keeps only its linkage under a restrictive policy.
+  // active allowlist decides again here.
   const quoteFacts = params.quote
     ? {
         id: params.quote.messageId,
@@ -358,7 +369,7 @@ async function finalizeLineInboundContext(params: {
         // the store holds no outbound text, matching the core default that
         // never repeats an assistant message the transcript already carries.
         ...(quoted?.body ? { body: quoted.body } : {}),
-        ...(quotedSenderName ? { sender: quotedSenderName } : {}),
+        ...(quotedSenderLabel ? { sender: quotedSenderLabel } : {}),
       }
     : undefined;
   const senderLabel =

@@ -13,38 +13,58 @@ export type LineQuotedMessage = {
   fromBot: boolean;
 };
 
+/** An inbound message plus the conversation that makes it quotable. */
+type LineInboundRecord = {
+  body?: string;
+  senderId?: string;
+  conversationId: string;
+};
+
 // LINE's webhook reports a quoted message's id but never its author or its text,
 // so the only way to answer "what was quoted" is to remember what passed through.
 // Bounded and in memory on purpose: after a restart a quote resolves to its id
 // alone, which is all LINE carries, rather than to a stale body.
-const RECENT_MESSAGE_LIMIT = 500;
+const SENT_MESSAGE_LIMIT = 500;
+const RECEIVED_MESSAGE_LIMIT = 500;
 
 // A quoted message is context, not the turn's own input: bound the retained text
 // so one 5000-character LINE message cannot dominate the store or the prompt.
 const QUOTED_BODY_MAX_CHARS = 2000;
 
-// The bound is per account, not shared: LINE runs several configured accounts in
+// The bounds are per account, not shared: LINE runs several configured accounts in
 // one process, and a busy account must not evict a quiet one's entries or the
-// quiet bot silently stops resolving quotes. The registry only grows with
+// quiet bot silently stops resolving quotes. The registries only grow with
 // configured accounts that have actually seen a message.
-const recentByAccount = new Map<string, Map<string, LineQuotedMessage>>();
+//
+// Sent ids and received messages are also bounded apart. A group produces inbound
+// traffic in bursts while the bot answers a handful of times, so one shared bound
+// would evict the bot's own ids within minutes and quoting the bot would silently
+// stop counting as addressing it.
+const sentByAccount = new Map<string, Map<string, true>>();
+const receivedByAccount = new Map<string, Map<string, LineInboundRecord>>();
 
-function remember(accountId: string, messageId: string, message: LineQuotedMessage): void {
+function remember<T>(
+  registry: Map<string, Map<string, T>>,
+  accountId: string,
+  messageId: string,
+  value: T,
+  limit: number,
+): void {
   if (!messageId) {
     return;
   }
-  const recent = recentByAccount.get(accountId) ?? new Map<string, LineQuotedMessage>();
-  recentByAccount.set(accountId, recent);
+  const entries = registry.get(accountId) ?? new Map<string, T>();
+  registry.set(accountId, entries);
   // Delete first so a message seen again is re-seated against insertion-order eviction.
-  recent.delete(messageId);
-  recent.set(messageId, message);
-  pruneMapToMaxSize(recent, RECENT_MESSAGE_LIMIT);
+  entries.delete(messageId);
+  entries.set(messageId, value);
+  pruneMapToMaxSize(entries, limit);
 }
 
 /** Records the ids of messages this account just sent. */
 export function recordLineSentMessages(accountId: string, messageIds: readonly string[]): void {
   for (const messageId of messageIds) {
-    remember(accountId, messageId, { fromBot: true });
+    remember(sentByAccount, accountId, messageId, true, SENT_MESSAGE_LIMIT);
   }
 }
 
@@ -56,25 +76,48 @@ export function recordLineSentMessages(accountId: string, messageIds: readonly s
  */
 export function recordLineAgentVisibleMessage(
   accountId: string,
-  message: { id: string; body?: string; senderId?: string },
+  message: { id: string; conversationId: string; body?: string; senderId?: string },
 ): void {
   const body = message.body ? truncateUtf16Safe(message.body, QUOTED_BODY_MAX_CHARS) : undefined;
-  remember(accountId, message.id, {
-    fromBot: false,
-    ...(body ? { body } : {}),
-    ...(message.senderId ? { senderId: message.senderId } : {}),
-  });
+  remember(
+    receivedByAccount,
+    accountId,
+    message.id,
+    {
+      conversationId: message.conversationId,
+      ...(body ? { body } : {}),
+      ...(message.senderId ? { senderId: message.senderId } : {}),
+    },
+    RECEIVED_MESSAGE_LIMIT,
+  );
 }
 
-/** Resolves what a quoted message id names, or undefined once it has aged out. */
+/**
+ * Resolves what a quoted message id names, or undefined once it has aged out.
+ * A received message answers only inside the conversation it was seen in: message
+ * ids are account-wide, so the conversation is what keeps one chat's text out of
+ * another's prompt rather than a platform promise we cannot check.
+ */
 export function resolveLineQuotedMessage(
   accountId: string,
   quotedMessageId: string | undefined,
+  conversationId: string,
 ): LineQuotedMessage | undefined {
   if (!quotedMessageId) {
     return undefined;
   }
-  return recentByAccount.get(accountId)?.get(quotedMessageId);
+  if (sentByAccount.get(accountId)?.has(quotedMessageId)) {
+    return { fromBot: true };
+  }
+  const received = receivedByAccount.get(accountId)?.get(quotedMessageId);
+  if (!received || received.conversationId !== conversationId) {
+    return undefined;
+  }
+  return {
+    fromBot: false,
+    ...(received.body ? { body: received.body } : {}),
+    ...(received.senderId ? { senderId: received.senderId } : {}),
+  };
 }
 
 /** Reads the quoted message id LINE reports on the message kinds a person can quote from. */
