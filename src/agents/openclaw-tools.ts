@@ -614,7 +614,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
-        options: { ...options, activeProjectKeys },
+        options: {
+          ...options,
+          agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+          activeProjectKeys,
+        },
         resolvedConfig,
         existingToolNames: new Set(tools.map((tool) => tool.name)),
       }),

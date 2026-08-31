@@ -106,7 +106,7 @@ export type RunEmbeddedAgentParams = {
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
-  /** Explicit owner of the sandbox policy when its session key is unscoped. */
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
   agentId?: string;
   messageChannel?: string;

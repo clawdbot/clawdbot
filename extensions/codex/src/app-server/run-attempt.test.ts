@@ -407,6 +407,7 @@ async function buildDynamicToolsForTest(
     nativeToolSurfaceEnabled: true,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
+    policyAgentId: params.sandboxAgentId ?? "main",
     pluginConfig: {},
     onYieldDetected: () => undefined,
     ...options,
@@ -511,6 +512,7 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     nativeToolSurfaceEnabled,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
+    policyAgentId: params.sandboxAgentId ?? "main",
     pluginConfig: options.pluginConfig ?? {},
     onYieldDetected: () => undefined,
   });
@@ -1153,6 +1155,7 @@ describe("runCodexAppServerAttempt", () => {
       nativeToolSurfaceEnabled,
       runAbortController: new AbortController(),
       sessionAgentId: "main",
+      policyAgentId: params.sandboxAgentId ?? "main",
       pluginConfig: {},
       onYieldDetected: () => undefined,
     });
@@ -1256,6 +1259,7 @@ describe("runCodexAppServerAttempt", () => {
         nativeToolSurfaceEnabled,
         runAbortController: new AbortController(),
         sessionAgentId: "main",
+        policyAgentId: params.sandboxAgentId ?? "main",
         pluginConfig: {
           appServer: {
             mode: "yolo",

@@ -330,6 +330,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
+          agentId: sessionAgentId,
           exec: {
             ...execOverrides,
             config: params.config,
