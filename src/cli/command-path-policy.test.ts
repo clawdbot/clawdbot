@@ -455,6 +455,17 @@ describe("command-path-policy", () => {
         loadPlugins: "never",
       });
     }
+    // Authoring commands operate on a target package, not operator config, so
+    // a host config the running CLI predates must not abort them.
+    for (const commandPath of [
+      ["plugins", "build"],
+      ["plugins", "validate"],
+      ["plugins", "init"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
+      });
+    }
     expectResolvedPolicy(["cron", "list"], {
       configGuard: "skip",
       loadPlugins: "never",

@@ -5,11 +5,6 @@
  * binds those contracts to embedded-run abort, status, and steering primitives.
  */
 import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
-import {
-  abortEmbeddedAgentRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-} from "../agents/embedded-agent-runner/runs.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -58,13 +53,6 @@ type RealtimeVoiceAgentControlDeps = {
   resolveActiveEmbeddedRunSessionId: (sessionKey: string) => string | undefined;
 };
 
-const defaultDeps: RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedAgentRun,
-  getDiagnosticSessionActivitySnapshot,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-};
-
 /** Apply a spoken status, cancel, steer, or follow-up request to an active run. */
 export async function controlRealtimeVoiceAgentRun(
   params: {
@@ -73,8 +61,14 @@ export async function controlRealtimeVoiceAgentRun(
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
   },
-  deps: RealtimeVoiceAgentControlDeps = defaultDeps,
+  providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
+  // Provider registration consumes the shared policy without starting the agent runtime.
+  const deps = providedDeps ?? {
+    ...(await import("../agents/embedded-agent-runner/runs.js")),
+    ...(await import("../agents/embedded-agent-runner/active-run-projections.js")),
+    getDiagnosticSessionActivitySnapshot,
+  };
   const sessionKey = params.sessionKey.trim();
   const text = params.text.trim();
   const intent = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode });

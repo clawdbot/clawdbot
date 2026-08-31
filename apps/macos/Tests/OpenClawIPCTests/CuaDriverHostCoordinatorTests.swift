@@ -21,7 +21,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `disabled host never spawns and enabled host publishes only a ready endpoint`() async throws {
-        let root = self.shortTemporaryDirectory("host")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("cua-driver")
         let launcher = CuaProcessLauncherProbe()
@@ -60,8 +60,8 @@ struct CuaDriverHostCoordinatorTests {
         #expect(launcher.processes.allSatisfy { !$0.isRunning })
     }
 
-    @Test func `elevation host refuses CUA enablement before spawning a child`() async {
-        let root = self.shortTemporaryDirectory("elevation-host")
+    @Test func `elevation host refuses CUA enablement before spawning a child`() async throws {
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
@@ -102,7 +102,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory is random owner-only and cleanup removes only its owned leaf`() throws {
-        let root = self.shortTemporaryDirectory("socket")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let first = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
@@ -156,7 +156,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `unexpected exit closes liveness and removes its socket directory`() async throws {
-        let root = self.shortTemporaryDirectory("exit-cleanup")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
@@ -185,7 +185,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup removes a preexisting owned directory without a live daemon`() async throws {
-        let root = self.shortTemporaryDirectory("startup-reap")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         let launcher = CuaProcessLauncherProbe()
@@ -206,13 +206,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup terminates a live owned daemon after its host is gone`() async throws {
-        let root = self.shortTemporaryDirectory("startup-orphan")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
-        defer {
-            self.stopIfRunning(orphan)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(orphan) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(orphan.processIdentifier).write(
             to: stale.url.appendingPathComponent("cua.pid"),
@@ -240,9 +238,9 @@ struct CuaDriverHostCoordinatorTests {
     @Test func `launch records the spawned daemon pid for later reaping`() async throws {
         // Without this record the reaper can only delete the directory and leaves the
         // privileged daemon running: `serve` ignores --pid-file and writes a global path.
-        let root = self.shortTemporaryDirectory("launch-pidfile")
-        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
             notificationCenter: NotificationCenter(),
@@ -269,9 +267,9 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `launch without an authoritative pid record never becomes ready`() async throws {
-        let root = self.shortTemporaryDirectory("launch-pidfile-failure")
-        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
             notificationCenter: NotificationCenter(),
@@ -303,13 +301,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup refuses to signal a pid owned by another executable`() async throws {
-        let root = self.shortTemporaryDirectory("startup-pid-reuse")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let expectedExecutable = try self.expectedExecutable(in: root, target: "/bin/cat")
         let unrelated = try self.startSleep(executable: URL(fileURLWithPath: "/bin/sleep"))
-        defer {
-            self.stopIfRunning(unrelated)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(unrelated) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(unrelated.processIdentifier).write(
             to: stale.url.appendingPathComponent("cua.pid"),
@@ -340,13 +336,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `teardown leaves no owned directories or live owned daemons`() async throws {
-        let root = self.shortTemporaryDirectory("teardown-reap")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
-        defer {
-            self.stopIfRunning(orphan)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(orphan) }
         let live = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(orphan.processIdentifier).write(
             to: live.url.appendingPathComponent("cua.pid"),
@@ -368,7 +362,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory rejects a symlinked CUA root`() throws {
-        let root = self.shortTemporaryDirectory("unsafe")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let openClaw = root.appendingPathComponent("OpenClaw", isDirectory: true)
         let redirected = root.appendingPathComponent("redirected", isDirectory: true)
@@ -385,7 +379,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory rejects a symlinked OpenClaw support root`() throws {
-        let root = self.shortTemporaryDirectory("unsafe-parent")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let redirected = root.appendingPathComponent("redirected", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -462,7 +456,7 @@ struct CuaDriverHostCoordinatorTests {
 
     @Test func `unexpected exits retry with a bounded budget while advertising unavailable`() async throws {
         let delays = CuaRestartDelayProbe()
-        let root = self.shortTemporaryDirectory("restart")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
@@ -500,7 +494,7 @@ struct CuaDriverHostCoordinatorTests {
         suspension: CuaStartupSuspension,
         disable: Bool) async throws
     {
-        let root = self.shortTemporaryDirectory("startup-race")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let notifications = NotificationCenter()
         let launcher = CuaProcessLauncherProbe()
@@ -604,7 +598,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `permission changes replace the daemon generation and endpoint`() async throws {
-        let root = self.shortTemporaryDirectory("permissions")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let notifications = NotificationCenter()
         let permissions = CuaPermissionSnapshotProbe()
@@ -632,11 +626,6 @@ struct CuaDriverHostCoordinatorTests {
         #expect(try replacementEndpoint.environmentValue() != originalEnvironmentValue)
         #expect(!launcher.processes[0].isRunning)
         await coordinator.setEnabled(false)
-    }
-
-    private func shortTemporaryDirectory(_ label: String) -> URL {
-        URL(fileURLWithPath: "/tmp", isDirectory: true).resolvingSymlinksInPath()
-            .appendingPathComponent("oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
     }
 
     private func expectedExecutable(in root: URL, target: String) throws -> URL {

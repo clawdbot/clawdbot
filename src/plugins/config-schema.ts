@@ -1,9 +1,8 @@
 // Builds plugin config schemas from manifest metadata.
 import { z, type ZodTypeAny } from "zod";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { parseJsonSchemaIssuePath, validateJsonSchemaValue } from "./schema-validator.js";
 import type { OpenClawPluginConfigSchema } from "./types.js";
 
 type Issue = { path: Array<string | number>; message: string };
@@ -88,15 +87,6 @@ function normalizeJsonSchema(schema: unknown): unknown {
   return record;
 }
 
-function toIssuePath(path: string): Array<string | number> {
-  if (!path || path === "<root>") {
-    return [];
-  }
-  return path.split(".").map((segment) => {
-    return parseConfigPathArrayIndex(segment) ?? segment;
-  });
-}
-
 function safeParseJsonSchema(
   schema: JsonSchemaObject,
   cacheKey: string,
@@ -115,7 +105,7 @@ function safeParseJsonSchema(
     success: false,
     error: {
       issues: result.errors.map((issue) => ({
-        path: toIssuePath(issue.path),
+        path: parseJsonSchemaIssuePath(issue.path),
         message: issue.message,
       })),
     },

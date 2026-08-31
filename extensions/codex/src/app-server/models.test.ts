@@ -166,7 +166,7 @@ describe("listCodexAppServerModels", () => {
     },
   ])("rejects $label through the app-server JSON-RPC boundary", async ({ response }) => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
@@ -187,7 +187,7 @@ describe("listCodexAppServerModels", () => {
 
   it("lists app-server models through the typed helper", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listCodexAppServerModels({ limit: 12, timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
@@ -257,7 +257,7 @@ describe("listCodexAppServerModels", () => {
 
   it("lists all app-server model pages through one client", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listAllCodexAppServerModels({ limit: 1, timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
@@ -337,7 +337,7 @@ describe("listCodexAppServerModels", () => {
 
   it("marks all-model listing truncated after the page cap", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listAllCodexAppServerModels({ limit: 1, timeoutMs: 1000, maxPages: 1 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));

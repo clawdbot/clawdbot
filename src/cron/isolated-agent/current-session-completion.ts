@@ -3,7 +3,6 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
 import { createCronExecutionId } from "../run-id.js";
 import {
@@ -11,10 +10,11 @@ import {
   resolveDirectCronTranscriptMirrorText,
 } from "./delivery-dispatch-awareness.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
+import { resolvedDeliveryTargetsExternalChannel } from "./delivery-target.js";
 
 type CurrentSessionCompletionResult =
   | { ok: false; reason: string }
-  | { ok: true; requiresExternalDelivery: boolean };
+  | { ok: true; requiresExternalDelivery: boolean; deliveryError?: string };
 
 export async function commitCurrentSessionCronCompletion(
   params: DispatchCronDeliveryParams,
@@ -56,9 +56,17 @@ export async function commitCurrentSessionCronCompletion(
   if (params.resolvedDelivery.ok) {
     return { ok: true, requiresExternalDelivery: true };
   }
-  const sourceChannel = parseAgentSessionKey(sourceSessionKey)?.rest.split(":")[0];
-  if (params.resolvedDelivery.channel === "webchat" || sourceChannel === "webchat") {
-    return { ok: true, requiresExternalDelivery: false };
+  // The completion is durably committed to the target conversation. When the
+  // failed resolution names an external channel route, that route still owed a
+  // send — report it as a delivery failure without failing the committed turn.
+  // With no external route (internal webchat/Control UI conversations, or a
+  // gateway with no channels configured), the commit IS the delivery.
+  if (resolvedDeliveryTargetsExternalChannel(params.resolvedDelivery)) {
+    return {
+      ok: true,
+      requiresExternalDelivery: false,
+      deliveryError: params.resolvedDelivery.error.message,
+    };
   }
-  return { ok: false, reason: params.resolvedDelivery.error.message };
+  return { ok: true, requiresExternalDelivery: false };
 }

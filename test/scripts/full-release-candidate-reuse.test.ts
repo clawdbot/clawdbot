@@ -24,6 +24,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const NOW = Date.parse("2026-08-28T12:00:00Z");
 const EXPIRES_AT = "2026-09-04T12:00:00Z";
 const REPOSITORY = "openclaw/openclaw";
+const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,9 +82,9 @@ function workflowJobs(
       },
       {
         conclusion: "success",
-        head_sha: manifest.producer.workflowSha,
-        id: 202,
-        name: "Prepare shared release candidate / Bind full release candidate evidence",
+        head_sha: manifest.publisher.workflowSha,
+        id: Number(manifest.publisher.jobId),
+        name: manifest.publisher.jobName,
         run_attempt: runAttempt,
         run_id: runId,
         status: "completed",
@@ -104,7 +105,7 @@ function artifactMetadata(
     expired: false,
     expires_at: EXPIRES_AT,
     id: 301,
-    name: `full-release-candidate-v1-${manifest.requestSha256}`,
+    name: `full-release-candidate-v2-${manifest.requestSha256}`,
     size_in_bytes: archive.length,
     workflow_run: {
       head_repository_id: 1,
@@ -344,6 +345,94 @@ describe("trusted full release candidate selection", () => {
 });
 
 describe("full release candidate discovery CLI", () => {
+  it("preserves canonical request arrays when checking the expected digest", () => {
+    const root = tempDirs.make("full-release-candidate-canonical-");
+    const bin = join(root, "bin");
+    const rawInputPath = join(root, "raw-request-input.json");
+    const requestPath = join(root, "request.json");
+    const outputPath = join(root, "github-output");
+    const callLogPath = join(root, "gh-calls");
+    mkdirSync(bin);
+    const ghPath = join(bin, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_GH_CALL_LOG"
+printf '%s\n' '{"artifacts":[]}'
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    writeFileSync(
+      rawInputPath,
+      JSON.stringify(
+        fullReleaseCandidateRequestInput({
+          upgradeSurvivorBaselines: "openclaw@latest",
+          upgradeSurvivorScenarios: "base",
+        }),
+      ),
+    );
+    const contractResult = spawnSync(
+      process.execPath,
+      [CONTRACT_SCRIPT, "request", "--input", rawInputPath, "--output", requestPath],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(contractResult.status, contractResult.stderr).toBe(0);
+    const contract = JSON.parse(contractResult.stdout) as {
+      requestJson: string;
+      requestSha256: string;
+    };
+    const requestBeforeDiscovery = readFileSync(requestPath, "utf8");
+    const request = JSON.parse(requestBeforeDiscovery) as {
+      upgradeSurvivorBaselines: string[];
+      upgradeSurvivorScenarios: string[];
+    };
+    expect(request.upgradeSurvivorBaselines).toEqual(["openclaw@latest"]);
+    expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        SCRIPT,
+        "discover",
+        "--request-input",
+        requestPath,
+        "--expected-request-sha256",
+        contract.requestSha256,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_GH_CALL_LOG: callLogPath,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const outputs = Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    expect(outputs).toMatchObject({
+      request_json: contract.requestJson,
+      request_sha256: contract.requestSha256,
+      reused: "false",
+      state: "miss",
+    });
+    expect(readFileSync(requestPath, "utf8")).toBe(requestBeforeDiscovery);
+    expect(readFileSync(callLogPath, "utf8").trim()).toBe(
+      `api repos/${REPOSITORY}/actions/artifacts?name=full-release-candidate-v2-${contract.requestSha256}&per_page=100&page=1`,
+    );
+  });
+
   it("marks exhausted transient reads unavailable instead of permitting preparation", () => {
     const root = tempDirs.make("full-release-candidate-discovery-");
     const bin = join(root, "bin");
@@ -364,7 +453,7 @@ exit 1
 `,
     );
     chmodSync(ghPath, 0o755);
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
@@ -405,7 +494,7 @@ cat "$FAKE_GH_PAYLOAD"
 `,
     );
     chmodSync(ghPath, 0o755);
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(
       payloadPath,
       JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
@@ -482,7 +571,7 @@ esac
         },
       });
     });
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
     const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
@@ -550,7 +639,7 @@ esac
     );
     chmodSync(ghPath, 0o755);
     const { archive, manifest, metadata } = await fixture();
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
     writeFileSync(workflowRunPath, JSON.stringify(workflowRun()));
@@ -612,7 +701,7 @@ describe("candidate archive deadline", () => {
           artifactDigest: `sha256:${"a".repeat(64)}`,
           artifactExpiresAt: EXPIRES_AT,
           artifactId: 301,
-          artifactName: `full-release-candidate-v1-${"b".repeat(64)}`,
+          artifactName: `full-release-candidate-v2-${"b".repeat(64)}`,
           artifactSizeBytes: 1,
           repository: REPOSITORY,
           runId: 77,
@@ -668,6 +757,7 @@ describe("full release candidate loading", () => {
         runId: "77",
       },
       producer: manifest.producer,
+      publisher: manifest.publisher,
       request: manifest.request,
     });
   });
@@ -801,7 +891,34 @@ describe("full release candidate loading", () => {
         selected: selected!,
         token: "test-token",
       }),
-    ).rejects.toThrow("producer workflow attempt is invalid");
+    ).rejects.toThrow("producer or publisher workflow attempt is invalid");
+  });
+
+  it("rejects a manifest publisher workflow that differs from the selected run", async () => {
+    const { manifest } = await fixture();
+    const changedManifest = structuredClone(manifest);
+    changedManifest.publisher.workflowPath = ".github/workflows/candidate-evidence-test.yml";
+    const archive = await archiveWithManifest(changedManifest);
+    const metadata = artifactMetadata(archive);
+    const selected = await selectTrustedFullReleaseCandidate({
+      artifacts: [metadata],
+      now: NOW,
+      readWorkflowRun: async () => workflowRun(),
+      readWorkflowJobs: async () => workflowJobs(manifest),
+      request: manifest.request,
+    });
+    await expect(
+      loadSelectedFullReleaseCandidate({
+        downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+        now: NOW,
+        readArtifact: constituentArtifactReader(changedManifest),
+        readRunAttempt: async () => workflowRun(),
+        readWorkflowJobs: async () => workflowJobs(changedManifest),
+        request: manifest.request,
+        selected: selected!,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("producer or publisher workflow attempt is invalid");
   });
 
   it("hard-fails an unavailable, changed, or expired selected artifact", async () => {
@@ -836,30 +953,37 @@ describe("full release candidate loading", () => {
     expect(archive.length).toBeGreaterThan(0);
   });
 
-  it("rejects evidence when the trusted publisher job did not succeed", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    const jobs = workflowJobs(manifest);
-    jobs.jobs[1]!.conclusion = "failure";
-    await expect(
-      loadSelectedFullReleaseCandidate({
-        downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+  it.each([
+    ["job id", (jobs) => void (jobs.jobs[1]!.id = 999)],
+    ["job name", (jobs) => void (jobs.jobs[1]!.name = "different publisher")],
+    ["job conclusion", (jobs) => void (jobs.jobs[1]!.conclusion = "failure")],
+  ] satisfies Array<[string, (jobs: ReturnType<typeof workflowJobs>) => void]>)(
+    "rejects evidence when the publisher %s differs from the sealed identity",
+    async (_label, mutate) => {
+      const { archive, manifest, metadata } = await fixture();
+      const selected = await selectTrustedFullReleaseCandidate({
+        artifacts: [metadata],
         now: NOW,
-        readArtifact: constituentArtifactReader(manifest),
-        readRunAttempt: async () => workflowRun(),
-        readWorkflowJobs: async () => jobs,
+        readWorkflowRun: async () => workflowRun(),
+        readWorkflowJobs: async () => workflowJobs(manifest),
         request: manifest.request,
-        selected: selected!,
-        token: "test-token",
-      }),
-    ).rejects.toThrow("publisher job did not complete successfully");
-  });
+      });
+      const jobs = workflowJobs(manifest);
+      mutate(jobs);
+      await expect(
+        loadSelectedFullReleaseCandidate({
+          downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+          now: NOW,
+          readArtifact: constituentArtifactReader(manifest),
+          readRunAttempt: async () => workflowRun(),
+          readWorkflowJobs: async () => jobs,
+          request: manifest.request,
+          selected: selected!,
+          token: "test-token",
+        }),
+      ).rejects.toThrow("publisher job did not complete successfully");
+    },
+  );
 });
 
 describe("full release candidate binding authority", () => {
@@ -973,6 +1097,27 @@ describe("sealed full release candidate verification", () => {
         token: "test-token",
       }),
     ).resolves.toEqual(binding);
+
+    const changedPublisherJobs = workflowJobs(manifest);
+    changedPublisherJobs.jobs[1]!.id = 999;
+    await expect(
+      verifySealedFullReleaseCandidate({
+        binding,
+        consumerRunAttempt: 1,
+        consumerRunId: 88,
+        downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+        now: NOW,
+        readArtifact: async (artifactId) => {
+          if (artifactId === binding.evidenceArtifact.id) {
+            return metadata;
+          }
+          return constituentArtifactReader(binding)(artifactId);
+        },
+        readRunAttempt: async () => workflowRun(),
+        readWorkflowJobs: async () => changedPublisherJobs,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("publisher job did not complete successfully");
   });
 
   it("fails final verification when a sealed constituent artifact disappears", async () => {

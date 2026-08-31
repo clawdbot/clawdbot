@@ -204,6 +204,7 @@ describe("config IO plugin metadata snapshots", () => {
     expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
     expect(snapshot?.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
     expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
+    expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
     expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
       false,
     );
@@ -266,6 +267,12 @@ describe("config IO plugin metadata snapshots", () => {
       "shared",
       "secondary",
     ]);
+    expect(structuredClone(snapshot.manifestRegistry)).toEqual(snapshot.manifestRegistry);
+    expect(
+      structuredClone(
+        resolveConfigWidePluginManifestRegistry({ config: { agents }, env: {}, pluginIds: [] }),
+      ).plugins,
+    ).toEqual([]);
     expect(snapshot.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",

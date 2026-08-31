@@ -4,6 +4,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+} from "../test-helpers/control-ui-e2e.ts";
+import {
   captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -130,6 +134,31 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
         const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
+        await expect
+          .poll(() =>
+            visiblePane.locator('[data-progress-card-placement="composer"]').getAttribute("open"),
+          )
+          .toBe("");
+        await page.evaluate(
+          ({ gatewayUrl, settingsKey }) => {
+            localStorage.setItem(
+              settingsKey,
+              JSON.stringify({ gatewayUrl, chatCollapseTaskProgress: true }),
+            );
+          },
+          {
+            gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          },
+        );
+        await page.reload();
+        const composerCard = visiblePane.locator('[data-progress-card-placement="composer"]');
+        await expect.poll(() => composerCard.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => composerCard.locator(".session-progress-card__current").textContent())
+          .toBe("Implement");
+        await composerCard.locator("summary").click();
+        await expect.poll(() => composerCard.getAttribute("open")).toBe("");
         await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
         await expect
           .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())

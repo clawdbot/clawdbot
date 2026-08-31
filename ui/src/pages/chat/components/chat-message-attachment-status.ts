@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
-import type { AttachmentItem } from "./chat-message-media.ts";
 
 type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
 
@@ -15,7 +14,6 @@ export function attachmentFailureReason(code: AttachmentFailureCode): string {
 }
 
 export function renderAssistantAttachmentStatusCard(params: {
-  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   mimeType?: string;
   badge: string;
@@ -32,6 +30,7 @@ export function renderAssistantAttachmentStatusCard(params: {
   return html`
     <div
       class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked ${statusClass}"
+      aria-busy=${unavailable ? nothing : "true"}
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
@@ -50,7 +49,10 @@ export function renderAssistantAttachmentStatusCard(params: {
               >${params.label}</span
             >
             <span
-              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
+              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta ${unavailable
+                ? ""
+                : "skeleton skeleton-line"}"
+              aria-hidden=${unavailable ? nothing : "true"}
             >
               <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
               ${params.reason
@@ -76,7 +78,18 @@ export function renderAssistantAttachmentStatusCard(params: {
             >
               ${icons.refresh} ${t("common.retry")}
             </button>`
-          : nothing}
+          : unavailable
+            ? nothing
+            : html`<span
+                class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
+                aria-hidden="true"
+                data-label=${t("chat.attachments.open")}
+              >
+                <span
+                  class="chat-assistant-attachment-card__action-skeleton skeleton"
+                  aria-hidden="true"
+                ></span>
+              </span>`}
       </div>
     </div>
   `;

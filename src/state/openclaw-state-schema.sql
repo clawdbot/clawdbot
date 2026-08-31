@@ -804,12 +804,29 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   endpoint TEXT NOT NULL,
   p256dh TEXT NOT NULL,
   auth TEXT NOT NULL,
+  device_id TEXT,
+  user_profile_id TEXT,
+  preferences_json TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
+
+CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
 
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
@@ -1549,8 +1566,6 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_controller_session_key
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,
-  target_agent_id TEXT NOT NULL,
-  target_session_id TEXT,
   target_session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
@@ -1567,7 +1582,7 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
-  ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
+  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
   ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires

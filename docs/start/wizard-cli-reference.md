@@ -471,6 +471,15 @@ in [CLI automation](/start/wizard-cli-automation).
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
 
+When setup admission is busy, `wizard.start` and the model setup start/activation
+methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This
+means that the requested operation did not begin: clients can retire that attempt
+and allow an explicit retry after the competing setup finishes. A terminal wizard
+`error` also ends that operation, but does not imply that earlier writes were
+rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
+do not establish whether setup ran; clients must preserve that uncertainty rather
+than automatically retrying or claiming successful activation.
+
 ## Signal setup behavior
 
 - Downloads the appropriate release asset from the official `signal-cli` GitHub releases (native build, Linux x86-64 only)

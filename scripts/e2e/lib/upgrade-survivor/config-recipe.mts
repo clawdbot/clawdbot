@@ -16,6 +16,7 @@ type ConfigStep = {
   id: string;
   intent: string;
   argv: string[];
+  prepublishPluginPackages?: string[];
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -131,6 +132,8 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  // Keep the migration specimen idle while baseline and candidate services run:
+  // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
   configSetJsonFile("skills", "skills", "skills", "skills.json"),
   configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
@@ -178,12 +181,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
     [
-      configSetJsonFile(
-        "plugins-acpx-openclaw-tools-bridge",
-        "acpx-openclaw-tools-bridge",
-        "plugins",
-        "plugins-acpx-openclaw-tools-bridge.json",
-      ),
+      {
+        ...configSetJsonFile(
+          "plugins-acpx-openclaw-tools-bridge",
+          "acpx-openclaw-tools-bridge",
+          "plugins",
+          "plugins-acpx-openclaw-tools-bridge.json",
+        ),
+        // The candidate externalizes this runtime even when the baseline bundles it.
+        prepublishPluginPackages: ["@openclaw/acpx"],
+      },
     ],
   ],
   [
@@ -242,9 +249,16 @@ const sharedRecipe: ConfigStep[] = [
   },
 ];
 
-export function resolveUpgradeSurvivorConfigSteps(scenario = "base"): ConfigStep[] {
+export function resolveUpgradeSurvivorConfigSteps(
+  scenario = "base",
+  configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+): ConfigStep[] {
   const validateStep = sharedRecipe.at(-1);
-  const updateChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
+  const updateChannel =
+    configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
+  if (updateChannel !== "stable" && updateChannel !== "beta") {
+    throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
+  }
   return [
     {
       id: "update-channel",
@@ -275,50 +289,59 @@ function adaptStepForBaseline(
     }
     return null;
   }
-  if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
-    return step;
-  }
-  if (step.id === "plugins-feishu" || step.id === "channels-feishu") {
+  const legacyBaseline = isReleaseBefore(baselineVersion, "2026.4.0");
+  const modernBaseline = baselineVersion && !isReleaseBefore(baselineVersion, "2026.8.1");
+  if (legacyBaseline && (step.id === "plugins-feishu" || step.id === "channels-feishu")) {
     if (!summary.skippedIntents.includes("feishu-channel")) {
       summary.skippedIntents.push("feishu-channel");
     }
     return null;
   }
-  if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
-    delete agents.defaults?.skills;
-    for (const agent of agents.list ?? []) {
-      delete agent.thinkingDefault;
-      delete agent.fastModeDefault;
-      delete agent.skills;
-    }
-    summary.skippedIntents.push("agent-modern-preferences");
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
+  if (
+    !(step.id === "agents" && (legacyBaseline || modernBaseline)) &&
+    !(step.id === "channels-discord" && modernBaseline) &&
+    !(step.intent === "plugins" && legacyBaseline)
+  ) {
+    return step;
   }
-  if (step.intent === "plugins") {
-    const pluginsJson = step.argv[3];
-    if (pluginsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  const configJson = step.argv[3];
+  if (configJson === undefined) {
+    throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  }
+  const config = JSON.parse(configJson);
+  if (step.id === "agents") {
+    // Modern config writes stamp explicit ownership when adding a second agent.
+    // Older baselines need their default marker for ownership migration on upgrade.
+    for (const agent of config.list ?? []) {
+      if (modernBaseline) {
+        delete agent.default;
+      }
+      if (legacyBaseline) {
+        delete agent.thinkingDefault;
+        delete agent.fastModeDefault;
+        delete agent.skills;
+      }
     }
-    const plugins = JSON.parse(pluginsJson);
-    plugins.allow = (plugins.allow ?? []).filter((id: unknown) => id !== "memory");
-    delete plugins.entries?.memory;
+    if (legacyBaseline) {
+      delete config.defaults?.skills;
+      summary.skippedIntents.push("agent-modern-preferences");
+    }
+  } else if (step.id === "channels-discord") {
+    // Keep retired DM fields as migration specimens only for older baselines.
+    config.dmPolicy = config.dm.policy;
+    config.allowFrom = config.dm.allowFrom;
+    delete config.dm;
+  } else {
+    config.allow = (config.allow ?? []).filter((id: unknown) => id !== "memory");
+    delete config.entries?.memory;
     if (!summary.skippedIntents.includes("memory-plugin-allow")) {
       summary.skippedIntents.push("memory-plugin-allow");
     }
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(plugins), ...step.argv.slice(4)],
-    };
   }
-  return step;
+  return {
+    ...step,
+    argv: [...step.argv.slice(0, 3), JSON.stringify(config), ...step.argv.slice(4)],
+  };
 }
 
 export function resolveUpgradeSurvivorConfigStepsForBaseline(

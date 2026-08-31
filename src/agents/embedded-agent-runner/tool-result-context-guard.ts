@@ -8,10 +8,14 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
+import {
+  shouldPreemptivelyCompactBeforePrompt,
+  type CompactionReplayPressureContext,
+} from "./run/preemptive-compaction.js";
 import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
@@ -22,7 +26,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
-const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
@@ -37,6 +40,7 @@ type GuardableAgentRecord = {
 };
 
 type MidTurnPrecheckOptions = {
+  getReplay?: () => CompactionReplayPressureContext;
   enabled?: boolean;
   contextTokenBudget: number;
   reserveTokens: () => number;
@@ -453,13 +457,7 @@ export function installToolResultContextGuard(params: {
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
-  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const maxSingleToolResultChars = Math.max(
-    1_024,
-    Math.floor(
-      contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
-    ),
-  );
+  const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
   // Agent.transformContext is private in session runtime, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.
@@ -498,6 +496,7 @@ export function installToolResultContextGuard(params: {
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.
         const precheck = shouldPreemptivelyCompactBeforePrompt({
+          replay: params.midTurnPrecheck.getReplay?.(),
           messages: contextMessages,
           systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
           // During a tool loop, the active user prompt is already part of messages.

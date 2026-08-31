@@ -347,6 +347,7 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
 async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
+  onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -382,6 +383,7 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
+    onAgentRunStart: params.onAgentRunStart,
     sessionKey: targetSessionKey,
     images: params.images,
     abortSignal: params.abortSignal,
@@ -896,17 +898,36 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it("keeps caller-owned run ids on the shared lifecycle path", async () => {
+  it.each<{
+    name: string;
+    onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+    accepted?: boolean;
+  }>([
+    { name: "no observer", onAgentRunStart: undefined },
+    { name: "void observer", onAgentRunStart: () => {} },
+    { name: "legacy boolean result", onAgentRunStart: () => true },
+    {
+      name: "legacy object result",
+      onAgentRunStart: () => ({ completionSource: "reply-dispatch" }),
+    },
+    { name: "asynchronous result", onAgentRunStart: () => Promise.resolve("reply-dispatch") },
+    { name: "completion owner", onAgentRunStart: () => "reply-dispatch", accepted: true },
+  ])("requires a synchronous completion acknowledgement from $name", async (scenario) => {
     setReadyAcpResolution();
 
-    await runDispatch({ bodyForAgent: "audit this turn", runId: "caller-run" });
+    await runDispatch({
+      bodyForAgent: "audit this turn",
+      runId: "caller-run",
+      onAgentRunStart: scenario.onAgentRunStart,
+    });
 
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
+    const expected = expect.objectContaining({
+      runId: "caller-run",
+      auditOnly: false,
+      completionSource: scenario.accepted ? "reply-dispatch" : undefined,
+    });
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
   });
 
   it("keeps audit run ids unique when channel message ids repeat", async () => {

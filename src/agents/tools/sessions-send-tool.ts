@@ -38,7 +38,10 @@ import {
   normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   isCronRunSessionKey,
@@ -48,15 +51,19 @@ import {
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
@@ -350,9 +357,15 @@ function shouldFallbackCronRunScopedActiveDelivery(
 }
 
 async function startAgentRun(params: {
+  cfg: OpenClawConfig;
   callGateway: GatewayCaller;
   runId: string;
-  sendParams: Record<string, unknown>;
+  sendParams: Record<string, unknown> & {
+    message: string;
+    agentId: string;
+    inputProvenance: InputProvenance;
+    sourceReplyDeliveryMode: "message_tool_only";
+  };
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
@@ -380,20 +393,37 @@ async function startAgentRun(params: {
     ) {
       throw new Error("active run session incarnation changed");
     }
-    const messageText =
-      typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
+    const {
+      agentId,
+      inputProvenance,
+      message: messageText,
+      sourceReplyDeliveryMode,
+    } = params.sendParams;
     if (activeRunSessionId && messageText) {
-      const sourceReplyDeliveryMode =
-        params.sendParams.sourceReplyDeliveryMode === "automatic" ||
-        params.sendParams.sourceReplyDeliveryMode === "message_tool_only"
-          ? params.sendParams.sourceReplyDeliveryMode
-          : undefined;
       const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
-        ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
+        sourceReplyDeliveryMode,
+        // Carry the same input facts as a new run; transcript ownership stays
+        // with the receiving runtime and its exact session incarnation.
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: {
+            text: messageText,
+            provenance: inputProvenance,
+            idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
+          },
+          target: {
+            sessionId: activeRunSessionId,
+            expectedSessionId: activeRunSessionId,
+            sessionKey: params.sessionKey,
+            sessionEntry: undefined,
+            agentId,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+            config: params.cfg,
+          },
+        }),
       };
       let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
         activeRunSessionId,
@@ -1121,6 +1151,7 @@ export function createSessionsSendTool(opts?: {
           };
 
           const start = await startAgentRun({
+            cfg,
             callGateway: gatewayCall,
             runId,
             sendParams,

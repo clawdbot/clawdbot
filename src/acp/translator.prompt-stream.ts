@@ -157,6 +157,7 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayReconnect(): void {
+    void this.agentEvents.replayApprovalDecisionsOnReconnect();
     this.disconnects.handleGatewayReconnect();
   }
 

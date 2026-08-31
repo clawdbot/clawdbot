@@ -17,7 +17,6 @@ review_artifacts_helper_path() {
 
 review_claim() {
   local pr="$1"
-  mark_pr_operation_side_effects_started
   # Claim logs are per-PR review state: keeping them in the PR worktree leaves the
   # shared canonical checkout with no scripts/pr-owned .local, so a stray artifact
   # there can never be mistaken for this flow's output. Claiming still works on a
@@ -32,7 +31,8 @@ review_claim() {
     local user_log
     user_log=".local/review-claim-user-attempt-$attempt.log"
 
-    if reviewer=$(gh_plain api user --jq .login 2>"$user_log"); then
+    # A relay's REST /user may identify its caller, not the local mutation writer.
+    if reviewer=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login 2>"$user_log"); then
       printf "%s\n" "$reviewer" >"$user_log"
       break
     fi
@@ -75,8 +75,7 @@ review_checkout_main() {
   local pr="$1"
   enter_worktree "$pr" false || return 1
   mark_pr_operation_side_effects_started
-  git fetch origin main
-  checkout_pr_worktree_target "$pr" origin/main || return 1
+  checkout_pr_worktree_target "$pr" "$PR_MAIN_SHA" || return 1
   set_review_mode main
 
   echo "review mode set to main baseline"
@@ -99,7 +98,7 @@ review_checkout_pr() {
 
 review_guard() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   require_artifact .local/review-mode.env
   require_artifact .local/pr-meta.env
 
@@ -120,10 +119,8 @@ review_guard() {
 
   case "${REVIEW_MODE:-}" in
     main)
-      local expected_main_sha
-      expected_main_sha=$(git rev-parse origin/main)
-      if [ "$head_sha" != "$expected_main_sha" ]; then
-        echo "Review guard failed: expected HEAD at origin/main ($expected_main_sha) for main baseline mode, got $head_sha"
+      if [ "$head_sha" != "$PR_MAIN_SHA" ]; then
+        echo "Review guard failed: expected HEAD at origin/main ($PR_MAIN_SHA) for main baseline mode, got $head_sha"
         exit 1
       fi
       ;;
@@ -151,7 +148,7 @@ review_guard() {
 
 review_artifacts_init() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   require_artifact .local/pr-meta.env
   require_artifact .local/pr-meta.json
 
@@ -244,13 +241,11 @@ review_validate_artifacts() {
   local pr="$1"
   # Callers use an OR-list to keep pre-mutation failures reversible; Bash disables
   # errexit within that context, so every artifact and exact-head guard must propagate.
-  enter_worktree "$pr" false || return 1
+  review_guard "$pr" || return 1
   require_artifact .local/review.md || return 1
   require_artifact .local/review.json || return 1
-  require_artifact .local/pr-meta.env || return 1
   require_artifact .local/pr-meta.json || return 1
 
-  review_guard "$pr" || return 1
   if [ "${REVIEW_MODE:-}" != "pr" ]; then
     echo "Review artifact validation requires the reviewed PR head, not main-baseline mode."
     return 1
@@ -270,8 +265,7 @@ review_tests() {
     exit 2
   fi
 
-  enter_worktree "$pr" false
-  review_guard "$pr"
+  review_guard "$pr" || return 1
 
   local target
   for target in "$@"; do
@@ -321,14 +315,13 @@ review_init() {
   # caller - enter_worktree still reports the real invocation cwd.
   json=$(cd "$root" && pr_meta_json "$pr") || return 1
 
-  mark_pr_operation_side_effects_started
   enter_worktree "$pr" true || return 1
   write_pr_meta_files "$json"
   pr_url=$(printf '%s\n' "$json" | jq -r .url)
 
   git fetch origin "pull/$pr/head:pr-$pr" --force
   local mb
-  mb=$(git merge-base origin/main "pr-$pr")
+  mb=$(git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 
   # Security: shell-escape values to prevent command injection when sourced.
   printf '%s=%q\n' \

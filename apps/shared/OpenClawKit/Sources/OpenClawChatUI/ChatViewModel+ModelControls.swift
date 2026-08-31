@@ -60,6 +60,11 @@ extension OpenClawChatViewModel {
         return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
     }
 
+    public var fastModeIsEnabled: Bool {
+        guard let session = self.currentSessionEntry() else { return false }
+        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true
+    }
+
     /// `models.list` currently has no fast-support capability field. Keep the
     /// control available and let the gateway validate the session patch.
     public var selectedModelSupportsFastMode: Bool {

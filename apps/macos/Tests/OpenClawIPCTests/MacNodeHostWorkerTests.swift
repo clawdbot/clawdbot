@@ -95,25 +95,17 @@ struct MacNodeHostWorkerTests {
             .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
     }
 
-    @Test func `worker allows a generous cold-start window`() async throws {
+    @Test func `worker reserves five minutes for cold startup`() {
+        // Process readiness is covered below; a short shell sleep cannot prove this default policy.
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
-
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
-        let script = """
-        sleep 0.1
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
-        while IFS= read -r line; do :; done
-        """
-
-        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-        #expect(manifest.version == "test")
-        await worker.stop()
     }
 
     @Test func `worker launches in the selected checkout`() async throws {
         let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        defer { try? FileManager.default.removeItem(at: checkout) }
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
           "$(/bin/pwd -P)"
@@ -124,8 +116,6 @@ struct MacNodeHostWorkerTests {
             command: ["/bin/sh", "-c", script],
             currentDirectoryURL: checkout))
 
-        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
-        defer { free(expectedCurrentDirectory) }
         #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
         await worker.stop()
     }
@@ -405,7 +395,7 @@ struct MacNodeHostWorkerTests {
               IFS= read -r unavailable
               printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
               printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
-              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}'
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli","generations":[0,1,9007199254740993,18446744073709551615],"flags":[false,true]}}}'
               ;;
           esac
         done
@@ -418,9 +408,22 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        #expect(response.ok)
-        #expect(response.payload != nil)
         await worker.stop()
+        #expect(response.ok)
+
+        struct Response: Decodable {
+            struct Payload: Decodable {
+                let owner: String
+                let generations: [UInt64]
+                let flags: [Bool]
+            }
+
+            let payload: Payload
+        }
+        let decoded = try JSONDecoder().decode(Response.self, from: JSONEncoder().encode(response))
+        #expect(decoded.payload.owner == "cli")
+        #expect(decoded.payload.generations == [0, 1, 9_007_199_254_740_993, UInt64.max])
+        #expect(decoded.payload.flags == [false, true])
     }
 
     @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {

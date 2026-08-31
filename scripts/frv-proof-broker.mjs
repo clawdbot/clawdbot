@@ -2,6 +2,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "./lib/record-shared.mjs";
+import { validateForwardAncestry } from "./pr-lib/crabbox-gate-contract.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const BROKER_WORKFLOW = ".github/workflows/frv-proof-broker.yml";
@@ -77,19 +78,19 @@ export function validateBrokerRequest(event, env) {
     "GITHUB_RUN_ATTEMPT",
   );
 
-  assertExactKeys(event.inputs, ["head_sha", "pr_number"], "workflow inputs");
+  assertExactKeys(event.inputs, ["landed_sha", "pr_number"], "workflow inputs");
   const inputs = event.inputs;
   const prNumber = requiredPositiveInteger(inputs.pr_number, "pr_number");
-  const headSha = requiredString(inputs.head_sha, "head_sha");
-  if (!SHA_PATTERN.test(headSha)) {
-    throw new Error("head_sha must be exactly 40 lowercase hex characters");
+  const landedSha = requiredString(inputs.landed_sha, "landed_sha");
+  if (!SHA_PATTERN.test(landedSha)) {
+    throw new Error("landed_sha must be exactly 40 lowercase hex characters");
   }
   const correlation = `frv-proof-${runId}-${runAttempt}`;
 
   return {
     actor,
     correlation,
-    headSha,
+    landedSha,
     prNumber,
     repository: REPOSITORY,
     runId,
@@ -117,14 +118,17 @@ function validateActorPermission(value, actor) {
 
 function validatePullRequest(value, context) {
   const pull = record(value, "pull request");
-  if (pull.number !== context.prNumber || pull.state !== "open") {
-    throw new Error("proof target must be the requested open pull request");
+  if (
+    pull.number !== context.prNumber ||
+    pull.state !== "closed" ||
+    pull.merged !== true ||
+    typeof pull.merged_at !== "string" ||
+    pull.merged_at.length === 0
+  ) {
+    throw new Error("proof target must be the requested merged pull request");
   }
-  if (nestedRecord(pull, "head", "pull request").sha !== context.headSha) {
-    throw new Error("pull request head SHA does not match the requested exact head");
-  }
-  if (nestedRecord(pull, "head", "pull request").repo?.full_name !== context.repository) {
-    throw new Error("pull request head must belong to the trusted repository");
+  if (pull.merge_commit_sha !== context.landedSha) {
+    throw new Error("pull request merge commit does not match the requested landed SHA");
   }
   if (nestedRecord(pull, "base", "pull request").ref !== "main") {
     throw new Error("pull request base must be main");
@@ -132,6 +136,14 @@ function validatePullRequest(value, context) {
   if (nestedRecord(pull, "base", "pull request").repo?.full_name !== context.repository) {
     throw new Error("pull request base repository does not match");
   }
+}
+
+function validateLandedAncestry(value, context) {
+  validateForwardAncestry(
+    value,
+    { baseSha: context.landedSha, headSha: context.workflowSha },
+    "landed controller ancestry",
+  );
 }
 
 function validateFixtureWorkflow(value) {
@@ -261,6 +273,10 @@ async function validateMutationAuthority(api, context) {
     context.actor,
   );
   validatePullRequest(await api.request("GET", `/pulls/${context.prNumber}`), context);
+  validateLandedAncestry(
+    await api.request("GET", `/compare/${context.landedSha}...${context.workflowSha}`),
+    context,
+  );
 }
 
 async function validateFixturePrerequisite(api) {
@@ -294,7 +310,7 @@ export async function runProofBroker({ api, env, event, sleep = setTimeoutPromis
     correlation: context.correlation,
     fixtureRunAttempt: 2,
     fixtureRunId,
-    headSha: context.headSha,
+    landedSha: context.landedSha,
     operation: FIXTURE_OPERATION,
     prNumber: context.prNumber,
     repository: context.repository,
@@ -357,7 +373,7 @@ async function main() {
         "## FRV failed-job rerun proof",
         "",
         `- Pull request: #${receipt.prNumber}`,
-        `- Exact head: \`${receipt.headSha}\``,
+        `- Landed controller: \`${receipt.landedSha}\``,
         `- Trusted broker SHA: \`${receipt.workflowSha}\``,
         `- Fixture run: \`${receipt.fixtureRunId}\`, attempt \`2\``,
         "- Fixed operation: `noop`",

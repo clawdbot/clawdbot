@@ -12,7 +12,7 @@ import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { SessionManager } from "../sessions/index.js";
+import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   calculateMaxToolResultCharsWithCap,
@@ -29,10 +29,6 @@ import {
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import {
-  resolveRuntimeTranscriptReadTarget,
-  type RuntimeTranscriptScope,
-} from "./transcript-runtime-state.js";
 
 export {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -369,7 +365,7 @@ export function truncateToolResultText(
     suffixFactory,
     minimumRawWeight: options.minimumRawWeight,
   });
-  if (estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
+  if (text.length <= maxChars && estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
     return text;
   }
   const initialKeptText = sliceToolResultTextToBudget(text, maxChars, budgetOptions);
@@ -501,6 +497,7 @@ export function truncateToolResultMessage(
     (block, index) =>
       (blockTextChars[index] ?? 0) > 0 &&
       isToolResultTextBlock(block) &&
+      block.text.length <= minKeepChars &&
       estimateToolResultTextChars(block.text) <= minKeepChars,
   );
   const blockNoticeChars = content.map((block, index) =>
@@ -740,7 +737,6 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
-  deferAggregateRecovery?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -872,7 +868,6 @@ function projectToolResultBranch(params: {
     messageEntries.map((entry) => entry.message),
     params.projectionState,
   );
-  const hasFrozenProjectionBaseline = params.projectionState.frozen.size > 0;
   let messageIndex = 0;
   return {
     keys,
@@ -899,10 +894,11 @@ function projectToolResultBranch(params: {
       return {
         ...entry,
         message,
-        aggregateEligible:
-          !key || !frozen || (projected !== undefined && message === entry.message),
-        // Reduce frozen history first so steering cannot make fresh output disappear.
-        deferAggregateRecovery: key !== undefined && hasFrozenProjectionBaseline && !frozen,
+        // Frozen bytes are immutable on dispatch projections; eliding them would
+        // rewrite provider-sent prompt bytes. Recovery projections (frozenOnly)
+        // run after a provider context failure, so the cached prefix is already
+        // forfeit and frozen history must stay reducible.
+        aggregateEligible: params.frozenOnly || !key || !frozen,
       };
     }),
   };
@@ -938,7 +934,6 @@ function buildAggregateToolResultReplacements(params: {
               spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
               textLength: getToolResultTextBudget(message),
               aggregateEligible: entry.aggregateEligible !== false,
-              deferredByFreshProjection: entry.deferAggregateRecovery === true,
               protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
             },
           ]
@@ -964,14 +959,11 @@ function buildAggregateToolResultReplacements(params: {
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements = new Map<string, ToolResultReplacement>();
-  // Frozen projections shrink first; stable sorting preserves the original oldest-first order.
-  const recoveryCandidates = candidates
-    .filter((candidate) => !candidate.protectedByTrailingBatch)
-    .toSorted(
-      (left, right) =>
-        Number(left.deferredByFreshProjection) - Number(right.deferredByFreshProjection) ||
-        Number(right.aggregateEligible) - Number(left.aggregateEligible),
-    );
+  // Frozen prompt bytes are immutable. Recover only from unsent tail results;
+  // allow budget overflow when frozen history alone exceeds the aggregate cap.
+  const recoveryCandidates = candidates.filter(
+    (candidate) => candidate.aggregateEligible && !candidate.protectedByTrailingBatch,
+  );
 
   // Trim all older entries before clearing any, so fresh output and spill pointers stay recoverable.
   for (const clear of [false, true]) {
@@ -987,9 +979,14 @@ function buildAggregateToolResultReplacements(params: {
       const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
       let message: AgentMessage;
       if (clear) {
+        // Cleared fresh results keep a visible elision notice on projection
+        // paths; an empty tool result reads as failure and loses rerun guidance.
+        const noticeFloor = params.protectedEntryIds
+          ? estimateToolResultTextChars(spillMarkers?.compact ?? AGGREGATE_ELISION_MARKER)
+          : 0;
         message = clearToolResultText(
           candidate.message,
-          Math.max(0, baseTextLength - remainingReduction),
+          Math.max(noticeFloor, baseTextLength - remainingReduction),
           spillMarkers,
         );
       } else {
@@ -1351,39 +1348,10 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
-  } catch (err) {
-    const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
-    return { truncated: false, truncatedCount: 0, reason: errMsg };
-  }
-}
-
-export async function truncateOversizedToolResultsInActiveTarget(params: {
-  scope: RuntimeTranscriptScope;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  try {
-    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
-    const sessionManager = SessionManager.open(target);
-    return truncateOversizedToolResultsInExistingSessionManager({
-      sessionManager,
-      contextWindowTokens: params.contextWindowTokens,
-      maxCharsOverride: params.maxCharsOverride,
-      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-      projectionState: params.projectionState,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      agentId: target.agentId,
-      storePath: target.storePath,
-    });
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

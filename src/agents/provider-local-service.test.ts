@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
@@ -578,8 +579,8 @@ describe("provider local service", () => {
   });
 
   it("keeps configured provider aliases on different local endpoints independent", async () => {
-    const firstPort = await freePort();
-    const secondPort = await freePort();
+    const firstPort = await getDeterministicFreePortBlock({ offsets: [0, 1] });
+    const secondPort = firstPort + 1;
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-key-"));

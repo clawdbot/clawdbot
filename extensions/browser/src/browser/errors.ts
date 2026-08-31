@@ -12,6 +12,7 @@ const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy
 /** Stable machine-readable browser error reasons. */
 export const BROWSER_ERROR_REASONS = {
   noDisplayForHeadedProfile: "no_display_for_headed_profile",
+  navigationBlocked: "navigation_blocked",
 } as const;
 
 /** Stable machine-readable codes returned by browser action routes. */
@@ -49,9 +50,13 @@ export type BrowserNoDisplayErrorMetadata = {
   details: BrowserNoDisplayErrorDetails;
 };
 
-type WithNoDisplayMetadata<T> = T | (T & BrowserNoDisplayErrorMetadata);
-export type BrowserErrorResponse = WithNoDisplayMetadata<{ status: number; message: string }>;
-export type BrowserErrorPayload = WithNoDisplayMetadata<{
+export type BrowserErrorMetadata =
+  | BrowserNoDisplayErrorMetadata
+  | { reason: typeof BROWSER_ERROR_REASONS.navigationBlocked };
+
+type WithBrowserErrorMetadata<T> = T | (T & BrowserErrorMetadata);
+export type BrowserErrorResponse = WithBrowserErrorMetadata<{ status: number; message: string }>;
+export type BrowserErrorPayload = WithBrowserErrorMetadata<{
   error: string;
   code?: BrowserActErrorCode;
   unrecognizedCode?: true;
@@ -162,7 +167,7 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
     return { status: err.status, message: err.message };
   }
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
-    return { status: 409, message: err.message };
+    return { status: 409, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
   if (err instanceof Error && err.name === "SsrFBlockedError") {
     // SsrFBlockedError from this point is from a navigation-target check
@@ -170,10 +175,14 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
     // requested URL). CDP endpoint blocks are rethrown as
     // BrowserCdpEndpointBlockedError by assertCdpEndpointAllowed and handled
     // by the BrowserError branch above.
-    return { status: 400, message: BROWSER_NAVIGATION_BLOCKED_MESSAGE };
+    return {
+      status: 400,
+      message: BROWSER_NAVIGATION_BLOCKED_MESSAGE,
+      reason: BROWSER_ERROR_REASONS.navigationBlocked,
+    };
   }
   if (err instanceof Error && err.name === "InvalidBrowserNavigationUrlError") {
-    return { status: 400, message: err.message };
+    return { status: 400, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
   return null;
 }
@@ -219,6 +228,9 @@ export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | 
     : unrecognizedCode
       ? { unrecognizedCode: true }
       : {};
+  if (body.reason === BROWSER_ERROR_REASONS.navigationBlocked) {
+    return { error: body.error, ...actionCode, reason: body.reason };
+  }
   if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {
     const details = parseNoDisplayDetails(body.details);
     if (details) {

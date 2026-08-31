@@ -42,11 +42,22 @@ export async function ensureNodeHostPluginRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  nodeHostPluginRegistry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
+  const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
   });
+  // Resolve this registry's native readiness before publishing the first manifest.
+  // No process-wide preparation cache: a replacement registry owns fresh resources.
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const prepare = new Set(registry.nodeHostCommands.map((entry) => entry.command.prepare));
+    await Promise.all(
+      [...prepare].map(async (callback) =>
+        callback?.({ config: params.config, env: params.env ?? process.env }),
+      ),
+    );
+  });
+  nodeHostPluginRegistry = registry;
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */

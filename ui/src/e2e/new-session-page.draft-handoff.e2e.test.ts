@@ -64,7 +64,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
-      await waitForCommittedNewSessionDraft(pageB, durableText, 1);
+      await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
       await expect.poll(() => messageB.inputValue()).toBe(durableText);
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();

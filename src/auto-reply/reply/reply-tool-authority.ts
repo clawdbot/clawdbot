@@ -137,7 +137,9 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
   const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: execution.config,
-    sessionKey: policySessionKey,
+    agentId: execution.agentId,
+    sessionKey: execution.sessionKey,
+    classificationSessionKey: policySessionKey,
   });
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: execution.config,

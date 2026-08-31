@@ -5,6 +5,7 @@ import type { RouteId } from "../../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
+import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
@@ -24,7 +25,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   @property({ type: Boolean }) latest = false;
 
   @state() private thumbnailSrc?: string;
-  private requestedRevision?: string;
+  private requestIdentity?: { client: unknown; key: string };
 
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
@@ -159,18 +160,21 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       if (!this.latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
         // Dropping the request marker keeps a pending capture from landing and
         // lets a later availability recovery re-request the thumbnail.
-        this.requestedRevision = undefined;
+        this.requestIdentity = undefined;
         this.thumbnailSrc = undefined;
       }
       return;
     }
-    if (this.requestedRevision === revision) {
+    const key = JSON.stringify([browserTabKey(preview), revision]);
+    if (this.requestIdentity?.key === key && this.requestIdentity.client === client) {
       return;
     }
-    this.requestedRevision = revision;
+    const identity = { client, key };
+    this.requestIdentity = identity;
+    this.thumbnailSrc = undefined;
     void loadBrowserTabThumbnail({
       client,
-      targetId: preview.targetId,
+      tab: preview,
       revision,
       resourceBasePath: context.resourceBasePath,
       authToken: resolveControlUiAuthToken({
@@ -179,16 +183,20 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         password: context.gateway.connection.password,
       }),
     }).then((src) => {
-      if (this.requestedRevision === revision) {
+      if (this.requestIdentity === identity) {
         this.thumbnailSrc = src;
       }
     });
   }
 
   private readonly openPanel = () => {
+    const browserTab = readBrowserTabTarget(this.preview);
+    if (!browserTab) {
+      return;
+    }
     this.dispatchEvent(
       new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
-        detail: { open: true, ...(this.preview ? { targetId: this.preview.targetId } : {}) },
+        detail: { open: true, browserTab },
         bubbles: true,
         composed: true,
       }),
@@ -214,6 +222,11 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     if (!preview) {
       return nothing;
     }
+    const currentImage =
+      this.requestIdentity?.client === this.context?.gateway.snapshot.client &&
+      this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
+        ? this.thumbnailSrc
+        : undefined;
     let host = preview.url;
     try {
       host = new URL(preview.url ?? "").host || preview.url;
@@ -224,7 +237,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     const label = preview.url ? `${title} — ${preview.url}` : title;
     return html`
       <div class="card">
-        ${this.thumbnailSrc
+        ${currentImage
           ? html`
               <button
                 type="button"
@@ -233,7 +246,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                 title=${t("browser.openPanel")}
                 @click=${this.openPanel}
               >
-                <img src=${this.thumbnailSrc} alt="" />
+                <img src=${currentImage} alt="" />
               </button>
             `
           : nothing}

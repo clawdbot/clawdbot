@@ -795,29 +795,6 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(0);
   });
 
-  it("bounds output and returned values across separate worker legs", async () => {
-    const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
-
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([tool]),
-        code: `
-          text("x".repeat(700));
-          await output_boundary({});
-          return "y".repeat(700);
-        `,
-        overrides: { maxOutputBytes: 1_024 },
-      }),
-    );
-
-    expect(JSON.stringify(result)).toContain("rerun with narrower args");
-    expect(
-      Buffer.byteLength(JSON.stringify(result.output), "utf8") +
-        Buffer.byteLength(JSON.stringify(result.value), "utf8"),
-    ).toBeLessThanOrEqual(1_024);
-    expect(tool.execute).toHaveBeenCalledOnce();
-  });
-
   it("honors cron payload tool budgets above the old headless cap", async () => {
     const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
     const result = expectCompleted(

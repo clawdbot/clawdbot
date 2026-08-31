@@ -1,7 +1,20 @@
 // Error payload tests ensure embedded runs convert provider/tool failures into
 // concise user-facing replies without leaking raw provider bodies or secrets.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// Classification fixtures here exercise message/status tables. Provider-attributed
+// structured signals otherwise cross the plugin-consult gate and cold-materialize
+// the full bundled provider runtime, timing the unit test out under CI load
+// (src/agents/CLAUDE.md: no full-runtime cold loads for table coverage).
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
+
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -75,6 +88,32 @@ describe("buildEmbeddedRunPayloads", () => {
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
+  });
+
+  it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const payloads = buildPayloads({
+      agentId,
+      sessionKey: "global",
+      config: {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            worker: { sandbox: { mode: "all" } },
+          },
+        },
+        tools: { sandbox: { tools: { deny: ["browser"] } } },
+      },
+      lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
+    });
+    expect(payloads).toEqual([
+      {
+        text:
+          agentId === "worker"
+            ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
+            : "LLM request failed.",
+        isError: true,
+      },
+    ]);
   });
 
   it("turns returned OpenAI refresh failures into Codex login recovery", () => {
@@ -285,6 +324,58 @@ describe("buildEmbeddedRunPayloads", () => {
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
+  });
+
+  it("surfaces actionable numeric provider limits without replaying the raw error", () => {
+    const rawError =
+      "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
+  });
+
+  it("keeps numeric limits generic for non-token parameters", () => {
+    const rawError = "400 account_id (1234567890123456) exceeds maximum length (8)";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "1234567890123456");
+  });
+
+  it("does not infer a token maximum from unrelated trailing digits", () => {
+    const rawError = "400 max_tokens 384000 exceeds maximum for model gpt-5";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "provider maximum of 5");
   });
 
   it("surfaces /new guidance for terminal thinking-signature replay failures", () => {

@@ -21,10 +21,10 @@ import {
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import {
-  checkUpdateStatus,
   compareSemverStrings,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
+  resolveUpdateInstallKind,
 } from "../../infra/update-check.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import {
@@ -42,6 +42,10 @@ import {
 } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
+import {
+  POST_CORE_UPDATE_CHANNEL_ENV,
+  POST_CORE_UPDATE_ENV,
+} from "../../infra/update-post-core-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -50,6 +54,11 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
+import {
+  checkTargetDatabaseSchemas,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
 import {
   DEFAULT_PACKAGE_NAME,
   createGlobalCommandRunner,
@@ -61,34 +70,21 @@ import {
   resolveNodeRunner,
   resolveTargetVersion,
   resolveUpdateRoot,
+  tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
-import { executeMutableUpdate } from "./update-command-execution.js";
-import {
-  checkTargetDatabaseSchemas,
-  formatSchemaRefusalLines,
-  hasSchemaRefusal,
-} from "./update-command-git.js";
-import {
-  POST_CORE_UPDATE_CHANNEL_ENV,
-  POST_CORE_UPDATE_ENV,
-  reportPreMutationUpdateFailure,
-} from "./update-command-post-core.js";
-import { finishUpdate } from "./update-command-post-update.js";
-import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { reportPreMutationUpdateFailure } from "./update-command-result.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
-  resolveManagedServiceNodeRunnerOverride,
-  resolveManagedServicePackageUpdateRoot,
+  resolveManagedServicePackageUpdatePlan,
   resolvePackageRuntimePreflight,
-  tryResolveInvocationCwd,
   type ManagedServiceRootRedirect,
-  type UpdateCommandRecoveryState,
-} from "./update-command-service.js";
-export { updateFinalizeCommand } from "./update-command-finalize.js";
+} from "./update-command-service-plan.js";
+import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -105,23 +101,40 @@ function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | {
   return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
 }
 
-async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  return run().finally(() => {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  const scopedKeys = Object.keys(env).filter(
+    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
+  );
+  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
+  // Package replacement can remove cwd. All phase owners, including native
+  // service guards, must share the invocation's already-resolved path selectors.
+  for (const key of scopedKeys) {
+    process.env[key] = env[key];
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
-  });
+  }
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const recoveryState: UpdateCommandRecoveryState = {};
-  return await withUpdateInProgressEnv(async () => {
+  const invocationCwd = tryResolveInvocationCwd();
+  return await withUpdateInProgressEnv(invocationCwd, async () => {
     try {
-      await updateCommandInternal(opts, recoveryState);
+      await updateCommandInternal(opts, recoveryState, invocationCwd);
     } finally {
       try {
         await recoveryState.windowsTaskAutoStartRecovery?.restore();
@@ -135,9 +148,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 async function updateCommandInternal(
   opts: UpdateCommandOptions,
   recoveryState: UpdateCommandRecoveryState,
+  invocationCwd: string | undefined,
 ): Promise<void> {
+  const startedAt = Date.now();
   suppressDeprecations();
-  const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
 
@@ -199,6 +213,7 @@ async function updateCommandInternal(
 
   let root = discoveredRoot;
   if (postCoreUpdateResume) {
+    const { resumePostCoreUpdate } = await import("./update-execution.runtime.js");
     await resumePostCoreUpdate({
       root,
       channel: postCoreUpdateChannel,
@@ -208,17 +223,15 @@ async function updateCommandInternal(
     return;
   }
 
-  const updateStatus = await checkUpdateStatus({
-    root,
-    timeoutMs: timeoutMs ?? 3500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
+  if (!opts.json) {
+    defaultRuntime.log(theme.muted("Checking for updates..."));
+  }
+  const installKind = await resolveUpdateInstallKind(root);
 
-  if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
+  if (requestedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
-      installKind: updateStatus.installKind,
+      installKind,
       reason: "unsupported_git_channel",
       opts,
       controlPlaneUpdateSentinelMeta,
@@ -247,7 +260,6 @@ async function updateCommandInternal(
     return;
   }
 
-  const installKind = updateStatus.installKind;
   const channel =
     requestedChannel ??
     storedChannel ??
@@ -314,18 +326,18 @@ async function updateCommandInternal(
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
   let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
+  let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
-  // Resolved independently of the root redirect so it covers the common case
-  // where the package root is the same but the user's PATH-resolved node
-  // differs from the node baked into the managed gateway service unit.
+  // The service's Node can differ even when its package root matches the shell.
   let managedServiceNodeRunner: string | undefined;
   let packageUpdateNodeRunner: string | undefined;
 
   if (updateInstallKind === "package") {
-    managedServiceRootRedirect = await resolveManagedServicePackageUpdateRoot({ root });
+    const servicePlan = await resolveManagedServicePackageUpdatePlan({ root });
+    managedServiceRootRedirect = servicePlan.rootRedirect;
+    managedServiceNodeRunner = servicePlan.nodeRunner;
     if (managedServiceRootRedirect) {
       root = managedServiceRootRedirect.root;
-      managedServiceNodeRunner = managedServiceRootRedirect.nodeRunner;
       if (!opts.json) {
         defaultRuntime.log(
           theme.muted(
@@ -348,29 +360,24 @@ async function updateCommandInternal(
           );
         }
       }
-    } else {
-      // Roots match but the node binary may still differ (e.g. user switched
-      // nvm/fnm/brew node after gateway install).
-      managedServiceNodeRunner = await resolveManagedServiceNodeRunnerOverride();
-      if (managedServiceNodeRunner && !opts.json) {
-        defaultRuntime.log(
-          theme.warn(
-            `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${managedServiceNodeRunner}).`,
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted(
-            `Using the managed service Node for this update so the gateway can start after the upgrade.`,
-          ),
-        );
-      }
+    } else if (managedServiceNodeRunner && !opts.json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${managedServiceNodeRunner}).`,
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          `Using the managed service Node for this update so the gateway can start after the upgrade.`,
+        ),
+      );
     }
     packageUpdateNodeRunner = managedServiceNodeRunner;
   }
 
   if (updateInstallKind !== "git") {
     packageInstallEnv = await createGlobalInstallEnv();
-    packageInstallCwd = tryResolveInvocationCwd();
+    packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
@@ -487,6 +494,9 @@ async function updateCommandInternal(
         return;
       }
       packageTargetSchemaVersions = targetMetadata.schemaVersions;
+      // Runtime and schema checks must use the same exact package that will be
+      // installed; rereading a mutable dist-tag can inspect a different release.
+      packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
       // Always install the exact inspected version: a dist-tag can move between
       // this lookup and the install, and an uninspected version would bypass
       // the schema and runtime decisions made here. Missing schema metadata
@@ -509,10 +519,11 @@ async function updateCommandInternal(
   }
 
   if (opts.dryRun) {
-    await printUpdateDryRun({
+    printUpdateDryRun({
       root,
       installKind,
       updateInstallKind,
+      mode: updateInstallKind === "git" ? "git" : (packageInstallTarget?.manager ?? "unknown"),
       switchToGit,
       switchToPackage,
       shouldRestart,
@@ -529,7 +540,6 @@ async function updateCommandInternal(
       managedServiceRootRedirect,
       explicitTag,
       packageSchemaPreflight,
-      timeoutMs: updateStepTimeoutMs,
       opts,
     });
     return;
@@ -576,14 +586,10 @@ async function updateCommandInternal(
       managedServiceNodeRunner !== undefined &&
       (await gatewayServiceCommandUsesRoot({ root })) === true;
     const runtimePreflight = await resolvePackageRuntimePreflight({
-      tag,
-      spec: packageInstallSpec ?? undefined,
+      target: packageRuntimeTarget,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
-      command: packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
-      cwd: packageInstallCwd,
-      env: packageInstallEnv,
     });
     if (!runtimePreflight.ok) {
       defaultRuntime.error(runtimePreflight.error);
@@ -606,6 +612,9 @@ async function updateCommandInternal(
     }
   }
 
+  // Preload execution and recovery before the package swap can remove these chunks.
+  const { executeMutableUpdate, finishUpdate } = await import("./update-execution.runtime.js");
+
   // Startup migrations belong to the freshly installed Doctor. Admit shared-state
   // mutation only after every pre-install refusal has passed.
   await assertOpenClawStateWriteAllowedAtPath({
@@ -613,14 +622,13 @@ async function updateCommandInternal(
   });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
-  const showProgress = !opts.json && process.stdout.isTTY;
+  const showProgress = !opts.json;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
     defaultRuntime.log("");
   }
 
   const { progress, stop } = createUpdateProgress(showProgress);
-  const startedAt = Date.now();
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   const execution = await executeMutableUpdate({

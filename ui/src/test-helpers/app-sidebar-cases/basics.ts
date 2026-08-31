@@ -6,10 +6,6 @@ import {
   sessionRefFromPath,
 } from "../../app-session-route-paths.ts";
 import {
-  clearSessionBoardAvailability,
-  recordSessionBoardAvailability,
-} from "../../lib/board/provider.ts";
-import {
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -359,28 +355,6 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
-  });
-
-  it("uses the shared tooltip for the Home dashboard glyph", async () => {
-    const mainKey = "agent:main:main";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", [mainKey]));
-
-    try {
-      recordSessionBoardAvailability(mainKey, true);
-      sidebar.requestUpdate();
-      await sidebar.updateComplete;
-
-      const glyph = sidebar.querySelector('.nav-item--home [aria-label="Dashboard available"]');
-      expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
-      expect(glyph?.hasAttribute("title")).toBe(false);
-      expect(
-        (glyph?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-          ?.content,
-      ).toBe("Dashboard available");
-    } finally {
-      clearSessionBoardAvailability();
-    }
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {

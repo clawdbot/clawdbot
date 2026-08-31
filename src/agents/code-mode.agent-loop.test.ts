@@ -9,13 +9,19 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import {
+  consumeRepairableCodeModeFailure,
+  createCodeModePermissionChangeReason,
+} from "./code-mode-repair-provenance.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -64,17 +70,33 @@ async function runCodeModeAgent(params: {
   programs: Array<string | { wait: true }>;
   hiddenTools: AnyAgentTool[];
   codeModeSkills?: CodeModeSkill[];
-  configureAgent?: (agent: Agent) => void;
+  harness?:
+    | ReturnType<typeof createCodeModeHarness>
+    | ReturnType<typeof createSubscribedCodeModeHarness>;
+  abortSignal?: AbortSignal;
+  configureAgent?: (
+    agent: Agent,
+    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
+  ) => void;
 }) {
-  const { config, catalogRef, tools } = createCodeModeHarness({
-    codeModeSkills: params.codeModeSkills,
-  });
+  const harness =
+    params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
+  const { config, catalogRef } = harness;
+  const ctx = "ctx" in harness ? harness.ctx : harness;
+  const tools = params.abortSignal
+    ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((tool) =>
+        wrapToolWithAbortSignal(tool, params.abortSignal),
+      )
+    : harness.tools;
+  const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
+  const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
+  const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
-    sessionId: "session-code-mode",
-    sessionKey: "agent:main:main",
-    runId: "run-code-mode",
+    sessionId,
+    sessionKey,
+    runId,
     catalogRef,
     codeModeSkills: params.codeModeSkills,
   });
@@ -116,14 +138,20 @@ async function runCodeModeAgent(params: {
       return stream;
     },
   });
-  params.configureAgent?.(agent);
+  params.configureAgent?.(agent, { tools, ctx });
   installCodeModeOutcomeHook({
     agent,
     onReconciliationCandidate: () => {
       reconciliationCandidates += 1;
     },
   });
-  await agent.prompt("finish the task despite tool errors");
+  try {
+    await agent.prompt("finish the task despite tool errors");
+  } finally {
+    if ("dispose" in harness) {
+      harness.dispose();
+    }
+  }
 
   return { agent, providerContexts, reconciliationCandidates };
 }
@@ -291,6 +319,97 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(consumeRepairableCodeModeFailure(waitDetails)).toBe(scenario === "copied details");
   });
 
+  it("continues after an operator permission change without replaying earlier mutations", async () => {
+    const generation = new AbortController();
+    const parked = createDeferred();
+    const applied: string[] = [];
+    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () => {
+      applied.push("prior mutation");
+      return jsonResult({ recorded: true });
+    });
+    const pending = pluginToolWithExecute(
+      "pending_action",
+      "Wait for permission",
+      async (_id, _input, signal) => {
+        if (!signal) {
+          throw new Error("Expected owning tool signal");
+        }
+        const cancelled = createDeferred<never>();
+        const onAbort = () => cancelled.reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        parked.resolve();
+        try {
+          return await cancelled.promise;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+        }
+      },
+    );
+    const inspect = pluginToolWithExecute(
+      "inspect_state",
+      "Inspect authoritative state",
+      async () => jsonResult({ applied: [...applied] }),
+    );
+    const finish = pluginToolWithExecute("finish_task", "Finish remaining work", async () => {
+      applied.push("remaining mutation");
+      return jsonResult({ finished: true });
+    });
+    let changePermissions!: () => void;
+    let retainedControl!: AnyAgentTool;
+    const running = runCodeModeAgent({
+      hiddenTools: [recordEffect, pending, inspect, finish],
+      abortSignal: generation.signal,
+      configureAgent: (agent, harness) => {
+        retainedControl = harness.tools[0]!;
+        agent.prepareNextTurn = async () => ({
+          context: {
+            systemPrompt: agent.state.systemPrompt,
+            tools: agent.state.tools,
+            messages: agent.state.messages,
+          },
+        });
+        changePermissions = () => {
+          generation.abort(createCodeModePermissionChangeReason());
+          agent.state.tools = createCodeModeTools({
+            ...harness.ctx,
+            abortSignal: new AbortController().signal,
+          });
+        };
+      },
+      programs: [
+        'await record_effect({}); json("prior mutation completed"); return await pending_action({});',
+        "return await inspect_state({});",
+        "return await finish_task({});",
+      ],
+    });
+    await parked.promise;
+    changePermissions();
+    const { agent, providerContexts, reconciliationCandidates } = await running;
+
+    expect(providerContexts).toHaveLength(4);
+    expect(reconciliationCandidates).toBe(0);
+    expect(applied).toEqual(["prior mutation", "remaining mutation"]);
+    expect(recordEffect.execute).toHaveBeenCalledOnce();
+    expect(pending.execute).toHaveBeenCalledOnce();
+    expect(inspect.execute).toHaveBeenCalledOnce();
+    expect(finish.execute).toHaveBeenCalledOnce();
+    expect(agent.state.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        details: expect.objectContaining({
+          status: "failed",
+          code: "aborted",
+          error: expect.stringContaining("Permission change"),
+          output: [{ type: "json", value: "prior mutation completed" }],
+        }),
+      }),
+    );
+    await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
+      "Aborted",
+    );
+  });
+
   it.each([
     {
       name: "catalog.search",
@@ -439,6 +558,79 @@ describe("Code Mode agent-loop error recovery", () => {
     const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
       hiddenTools: [readOnly, recover],
       programs: ["return await sessions_history({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(readOnly.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the terminal owner's input-aware read receipt for ordinary recovery", async () => {
+    const mixedAction = fakeTool("message", "Read or mutate messages");
+    mixedAction.parameters = {
+      type: "object",
+      properties: { action: { type: "string" } },
+      required: ["action"],
+    };
+    mixedAction.execute = vi.fn(async () => {
+      throw new Error("read-only operation failed after dispatch");
+    }) as AnyAgentTool["execute"];
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [mixedAction, recover],
+      harness: createSubscribedCodeModeHarness({ name: "input-aware-read-receipt" }),
+      programs: ['return await message({ action: "read" });', "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(mixedAction.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the namespace owner's local read receipt for ordinary recovery", async () => {
+    const listResources = mcpTool({
+      name: "mcp_files_resources_list",
+      serverName: "files",
+      toolName: "resources/list",
+      operation: "resources_list",
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [listResources, recover],
+      programs: ["json(await MCP.$api()); return missingFn();", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(listResources.execute).not.toHaveBeenCalled();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses an exact plugin instance's replay-safe receipt for ordinary recovery", async () => {
+    const readOnly = pluginToolWithExecute("plugin_read", "Read plugin state", async () => {
+      throw new Error("plugin read failed after dispatch");
+    });
+    setPluginToolMeta(readOnly, {
+      pluginId: "replay-safe-read-test",
+      optional: false,
+      replaySafe: true,
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [readOnly, recover],
+      harness: createSubscribedCodeModeHarness({ name: "plugin-read-receipt" }),
+      programs: ["return await plugin_read({});", "return await recover_task({});"],
     });
 
     expect(providerContexts).toHaveLength(3);

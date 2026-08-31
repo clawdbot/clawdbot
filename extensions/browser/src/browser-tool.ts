@@ -13,21 +13,8 @@ import {
 } from "./browser-node-proxy.js";
 import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
-import {
-  createBrowserToolSessionTabs,
-  stripBrowserOpenInternalMetadata,
-} from "./browser-tool-session-tabs.js";
-import {
-  executeActAction,
-  executeConsoleAction,
-  executeDownloadAction,
-  executeEmulateAction,
-  executeRequestsAction,
-  executeErrorsAction,
-  executeTextAction,
-  executeTabsAction,
-  formatBrowserExternalToolResult,
-} from "./browser-tool.actions.js";
+import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
+import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import { executeBrowserLifecycleAction } from "./browser-tool.lifecycle.js";
 import {
   resolveBrowserBaseUrl,
@@ -37,93 +24,92 @@ import {
 } from "./browser-tool.routing.js";
 import {
   type AnyAgentTool,
+  type browserAct,
   BrowserToolOutputSchema,
   createBrowserToolSchema,
   resolveBrowserToolCapabilities,
   type BrowserToolCapabilities,
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserCloseTab,
-  browserFocusTab,
-  browserNavigate,
-  browserOpenTab,
-  browserPdfSave,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
-  jsonResult,
-  normalizeOptionalString,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
-  resolveExistingUploadPaths,
   resolveProfile,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
-import {
-  executeScreenshotAction,
-  type BrowserScreenshotOptions,
-} from "./browser-tool.screenshot.js";
-import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
-import { resolveBrowserNavigationTimeoutMs } from "./browser/act-policy.js";
-import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+
+type BrowserTabIdentity = { targetId: string; profile: string } & (
+  | { target: "host" }
+  | { target: "node"; node: string }
+);
+
+function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxChars &&
+    value.trim() === value
+  );
+}
+
+function resolveBrowserTabIdentity(params: {
+  targetId?: string;
+  profile?: string;
+  target: "host" | "node";
+  node?: string;
+  baseUrl?: string;
+}): BrowserTabIdentity | undefined {
+  // Bridge/sandbox tabs have no operator browser.request route. Identity must
+  // remain exact: truncation could address another tab, profile, or node.
+  if (
+    params.baseUrl ||
+    !isBrowserRouteIdentifier(params.targetId, 128) ||
+    !isBrowserRouteIdentifier(params.profile, 128)
+  ) {
+    return undefined;
+  }
+  if (params.target === "node") {
+    return isBrowserRouteIdentifier(params.node, 256)
+      ? { targetId: params.targetId, profile: params.profile, target: "node", node: params.node }
+      : undefined;
+  }
+  return { targetId: params.targetId, profile: params.profile, target: "host" };
+}
 
 function withBrowserTabDetails(
   result: AgentToolResult<unknown>,
-  fallbackTargetId?: unknown,
+  identity: BrowserTabIdentity | undefined,
 ): AgentToolResult<unknown> {
-  // Control UI browser-tab preview card metadata; UI-only, replay strips details.
-  try {
-    const details = asNullableRecord(result.details);
-    if (
-      !details ||
-      details.ok === false ||
-      details.isError === true ||
-      (Array.isArray(details.results) &&
-        details.results.some((entry) => asNullableRecord(entry)?.ok === false)) ||
-      asNullableRecord(details.aborted)?.reason === "closed"
-    ) {
-      return result;
-    }
-    const targetId = readStringValue(details.targetId) ?? readStringValue(fallbackTargetId);
-    if (!targetId) {
-      return result;
-    }
-    const url = readStringValue(details.url);
-    const title = readStringValue(details.title);
-    return {
-      ...result,
-      details: {
-        ...details,
-        browserTab: {
-          targetId: truncateUtf16Safe(targetId, 128),
-          ...(url ? { url: truncateUtf16Safe(url, 2048) } : {}),
-          ...(title ? { title: truncateUtf16Safe(title, 512) } : {}),
-        },
-      },
-    };
-  } catch {
+  // UI addressing only; normal tool content and authorization stay unchanged.
+  const details = asNullableRecord(result.details);
+  if (
+    !identity ||
+    !details ||
+    details.ok === false ||
+    details.isError === true ||
+    (Array.isArray(details.results) &&
+      details.results.some((entry) => asNullableRecord(entry)?.ok === false)) ||
+    asNullableRecord(details.aborted)?.reason === "closed"
+  ) {
     return result;
   }
-}
-
-function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
-  const targetId = normalizeOptionalString(params.targetId);
-  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
-    message: "timeoutMs must be a positive integer.",
-  });
-  return { targetId, timeoutMs };
-}
-
-function readTargetUrlParam(params: Record<string, unknown>) {
-  const targetUrl =
-    readStringParam(params, "targetUrl") ??
-    readStringParam(params, "url", { required: true, label: "targetUrl" });
-  parseBrowserNavigationUrl(targetUrl);
-  return targetUrl;
+  const url = readStringValue(details.url);
+  const title = readStringValue(details.title);
+  return {
+    ...result,
+    details: {
+      ...details,
+      browserTab: {
+        ...identity,
+        ...(url ? { url: truncateUtf16Safe(url, 2048) } : {}),
+        ...(title ? { title: truncateUtf16Safe(title, 512) } : {}),
+      },
+    },
+  };
 }
 
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
@@ -244,7 +230,7 @@ export function createBrowserTool(
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  const tool: AnyAgentTool = {
+  return {
     label: "Browser",
     name: "browser",
     resultContentSource: "network",
@@ -375,21 +361,6 @@ export function createBrowserTool(
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
       });
-      const executeTrackedTabRequest = async (
-        path: string,
-        body: Record<string, unknown>,
-        runLocal: () => Promise<unknown>,
-      ) => {
-        const result = proxyRequest
-          ? await proxyRequest({ method: "POST", path, profile, body })
-          : await runLocal();
-        sessionTabs.touch(
-          readStringValue((result as { targetId?: unknown }).targetId) ??
-            readStringValue(body.targetId),
-        );
-        return jsonResult(result);
-      };
-
       switch (action) {
         case "doctor":
         case "status":
@@ -408,313 +379,44 @@ export function createBrowserTool(
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             signal,
           });
-        case "tabs":
-          return await executeTabsAction({
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-            targetId: bindingResult?.ok ? bindingResult.binding.targetId : undefined,
-            signal,
-          });
-        case "open": {
-          const targetUrl = readTargetUrlParam(params);
-          const label = normalizeOptionalString(params.label);
-          const opened = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/tabs/open",
-                profile,
-                body: { url: targetUrl, ...(label ? { label } : {}) },
-                timeoutMs: toolTimeoutMs,
-              })
-            : await browserOpenTab(baseUrl, targetUrl, {
-                profile,
-                label,
-                timeoutMs: toolTimeoutMs,
-                signal,
-              });
-          const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
-            if (nodeRoute && !proxyRequest?.isHostFallbackActive()) {
-              await nodeRoute.closeTarget({ targetId, profile: openedProfile });
-              return;
-            }
-            await browserCloseTab(baseUrl, targetId, {
-              profile: openedProfile,
-              timeoutMs: toolTimeoutMs,
-            });
-          };
-          await sessionTabs.trackOpened(opened, closeOpenedTab);
-          return formatBrowserExternalToolResult({
-            kind: "tabs",
-            payload: stripBrowserOpenInternalMetadata(opened),
-          });
-        }
-        case "focus": {
-          const targetId = readStringParam(params, "targetId", {
-            required: true,
-          });
-          const result = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/tabs/focus",
-                profile,
-                body: { targetId },
-                timeoutMs: toolTimeoutMs,
-              })
-            : await browserFocusTab(baseUrl, targetId, {
-                profile,
-                timeoutMs: toolTimeoutMs,
-                signal,
-              });
-          sessionTabs.touch(
-            readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
-          );
-          return jsonResult(result);
-        }
-        case "close": {
-          const targetId = readStringParam(params, "targetId");
-          if (proxyRequest) {
-            const result = targetId
-              ? await proxyRequest({
-                  method: "DELETE",
-                  path: `/tabs/${encodeURIComponent(targetId)}`,
-                  profile,
-                  timeoutMs: toolTimeoutMs,
-                })
-              : await proxyRequest({
-                  method: "POST",
-                  path: "/act",
-                  profile,
-                  body: { kind: "close" },
-                  timeoutMs: toolTimeoutMs,
-                });
-            sessionTabs.untrack(
-              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
-            );
-            return jsonResult(result);
-          }
-          const result = targetId
-            ? await browserCloseTab(baseUrl, targetId, {
-                profile,
-                timeoutMs: toolTimeoutMs,
-                signal,
-              })
-            : await browserAct(
-                baseUrl,
-                { kind: "close" },
-                {
-                  profile,
-                  timeoutMs: toolTimeoutMs,
-                  signal,
-                },
-              );
-          sessionTabs.untrack(readStringValue(result.targetId) ?? targetId);
-          return jsonResult(result);
-        }
-        case "snapshot":
-          return await executeSnapshotAction({
-            input: params,
-            baseUrl,
-            profile,
-            proxyRequest,
-            signal,
-            onTabActivity: sessionTabs.touch,
-          });
-        case "screenshot":
-          return await executeScreenshotAction({
-            input: params,
-            baseUrl,
-            profile,
-            requestedTimeoutMs,
-            proxyRequest,
-            signal,
-            onTabActivity: sessionTabs.touch,
-            opts,
-          });
-        case "navigate": {
-          const targetUrl = readTargetUrlParam(params);
-          const targetId = readStringParam(params, "targetId");
-          const timeoutMs =
-            requestedTimeoutMs === undefined
-              ? undefined
-              : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
-          const result = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/navigate",
-                profile,
-                body: {
-                  url: targetUrl,
-                  targetId,
-                  timeoutMs,
-                },
-                timeoutMs,
-              })
-            : await browserNavigate(baseUrl, {
-                url: targetUrl,
-                targetId,
-                timeoutMs,
-                profile,
-                signal,
-              });
-          const navigatedTargetId =
-            readStringValue((result as { targetId?: unknown }).targetId) ?? targetId;
-          sessionTabs.touch(navigatedTargetId);
-          const formatted = formatBrowserExternalToolResult({
-            kind: (result as { download?: unknown }).download ? "download" : "act",
-            payload: result,
-          });
-          // A navigation that resolved to a download leaves the document
-          // unchanged, so inline page state would describe the wrong thing.
-          if ((result as { download?: unknown }).download) {
-            return formatted;
-          }
-          return await appendNavigatedPageState({
-            result: formatted,
-            targetId: navigatedTargetId,
-            baseUrl,
-            profile,
-            proxyRequest,
-            signal,
-          });
-        }
-        case "console": {
-          const result = await executeConsoleAction({
-            input: params,
-            baseUrl,
-            profile,
-            proxyRequest,
-            signal,
-          });
-          const targetId = readStringParam(params, "targetId");
-          const canonicalTargetId = readStringValue(
-            (result.details as { targetId?: unknown } | undefined)?.targetId,
-          );
-          sessionTabs.touch(canonicalTargetId ?? targetId);
-          return result;
-        }
-        case "requests":
-        case "errors":
-        case "text":
-        case "emulate": {
-          const execute = {
-            requests: executeRequestsAction,
-            errors: executeErrorsAction,
-            text: executeTextAction,
-            emulate: executeEmulateAction,
-          }[action];
-          const result = await execute({ input: params, baseUrl, profile, proxyRequest, signal });
-          sessionTabs.touch(
-            readStringValue(asNullableRecord(result.details)?.targetId) ??
-              readStringValue(params.targetId),
-          );
-          return result;
-        }
-        case "pdf": {
-          const targetId = normalizeOptionalString(params.targetId);
-          const result = proxyRequest
-            ? ((await proxyRequest({
-                method: "POST",
-                path: "/pdf",
-                profile,
-                body: { targetId },
-              })) as Awaited<ReturnType<typeof browserPdfSave>>)
-            : await browserPdfSave(baseUrl, { targetId, profile, signal });
-          sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
-          return {
-            content: [{ type: "text" as const, text: `FILE:${result.path}` }],
-            details: result,
-          };
-        }
-        case "download":
-        case "waitfordownload":
-          return await executeDownloadAction({
-            action,
-            input: params,
-            baseUrl,
-            profile,
-            proxyRequest,
-            signal,
-            onTabActivity: sessionTabs.touch,
-          });
-        case "upload": {
-          const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
-          if (paths.length === 0) {
-            throw new Error("paths required");
-          }
-          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
-          if (!resolvedResult.ok) {
-            throw new Error(resolvedResult.error);
-          }
-          const normalizedPaths = resolvedResult.paths;
-          const ref = readStringParam(params, "ref");
-          const inputRef = readStringParam(params, "inputRef");
-          const element = readStringParam(params, "element");
-          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
-          const request = {
-            paths: normalizedPaths,
-            ref,
-            inputRef,
-            element,
-            targetId,
-            timeoutMs,
-          };
-          return await executeTrackedTabRequest(
-            "/hooks/file-chooser",
-            request,
-            async () => await browserArmFileChooser(baseUrl, { ...request, profile, signal }),
-          );
-        }
-        case "dialog": {
-          const accept = Boolean(params.accept);
-          const promptText = readStringValue(params.promptText);
-          const dialogId = readStringValue(params.dialogId);
-          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
-          const request = { accept, promptText, dialogId, targetId, timeoutMs };
-          return await executeTrackedTabRequest(
-            "/hooks/dialog",
-            request,
-            async () => await browserArmDialog(baseUrl, { ...request, profile, signal }),
-          );
-        }
-        case "act": {
-          const request = readActRequestParam(params);
-          if (!request) {
-            throw new Error("request required");
-          }
-          if (!capabilities.actKinds.some((kind) => kind === request.kind)) {
-            throw new Error(
-              `browser act kind ${JSON.stringify(request.kind)} is unavailable for this run`,
-            );
-          }
-          return await executeActAction({
-            request,
-            baseUrl,
-            profile,
-            usesChromeMcp: isUserBrowserProfile,
-            proxyRequest,
-            signal,
-            onTabActivity: sessionTabs.touch,
-            onTabClose: sessionTabs.untrack,
-          });
-        }
         default:
-          throw new Error(`Unknown action: ${action}`);
+          break;
       }
-    },
-  };
-  return {
-    ...tool,
-    execute: async (...args) => {
-      const result = await tool.execute(...args);
-      const params = asNullableRecord(args[1]) ?? {};
-      const action = readStringParam(params, "action", { required: true });
-      const actRequest = action === "act" ? readActRequestParam(params) : undefined;
-      const targetId =
-        actRequest?.targetId ??
-        params.targetId ??
-        (bindingResult?.ok ? bindingResult.binding.targetId : undefined);
+      let tabIdentity: BrowserTabIdentity | undefined;
+      const result = await executeBrowserTabAction({
+        action,
+        actRequest: action === "act" ? readActRequestParam(params) : undefined,
+        params,
+        baseUrl,
+        profile,
+        proxyRequest,
+        nodeRoute,
+        sessionTabs,
+        capabilities,
+        isUserBrowserProfile,
+        toolTimeoutMs,
+        requestedTimeoutMs,
+        signal,
+        opts,
+        boundTargetId: bindingResult?.ok ? bindingResult.binding.targetId : undefined,
+        onTabActivity: (targetId, openedProfile) => {
+          // Record the executed tab before follow-up observation adds page state.
+          const route = proxyRequest?.route();
+          const onNode = proxyRequest && !proxyRequest.isHostFallbackActive();
+          const routeProfile = onNode
+            ? route?.status === "resolved"
+              ? route.profile
+              : undefined
+            : (profile ?? resolvedBrowser.defaultProfile);
+          tabIdentity = resolveBrowserTabIdentity({
+            targetId,
+            baseUrl,
+            profile: openedProfile ?? routeProfile,
+            target: onNode ? "node" : "host",
+            node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
+          });
+        },
+      });
       return [
         "open",
         "focus",
@@ -727,8 +429,8 @@ export function createBrowserTool(
         "console",
         "emulate",
         "act",
-      ].includes(action) && actRequest?.kind !== "close"
-        ? withBrowserTabDetails(result, targetId)
+      ].includes(action)
+        ? withBrowserTabDetails(result, tabIdentity)
         : result;
     },
   };

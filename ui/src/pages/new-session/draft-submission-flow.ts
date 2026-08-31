@@ -229,6 +229,7 @@ export class DraftSubmissionFlow {
       model: this.place.modelControl.selected,
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
+      fastMode: this.place.modelControl.fastMode,
       toolOverrides: this.capabilities.toolOverrides,
       permissionMode: this.permission.value,
       visibility: options.visibility ?? this.visibilityValue,
@@ -632,7 +633,7 @@ export class DraftSubmissionFlow {
           result.key,
           { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
           submissionClient,
-          { runId: result.initialRun.runId, messageSeq: result.initialRun.messageSeq },
+          { runId: result.initialRun.runId },
         );
       }
       await this.draftPersistence.clearSubmittedDraft();

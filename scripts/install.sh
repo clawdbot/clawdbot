@@ -1008,9 +1008,14 @@ npm_builtin_config_path() {
 npm_config_has_raw_key() {
     local npm_cmd="$1"
     local key="$2"
+    local project_dir="${3:-}"
     local raw=""
     local file=""
     local -a files=()
+
+    if [[ -n "$project_dir" ]]; then
+        files+=("${project_dir}/.npmrc")
+    fi
 
     raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
     if [[ -n "$raw" ]]; then
@@ -1042,14 +1047,14 @@ npm_config_has_raw_key() {
 }
 
 npm_lifecycle_allow_arg() {
-    local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version="" output=""
+    local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" exact_identity="${4:-}" version="" output=""
     if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
         echo "Unable to determine npm version from ${npm_cmd}; no package changes were made." >&2
         return 1
     fi
-    output="$(node - "$version" "$spec" "$npm_cwd" <<'NODE'
+    output="$(node - "$version" "$spec" "$npm_cwd" "$exact_identity" <<'NODE'
 const path = require("node:path");
-const [versionOutput, spec, cwd] = process.argv.slice(2);
+const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
 const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
 const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
 const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
@@ -1062,6 +1067,7 @@ let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\
 if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
 const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
 if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (exactIdentity) identity = exactIdentity;
 if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 NODE
@@ -1073,9 +1079,9 @@ verify_npm_lifecycle_completed() {
     local npm_cmd="$1" npm_root=""
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
     [[ -n "$npm_root" ]] || { echo "Unable to resolve npm global root after install." >&2; return 1; }
-    [[ ! -e "${npm_root%/}/openclaw/dist/openclaw-install-guard" ]] || {
-        echo "OpenClaw lifecycle scripts did not complete; refusing installer success." >&2
-        return 1
+    [[ ! -e "${npm_root%/}/openclaw/.openclaw-lifecycle-pending" && ! -e "${npm_root%/}/openclaw/dist/openclaw-install-guard" ]] || {
+      echo "OpenClaw lifecycle scripts did not complete; refusing installer success." >&2
+      return 1
     }
 }
 
@@ -2298,10 +2304,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Installing Node.js" dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Installing Node.js" sudo dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp setup_url
@@ -2310,10 +2316,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Installing Node.js" yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Installing Node.js" sudo yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         else
             ui_error "Could not detect package manager"
@@ -2476,114 +2482,62 @@ pnpm_cmd_pretty() {
     return 0
 }
 
-pnpm_cmd_is_ready() {
-    if [[ ${#PNPM_CMD[@]} -eq 0 ]]; then
-        return 1
-    fi
-    "${PNPM_CMD[@]}" --version >/dev/null 2>&1
-}
-
-detect_pnpm_cmd() {
-    if command -v pnpm &> /dev/null; then
-        set_pnpm_cmd pnpm
-        return 0
-    fi
-    if command -v corepack &> /dev/null; then
-        if corepack pnpm --version >/dev/null 2>&1; then
-            set_pnpm_cmd corepack pnpm
-            return 0
-        fi
-    fi
-    return 1
-}
-
 ensure_pnpm() {
-    if detect_pnpm_cmd && pnpm_cmd_is_ready; then
-        ui_success "pnpm ready ($(pnpm_cmd_pretty))"
-        return 0
-    fi
-
-    if command -v corepack &> /dev/null; then
-        ui_info "Configuring pnpm via Corepack"
-        corepack enable >/dev/null 2>&1 || true
-        if ! run_quiet_step "Activating pnpm" corepack prepare pnpm@11 --activate; then
-            ui_warn "Corepack pnpm activation failed; falling back"
-        fi
-        refresh_shell_command_cache
-        if detect_pnpm_cmd && pnpm_cmd_is_ready; then
-            if [[ "${PNPM_CMD[*]}" == "corepack pnpm" ]]; then
-                ui_warn "pnpm shim not on PATH; using corepack pnpm fallback"
-            fi
+    local repo_dir="${1:-$PWD}"
+    local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
+    spec="$(repo_pnpm_spec "$repo_dir" || true)"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.1.0"
+    version="${spec#pnpm@}"
+    version="${version%%+*}"
+    pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
+    TMPFILES+=("$pnpm_dir")
+    corepack_cmd="$(command -v corepack || true)"
+    if [[ -n "$corepack_cmd" ]]; then
+        ui_info "Selecting repo pnpm ${version} via Corepack"
+        set_pnpm_cmd "$pnpm_dir/pnpm"
+        if "$corepack_cmd" enable --install-directory "$pnpm_dir" pnpm &&
+            selected_version="$(run_pnpm -C "$repo_dir" --version 2>/dev/null)" &&
+            [[ "$selected_version" == "$version" ]]; then
             ui_success "pnpm ready ($(pnpm_cmd_pretty))"
             return 0
         fi
+        ui_warn "Corepack could not provision pnpm; falling back to npm"
     fi
 
-    ui_info "Installing pnpm via npm"
-    fix_npm_permissions
-    run_quiet_step "Installing pnpm" npm install -g pnpm@11
-    refresh_shell_command_cache
-    if detect_pnpm_cmd && pnpm_cmd_is_ready; then
-        ui_success "pnpm ready ($(pnpm_cmd_pretty))"
-        return 0
+    ui_info "Installing pnpm ${version} via npm"
+    npm_cmd="$(command -v npm)"
+    lifecycle_arg="$(npm_lifecycle_allow_arg "$npm_cmd" "pnpm@${version}" "$repo_dir" "pnpm@${version}")" || return 1
+    # The explicit npm prefix owns this executable; never rediscover ambient pnpm.
+    "$npm_cmd" install -g --prefix "$pnpm_dir/npm" "pnpm@${version}" ${lifecycle_arg:+"$lifecycle_arg"} || return 1
+    set_pnpm_cmd "$pnpm_dir/npm/bin/pnpm"
+    if [[ ! -x "${PNPM_CMD[0]}" ]] || ! selected_version="$(run_pnpm -C "$repo_dir" --version 2>/dev/null)" || [[ "$selected_version" != "$version" ]]; then
+        ui_error "Could not provision pnpm ${version} for ${repo_dir}"
+        return 1
     fi
-
-    ui_error "pnpm installation failed"
-    return 1
+    ui_success "pnpm ready ($(pnpm_cmd_pretty))"
 }
 
-ensure_pnpm_binary_for_scripts() {
-    if command -v pnpm >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if command -v corepack >/dev/null 2>&1; then
-        ui_info "Ensuring pnpm command is available"
-        corepack enable >/dev/null 2>&1 || true
-        corepack prepare pnpm@11 --activate >/dev/null 2>&1 || true
-        refresh_shell_command_cache
-        if command -v pnpm >/dev/null 2>&1; then
-            ui_success "pnpm command enabled via Corepack"
-            return 0
-        fi
-    fi
-
-    if [[ "${PNPM_CMD[*]}" == "corepack pnpm" ]] && command -v corepack >/dev/null 2>&1; then
-        ensure_user_local_bin_on_path
-        local user_pnpm="${HOME}/.local/bin/pnpm"
-        cat >"${user_pnpm}" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-exec corepack pnpm "$@"
-EOF
-        chmod +x "${user_pnpm}"
-        refresh_shell_command_cache
-
-        if command -v pnpm >/dev/null 2>&1; then
-            ui_warn "pnpm shim not on PATH; installed user-local wrapper at ${user_pnpm}"
-            return 0
-        fi
-    fi
-
-    ui_error "pnpm command not available on PATH"
-    ui_info "Install pnpm globally (npm install -g pnpm@11) and retry"
-    return 1
-}
-
-run_pnpm() {
-    if [[ "${PNPM_CMD[*]}" == "corepack pnpm" && "${1:-}" == "-C" && -n "${2:-}" ]]; then
-        local repo_dir="$2"
+run_pnpm() (
+    local repo_dir="$PWD"
+    if [[ "${1:-}" == "-C" ]]; then
+        repo_dir="$2"
         shift 2
-        if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
-            ensure_pnpm
-        fi
-        (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
-        return
     fi
-    if ! pnpm_cmd_is_ready; then
-        ensure_pnpm
-    fi
-    "${PNPM_CMD[@]}" "$@"
+    cd "$repo_dir" || return 1
+    # Pin nested commands and inherited roots only for this child. Corepack's
+    # cold-cache prompt would otherwise wait invisibly in the version probe.
+    env COREPACK_ENABLE_DOWNLOAD_PROMPT=0 PATH="${PNPM_CMD[0]%/*}:$PATH" \
+      NPM_CONFIG_WORKSPACE_DIR="$PWD" npm_config_workspace_dir="$PWD" \
+      PNPM_CONFIG_LOCKFILE_DIR="$PWD" pnpm_config_lockfile_dir="$PWD" \
+      "${PNPM_CMD[@]}" "$@"
+)
+
+should_prefer_offline_pnpm_install() {
+    local project_dir="${1:-$PWD}"
+    [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
+    local configured=""
+    configured="$(run_pnpm -C "$project_dir" config get prefer-offline 2>/dev/null)" || return 1
+    [[ -z "$configured" || "$configured" == "undefined" || "$configured" == "null" ]]
 }
 
 resolve_git_openclaw_ref() {
@@ -2654,6 +2608,24 @@ checkout_git_openclaw_ref() {
     GIT_REF_KIND=""
 
     if [[ -z "$ref" ]]; then
+        return 0
+    fi
+
+    # Full commit IDs pin source bytes, even when a remote ref has the same name.
+    # Bundled/existing checkouts already have the object and need no remote lookup.
+    if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+            if ! run_quiet_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
+                ui_error "Could not fetch requested git commit: ${ref}"
+                return 1
+            fi
+        fi
+        if ! git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+            ui_error "Requested git version is not a commit: ${ref}"
+            return 1
+        fi
+        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
+        GIT_REF_KIND="immutable"
         return 0
     fi
 
@@ -2832,35 +2804,9 @@ repo_pnpm_spec() {
         return 1
     fi
 
-    sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
+    node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (typeof pkg.packageManager === "string") process.stdout.write(pkg.packageManager);' "$package_json"
 }
 
-activate_repo_pnpm_version() {
-    local repo_dir="$1"
-    local spec version
-
-    spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    if [[ "$spec" != pnpm@* ]]; then
-        return 0
-    fi
-
-    version="${spec#pnpm@}"
-    version="${version%%+*}"
-    if [[ -z "$version" ]]; then
-        return 0
-    fi
-
-    if command -v corepack >/dev/null 2>&1; then
-        ui_info "Activating repo pnpm ${version}"
-        corepack prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
-        refresh_shell_command_cache
-        if [[ "$(cd "$repo_dir" && corepack pnpm --version 2>/dev/null || true)" == "$version" ]]; then
-            set_pnpm_cmd corepack pnpm
-            return 0
-        fi
-        detect_pnpm_cmd || true
-    fi
-}
 
 ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
@@ -3140,11 +3086,23 @@ bounded_probe_output() {
     pid="$!"
 
     (
-        sleep "$timeout_seconds"
+        local sleeper
+        # Builtin wait lets TERM interrupt the watchdog; a foreground sleep
+        # would outlive it and hold the caller's command-substitution pipe open.
+        trap 'exit' TERM
+        trap '
+            for sleeper in $(jobs -p); do
+                kill "$sleeper" 2>/dev/null || true
+                wait "$sleeper" 2>/dev/null || true
+            done
+        ' EXIT
+        sleep "$timeout_seconds" &
+        wait "$!"
         if kill -0 "$pid" 2>/dev/null; then
             printf '1' >"$timeout_file"
             kill "$pid" 2>/dev/null || true
-            sleep 0.1
+            sleep 0.1 &
+            wait "$!"
             kill -9 "$pid" 2>/dev/null || true
             printf 'timeout' >"$status_file"
         fi
@@ -3285,9 +3243,6 @@ install_openclaw_from_git() {
         install_git
     fi
 
-    ensure_pnpm
-    ensure_pnpm_binary_for_scripts
-
     validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
         # Blobless clone: the installer checks out one release tag, so full blob
@@ -3312,11 +3267,15 @@ install_openclaw_from_git() {
     fi
 
     cleanup_legacy_submodules "$repo_dir"
-    activate_repo_pnpm_version "$repo_dir"
+    ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    local -a pnpm_prefer_offline_args=()
+    if should_prefer_offline_pnpm_install "$repo_dir"; then
+        pnpm_prefer_offline_args=(--prefer-offline)
+    fi
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
@@ -3351,7 +3310,7 @@ set -euo pipefail
 exec ${node_bin_quoted} ${entry_path_quoted} "\$@"
 EOF
     ui_success "OpenClaw wrapper installed to \$HOME/.local/bin/openclaw"
-    ui_info "This checkout uses pnpm — run pnpm install (or corepack pnpm install) for deps"
+    ui_info "Manual builds need the checkout-pinned pnpm launcher; installer bootstrap is temporary: https://docs.openclaw.ai/install/installer#source-build-toolchain"
 }
 
 # Install OpenClaw
@@ -3695,17 +3654,29 @@ verify_installation() {
 
 retire_npm_owner_after_git_install() {
     local wrapper="$HOME/.local/bin/openclaw" npm_cmd="" npm_root="" npm_bin="" package_root="" package_name=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    if ! npm_cmd="$(npm_command_path npm)"; then
+        ui_error "Could not retire the previous npm install: npm not found on PATH"
+        return 1
+    fi
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
     package_root="${npm_root%/}/openclaw"
     [[ -n "$npm_root" && -f "$package_root/package.json" ]] || return 0
     package_name="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.name || ""))' "$package_root/package.json" 2>/dev/null || true)"
-    [[ "$package_name" == "openclaw" ]] || return 1
+    if [[ "$package_name" != "openclaw" ]]; then
+        ui_error "Could not retire the previous npm install: ${package_root} contains package '${package_name:-unknown}', not openclaw"
+        return 1
+    fi
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
     if [[ "${npm_bin%/}/openclaw" == "$wrapper" ]]; then
-        rm -rf "$package_root" || return 1
+        if ! rm -rf "$package_root"; then
+            ui_error "Could not retire the previous npm install: failed to remove ${package_root}"
+            return 1
+        fi
     else
-        "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1 || return 1
+        if ! "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1; then
+            ui_error "Could not retire the previous npm install: npm uninstall -g openclaw failed"
+            return 1
+        fi
     fi
     ui_success "Previous npm install retired"
 }
@@ -3721,10 +3692,13 @@ is_installer_git_wrapper() {
 
 prepare_git_wrapper_backup_for_npm() {
     local npm_cmd="" npm_root="" npm_bin="" target="" launcher=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    # Without a resolvable npm there is nothing to back up; let the npm
+    # install step report the missing npm with its own remediation text
+    # instead of silently exiting here (Arch splits node and npm packages).
+    npm_cmd="$(npm_command_path npm)" || return 0
     npm_root="$("$npm_cmd" root -g 2>/dev/null || true)"
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
-    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 1
+    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 0
     target="${npm_bin%/}/openclaw"
     is_installer_git_wrapper "$target" || return 0
     launcher="${npm_root%/}/openclaw/openclaw.mjs"
@@ -3734,7 +3708,10 @@ prepare_git_wrapper_backup_for_npm() {
 retire_git_wrapper_after_npm_install() {
     local wrapper="$HOME/.local/bin/openclaw"
     is_installer_git_wrapper "$wrapper" || return 0
-    rm -f "$wrapper" || return 1
+    if ! rm -f "$wrapper"; then
+        ui_error "Could not retire the previous git wrapper: failed to remove ${wrapper}"
+        return 1
+    fi
     ui_success "Previous git wrapper retired"
 }
 

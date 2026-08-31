@@ -1,18 +1,21 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { isBuiltin } from "node:module";
 import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
+  collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { fsSafeNativeCopy } from "./scripts/lib/fs-safe-native-assets.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
+import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
@@ -23,6 +26,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -171,24 +175,11 @@ function nodeBuildConfig(
   };
 }
 
-function fsSafeNativeCopy(entryDirectory: string): UserConfig["copy"] {
-  const packageRoot = path.dirname(
-    createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json"),
-  );
-  return ({ outDir }) => ({
-    from: path.join(packageRoot, "dist/native"),
-    // fs-safe resolves ../dist/native from its emitted loader. Preserve that
-    // layout, including the inline worker's extra directory, and every target.
-    to: path.resolve(outDir, entryDirectory, "..", "dist"),
-  });
-}
-
 function workerDeployBuildConfig(): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry: { "worker/worker": "src/worker/worker-deploy-entry.ts" },
     outDir: "dist",
-    copy: fsSafeNativeCopy("worker"),
     dts: false,
     env,
     define: {
@@ -209,6 +200,7 @@ function workerDeployBuildConfig(): UserConfig {
       onlyBundle: false,
     },
     fixedExtension: false,
+    minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
@@ -371,15 +363,19 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
+    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
@@ -388,9 +384,8 @@ function buildCoreDistEntries(): Record<string, string> {
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
-    "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
-    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
-    "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
+    ...runtimeProcessBuildEntries,
+    ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":
       "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
@@ -406,8 +401,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
-    "commands/doctor/shared/plugin-registry-migration":
-      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
@@ -418,11 +411,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
-    "process/supervisor/service-child-group-anchor":
-      "src/process/supervisor/service-child-group-anchor.ts",
-    "process/supervisor/service-child-windows-job-anchor":
-      "src/process/supervisor/service-child-windows-job-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",
@@ -440,8 +428,8 @@ function buildCoreDistEntries(): Record<string, string> {
 function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
     // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
+    "agents/agent-bundle-mcp-manager-api": "src/agents/agent-bundle-mcp-manager-api.ts",
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
-    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
     "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
@@ -460,7 +448,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
-    "plugins/tools": "src/plugins/tools.ts",
+    "plugins/tool-metadata": "src/plugins/tool-metadata.ts",
     "normalization-core/string-coerce": "packages/normalization-core/src/string-coerce.ts",
   };
 }
@@ -621,10 +609,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
-    "extensions/memory-core/memory-search-knn.child":
-      "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
+    "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -773,12 +760,23 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy("."),
+      copy: fsSafeNativeCopy,
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
   workerDeployBuildConfig(),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Keep retained config repairs in their own graph: shared public SDK chunks
+      // otherwise pull state-migration exports into these pre-install artifacts.
+      entry: collectChannelConfigDoctorBuildEntries(),
+      outDir: "dist/config-doctor",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
   workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>

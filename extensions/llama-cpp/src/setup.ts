@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
@@ -16,7 +17,6 @@ import {
   LLAMA_CPP_DEFAULT_PROFILE_ID,
 } from "./auth-config.js";
 import {
-  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
   LLAMA_CPP_PROVIDER_ID,
@@ -24,6 +24,7 @@ import {
   meetsLlamaCppDefaultModelRamFloor,
   resolveCachedLlamaCppModelPath,
   resolveLegacyLlamaCppModelCacheDir,
+  resolveLlamaCppEmbeddingModel,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
@@ -61,6 +62,12 @@ function formatDownloadProgress(
 
 function formatRamGb(totalmemBytes: number): string {
   return (totalmemBytes / 1024 ** 3).toFixed(1).replace(/\.0$/u, "");
+}
+
+function describeEmbeddingDownload(isDefault: boolean): string {
+  return isDefault
+    ? "the local embedding model (about 0.3 GB)"
+    : "your configured local embedding model";
 }
 
 function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
@@ -212,19 +219,37 @@ export async function prepareLlamaCppSetup(
   });
 }
 
-function hasLocalMemoryIntent(config: ProviderAuthContext["config"]): boolean {
-  return (
-    config.memory?.search?.provider === "local" ||
-    Object.values(config.agents?.entries ?? {}).some(
-      (agent) => agent.memory?.search?.provider === "local",
-    ) ||
-    config.agents?.list?.some((agent) => agent.memory?.search?.provider === "local") === true
-  );
+function resolveEmbeddingSetup(config: ProviderAuthContext["config"], cacheDir: string) {
+  const defaults = config.memory?.search;
+  const models = listAgentIds(config).flatMap((agentId) => {
+    const override = resolveAgentConfig(config, agentId)?.memory?.search;
+    // Match core memory config: each agent field overrides the top-level default.
+    if (
+      !(override?.enabled ?? defaults?.enabled ?? true) ||
+      (override?.provider ?? defaults?.provider) !== "local"
+    ) {
+      return [];
+    }
+    return [
+      resolveLlamaCppEmbeddingModel({
+        modelPath: override?.local?.modelPath ?? defaults?.local?.modelPath,
+        modelCacheDir: cacheDir,
+      }),
+    ];
+  });
+  const model = models[0] ?? resolveLlamaCppEmbeddingModel({ modelCacheDir: cacheDir });
+  return {
+    model,
+    localMemoryIntent: models.length > 0,
+    conflict: models.some((candidate) => candidate.source !== model.source),
+  };
 }
 
 async function resolveSetupPlan(
   ctx: ProviderAuthContext,
   candidates: LlamaCppChatCandidate[],
+  embeddingModelIsDefault: boolean,
+  localMemoryIntent: boolean,
 ): Promise<LlamaCppSetupPlan | undefined> {
   let candidate = candidates[0];
   const cachedPath = candidate ? await resolveCachedCandidate(candidate) : undefined;
@@ -234,11 +259,9 @@ async function resolveSetupPlan(
 
   candidate = candidates.find((entry) => entry.model.id === DEFAULT_LLAMA_CPP_MODEL_ID);
   const totalmemBytes = os.totalmem();
-  const localMemoryIntent = hasLocalMemoryIntent(ctx.config);
   if (candidate && meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
     const consent = await ctx.prompter.confirm({
-      message:
-        "OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus the local embedding model (about 0.3 GB). Continue?",
+      message: `OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus ${describeEmbeddingDownload(embeddingModelIsDefault)}. Continue?`,
       initialValue: false,
     });
     if (consent) {
@@ -263,8 +286,7 @@ async function resolveSetupPlan(
 
   if (localMemoryIntent) {
     const consent = await ctx.prompter.confirm({
-      message:
-        "OpenClaw can install a verified llama.cpp server and download only the local embedding model (about 0.3 GB). This will not install or change your chat model. Continue?",
+      message: `OpenClaw can install a verified llama.cpp server and download only ${describeEmbeddingDownload(embeddingModelIsDefault)}. This will not install or change your chat model. Continue?`,
       initialValue: false,
     });
     if (consent) {
@@ -279,15 +301,29 @@ async function resolveSetupPlan(
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
+  const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
+  const embeddingSetup = resolveEmbeddingSetup(ctx.config, cacheDir);
+  if (embeddingSetup.conflict) {
+    await ctx.prompter.note(
+      "Configured agents resolve to different local embedding models. Set memory.search.local.modelPath and any per-agent overrides to the same value, then retry llama.cpp setup.",
+      "Setup skipped",
+    );
+    return { profiles: [] };
+  }
+  const embeddingModel = embeddingSetup.model;
   const candidates = configuredCandidates(ctx.config, "setup");
-  const plan = await resolveSetupPlan(ctx, candidates);
+  const plan = await resolveSetupPlan(
+    ctx,
+    candidates,
+    embeddingModel.isDefault,
+    embeddingSetup.localMemoryIntent,
+  );
   if (!plan) {
     return { profiles: [] };
   }
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
-    const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
     let chatModel: ManagedLlamaChatModel;
     if (plan.kind === "chat") {
       const chatModelPath =
@@ -313,16 +349,19 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     } else {
       chatModel = { mode: "remove" };
     }
+    const embeddingModelLabel = embeddingModel.isDefault
+      ? "EmbeddingGemma"
+      : "configured embedding model";
     const embeddingModelPath = await ensureLlamaCppModel({
-      source: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      source: embeddingModel.source,
       cacheDir,
       download: true,
       signal: ctx.signal,
-      onProgress: (status) => progress.update(formatDownloadProgress("EmbeddingGemma", status)),
+      onProgress: (status) => progress.update(formatDownloadProgress(embeddingModelLabel, status)),
     });
     const managed = await prepareManagedLlamaServer({
       chatModel,
-      embeddingModelIsDefault: true,
+      embeddingModelIsDefault: embeddingModel.isDefault,
       embeddingModelPath,
       port: readConfiguredPort(managedExisting),
     });

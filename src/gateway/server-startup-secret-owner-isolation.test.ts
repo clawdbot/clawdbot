@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -205,10 +206,12 @@ describe("Gateway startup SecretRef owner isolation", () => {
             reason: string;
           }>;
         };
+        const accountStarted = new Map<string, () => void>();
         const startAccount = vi.fn(
-          async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+          async ({ accountId, abortSignal }: ChannelGatewayContext<TestAccount>) =>
             await new Promise<void>((resolve) => {
               abortSignal.addEventListener("abort", () => resolve(), { once: true });
+              accountStarted.get(accountId)?.();
             }),
         );
         const plugin: ChannelPlugin<TestAccount> = {
@@ -276,6 +279,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
           });
           expect(brokenStart.ok).toBe(false);
           for (const accountId of ["healthy", "stopped"]) {
+            const pluginStarted = createDeferred();
+            accountStarted.set(accountId, pluginStarted.resolve);
             const started = await rpcReq<{ accountId: string; started: boolean }>(
               ws,
               "channels.start",
@@ -283,6 +288,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
             );
             expect(started.ok, JSON.stringify(started)).toBe(true);
             expect(started.payload).toMatchObject({ accountId, started: true });
+            // The RPC acknowledges handoff; traced startup invokes the plugin on a later turn.
+            await pluginStarted.promise;
           }
           expect(startAccount).toHaveBeenCalledTimes(2);
           expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
@@ -337,9 +344,12 @@ describe("Gateway startup SecretRef owner isolation", () => {
           writeFileSync(credentialPath, repairedToken, { mode: 0o600 });
           expect(readFileSync(configPath)).toEqual(originalConfig);
 
+          const repairedStarted = createDeferred();
+          accountStarted.set("broken", repairedStarted.resolve);
           const reload = await rpcReq<{ warningCount: number }>(ws, "secrets.reload", {});
           expect(reload.ok, JSON.stringify(reload)).toBe(true);
           expect(reload.payload).toMatchObject({ warningCount: 0 });
+          await repairedStarted.promise;
           expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
             "healthy",
             "stopped",

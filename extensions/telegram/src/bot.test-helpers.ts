@@ -62,6 +62,8 @@ export async function runTelegramChannelInboundEventWithHarness(
                   plan.delivery.deliverWithProviderMessageSending(payload, {
                     ...info,
                     onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
+                    assertPlatformSendAuthorized:
+                      info.assertPlatformSendAuthorized ?? (() => undefined),
                   }),
                 onError: plan.delivery.onError,
               },

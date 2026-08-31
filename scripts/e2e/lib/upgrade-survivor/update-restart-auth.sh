@@ -87,6 +87,7 @@ start_gateway() {
   local exec_start
   exec_start="$(node "$manager_script" command)"
   rm -f "$pid_file" "$supervisor_script"
+  rm -f "${daemon_log}.exit.json"
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -113,6 +114,7 @@ const restartWindowMs = 60_000;
 const restartBurst = 5;
 const stopTimeoutMs = 30_000;
 const starts = [];
+let firstExit;
 let child;
 let activeGroupPid;
 let drainingGroupPid;
@@ -209,7 +211,16 @@ const start = () => {
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
   });
-  child.once("close", (code) => {
+  child.once("close", (code, signal) => {
+    const observed = { code, signal, at: new Date().toISOString() };
+    firstExit ??= observed;
+    try {
+      fs.writeFileSync(`${daemonLog}.exit.json`, JSON.stringify({
+        first: firstExit, last: observed, cwd: process.cwd(),
+      }));
+    } catch {
+      fs.writeSync(output, "[systemctl-shim] child exit diagnostic could not be retained\n");
+    }
     child = undefined;
     drainProcessGroup(childGroupPid, () => {
       if (stopping) return finish();
@@ -224,12 +235,30 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 start();
 SUPERVISOR
-  (
-    OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
-      OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
-      nohup node "$supervisor_script" </dev/null >/dev/null 2>&1 &
-    printf '%s\n' "$!" >"$pid_file"
-  )
+  # The manager must outlive the calling terminal, just like systemd. nohup alone
+  # leaves Node in that terminal session and can strand its detached gateway.
+  OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
+    OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
+    node --input-type=module - "$supervisor_script" "$pid_file" "${daemon_log}.bootstrap.log" <<'START_SUPERVISOR'
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+
+const [supervisor, pidFile, logFile] = process.argv.slice(2);
+const output = fs.openSync(logFile, "a");
+const child = spawn("node", [supervisor], {
+  detached: true,
+  stdio: ["ignore", output, output],
+});
+fs.closeSync(output);
+child.once("spawn", () => {
+  fs.writeFileSync(pidFile, `${child.pid}\n`);
+  child.unref();
+});
+child.once("error", (error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});
+START_SUPERVISOR
 }
 
 case "$command" in
@@ -302,10 +331,20 @@ case "$command" in
       exit 1
     }
     if is_running; then
-      printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
+      printf 'ActiveState=active\nSubState=running\nMainPID=%s\n' "$(cat "$pid_file")"
     else
-      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n'
+      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\n'
     fi
+    # Missing observations stay unknown, including bootstrap failures.
+    node - "${daemon_log}.exit.json" <<'EXIT_STATUS'
+const fs = require("node:fs");
+try {
+  const { last } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  if (Number.isInteger(last.code) && last.code >= 0 && last.code <= 255) {
+    process.stdout.write(`ExecMainStatus=${last.code}\nExecMainCode=exited\n`);
+  }
+} catch {}
+EXIT_STATUS
     exit 0
     ;;
   *)

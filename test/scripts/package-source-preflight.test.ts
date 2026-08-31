@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,6 +296,7 @@ function runReleaseInputCapture(params: {
         RELEASE_LIVE_SUITE_FILTER_INPUT: "",
         RELEASE_MODE_INPUT: "both",
         RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PHASE_INPUT: "all",
         RELEASE_PROFILE_INPUT: "beta",
         RELEASE_PROVIDER_INPUT: "openai",
         RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
@@ -306,6 +307,7 @@ function runReleaseInputCapture(params: {
         RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
         RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
         RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+        TELEGRAM_WAIVER: "",
       },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -324,16 +326,19 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it("accepts aligned source manifests and the explicitly allowed Unreleased section", () => {
-    expect(
-      validatePackageSource({
-        aiManifestContent: aiManifest(),
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
-      }),
-    ).toBe("2026.8.1");
-  });
+  it.each(["2026.8.1", "2026.8.1-beta.4", "2026.9.1"])(
+    "accepts aligned %s source manifests with Unreleased notes",
+    (version) => {
+      expect(
+        validatePackageSource({
+          aiManifestContent: aiManifest({ version }),
+          allowUnreleasedChangelog: true,
+          changelogContent: changelog,
+          rootManifestContent: rootManifest({ version }),
+        }),
+      ).toBe(version);
+    },
+  );
 
   it("uses canonical package changelog validation", () => {
     expect(() =>
@@ -343,6 +348,16 @@ describe("package source preflight", () => {
         rootManifestContent: rootManifest(),
       }),
     ).toThrow("CHANGELOG.md does not contain a release section for 2026.8.1.");
+  });
+
+  it("accepts complete oversized contribution records through the package renderer", () => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest(),
+        rootManifestContent: rootManifest(),
+        changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
+      }),
+    ).toBe("2026.8.1");
   });
 
   it("rejects source package version drift", () => {
@@ -437,16 +452,20 @@ describe("package source preflight", () => {
   });
 
   it("validates the current source ref without modifying the checkout", () => {
+    const committedManifest = JSON.parse(
+      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
+    ) as { version: string };
+    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
     expect(
       validatePackageSourceRef("HEAD", {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(committedManifest.version);
     expect(
       validatePackageSourceDir(process.cwd(), {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(workingManifest.version);
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {
@@ -512,7 +531,8 @@ describe("package source preflight", () => {
         "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
     });
     expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
-      candidate_artifact_json: "${{ needs.resolve_target.outputs.candidate_artifact_json }}",
+      candidate_artifact_json:
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
       source:
         "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     });

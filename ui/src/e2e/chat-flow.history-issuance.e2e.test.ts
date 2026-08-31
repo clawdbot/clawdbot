@@ -54,7 +54,9 @@ suite.define(() => {
       await historyError.getByRole("button", { name: "Retry" }).click();
       await gateway.waitForRequest("chat.startup", { after: 1 });
       await historyError.waitFor({ state: "detached" });
-      await page.locator(".chat-thread .chat-loading-skeleton").waitFor({ state: "visible" });
+      await page
+        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+        .waitFor({ state: "visible" });
       await gateway.resolveDeferred("chat.startup");
       await page
         .locator(".chat-thread")

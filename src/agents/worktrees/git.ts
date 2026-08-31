@@ -55,7 +55,12 @@ export function commandError(command: string, result: GitResult): Error {
 export async function requireGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<string> {
   return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }

@@ -417,7 +417,11 @@ function renderIdentityHeader(
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
   const projection = projectSessionActivity(props.result);
-  const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
+  const onlineById = new Map(
+    props.presenceViewers.flatMap((person) =>
+      person.identity ? [[person.identity.id, person] as const] : [],
+    ),
+  );
   const identity = props.filters.personId
     ? (onlineById.get(props.filters.personId) ??
       projection.people.find((person) => person.id === props.filters.personId) ??

@@ -1,12 +1,16 @@
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, inject } from "vitest";
 import {
-  canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+
+declare module "vitest" {
+  export interface ProvidedContext {
+    controlUiE2eChromium: { executablePath: string; available: boolean };
+  }
+}
 
 type ControlUiE2eSuiteOptions = {
   browserLaunchOptions?: Omit<NonNullable<Parameters<typeof chromium.launch>[0]>, "executablePath">;
@@ -83,8 +87,9 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
 }
 
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
-  const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-  const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+  // Global setup already checked the executable; keep that result across isolated files.
+  const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
+    inject("controlUiE2eChromium");
   const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
   const describeControlUiE2e =
     chromiumAvailable || !allowMissingChromium ? describe : describe.skip;

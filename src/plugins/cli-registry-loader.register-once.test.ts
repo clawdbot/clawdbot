@@ -1,9 +1,13 @@
 // Pins one plugin register execution per CLI invocation across independent bootstrap stages.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginCliDescriptors, resolvePluginCliRootOwnerIds } from "./cli-registry-loader.js";
+import {
+  createPluginCliLoadSession,
+  loadPluginCliDescriptors,
+  resolvePluginCliRootOwnerIds,
+} from "./cli-registry-loader.js";
 import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -64,18 +68,22 @@ describe("plugin CLI metadata registration count", () => {
   it("runs a legacy external plugin register once across CLI bootstrap stages", async () => {
     const { config, markerPath } = setupCountingCliPlugin();
 
+    const session = createPluginCliLoadSession();
+    onTestFinished(() => session.close());
     // Stage order mirrors one `openclaw counting-cli --help` invocation: the unowned-primary
     // guard resolves plugin CLI root ownership, then command registration resolves descriptors
-    // for the same primary. Both stages resolve CLI metadata for the same load scope.
+    // for the same primary. The CLI carries one preparation session through both stages.
     const ownerIds = await resolvePluginCliRootOwnerIds({
       cfg: config,
       env: process.env,
       primaryCommand: "counting-cli",
+      session,
     });
     const descriptors = await loadPluginCliDescriptors({
       cfg: config,
       env: process.env,
       primaryCommand: "counting-cli",
+      session,
     });
 
     expect(ownerIds).toEqual(["counting-cli"]);

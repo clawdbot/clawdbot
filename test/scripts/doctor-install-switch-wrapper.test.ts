@@ -76,7 +76,8 @@ describe("doctor install switch ExecStart assertions", () => {
   it("resolves a quoted entrypoint after inserted Node heap flags", () => {
     const root = makeTempDir(tempDirs, "openclaw-doctor-exec-start-");
     const unitPath = path.join(root, "openclaw-gateway.service");
-    const entrypoint = "/opt/openclaw git/dist/index.js";
+    const entrypoint = path.join(root, "index with spaces.js");
+    writeFileSync(entrypoint, "export {};\n");
     writeFileSync(
       unitPath,
       [
@@ -89,6 +90,27 @@ describe("doctor install switch ExecStart assertions", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+
+    const exists = runExecStartAssertion(["entrypoint-exists", unitPath]);
+    expect(exists.status, exists.stderr).toBe(0);
+    expect(exists.stdout.trim()).toBe(entrypoint);
+  });
+
+  it.each(["missing", "directory"])("rejects a %s service entrypoint", (kind) => {
+    const root = makeTempDir(tempDirs, "openclaw-doctor-exec-start-");
+    const unitPath = path.join(root, "openclaw-gateway.service");
+    const entrypoint = path.join(root, "entry.js");
+    if (kind === "directory") {
+      mkdirSync(entrypoint);
+    }
+    writeFileSync(
+      unitPath,
+      `[Service]\nExecStart=/usr/bin/node --max-old-space-size=4096 "${entrypoint}" gateway\n`,
+    );
+
+    const result = runExecStartAssertion(["entrypoint-exists", unitPath]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Entrypoint in service unit does not exist: ${entrypoint}`);
   });
 
   it("reads wrapper arguments from parsed ExecStart argv", () => {

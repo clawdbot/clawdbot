@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -38,6 +39,7 @@ describe("createGatewayKernel", () => {
       },
     });
     const token = "gateway-kernel-direct-close-readiness-token";
+    const configReloaderStop = createDeferred();
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
       await state.writeConfig({
@@ -58,7 +60,6 @@ describe("createGatewayKernel", () => {
 
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
-      const configReloaderStop = createDeferred();
       vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
         configReloaderStop.promise,
       );
@@ -71,6 +72,7 @@ describe("createGatewayKernel", () => {
       expect(closeFirstStop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {
+      configReloaderStop.resolve();
       try {
         await kernel?.closeOnStartupFailure();
       } finally {
@@ -375,6 +377,7 @@ describe("createGatewayKernel", () => {
       ).resolves.toEqual({ runId: "kernel-run", status: "ok", summary: "cached" });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
+      flushDiagnosticsTimeline();
       const timeline = (await fs.readFile(timelinePath, "utf8"))
         .trim()
         .split("\n")
@@ -429,6 +432,7 @@ describe("createGatewayKernel", () => {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
+          flushDiagnosticsTimeline();
           await state.cleanup();
         } finally {
           if (capturedLoadedPluginRegistry) {

@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -290,41 +292,76 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Matrix: ok");
   });
 
-  it("shows every agent when an explicit fleet has no default owner", async () => {
-    const sessions = (agentId: string) => ({
-      path: `/tmp/${agentId}/sessions.json`,
-      count: 0,
-      recent: [],
-    });
-    const snapshot = {
-      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
-      defaultAgentId: undefined,
-      agents: [
-        { ...createMainAgentSummary(sessions("alpha")), agentId: "alpha", isDefault: false },
-        { ...createMainAgentSummary(sessions("beta")), agentId: "beta", isDefault: false },
-      ],
-    };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
+  it.each(["remote", "empty", "missing"] as const)(
+    "shows each explicit fleet owner's sessions with %s agent summaries",
+    async (agentSummaries) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const storePath = state.statePath("shared.sqlite");
+        const updatedAt = Date.now();
+        for (const [agentId, key] of [
+          ["alpha", "first"],
+          ["alpha", "second"],
+          ["beta", "only"],
+        ] as const) {
+          await replaceSessionEntry(
+            { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
+            { sessionId: `${agentId}-${key}`, updatedAt },
+          );
+        }
+        const agent = (agentId: string, keys: string[]) => ({
+          ...createMainAgentSummary({
+            path: storePath,
+            count: keys.length,
+            recent: keys.map((key) => ({
+              key: `agent:${agentId}:${key}`,
+              updatedAt,
+              age: 0,
+            })),
+          }),
+          agentId,
+          isDefault: false,
+        });
+        const { agents: _agents, ...snapshot } = createHealthSummary({
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+        });
+        callGatewayMock.mockResolvedValueOnce({
+          ...snapshot,
+          defaultAgentId: undefined,
+          ...(agentSummaries === "missing"
+            ? {}
+            : {
+                agents:
+                  agentSummaries === "empty"
+                    ? []
+                    : [agent("alpha", ["first", "second"]), agent("beta", ["only"])],
+              }),
+        });
 
-    await healthCommand(
-      {
-        json: false,
-        timeoutMs: 1000,
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: {}, beta: {} },
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 1_000,
+            config: {
+              session: { store: storePath },
+              agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+            },
           },
-        },
-      },
-      runtime as never,
-    );
+          runtime as never,
+        );
 
-    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).toContain("Session store (alpha): /tmp/alpha/sessions.json");
-    expect(output).toContain("Session store (beta): /tmp/beta/sessions.json");
-    expect(output).not.toContain("(default)");
-  });
+        const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+        expect(output).toContain(
+          `Session store (alpha): ${storePath} (2 entries)\n- agent:alpha:first`,
+        );
+        expect(output).toContain(
+          `Session store (beta): ${storePath} (1 entries)\n- agent:beta:only`,
+        );
+        expect(output).not.toContain("(default)");
+      });
+    },
+  );
 
   it("prints persistent event-loop degradation duration in text output", async () => {
     const snapshot = {

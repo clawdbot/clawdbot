@@ -33,7 +33,6 @@ import {
   hasReplyTargetContext,
   resolvePromptSessionContextForSystemEvent,
   resolvePromptSilentReplyConversationType,
-  stripPromptThinkingDirectives,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -351,11 +350,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     shouldApplyStartupContext({ cfg, action: startupAction })
       ? await buildSessionStartupContextPrelude({ workspaceDir, cfg })
       : null;
-  const baseBodyFinal = isBareSessionReset
-    ? (bareResetPromptState?.prompt ?? "")
-    : canInterpretCommands
-      ? stripPromptThinkingDirectives(baseBody)
-      : baseBody;
+  // Directive routing already owns stripping and authorization; prepared text is final.
+  const baseBodyFinal = isBareSessionReset ? (bareResetPromptState?.prompt ?? "") : baseBody;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||

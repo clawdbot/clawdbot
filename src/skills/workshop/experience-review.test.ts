@@ -5,6 +5,10 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import {
+  createNestedToolActivity,
+  projectNestedToolActivityForHooks,
+} from "../../sessions/nested-tool-activity.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -130,6 +134,39 @@ describe("skill experience review scheduler", () => {
       }),
     );
     expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("transcript");
+    scheduler.clear();
+  });
+
+  it("does not count nested tool activity as model iterations", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+    const run = completedRun({ messages: 2 });
+    const activities = Array.from({ length: 8 }, (_, index) =>
+      createNestedToolActivity({
+        runId: "run-1",
+        scopeId: "scope-1",
+        afterEntryId: null,
+        startOrder: index,
+        parentToolCallId: "outer-exec",
+        toolCallId: `nested-${index}`,
+        toolName: "read",
+        input: {},
+        result: { content: [{ type: "text", text: "file contents" }] },
+        isError: false,
+        startedAt: index,
+        timestamp: index + 1,
+      }),
+    );
+    run.event.messages = projectNestedToolActivityForHooks(run.event.messages, activities);
+
+    scheduler.schedule(run);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 
@@ -506,10 +543,18 @@ describe("skill experience review prompt", () => {
     expect(prompt).toContain("One mutation at most, smallest mutation first");
     expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
     expect(prompt).toContain("Reading and preparing do not spend the mutation");
+    expect(prompt).toContain("Only writable workspace skills can be read or updated");
+    expect(prompt).toContain("only when no writable skill covers this class of work");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
     expect(prompt).toContain("- local-notes — Local workflow (user-authored)");
     expect(prompt).not.toContain("Trajectory:");
+
+    const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({
+      ctx: { runId: "run-1" },
+      existingSkills: [],
+    });
+    expect(emptyWorkspacePrompt).toContain("Writable skills: none.");
   });
 
   it("caps used and writable skill lists", () => {
@@ -539,7 +584,10 @@ describe("skill experience review prompt", () => {
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
-    const receipt = prompt.slice(prompt.indexOf("Skills actually used in this trajectory"));
+    const receipt = prompt.slice(
+      prompt.indexOf("Skills actually used in this trajectory"),
+      prompt.indexOf("\n\nWritable skills:"),
+    );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
     );
@@ -576,6 +624,30 @@ describe("skill experience review prompt", () => {
 });
 
 describe("skill experience review preparation", () => {
+  it.each([
+    { agentId: "direct", eligible: true },
+    { agentId: "isolated", eligible: false },
+  ])("rechecks $agentId sandbox policy for global reviews", async ({ agentId, eligible }) => {
+    const params = completedRun({ sessionKey: "global" });
+    params.ctx.agentId = agentId;
+    params.ctx.foregroundPromptContext.agentId = agentId;
+    const result = await prepareSkillExperienceReviewCandidate(
+      { ctx: params.ctx },
+      {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+      },
+    );
+
+    expect(result !== undefined).toBe(eligible);
+  });
+
   it("keeps an eligible foreground candidate", async () => {
     const params = completedRun();
     await expect(

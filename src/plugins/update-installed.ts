@@ -432,7 +432,6 @@ export async function updateNpmInstalledPlugins(params: {
             pluginId,
             record,
             currentVersion,
-            effectiveSpec,
             recordSpec,
             resolution: metadataResult.metadata,
             updateChannel,

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Binds Full Release Validation run metadata to its v3 evidence manifest.
+// Binds Full Release Validation run metadata to its supported evidence manifest.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -172,9 +172,9 @@ export function validateFullReleaseValidationEvidence({
     );
   }
 
-  if (manifest.version !== 3) {
+  if (manifest.version !== 3 && manifest.version !== 4) {
     throw new Error(
-      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
+      `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
     );
   }
   const manifestChecks = [
@@ -276,7 +276,7 @@ export function validateFullReleaseValidationEvidence({
       targetSha: expectedTargetSha,
     });
     if (
-      strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
+      strictEvidence?.schema !== `openclaw.release-validation-evidence/v${manifest.version}` ||
       strictEvidence.valid !== true ||
       scalarString(strictEvidence.current?.runId) !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||

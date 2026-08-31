@@ -24,12 +24,12 @@ describe("full release same-parent recovery workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
       "docker_runtime_assets_preflight",
-      "candidate_discovery",
-      "prepare_release_candidate",
-      "candidate_binding",
+      "candidate_acquisition",
       "normal_ci",
-      "plugin_prerelease",
-      "release_checks",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
       "npm_telegram",
       "performance",
     ]) {
@@ -75,11 +75,7 @@ describe("full release same-parent recovery workflow", () => {
     }
   });
 
-  it("records effective attempts and composite jobs in the final manifest", () => {
-    const write = String(step("summary", "Write release validation manifest").run);
-    expect(write).toContain("CHILD_EVIDENCE=");
-    expect(write).toContain("acceptedRunAttempt");
-    expect(write).toContain("compositeJobsSha256");
+  it("validates final manifest attempts against the diagnostic drain", () => {
     expect(step("summary", "Validate release validation manifest").env).toMatchObject({
       DIAGNOSTIC_DRAIN_PATH:
         "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",

@@ -209,7 +209,6 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/AgentAutomationDetailScreen.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
-        let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
         let chatTypography = try String(
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
@@ -242,12 +241,6 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("primaryActionTitle.text"))
         #expect(proComponents.contains("secondaryActionTitle.text"))
-
-        #expect(chatTab.contains("Text(\"Export Transcript\")"))
-        #expect(chatTab.contains("Text(String(localized: \"Sessions…\"))"))
-        #expect(chatTab.contains("Text(String(localized: \"Show reasoning & tool activity\"))"))
-        #expect(chatTab.contains(".font(OpenClawType.body)"))
-        #expect(!chatTab.contains("Button(\"Export Transcript\")"))
 
         #expect(!quickSetup.contains("Button(\"Close\")"))
         #expect(quickSetup.contains(".navigationTitle(\"Quick Setup\")"))
@@ -391,6 +384,35 @@ struct OpenClawTypographyTests {
             "Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)"))
         #expect(!chatTypography.contains("Font.system(textStyle, design: .default)"))
         #expect(!chatTypography.contains("Font.system(textStyle, design: .monospaced)"))
+    }
+
+    @Test func `chat model menu uses branded typography`() throws {
+        let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
+        let menu = try String(
+            contentsOf: Self.sourceURL("Design/ChatModelControlsMenu.swift"),
+            encoding: .utf8)
+        let chatActionsStart = try #require(chatTab.range(of: "private var chatActionsMenu: some View"))
+        let chatActionsEnd = try #require(chatTab.range(
+            of: "private var chatActionsPopover: some View",
+            range: chatActionsStart.upperBound..<chatTab.endIndex))
+        let chatActionsMenu = String(chatTab[chatActionsStart.lowerBound..<chatActionsEnd.lowerBound])
+
+        #expect(chatTab.contains("title: \"New chat in worktree\""))
+        #expect(!chatTab.contains("title: String(localized: \"Sessions…\")"))
+        #expect(chatTab.contains("title: \"New session options…\""))
+        #expect(chatTab.contains("title: \"Background tasks\""))
+        #expect(chatTab.contains("title: \"Export transcript\""))
+        #expect(chatTab.contains("title: \"Gateway settings\""))
+        #expect(chatTab.contains("title: String(localized: \"Show reasoning & tool activity\")"))
+        #expect(chatTab.contains(".accessibilityIdentifier(\"chat-show-reasoning-toggle\")"))
+        #expect(!chatTab.contains("title: \"Export Transcript\""))
+        #expect(!chatTab.contains("Divider()"))
+        #expect(!menu.contains("Divider()"))
+        #expect(chatActionsMenu.contains(".buttonStyle(.plain)"))
+        #expect(chatTab.components(separatedBy: ".sharedBackgroundVisibility(.hidden)").count >= 3)
+        #expect(menu.contains("Text(self.title)"))
+        #expect(menu.contains(".font(OpenClawType.body)"))
+        #expect(menu.contains(".font(OpenClawType.caption)"))
     }
 
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {

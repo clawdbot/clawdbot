@@ -3,7 +3,7 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   invalidateChatMetadataStore,
-  rememberChatMetadata,
+  beginChatMetadataPublication,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
@@ -179,6 +179,75 @@ describe("new-session model runtime", () => {
     expect(
       renderControl(control, context).querySelector("[data-chat-context-window-toggle]"),
     ).toBeNull();
+  });
+
+  it.each([
+    { inherited: true, checked: "true", toggleValue: "off", next: false },
+    { inherited: false, checked: "false", toggleValue: "on", next: true },
+    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
+  ] as const)(
+    "renders the current composer toggle for inherited Fast Mode $inherited",
+    async ({ inherited, checked, toggleValue, next }) => {
+      const { context } = contextWith([
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+          effectiveFastMode: inherited,
+        },
+      ]);
+      const control = new NewSessionModelControl(() => undefined);
+      control.load(context, "main", true);
+
+      await vi.waitFor(() => {
+        const container = renderControl(control, context);
+        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+        expect(
+          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
+        ).toBe("Fast mode");
+        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
+        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
+        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
+      });
+
+      renderControl(control, context)
+        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+        ?.click();
+      expect(control.fastMode).toBe(next);
+    },
+  );
+
+  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
+      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+      ?.click();
+    expect(control.fastMode).toBe(true);
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
+      ?.click();
+
+    expect(control.selected).toBe("ollama/llama-4");
+    expect(control.fastMode).toBeUndefined();
+    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
+      "[data-chat-speed-toggle]",
+    );
+    expect(unsupportedToggle?.disabled).toBe(true);
+    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
+    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
   });
 
   it("does not mark ordinary catalog loading as preference restoration", async () => {
@@ -486,7 +555,7 @@ describe("new-session model runtime", () => {
     );
     expect(renderControl(control, context).textContent).toContain("No models available");
 
-    rememberChatMetadata(context.gateway.snapshot.client!, "main", {
+    beginChatMetadataPublication(context.gateway.snapshot.client!, { agentId: "main" }).publish({
       commands: [],
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
@@ -537,7 +606,7 @@ describe("new-session model runtime", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("drops the stale auth gate on refresh error and restores selection after recovery", async () => {
+  it("retains the accepted auth gate on refresh error and clears it only after recovery", async () => {
     const coldModels: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -571,7 +640,7 @@ describe("new-session model runtime", () => {
       "GPT-5.6 Luna",
     );
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.modelUnavailableReason(agent)).toBeUndefined();
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });

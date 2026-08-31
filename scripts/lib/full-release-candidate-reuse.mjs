@@ -14,8 +14,6 @@ import { isRecord } from "./record-shared.mjs";
 const CANDIDATE_MANIFEST_FILE = "full-release-candidate.json";
 const CANDIDATE_PRODUCER_WORKFLOW_PATH =
   ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
-const CANDIDATE_PUBLISHER_JOB_NAME =
-  "Prepare shared release candidate / Bind full release candidate evidence";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const MAX_CANDIDATE_ARCHIVE_BYTES = 1024 * 1024;
 const MAX_CANDIDATES_TO_EVALUATE = 5;
@@ -77,7 +75,7 @@ function bindingFromArchive(archiveBytes, artifactMetadata) {
       digest: String(artifactMetadata.digest).replace(/^sha256:/u, ""),
       expiresAt: artifactMetadata.expires_at,
       runId: artifactMetadata.workflow_run?.id,
-      runAttempt: manifest.producer?.runAttempt,
+      runAttempt: manifest.publisher?.runAttempt,
     },
   });
 }
@@ -356,7 +354,7 @@ function sealedArchiveExpected(binding, metadata) {
     artifactSizeBytes: positiveInteger(metadata.size_in_bytes),
     repository: binding.request.repository,
     runId: positiveInteger(binding.evidenceArtifact.runId),
-    workflowSha: binding.producer.workflowSha,
+    workflowSha: binding.publisher.workflowSha,
   };
 }
 
@@ -369,7 +367,7 @@ function manifestFiles(archiveBytes) {
   });
 }
 
-function validateProducerWorkflowRun(run, binding, options = {}) {
+function validateCandidateWorkflowRun(run, binding, options = {}) {
   const runId = positiveInteger(binding.producer.runId);
   const runAttempt = positiveInteger(binding.producer.runAttempt);
   if (
@@ -379,11 +377,16 @@ function validateProducerWorkflowRun(run, binding, options = {}) {
     run.head_sha !== binding.producer.workflowSha ||
     run.event !== "workflow_dispatch" ||
     binding.producer.workflowPath !== CANDIDATE_PRODUCER_WORKFLOW_PATH ||
+    binding.publisher.workflowPath !== CANDIDATE_PRODUCER_WORKFLOW_PATH ||
     workflowPath(run.path) !== FULL_RELEASE_WORKFLOW_PATH ||
     run.repository?.full_name !== binding.producer.repository ||
-    run.head_repository?.full_name !== binding.producer.repository
+    run.head_repository?.full_name !== binding.producer.repository ||
+    binding.publisher.runId !== binding.producer.runId ||
+    binding.publisher.runAttempt !== binding.producer.runAttempt ||
+    binding.publisher.repository !== binding.producer.repository ||
+    binding.publisher.workflowSha !== binding.producer.workflowSha
   ) {
-    fail("full release candidate producer workflow attempt is invalid");
+    fail("full release candidate producer or publisher workflow attempt is invalid");
   }
   const active = ["in_progress", "waiting"].includes(run.status) && run.conclusion === null;
   const terminal =
@@ -414,13 +417,16 @@ function validatedWorkflowJobs(workflowJobs) {
 }
 
 function hasTrustedCandidatePublisher(workflowJobs, candidate, request) {
+  // This is a readiness prefilter only. The downloaded v2 manifest supplies
+  // the immutable publisher identity that is checked before reuse.
   return validatedWorkflowJobs(workflowJobs).some(
     (job) =>
       isRecord(job) &&
       job.run_id === candidate.runId &&
       positiveInteger(job.run_attempt) !== undefined &&
       job.head_sha === request.toolingSha &&
-      job.name === CANDIDATE_PUBLISHER_JOB_NAME &&
+      typeof job.name === "string" &&
+      job.name.endsWith(" / Bind full release candidate evidence") &&
       job.status === "completed" &&
       job.conclusion === "success",
   );
@@ -447,7 +453,10 @@ function validateCandidateWorkflowJobs(workflowJobs, binding) {
     fail("full release candidate producer job did not complete successfully");
   }
   const publisherJobs = jobs.filter(
-    (job) => matchesExpectedAttempt(job) && job.name === CANDIDATE_PUBLISHER_JOB_NAME,
+    (job) =>
+      matchesExpectedAttempt(job) &&
+      String(job.id) === binding.publisher.jobId &&
+      job.name === binding.publisher.jobName,
   );
   if (publisherJobs.length !== 1) {
     fail("full release candidate publisher job did not complete successfully");
@@ -512,7 +521,7 @@ export async function loadSelectedFullReleaseCandidate({
   });
   requireDiscoveryBudget(deadlineMs);
   const run = await readRunAttempt(binding.producer.runId, binding.producer.runAttempt);
-  validateProducerWorkflowRun(run, binding);
+  validateCandidateWorkflowRun(run, binding);
   requireDiscoveryBudget(deadlineMs);
   validateCandidateWorkflowJobs(
     await readWorkflowJobs(binding.producer.runId, binding.producer.runAttempt),
@@ -571,7 +580,7 @@ export async function verifySealedFullReleaseCandidate({
     unavailableAsMiss: false,
   });
   const run = await readRunAttempt(binding.producer.runId, binding.producer.runAttempt);
-  validateProducerWorkflowRun(run, binding, { consumerRunAttempt, consumerRunId });
+  validateCandidateWorkflowRun(run, binding, { consumerRunAttempt, consumerRunId });
   validateCandidateWorkflowJobs(
     await readWorkflowJobs(binding.producer.runId, binding.producer.runAttempt),
     binding,

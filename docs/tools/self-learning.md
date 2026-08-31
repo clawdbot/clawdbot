@@ -77,9 +77,11 @@ results never enter the foreground transcript or session record.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
-read or command-invoked, plus a bounded workspace skill list. It prefers a used
-writable skill when that skill governs the learning, then another existing
-skill, and creates a new skill only when nothing covers the class.
+read or command-invoked, plus a bounded writable workspace skill list that
+explicitly reports when no writable skills exist. It prefers a used writable
+skill when that skill governs the learning, then another writable skill, and
+creates a new skill only when no writable skill covers the class. Read-only skills
+in the inherited foreground catalog cannot be read or updated during review.
 
 Before changing an existing skill, the reviewer reads its current body. If the
 complete body is omitted, it can call `prepare_patch` for one non-empty unique
@@ -210,8 +212,10 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-The review forks the foreground transcript in memory and appends one small user
-message. It uses a private detached session identity while preserving the
+The review creates a detached view of the foreground model context and appends
+one small user message. Storage-only native prompt payloads stay in the original
+transcript, whose stored bytes the review does not change. It uses a private
+detached session identity while preserving the
 foreground provider, model, auth profile, bootstrap context, skills prompt, tool
 schemas, and prompt-cache affinity. The provider can reuse the finished turn's
 cached request prefix without making the review part of the foreground session.

@@ -29,7 +29,7 @@ export function recordMessageToolOnlyRunOutcome(
   const provider = resolved?.provider ?? params.followupRun.run.provider;
   const model = resolved?.model ?? params.followupRun.run.model;
   const runStatus: "completed" | "errored" | "aborted" =
-    outcome?.kind === "aborted" || (outcome?.kind === "settled" && outcome.abortReason)
+    outcome?.kind === "aborted"
       ? "aborted"
       : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
         ? "errored"

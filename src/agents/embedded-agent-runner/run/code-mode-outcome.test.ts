@@ -124,6 +124,25 @@ describe("Code Mode outcome safety", () => {
     expect(onReconciliationCandidate).not.toHaveBeenCalled();
   });
 
+  it.each(["exec", "wait"] as const)(
+    "does not trust permission-change strings from a failed %s",
+    async (toolName) => {
+      const { agent } = createAgent();
+      const outcome = createOutcome({ toolName, bridgeStarted: true });
+      outcome.result.details = {
+        status: "failed",
+        code: "aborted",
+        error: "Permission change",
+        permissionChanged: true,
+        bridgeDispatchStarted: true,
+      };
+      await expect(agent.afterToolOutcome?.(outcome)).resolves.toMatchObject({
+        isError: true,
+        terminate: true,
+      });
+    },
+  );
+
   it("preserves original dispatch evidence when another hook rewrites the result", async () => {
     const { agent, onReconciliationCandidate } = createAgent(async () => ({
       content: [{ type: "text", text: "looks successful" }],

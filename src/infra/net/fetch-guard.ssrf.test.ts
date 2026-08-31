@@ -3,6 +3,8 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Load before cases own mocks; a timed-out import would resume inside the next case.
+import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
 import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
@@ -1714,8 +1716,6 @@ describe("fetchWithSsrFGuard hardening", () => {
         async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
       );
       const lookupFn = createLoopbackLookup();
-      const { waitForControlUiDocument } = await import("../../commands/control-ui-handoff.js");
-
       const readiness = await waitForControlUiDocument({
         url: "http://127.0.0.1:18789/dashboard/",
         deps: {

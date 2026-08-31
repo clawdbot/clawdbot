@@ -17,6 +17,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
@@ -227,6 +228,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   handleEvent(event: Event) {
+    if (event instanceof KeyboardEvent) {
+      focusChatComposerFromPrintableKeydown(this, event);
+    }
     handleSessionPickerEvent(this, event);
   }
 
@@ -493,8 +497,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       onSelectProject: (projectId) => this.place.selectProjectId(projectId),
       onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
       onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
-      onApplyFolder: (folder) =>
-        this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
+      onApplyFolder: (folder) => this.place.applyFolder(folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
       onBrowse: () =>
@@ -582,6 +585,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             ? undefined
             : renderChatPermissionPicker({
                 canSelectFull: this.place.isAdmin(),
+                defaultMode: this.place.selectedAgent()?.defaultPermissionMode,
                 disabled:
                   this.submission.submitting ||
                   Boolean(this.submission.pendingPlacement.sessionKey),

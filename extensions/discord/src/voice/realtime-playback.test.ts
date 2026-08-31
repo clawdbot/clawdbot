@@ -445,7 +445,7 @@ defineDiscordVoiceTests(
       output.on("data", (chunk: Buffer) => received.push(chunk));
       await finished(output);
 
-      expect(Buffer.concat(received)).toEqual(Buffer.concat(expected));
+      expect(Buffer.concat(received).equals(Buffer.concat(expected))).toBe(true);
       expect(player.play).toHaveBeenCalledOnce();
       expect(player.stop).not.toHaveBeenCalled();
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();

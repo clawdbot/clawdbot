@@ -45,9 +45,16 @@ import type { SessionEntry } from "./types.js";
 
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
 
+type SessionEntryRemovalExpectation = Pick<
+  SessionEntryLifecycleRemoval,
+  "expectedEntry" | "expectedLifecycleRevision" | "expectedUpdatedAt"
+> & {
+  expectedSessionId?: string | null;
+};
+
 export function shouldRemoveSessionEntry(
   entry: SessionEntry | undefined,
-  removal: SessionEntryLifecycleRemoval,
+  removal: SessionEntryRemovalExpectation,
 ): entry is SessionEntry {
   if (!entry) {
     return false;
@@ -58,7 +65,13 @@ export function shouldRemoveSessionEntry(
   ) {
     return false;
   }
-  if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
+  // Null requires an entry without a physical ID; undefined leaves the ID unconstrained.
+  if (
+    removal.expectedSessionId !== undefined &&
+    (removal.expectedSessionId === null
+      ? entry.sessionId !== undefined
+      : entry.sessionId !== removal.expectedSessionId)
+  ) {
     return false;
   }
   if (
@@ -178,25 +191,7 @@ export function readReferencedSessionIdsAfterTargetMutation(
   const removedKeys = new Set(
     uniqueStrings([target.canonicalKey, ...target.storeKeys].map((key) => key.trim())),
   );
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "session_key", "current_session_id"]),
-  ).rows;
-  const sessionIds = new Set<string>();
-  for (const row of rows) {
-    if (removedKeys.has(row.session_key)) {
-      continue;
-    }
-    sessionIds.add(row.current_session_id);
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      continue;
-    }
-    for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-      sessionIds.add(sessionId);
-    }
-  }
+  const sessionIds = readReferencedSessionIds(database, removedKeys);
   if (nextEntry) {
     for (const sessionId of collectSessionStateIdsForEntry(nextEntry)) {
       sessionIds.add(sessionId);
@@ -465,19 +460,6 @@ export async function projectSessionEntryLifecycleMutation(
   return { deletePlans, removals: projectedRemovals, upsertedEntries };
 }
 
-// Builds the post-removal reference set from an in-memory projected store.
-function collectReferencedSqliteSessionIdsFromStore(
-  store: Record<string, SessionEntry>,
-): Set<string> {
-  const sessionIds = new Set<string>();
-  for (const entry of Object.values(store)) {
-    for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-      sessionIds.add(sessionId);
-    }
-  }
-  return sessionIds;
-}
-
 // Projected deletes must preserve raw session_nodes.current_session_id references for
 // remaining rows whose entry_json cannot be parsed into a SessionEntry.
 export function collectProjectedReferencedSessionIds(params: {
@@ -486,27 +468,11 @@ export function collectProjectedReferencedSessionIds(params: {
   projectedStore: Record<string, SessionEntry>;
 }): Set<string> {
   const excludedSessionKeys = new Set(params.excludedSessionKeys);
-  const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "session_key", "current_session_id"]),
-  ).rows;
-  const sessionIds = new Set<string>();
-  for (const row of rows) {
-    if (excludedSessionKeys.has(row.session_key)) {
-      continue;
-    }
-    sessionIds.add(row.current_session_id);
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      continue;
-    }
+  const sessionIds = readReferencedSessionIds(params.database, excludedSessionKeys);
+  for (const entry of Object.values(params.projectedStore)) {
     for (const sessionId of collectSessionStateIdsForEntry(entry)) {
       sessionIds.add(sessionId);
     }
-  }
-  for (const sessionId of collectReferencedSqliteSessionIdsFromStore(params.projectedStore)) {
-    sessionIds.add(sessionId);
   }
   return sessionIds;
 }

@@ -1,25 +1,48 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 // Re-exports the OpenClaw CLI entry point for package execution.
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import {
-  formatCliFailureLines,
-  formatCliJsonFailure,
-  isExpectedCliError,
-} from "./cli/failure-output.js";
-import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
-import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
-import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
-import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
-import { formatUncaughtError } from "./infra/errors.js";
-import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
-import { isMainModule } from "./infra/is-main.js";
-import {
-  installUnhandledRejectionHandler,
-  isBenignUncaughtExceptionError,
-  isUncaughtExceptionHandled,
-} from "./infra/unhandled-rejections.js";
+
+const packageRootUrl = new URL("../", import.meta.url);
+if (
+  !existsSync(new URL("entry.ts", import.meta.url)) &&
+  (existsSync(new URL(".openclaw-lifecycle-pending", packageRootUrl)) ||
+    existsSync(new URL("dist/openclaw-install-guard", packageRootUrl)))
+) {
+  const { completePendingPackageLifecycle } = await import("./infra/package-lifecycle.js");
+  try {
+    await completePendingPackageLifecycle({ packageRoot: fileURLToPath(packageRootUrl) });
+  } catch (error) {
+    throw new Error(
+      `OpenClaw package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+const [
+  { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+  { isJsonOutputModeActive },
+  { runCliWithExitFinalization },
+  { installDistEsmResolveFastPath },
+  { tryHandleRootVersionFastPath },
+  { formatUncaughtError },
+  { runFatalErrorHooks },
+  { isMainModule },
+  { installUnhandledRejectionHandler, isBenignUncaughtExceptionError, isUncaughtExceptionHandled },
+] = await Promise.all([
+  import("./cli/failure-output.js"),
+  import("./cli/json-output-mode.js"),
+  import("./cli/one-shot-exit.js"),
+  import("./entry.esm-resolve-fast-path.js"),
+  import("./entry.version-fast-path.js"),
+  import("./infra/errors.js"),
+  import("./infra/fatal-error-hooks.js"),
+  import("./infra/is-main.js"),
+  import("./infra/unhandled-rejections.js"),
+]);
 
 type LegacyCliDeps = {
   runCli: (

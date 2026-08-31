@@ -143,6 +143,27 @@ describe("exec approvals pending and resolve CLI", () => {
     defaultRuntime.exit.mockClear();
   });
 
+  it.each(["10junk", "1.5", "0"])(
+    "rejects a malformed grants list limit before the Gateway request (%s)",
+    async (limit) => {
+      await expect(
+        runApprovalsCommand(["approvals", "grants", "list", "--limit", limit, "--json"]),
+      ).rejects.toThrow("--limit must be a positive integer.");
+
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it("forwards a valid grants list limit as a number", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ grants: [] });
+
+    await runApprovalsCommand(["approvals", "grants", "list", "--limit", "25", "--json"]);
+
+    const call = callGatewayFromCli.mock.calls[0];
+    expect(call?.[0]).toBe("exec.approval.grants.list");
+    expect(call?.[2]).toEqual({ limit: 25 });
+  });
+
   it("renders pending approvals from all three approval kinds", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {

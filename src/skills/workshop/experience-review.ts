@@ -25,6 +25,7 @@ import {
   countSkillModelIterations,
   selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
+import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
@@ -138,7 +139,10 @@ export async function prepareSkillExperienceReviewCandidate(
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.ctx.sessionKey;
-  if (!sessionKey || resolveSandboxRuntimeStatus({ cfg: config, sessionKey }).sandboxed) {
+  if (
+    !sessionKey ||
+    resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
+  ) {
     return undefined;
   }
   const capabilityProfile = resolveConversationCapabilityProfile({
@@ -409,27 +413,6 @@ async function runSkillExperienceReviewInner(
     remaining: 1,
     readSkillHashes: new Map(),
   };
-  const foregroundSessionTarget = await resolveAgentRunSessionTarget({
-    agentId: foregroundPromptContext.agentId,
-    config,
-    sessionId: foregroundSessionId,
-    sessionKey: foregroundSessionKey,
-    missingSessionKey: "resolve-existing",
-  });
-  const foregroundSession = SessionManager.open(foregroundSessionTarget, workspaceDir);
-  const detachedSession = SessionManager.fromEntries(foregroundSession.getEntries(), workspaceDir);
-  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
-  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config,
-    agentId: foregroundPromptContext.agentId,
-  });
-  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    config,
-    runId,
-    foregroundPromptContext.agentId,
-    "skill-workshop.experience",
-  );
   const attemptedAtMs = Date.now();
   let outcome: "applied" | "proposed" | "nothing";
   let proposalId: string | undefined;
@@ -446,6 +429,28 @@ async function runSkillExperienceReviewInner(
     projectSessionMessages: false,
   });
   try {
+    const foregroundSessionTarget = await resolveAgentRunSessionTarget({
+      agentId: foregroundPromptContext.agentId,
+      config,
+      sessionId: foregroundSessionId,
+      sessionKey: foregroundSessionKey,
+      missingSessionKey: "resolve-existing",
+    });
+    const detachedSession = SessionManager.openModelContext(foregroundSessionTarget, {
+      cwd: workspaceDir,
+    });
+    const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+    const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+      config,
+      agentId: foregroundPromptContext.agentId,
+    });
+    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+    const preparedRunAdmission = prepareSystemAgentRunAdmission(
+      config,
+      runId,
+      foregroundPromptContext.agentId,
+      "skill-workshop.experience",
+    );
     let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
     try {
       const run = () =>
@@ -499,6 +504,9 @@ async function runSkillExperienceReviewInner(
     } finally {
       preparedRunAdmission.close();
     }
+
+    // A failed review can leave a pending proposal; never auto-apply it.
+    assertSkillReviewRunSucceeded(embeddedResult);
 
     const proposalIds = [...(proposalMutationBudget.mutatedProposalIds ?? [])];
     proposalId = proposalIds[0];

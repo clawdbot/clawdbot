@@ -1,4 +1,5 @@
 /** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -30,6 +31,7 @@ export type DiscoverAuthStorageOptions = {
 } & AgentDiscoveryAuthLookupOptions;
 
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
+  authoritativeSyntheticAuthProviderRefs?: Iterable<string>;
   resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined;
   syntheticAuthProviderRefs?: Iterable<string>;
 };
@@ -41,6 +43,16 @@ export function resolveAmbientAgentCredentialsForDiscovery(
   const credentials = addEnvBackedAgentCredentials({}, options);
   const syntheticAuthProviderRefs =
     options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+  const authoritativeSyntheticAuthProviderRefs = new Set(
+    [...(options.authoritativeSyntheticAuthProviderRefs ?? [])]
+      .map(normalizeProviderId)
+      .filter(Boolean),
+  );
+  // CLI-runtime authentication is a separate authority. Aliased provider
+  // credentials must not suppress or replace native account checks.
+  for (const provider of authoritativeSyntheticAuthProviderRefs) {
+    delete credentials[provider];
+  }
   const resolveSyntheticAuth =
     options.resolveSyntheticAuth ??
     ((provider: string) =>
@@ -56,7 +68,8 @@ export function resolveAmbientAgentCredentialsForDiscovery(
         },
       }));
   for (const provider of syntheticAuthProviderRefs) {
-    if (credentials[provider]) {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (!authoritativeSyntheticAuthProviderRefs.has(normalizedProvider) && credentials[provider]) {
       continue;
     }
     if (
@@ -77,7 +90,7 @@ export function resolveAmbientAgentCredentialsForDiscovery(
     if (!apiKey) {
       continue;
     }
-    credentials[provider] = {
+    credentials[normalizedProvider || provider] = {
       type: "api_key",
       key: apiKey,
     };

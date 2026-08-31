@@ -16,6 +16,7 @@ import {
   githubApiWithSnapshot,
   highlightCountError,
   isEligibleHandle,
+  ledgerChecks,
   parseArgs,
   persistGithubSnapshot,
   pullRequestTitleFromCommitSubject,
@@ -866,6 +867,95 @@ describe("release-note verification", () => {
     ].join("\n");
 
     expect(releaseNoteReferences(section, baselines)).toEqual([1, 3]);
+  });
+
+  it.each([
+    {
+      name: "CSS palette comparisons in a commit message",
+      source: [
+        "fix(control-ui): darken the Absolutely surface ramp (#130239)",
+        "",
+        "--bg #262624 sat above Dash #1a1210, Claw #0e1015, and Knot #080808.",
+        "Steps the ramp down (--bg #262624 -> #1c1c1a).",
+      ].join("\n"),
+      expected: [130239],
+    },
+    {
+      name: "issue refs after CSS colors on the same line",
+      source: "--bg #262624 (fixes #123), refs #1234, #123456, and #12345678.",
+      expected: [123, 1234, 123456, 12345678],
+    },
+    {
+      name: "short and alpha CSS values and numeric color transitions",
+      source:
+        "--fg: #123; --border:#1234; --bg #123456 -> #654321; --alpha: #12345678 → #87654321. (#456)",
+      expected: [456],
+    },
+    {
+      name: "qualified references beside CSS values",
+      source: "OpenClaw/OpenClaw#123 --bg #262624; openclaw/openclaw#456 and Other/Repo#123456.",
+      expected: [123, 456],
+    },
+    {
+      name: "ordinary Markdown and code references",
+      source:
+        "**PR #123**; `#456`; [#789](https://github.com/openclaw/openclaw/issues/789)\n```text\n#123456\n```\n`--bg: #262624` (#1234)",
+      expected: [123, 456, 789, 123456, 1234],
+    },
+    {
+      name: "complete numeric reference tokens",
+      source:
+        "#1a1210 #0e1015 #080808 #fff #123abc #456_def &#123; file#456; #123 #1234 #123456 #12345678",
+      expected: [123, 1234, 123456, 12345678],
+    },
+    {
+      name: "non-color custom-property prose and cross-line references",
+      source: "--bg fixes #123; --border relates to #456.\n--bg\n#789",
+      expected: [123, 456, 789],
+    },
+  ])("extracts release references from $name", ({ source, expected }) => {
+    expect(releaseNoteReferences(source, [])).toEqual(expected);
+  });
+
+  it.each([
+    { reference: "", expected: [] },
+    {
+      reference: " (fixes #262624)",
+      expected: [
+        "editorial release prose references non-editorial chore PR #262624 (chore)",
+        "missing editorial Thanks @alice for PR #262624",
+      ],
+    },
+  ])("validates editorial credit after a CSS color: '$reference'", ({ reference, expected }) => {
+    const source = [
+      "## 2026.8.1",
+      "### Highlights",
+      "- One.",
+      "- Two.",
+      "- Three.",
+      "- Four.",
+      "- Five.",
+      "### Changes",
+      "### Fixes",
+      `- Set --bg #262624${reference}.`,
+      "### Complete contribution record",
+      `This audited record covers the complete base..${"a".repeat(40)} history: 1 merged PR.`,
+      "#### Pull requests",
+      "- **PR #262624** Thanks @alice.",
+    ].join("\n");
+    const entry = {
+      number: 262624,
+      title: "chore: unrelated tooling",
+      type: "chore",
+      editorialEligible: false,
+      externalReferences: [],
+      linkedIssues: [],
+      thanks: ["alice"],
+    };
+
+    expect(
+      ledgerChecks({ source }, [entry], new Map([[262624, { __typename: "PullRequest" }]]), []),
+    ).toEqual(expected);
   });
 
   it("records a canonical target SHA when --target is symbolic", () => {

@@ -50,7 +50,8 @@ describe("QA inference scenario catalog", () => {
       retryNeedle: "The previous attempt did not produce a user-visible answer.",
       settledToolRetryNeedle:
         "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
-      expectedDiagnostic: "⚠️ Agent couldn't generate a response. Please try again.",
+      expectedFallback:
+        "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
       unexpectedSuccessMarker: "EMPTY-EXHAUSTED-OK",
     });
     expect(scenario.execution.flow?.steps).toHaveLength(1);

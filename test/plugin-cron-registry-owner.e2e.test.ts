@@ -10,6 +10,8 @@ import {
   disconnectGatewayClient,
   getGatewayE2ePortBlock,
 } from "../src/gateway/test-helpers.e2e.js";
+import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -139,7 +141,7 @@ function writeModelResponse(res: ServerResponse, sequence: number): void {
   );
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(rejectModel?: string): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
   const server = createServer((req, res) => {
     void (async () => {
@@ -153,7 +155,13 @@ async function startMockModelServer(): Promise<MockModelServer> {
         res.writeHead(404).end();
         return;
       }
-      requests.push({ body: await readJsonRequest(req) });
+      const body = await readJsonRequest(req);
+      requests.push({ body });
+      if (rejectModel && body.model === rejectModel) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Model temporarily unavailable" } }));
+        return;
+      }
       writeModelResponse(res, requests.length);
     })();
   });
@@ -263,6 +271,206 @@ async function listCronJobs(client: {
 }
 
 describe("plugin cron registry ownership e2e", () => {
+  it.each(["cron", "subagent"] as const)(
+    "prepares distinct selected and fallback providers for %s under per-agent defaults",
+    async (route) => {
+      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-cron-selection-e2e-"));
+      cleanupDirs.push(fixtureDir);
+      const bundledRoot = path.join(fixtureDir, "bundled");
+      const provider = "selected-cron";
+      const fallbackProvider = "selected-fallback";
+      const pluginIds = [provider, fallbackProvider];
+      for (const pluginId of pluginIds) {
+        const pluginDir = path.join(bundledRoot, pluginId);
+        await mkdir(pluginDir, { recursive: true });
+        await writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: pluginId,
+            providers: [pluginId],
+            activation: { onStartup: false, onProviders: [pluginId] },
+            configSchema: { type: "object", additionalProperties: false },
+          }),
+        );
+        await writeFile(
+          path.join(pluginDir, "index.js"),
+          `module.exports = {
+        id: ${JSON.stringify(pluginId)},
+        register(api) {
+          api.registerProvider({
+            id: ${JSON.stringify(pluginId)}, label: "Selected provider", auth: [],
+            resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
+            transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(`PROVIDER_HOOK_${pluginId}`)},
+          });
+        },
+      };\n`,
+        );
+      }
+      const server = await startMockModelServer("unavailable");
+      modelServers.push(server);
+      const model = (id: string) => ({
+        id,
+        name: id,
+        reasoning: false,
+        input: ["text"] as ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      });
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
+          slots: { memory: "none" },
+        },
+        agents: {
+          defaults: {
+            workspace: path.join(fixtureDir, "workspace"),
+            model: { primary: "cron-owner/default" },
+            skills: [],
+            ...(route === "subagent"
+              ? {
+                  subagents: {
+                    model: {
+                      primary: `${provider}/unavailable`,
+                      fallbacks: [`${fallbackProvider}/available`],
+                    },
+                  },
+                }
+              : {}),
+          },
+          entries: { main: { model: { primary: "cron-owner/agent-default" } } },
+        },
+        tools: { profile: "minimal" },
+        models: {
+          mode: "replace",
+          providers: {
+            "cron-owner": {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              apiKey: TEST_API_KEY,
+              request: { allowPrivateNetwork: true },
+              models: [model("default"), model("agent-default")],
+            },
+            [provider]: {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              request: { allowPrivateNetwork: true },
+              models: [model("unavailable")],
+            },
+            [fallbackProvider]: {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              request: { allowPrivateNetwork: true },
+              models: [model("available")],
+            },
+          },
+        },
+      };
+      const instance = await createOpenClawTestInstance({
+        name: "cron-selected-provider",
+        config,
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_SKIP_CRON: undefined,
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
+      });
+      instances.push(instance);
+      const sessionKey = "agent:main:subagent:provider-fallback";
+      if (route === "subagent") {
+        instance.state.applyEnv();
+        await upsertSessionEntry({
+          agentId: "main",
+          sessionKey,
+          entry: {
+            sessionId: randomUUID(),
+            updatedAt: Date.now(),
+            providerOverride: provider,
+            modelOverride: "unavailable",
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: provider,
+            modelOverrideFallbackOriginModel: "unavailable",
+          },
+        });
+        closeOpenClawAgentDatabasesForTest();
+      }
+      await instance.startGateway();
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+      });
+      let jobId: string | undefined;
+      try {
+        if (route === "subagent") {
+          expect(
+            await client.request(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: randomUUID(),
+                message: "Prove the selected provider runtime.",
+                deliver: false,
+                timeout: 45,
+              },
+              { expectFinal: true, timeoutMs: 45_000 },
+            ),
+          ).toMatchObject({
+            status: "ok",
+            result: { payloads: [{ text: expect.stringContaining("CRON_OWNER_RESPONSE_") }] },
+          });
+        } else {
+          const job = await client.request<{ id: string }>("cron.add", {
+            name: "Selected provider fallback",
+            agentId: "main",
+            enabled: true,
+            schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+            payload: {
+              kind: "agentTurn",
+              message: "Prove the selected provider runtime.",
+              model: `${provider}/unavailable`,
+              fallbacks: [`${fallbackProvider}/available`],
+            },
+          });
+          jobId = job.id;
+          const run = await client.request<{ runId: string }>("cron.run", {
+            id: jobId,
+            mode: "force",
+          });
+          let terminal: { status?: string; summary?: string; error?: string } | undefined;
+          await expect
+            .poll(async () => {
+              const history = await client.request<{
+                entries: Array<{ status?: string; summary?: string; error?: string }>;
+              }>("cron.runs", { id: jobId, runId: run.runId, limit: 1 });
+              terminal = history.entries[0];
+              return terminal?.status;
+            }, WAIT_OPTIONS)
+            .toBeDefined();
+          expect(terminal?.error).toBeUndefined();
+          expect(terminal).toMatchObject({
+            status: "ok",
+            summary: expect.stringContaining("CRON_OWNER_RESPONSE_"),
+          });
+        }
+        const models = server.requests.map(({ body }) => body.model);
+        expect(models).toContain("unavailable");
+        expect(models.at(-1)).toBe("available");
+        expect(requestText(server.requests[0]!)).toContain(`PROVIDER_HOOK_${provider}`);
+        expect(requestText(server.requests.at(-1)!)).toContain(`PROVIDER_HOOK_${fallbackProvider}`);
+      } finally {
+        if (jobId) await client.request("cron.remove", { id: jobId });
+        await disconnectGatewayClient(client);
+      }
+    },
+    E2E_TIMEOUT_MS,
+  );
+
   it(
     "keeps recurring startup-plugin jobs through workspace registry churn",
     { timeout: E2E_TIMEOUT_MS },

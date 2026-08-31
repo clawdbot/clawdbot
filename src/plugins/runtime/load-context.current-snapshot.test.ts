@@ -8,7 +8,7 @@ import { getGatewayPluginMetadataSnapshot } from "../current-plugin-metadata-sta
 import { resolveInstalledPluginIndexPolicyHash } from "../installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
-import { resolvePluginRuntimeLoadContext } from "./load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
 const resolvePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 

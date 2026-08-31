@@ -92,15 +92,19 @@ function listPluginConfigSecretTargetRegistryEntries(
 
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
+  throwOnLoadError = false,
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
     try {
-      const contractApi = loadChannelSecretContractApiForRecord(record);
+      const contractApi = loadChannelSecretContractApiForRecord(record, { throwOnLoadError });
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
-    } catch {
-      // Ignore channels that do not expose a usable secret contract artifact.
+    } catch (error) {
+      // Runtime can isolate unavailable owners; generated docs must never silently lose targets.
+      if (throwOnLoadError) {
+        throw error;
+      }
     }
   }
   return entries;
@@ -448,6 +452,7 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
+  throwOnLoadError?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     ...(params.config !== undefined ? { config: params.config } : {}),
@@ -455,12 +460,13 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins);
+  return buildSecretTargetRegistryFromPlugins(plugins, params);
 }
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
+  options?: { throwOnLoadError?: boolean },
 ): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
@@ -479,7 +485,7 @@ export function buildSecretTargetRegistryFromPlugins(
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
     ...listPluginConfigSecretTargetRegistryEntries(plugins),
-    ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins, options?.throwOnLoadError),
     ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
   const seen = new Set<string>();
@@ -514,6 +520,7 @@ export function getSecretTargetRegistry(params?: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
+      throwOnLoadError: true,
     });
   }
   if (params?.config) {

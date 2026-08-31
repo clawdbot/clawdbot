@@ -35,6 +35,7 @@ function makeTempDir() {
 function makeOpenClawDevSourceRoot() {
   const root = makeTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
@@ -848,40 +849,44 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
-  it("prefers dev source bundled plugins over installed globals with the same id", () => {
-    const devSourceRoot = makeOpenClawDevSourceRoot();
-    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
-    const globalDir = makeTempDir();
-    const manifest = { id: "codex", configSchema: { type: "object" } };
-    mkdirSafe(bundledDir);
-    writeManifest(bundledDir, manifest);
-    writeManifest(globalDir, manifest);
+  it.each(["extensions", "dist/extensions", "dist-runtime/extensions"])(
+    "prefers dev %s plugins over installed globals with the same id",
+    (tree) => {
+      const devSourceRoot = makeOpenClawDevSourceRoot();
+      const bundledDir = path.join(devSourceRoot, tree, "codex");
+      const globalDir = makeTempDir();
+      const manifest = { id: "codex", configSchema: { type: "object" } };
+      mkdirSafe(bundledDir);
+      writeManifest(bundledDir, manifest);
+      writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistryCore({
-      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
-      installRecords: {
-        codex: {
-          source: "npm",
-          installPath: globalDir,
+      const registry = loadPluginManifestRegistryCore({
+        env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+        installRecords: {
+          codex: {
+            source: "npm",
+            installPath: globalDir,
+          },
         },
-      },
-      candidates: [
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: bundledDir,
-          origin: "bundled",
-        }),
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-      ],
-    });
+        candidates: [
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: bundledDir,
+            origin: "bundled",
+          }),
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: globalDir,
+            origin: "global",
+            installOwner: "codex",
+          }),
+        ],
+      });
 
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("bundled");
-  });
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.origin).toBe("bundled");
+    },
+  );
 
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();

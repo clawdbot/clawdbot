@@ -9,10 +9,14 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "autonomous-task-lifecycle-receipts";
@@ -76,7 +80,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function stateDatabasePath(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>): string {
+function stateDatabasePath(gateway: QaGatewayChild): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -84,7 +88,7 @@ function stateDatabasePath(gateway: Awaited<ReturnType<typeof startQaGatewayChil
   return path.join(stateDir, "state", "openclaw.sqlite");
 }
 
-function countExecutionContexts(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>): number {
+function countExecutionContexts(gateway: QaGatewayChild): number {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
   try {
     if (!hasSqliteColumns(db, "execution_identity_contexts", ["context_id"])) {
@@ -100,7 +104,7 @@ function countExecutionContexts(gateway: Awaited<ReturnType<typeof startQaGatewa
 }
 
 function readCronOwnerRows(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   jobId: string,
 ): { cron: ExactOwnerRow; task: ExactOwnerRow } | undefined {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
@@ -149,10 +153,7 @@ function readCronOwnerRows(
   }
 }
 
-function readCronOwnerBindingDiagnostic(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  jobId: string,
-): unknown {
+function readCronOwnerBindingDiagnostic(gateway: QaGatewayChild, jobId: string): unknown {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
   try {
     return {
@@ -183,7 +184,7 @@ function readCronOwnerBindingDiagnostic(
 }
 
 function readCliOwnerRows(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   runId: string,
 ): { task: ExactOwnerRow } | undefined {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
@@ -247,7 +248,7 @@ function requireOwnerDisplay(result: AuditRunInspectResult, producer: OwnerDispl
 }
 
 async function inspectExecution(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   executionId: string;
   producers: OwnerDisplayProducer[];
   privateSentinels: string[];
@@ -284,9 +285,10 @@ async function inspectExecution(params: {
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -491,7 +493,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     );
     return `cron=${cronRows.cron.execution_id}; task=${cliRows.task.execution_id}; suppression=204; restart sha256=${sha256(afterRestart)}`;
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }

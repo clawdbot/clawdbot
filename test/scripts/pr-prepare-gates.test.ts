@@ -199,7 +199,7 @@ function makePreparePushHeadDriftRepo(): {
 
 function prepareSyncHeadStubs(): string[] {
   return [
-    "enter_worktree() { :; }",
+    "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
     "hosted_sha=$(cat .local/hosted-sha)",
     'gh() { printf "%s\\n" "$hosted_sha"; }',
     "verify_pr_head_branch_matches_expected() { :; }",
@@ -207,7 +207,7 @@ function prepareSyncHeadStubs(): string[] {
     "push_prep_head_to_pr_branch() {",
     '  local result_env="$7"',
     "  touch .local/published",
-    '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
+    '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
     "}",
   ];
 }
@@ -374,6 +374,7 @@ describe("prepare gate changed-file plan", () => {
     const result = runGatesBash(
       [
         gitStub,
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\t%s\\t%s\\t%s\\n" "$PREPARE_GATE_CHANGED_FILES" "$PREPARE_GATE_DOCS_ONLY" "$PREPARE_GATE_CHANGELOG_ONLY" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -389,6 +390,7 @@ describe("prepare gate changed-file plan", () => {
       [
         "git() { printf 'src/index.ts\\n'; }",
         "changelog_required_for_changed_files() { return 0; }",
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\n" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -616,9 +618,53 @@ describe("prepare review readiness", () => {
   });
 });
 
+describe("prepare author access snapshot", () => {
+  it.each([
+    ["admin", "maintainer"],
+    ["write", "maintainer"],
+    ["read", "external"],
+    ["none", "external"],
+    ["maintain", "unknown"],
+  ])("maps GitHub permission %s to %s", (permission, expected) => {
+    const result = runGatesBash(
+      [
+        "gh() {",
+        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        `  else printf '{"permission":"${permission}"}\\n'; fi`,
+        "}",
+        "resolve_pr_author_access_at_prepare fixture",
+      ].join("\n"),
+      { sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
+
+  it.each(["error", "malformed"])("maps %s permission evidence to unknown", (mode) => {
+    const result = runGatesBash(
+      [
+        "gh() {",
+        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        mode === "error" ? "  else return 1; fi" : "  else printf '{}\\n'; fi",
+        "}",
+        "resolve_pr_author_access_at_prepare fixture",
+      ].join("\n"),
+      { sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("unknown");
+  });
+});
+
 describe("prepare sync-head transitions", () => {
   it("publishes only appended fixups when main advances", () => {
     const repoDir = makeSyncRepo({ needsRebase: true });
+    writeFileSync(
+      join(repoDir, ".local", "prep-context.env"),
+      "PR_HEAD=topic\nPREP_BRANCH=prep\nPR_AUTHOR_ACCESS_AT_PREP=external\n",
+    );
     writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
     for (const args of [
       ["add", "fixup.ts"],
@@ -642,6 +688,8 @@ describe("prepare sync-head transitions", () => {
         "! git merge-base --is-ancestor origin/main HEAD",
         "test -e .local/published",
         "grep -F 'Preserved hosted PR ancestry' .local/prep.md",
+        "grep -F 'PREP_REPLACED_HOSTED_ANCESTRY=false' .local/prep.env",
+        "grep -F 'PREP_AUTHOR_ACCESS=external' .local/prep.env",
       ].join("\n"),
       { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
     );
@@ -657,7 +705,8 @@ describe("prepare push head drift", () => {
     const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "refresh_main_snapshot() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
+        "enter_worktree() { refresh_main_snapshot; }",
         `reviewed_head='${reviewedHead}'`,
         'gh() { printf "%s\\n" "$reviewed_head"; }',
         "verify_pr_head_branch_matches_expected() { :; }",
@@ -667,7 +716,7 @@ describe("prepare push head drift", () => {
         "}",
         "push_prep_head_to_pr_branch() {",
         '  local result_env="$7"',
-        '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$reviewed_head" "$3" > "$result_env"',
+        '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$reviewed_head" "$3" > "$result_env"',
         "}",
         "prepare_push 4242",
         'test "$(git rev-parse HEAD)" = "$reviewed_head"',
@@ -692,6 +741,36 @@ describe("prepare push head drift", () => {
 });
 
 describe("GraphQL fork publication", () => {
+  it("classifies appended and replaced hosted ancestry without tree heuristics", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    spawnSync("git", ["commit", "-qm", "appended", "--allow-empty"], { cwd: repoDir });
+    const appendedHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const replacedHead = spawnSync("git", ["-c", "commit.gpgsign=false", "commit-tree", tree], {
+      cwd: repoDir,
+      input: "replacement\n",
+      encoding: "utf8",
+    }).stdout.trim();
+
+    const result = runGatesBash(
+      [
+        `test "$(classify_replaced_hosted_ancestry ${headSha} ${appendedHead})" = false`,
+        `test "$(classify_replaced_hosted_ancestry ${headSha} ${replacedHead})" = true`,
+        `! classify_replaced_hosted_ancestry ${headSha} deadbeef 2>.local/ancestry-error`,
+        "grep -F 're-run prepare-init' .local/ancestry-error",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("accepts appended fixups and preserves the commit body", () => {
     const { repoDir, headSha } = makeRetryRepo();
     writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
@@ -868,6 +947,7 @@ describe("prepare gate stamp transitions", () => {
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -888,6 +968,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -907,6 +988,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -944,7 +1026,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 0; }",
         "changelog_required_for_changed_files() { return 1; }",
@@ -988,7 +1070,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",

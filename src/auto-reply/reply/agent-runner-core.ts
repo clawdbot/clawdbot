@@ -286,8 +286,7 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
-    blockReplyPipeline: BlockReplyPipeline | null;
-    didDeliverVisiblePartialReply: () => boolean;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -298,8 +297,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
-    blockReplyPipeline,
-    didDeliverVisiblePartialReply,
+    resolveVisibleReplyDelivery,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -356,19 +354,8 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
-  if (blockReplyPipeline) {
-    try {
-      await blockReplyPipeline.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-  }
-  const didDeliverVisibleReply =
-    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
-    didDeliverVisiblePartialReply();
-  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+  const visibleReplyDelivered = await resolveVisibleReplyDelivery();
+  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({

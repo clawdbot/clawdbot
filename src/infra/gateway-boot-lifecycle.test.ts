@@ -1,9 +1,7 @@
 // Gateway boot lifecycle tests cover restart-loop breaker accounting.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   formatLegacyAgentMediaMigrationRequiredMessage,
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
@@ -33,13 +31,16 @@ const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
+const tempDirs = createTempDirTracker();
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
   vi.unstubAllEnvs();
 });
 
 function createLifecycleDb() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-boot-"));
+  const stateDir = tempDirs.make("openclaw-gateway-boot-");
   const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
   const { db } = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<GatewayBootLifecycleTestDatabase>(db);

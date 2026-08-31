@@ -20,16 +20,21 @@ and what the automatic resume looks like.
 
 ## What survives a restart
 
-| State                         | Storage                                     | Behavior across restart                                                 |
-| ----------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
-| Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                 |
-| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup         |
-| Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                     |
-| Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost              |
-| Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
-| Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                        |
-| Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
-| Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
+| State                          | Storage                                     | Behavior across restart                                                     |
+| ------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------- |
+| Conversation history           | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                     |
+| Accepted Control UI follow-ups | Per-agent SQLite pending inputs             | Unconsumed inputs remain visible as interrupted and require explicit resend |
+| Interrupted main-session turn  | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup             |
+| Subagent runs                  | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                         |
+| Background tasks               | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost                  |
+| Queued outbound deliveries     | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                      |
+| Scheduled (cron) jobs          | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                            |
+| Restart continuation           | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart     |
+| Gateway terminal PTYs          | Process memory                              | End with the old process; terminal sessions are not recovered               |
+
+Accepted input that has not reached the transcript does not automatically run
+after restart. Its saved text survives, but its old queue and execution authority
+do not. This is separate from recovery of a turn already admitted to the transcript.
 
 Pending delivery rows drain or retry after restart. When a delivery exhausts its
 retry budget, recovery reclaims expired producer custody; an active producer
@@ -54,6 +59,12 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Replies to pending node commands remain accepted during the drain, including
+worker cleanup started by shutdown. Each reply must still match its live
+invocation, node connection, pairing generation, and owning lifecycle. This
+lets cleanup finish without waiting for a command timeout; it does not reopen
+admission for new requests.
+
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
@@ -62,8 +73,11 @@ affected session is marked for recovery.
 
 When a gateway host wakes from sleep, a virtual machine resumes, or the process
 continues after a long pause, the gateway detects the freeze within about 30
-seconds. It restarts channel connections and refreshes cached health and
-presence so clients do not wait for stale sockets or snapshots to expire.
+seconds. It restarts channel connections once tracked Gateway work is idle, then
+refreshes cached health and presence. The health and presence refresh still runs
+when a busy gateway defers only the channel restart. This keeps stale sockets from
+waiting for their normal expiry without interrupting an active reply or agent
+startup when a busy event loop caused the timer gap.
 
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote

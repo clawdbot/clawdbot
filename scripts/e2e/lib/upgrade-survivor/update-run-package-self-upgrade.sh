@@ -116,9 +116,13 @@ export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEM
 gateway_pid=""
 qa_bus_pid=""
 supervisor_monitor_pid=""
+CURRENT_PHASE=prepare-runtime
+FAILURE_SIGNAL=""
+run_completed=0
 
 mkdir -p \
   "$ARTIFACT_DIR" \
+  "$ARTIFACT_DIR/diagnostics" \
   "$HOME" \
   "$OPENCLAW_STATE_DIR" \
   "$OPENCLAW_TEST_WORKSPACE_DIR" \
@@ -149,7 +153,32 @@ cleanup() {
     wait "$qa_bus_pid" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
+on_exit() {
+  local exit_status="$1"
+  # Command substitutions may inherit EXIT; only the scenario owner may capture or stop children.
+  [ "$BASH_SUBSHELL" -eq 0 ] || return "$exit_status"
+  trap - EXIT HUP INT TERM
+  set +e
+  if [ "$exit_status" -eq 0 ] && [ "$run_completed" != 1 ]; then
+    exit_status=1
+  fi
+  if [ "$exit_status" -ne 0 ]; then
+    node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
+      "$ARTIFACT_DIR" "$CURRENT_PHASE" "$exit_status" "$FAILURE_SIGNAL" ||
+      echo "Self-upgrade diagnostics missing; preserving original failure." >&2
+  fi
+  cleanup
+  exit "$exit_status"
+}
+on_signal() {
+  FAILURE_SIGNAL="$1"
+  trap - HUP INT TERM
+  exit "$2"
+}
+trap 'on_exit $?' EXIT
+trap 'on_signal SIGHUP 129' HUP
+trap 'on_signal SIGINT 130' INT
+trap 'on_signal SIGTERM 143' TERM
 
 package_root() {
   printf '%s/lib/node_modules/openclaw\n' "$npm_config_prefix"
@@ -161,6 +190,7 @@ read_installed_version() {
     "$(package_root)"
 }
 
+CURRENT_PHASE=install-source
 echo "Installing declared source package $SOURCE_SPEC"
 openclaw_e2e_maybe_timeout 600s \
   npm install -g --prefix "$npm_config_prefix" "$SOURCE_SPEC" --no-fund --no-audit \
@@ -176,6 +206,7 @@ if ! openclaw --version | grep -Fq "$SOURCE_VERSION"; then
   exit 1
 fi
 
+CURRENT_PHASE=resolve-target
 target_version="$(
   npm view "openclaw@$TARGET_TAG" version --json --prefer-online --cache "$npm_config_cache" |
     node -e '
@@ -200,6 +231,7 @@ TARGET_VERSION="$target_version" TARGET_TAG="$TARGET_TAG" node -e '
   );
 ' "$TARGET_RESOLUTION_JSON"
 
+CURRENT_PHASE=install-plugin
 qa_plugin_source="/tmp/openclaw-update-run-build/dist/extensions/qa-channel"
 qa_plugin_dir="$qa_plugin_source"
 if [ ! -f "$qa_plugin_source/openclaw.plugin.json" ] || [ ! -f "$qa_plugin_source/index.js" ]; then
@@ -258,6 +290,7 @@ node -e '
     fs.copyFileSync(indexPath, process.env.SOURCE_PLUGIN_INDEX_OUT);
   '
 
+CURRENT_PHASE=configure-gateway
 node scripts/e2e/lib/upgrade-survivor/mock-server.mjs \
   --port "$QA_BUS_PORT" \
   --ready-file "$QA_BUS_READY_FILE" \
@@ -367,6 +400,10 @@ gateway_call() {
   local output="$3"
   local error_output="$4"
   local timeout_ms="${5:-30000}"
+  local rpc_name="${output##*/}"
+  # This named QA observation survives command substitutions; the host accepts only closed RPC labels.
+  printf '%s\n' "${rpc_name%.json}" >"$ARTIFACT_DIR/diagnostics/last-rpc" ||
+    echo "Self-upgrade last RPC diagnostic unavailable." >&2
   openclaw gateway call "$method" \
     --url "ws://127.0.0.1:$PORT" \
     --token "test-token" \
@@ -417,6 +454,7 @@ gateway_call channels.status '{"probe":false,"timeoutMs":2000}' \
   "$ARTIFACT_DIR/channels-status-before.json" \
   "$ARTIFACT_DIR/channels-status-before.err"
 
+CURRENT_PHASE=source-wizard
 echo "Exercising authenticated Gateway wizard RPC lifecycle"
 gateway_call wizard.start '{"mode":"local"}' "$WIZARD_START_JSON" "$WIZARD_START_ERR"
 wizard_session_id="$(
@@ -650,6 +688,7 @@ source_gateway_pid="$gateway_pid"
 ) >"$SUPERVISOR_MONITOR_LOG" 2>&1 &
 supervisor_monitor_pid="$!"
 
+CURRENT_PHASE=update-run
 echo "Invoking authenticated Gateway RPC update.run"
 gateway_call update.run "$update_params" "$UPDATE_RPC_JSON" "$UPDATE_RPC_ERR" 1200000
 update_rpc_completed_at_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
@@ -672,6 +711,7 @@ fi
 
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 180 "$PORT"
 
+CURRENT_PHASE=update-status
 deadline=$((SECONDS + 180))
 update_status_candidate="$ARTIFACT_DIR/update-status.candidate.json"
 while [ "$SECONDS" -lt "$deadline" ]; do
@@ -704,6 +744,7 @@ if [ ! -f "$UPDATE_STATUS_JSON" ]; then
   exit 1
 fi
 
+CURRENT_PHASE=target-wizard
 echo "Exercising current target Gateway wizard RPC lifecycle"
 wait_for_target_wizard_start() {
   local output="$1"
@@ -986,6 +1027,7 @@ TARGET_WIZARD_STATUS_START_JSON="$TARGET_WIZARD_STATUS_START_JSON" \
     );
   '
 
+CURRENT_PHASE=post-restart-probes
 post_restart_observed_at_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
 deadline=$((SECONDS + 60))
 while [ "$SECONDS" -lt "$deadline" ]; do
@@ -1026,6 +1068,7 @@ gateway_call channels.status '{"probe":false,"timeoutMs":2000}' \
   "$CHANNELS_STATUS_JSON" \
   "$CHANNELS_STATUS_ERR"
 
+CURRENT_PHASE=assert-plugin-state
 TARGET_PLUGIN_INDEX_OUT="$TARGET_PLUGIN_INDEX_JSON" node --input-type=module -e '
   import fs from "node:fs";
   import { readPluginInstallIndex } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
@@ -1120,8 +1163,10 @@ SOURCE_VERSION="$SOURCE_VERSION" \
     fs.writeFileSync(process.env.SUMMARY_JSON, `${JSON.stringify(summary, null, 2)}\n`);
   '
 
+CURRENT_PHASE=assert-summary
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
   assert-update-run-self-upgrade \
   "$SUMMARY_JSON"
 
 echo "Gateway update.run package self-upgrade passed source=$SOURCE_VERSION target=$target_version installed=$installed_version note=$RESTART_NOTE."
+run_completed=1

@@ -39,6 +39,7 @@ const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
   "scripts/copy-hook-metadata.ts",
   "scripts/runtime-postbuild.mts",
   "scripts/stage-bundled-plugin-runtime.mts",
+  "scripts/write-build-info.ts",
   "scripts/write-official-channel-catalog.mts",
 ] as const;
 const DEPLOYMENT_MANIFEST = "deployment.json";
@@ -49,6 +50,7 @@ const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
 const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
+const DIST_BUILD_INFO = "dist/build-info.json";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
@@ -163,6 +165,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   await writeProjectFiles(tmp, {
     [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+    [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
@@ -173,6 +176,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     tmp,
     [
       DIST_CHANNEL_CATALOG,
+      DIST_BUILD_INFO,
       DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
@@ -818,6 +822,26 @@ describe("run-node script", () => {
     expect(exitCode).toBe(0);
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
+
+  it.for([undefined, "/explicit/checkout"])(
+    "carries the checkout selector into the CLI (override: %s)",
+    async (override, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const { spawnSync } = createCurrentGitSpawnRecorder();
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const exitCode = await runNodeCommand(tmp, {
+        env: { OPENCLAW_DEV_SOURCE_ROOT: override },
+        spawn: (_cmd, _args, options) => {
+          childEnv = options.env;
+          return createExitedProcess(0);
+        },
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      expect(exitCode).toBe(0);
+      expect(childEnv?.OPENCLAW_DEV_SOURCE_ROOT).toBe(override ?? tmp);
+    },
+  );
 
   it("skips rebuilding for private QA commands when the private QA facades are present", async ({
     tmp,
@@ -1995,6 +2019,7 @@ describe("run-node script", () => {
 
     for (const missingPath of [
       DIST_CHANNEL_CATALOG,
+      DIST_BUILD_INFO,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
       DIST_LEGACY_ROOT_RUNTIME_COMPAT,

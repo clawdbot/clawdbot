@@ -18,6 +18,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
@@ -129,29 +130,7 @@ suite.define(() => {
       });
     }
     if (options.webChrome) {
-      await page.addInitScript(() => {
-        const nativeWindow = window as Window & {
-          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
-        };
-        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
-          canGoBack: false,
-          canGoForward: false,
-        };
-        const stamp = () => {
-          document.documentElement.classList.add(
-            "openclaw-native-macos",
-            "openclaw-native-web-chrome",
-          );
-          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
-        };
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
+      await installNativeWebChrome(page);
     }
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -174,6 +153,14 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
+    expect(
+      await page.evaluate(() => ({
+        titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
+        titlebarRequested: performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("macos-titlebar-controls")),
+      })),
+    ).toEqual({ titlebarRegistered: false, titlebarRequested: false });
     expect(
       await page.evaluate(() =>
         performance
@@ -717,7 +704,7 @@ suite.define(() => {
     await page.keyboard.press("Meta+K");
     const palette = page.locator(".cmd-palette");
     const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await palette.waitFor({ state: "visible" });
+    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );

@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  constants as fsConstants,
   cpSync,
   existsSync,
   linkSync,
@@ -13,11 +14,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, relative, resolve } from "node:path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
+import { collectExtensionPackageJsonCandidates } from "../../scripts/lib/plugin-publication-candidates.ts";
 import {
   canonicalReleasePlanLockJson,
   createReleasePlanLock,
@@ -39,6 +41,8 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let defaultFixture: ReturnType<typeof buildFixtureRepo> | undefined;
 const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
@@ -52,6 +56,7 @@ const TOOLING_CLOSURE = [
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
 ];
@@ -89,17 +94,31 @@ function copyToolingClosure(root: string) {
   }
 }
 
-function createFixtureRepo(
-  version = "2026.8.1-beta.2",
-  options: {
-    conflictingPlatformId?: boolean;
-    corePackageNameCollision?: boolean;
-    duplicateCrossTargetPackageName?: boolean;
-    malformedPlugin?: boolean;
-    malformedPluginJson?: boolean;
-  } = {},
-) {
+type FixtureOptions = {
+  conflictingPlatformId?: boolean;
+  corePackageNameCollision?: boolean;
+  duplicateCrossTargetPackageName?: boolean;
+  malformedPlugin?: boolean;
+  malformedPluginJson?: boolean;
+};
+
+function createFixtureRepo(version = "2026.8.1-beta.2", options: FixtureOptions = {}) {
   const root = tempDirs.make("openclaw-release-plan-");
+  if (version !== "2026.8.1-beta.2" || Object.keys(options).length > 0) {
+    return buildFixtureRepo(root, version, options);
+  }
+  const template = (defaultFixture ??= buildFixtureRepo(
+    templateDirs.make("openclaw-release-plan-template-"),
+    version,
+    options,
+  ));
+  // Copy both commits before any case adds YAML, tags, or mutated tooling.
+  // Independent files keep those authority and loader faults local to each case.
+  cpSync(template.root, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { ...template, root };
+}
+
+function buildFixtureRepo(root: string, version: string, options: FixtureOptions) {
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
 
   writeFixture(
@@ -1172,10 +1191,37 @@ mutateModule.syncBuiltinESMExports();
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", resolve("."), root]);
+    const candidates = collectExtensionPackageJsonCandidates();
+    const pluginMetadataPaths = candidates.flatMap(({ packageDir, readmeText }) => [
+      `${packageDir}/package.json`,
+      ...(readmeText === undefined ? [] : [`${packageDir}/README.md`]),
+    ]);
+    // Preserve the exact candidate commit without materializing runtime trees for fixture cleanup.
+    execFileSync("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], {
+      cwd: root,
+      input: [
+        ".github/workflows/",
+        "packages/*/package.json",
+        ...pluginMetadataPaths,
+        ...TOOLING_CLOSURE,
+        ...TOOLING_ROOT_FILES,
+      ]
+        .map((path) => `/${path}`)
+        .join("\n"),
+    });
     execFileSync("git", ["checkout", "-q", "--detach", candidateSha], { cwd: root });
     copyToolingClosure(root);
     const toolingSha = commit(root, "tooling overlay", { allowEmpty: true });
     execFileSync("git", ["update-ref", "refs/heads/main", toolingSha], { cwd: root });
+    expect(candidateSha).not.toBe(toolingSha);
+    expect(existsSync(join(root, "src"))).toBe(false);
+    expect(collectExtensionPackageJsonCandidates(root)).toEqual(candidates);
+    expect(
+      readdirSync(join(root, "extensions"), { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => relative(root, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+        .toSorted(),
+    ).toEqual(pluginMetadataPaths.toSorted());
 
     const plan = produceReleasePlan({
       repoRoot: root,

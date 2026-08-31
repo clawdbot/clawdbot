@@ -209,6 +209,7 @@ describe("session activity people filter", () => {
           presenceViewers: [
             {
               id: "online",
+              identity: { type: "profile", id: "online" },
               name: "Online person",
               watchedSessions: [],
               entries: [{ instanceId: "online-device", user: { id: "online" }, ts: now }],
@@ -252,6 +253,7 @@ describe("session activity people filter", () => {
         presenceViewers: [
           {
             id: "online",
+            identity: { type: "profile", id: "online" },
             email: "online@example.test",
             watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
             entries: [
@@ -321,6 +323,47 @@ describe("session activity people filter", () => {
         expect(container.querySelector("[data-activity-identity]")).toBeNull();
         expect(container.querySelector("[data-activity-session]")).toBeNull();
       }
+    },
+  );
+
+  it.each([true, false])(
+    "never joins raw presence into a profile Activity page (profile online: %s)",
+    (online) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId: "online", query: "", time: "7d" },
+        rows: [row("raw-watch", { id: "online" }, 10)],
+        presenceViewers: [
+          ...(online
+            ? [
+                {
+                  id: "online",
+                  identity: { type: "profile" as const, id: "online" },
+                  name: "Profile person",
+                  watchedSessions: [],
+                  entries: [{ host: "Profile device", ts: 1 }],
+                },
+              ]
+            : []),
+          {
+            id: "online",
+            name: "Raw collider",
+            watchedSessions: ["raw-watch"],
+            entries: [{ host: "Raw device", ts: 1 }],
+          },
+        ],
+      });
+      render(renderSessionActivityView(input), container);
+      const identity = container.querySelector("[data-activity-identity]")!;
+      expect(identity.querySelector("h2")?.textContent).toBe(
+        online ? "Profile person" : "Online person",
+      );
+      expect(identity.textContent).not.toContain("Raw device");
+      expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
+      expect(
+        container.querySelectorAll(".activity-feed__people-row .activity-feed__presence-dot"),
+      ).toHaveLength(online ? 1 : 0);
     },
   );
 
@@ -405,7 +448,14 @@ describe("session activity automation grouping", () => {
       { filters: { personId: null, query: "Automation", time: "7d" as const } },
       {
         filters: { personId: "owner", query: "", time: "7d" as const },
-        presenceViewers: [{ id: "owner", name: "Owner", watchedSessions: [] }],
+        presenceViewers: [
+          {
+            id: "owner",
+            identity: { type: "profile" as const, id: "owner" },
+            name: "Owner",
+            watchedSessions: [],
+          },
+        ],
       },
     ]) {
       render(
