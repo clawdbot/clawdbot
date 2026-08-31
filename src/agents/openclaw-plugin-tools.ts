@@ -87,6 +87,9 @@ function createPluginToolDelivery(params: {
   ) {
     return undefined;
   }
+  // Capabilities bind the source policy session, even when plugins execute in
+  // a shared or durable session. Keep validation separate from execution identity.
+  const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
   const channelPlugin = activeRegistry.channels.find(
     (entry) => entry.plugin.id === deliveryContext.channel,
   )?.plugin;
@@ -113,7 +116,7 @@ function createPluginToolDelivery(params: {
       token,
       agentId,
       runId,
-      sessionKey,
+      sessionKey: policySessionKey,
       sessionId,
     });
     if (!authorization) {
@@ -329,7 +332,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       existingToolNames,
       toolAllowlist: params.options?.pluginToolAllowlist,
       toolDenylist: params.options?.pluginToolDenylist,
-      agentSessionKey: params.options?.agentSessionKey,
+      agentSessionKey: pluginToolInputs.context.sessionKey,
     }),
   );
 

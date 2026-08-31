@@ -208,7 +208,7 @@ vi.mock("../../talk/client-voice-session.js", async (importOriginal) => {
 
 vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
-  handleChatSendWithRuntimeTools: mocks.chatSend,
+  handleTrustedInternalChatSend: mocks.chatSend,
 }));
 
 vi.mock("../sessions-resolve.js", () => ({
@@ -2795,14 +2795,10 @@ describe("talk.client.toolCall handler", () => {
     expectRecordFields(chatInput.params, { sessionKey: "main" });
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
-    expect(mockCallArg(mocks.chatSend, 0, 1)).toEqual([
-      "read",
-      "web_search",
-      "web_fetch",
-      "x_search",
-      "memory_search",
-      "memory_get",
-    ]);
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
+      toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      display: false,
+    });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
   });
@@ -2927,7 +2923,7 @@ describe("talk.client.toolCall handler", () => {
       thinking: "low",
       fastMode: true,
     });
-    expect(mockCallArg(mocks.chatSend, 0, 1)).toBeUndefined();
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({ toolsAllow: undefined, display: false });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 

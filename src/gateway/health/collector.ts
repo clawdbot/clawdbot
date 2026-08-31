@@ -3,11 +3,13 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
@@ -364,7 +366,20 @@ async function buildHealthAccountRecord(params: {
   runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<ChannelAccountHealthSummary> {
   const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
-  const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
+  const runtimeSnapshot =
+    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
+    (params.accountId === params.defaultAccountId
+      ? params.runtimeSnapshot?.channels[params.plugin.id]
+      : undefined);
+  const unavailable = resolveUnavailableChannelAccountSnapshot({
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({
       plugin: params.plugin,
       cfg: params.cfg,
@@ -383,7 +398,13 @@ async function buildHealthAccountRecord(params: {
 
   let probe: unknown;
   let lastProbeAt: number | null = null;
-  if (enabled && configured && params.probe && params.plugin.status?.probeAccount) {
+  if (
+    probeAccount !== undefined &&
+    enabled &&
+    configured === true &&
+    params.probe &&
+    params.plugin.status?.probeAccount
+  ) {
     try {
       probe = await params.plugin.status.probeAccount({
         account: probeAccount,
@@ -414,23 +435,26 @@ async function buildHealthAccountRecord(params: {
     });
   }
 
-  const runtimeSnapshot =
-    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
-    (params.accountId === params.defaultAccountId
-      ? params.runtimeSnapshot?.channels[params.plugin.id]
-      : undefined);
   const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
   const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
-  const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account: snapshotAccount,
-    runtime: runtimeSnapshot,
-    probe: snapshotProbe,
-    enabledFallback: enabled,
-    configuredFallback: configured,
-  });
+  const snapshot: ChannelAccountSnapshot =
+    probeAccount === undefined
+      ? buildChannelAccountSnapshotFromInspection({
+          account: inspectedAccount,
+          accountId: params.accountId,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+        })
+      : await buildChannelAccountSnapshotFromAccount({
+          plugin: params.plugin,
+          cfg: params.cfg,
+          accountId: params.accountId,
+          account: probeAccount,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+          enabledFallback: enabled,
+          configuredFallback: configured,
+        });
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -447,14 +471,15 @@ async function buildHealthAccountRecord(params: {
     snapshot.healthState = healthState;
   }
 
-  const summary = params.plugin.status?.buildChannelSummary
-    ? await params.plugin.status.buildChannelSummary({
-        account: probeAccount,
-        cfg: params.cfg,
-        defaultAccountId: params.accountId,
-        snapshot,
-      })
-    : undefined;
+  const summary =
+    probeAccount !== undefined && params.plugin.status?.buildChannelSummary
+      ? await params.plugin.status.buildChannelSummary({
+          account: probeAccount,
+          cfg: params.cfg,
+          defaultAccountId: params.accountId,
+          snapshot,
+        })
+      : undefined;
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -465,10 +490,9 @@ async function buildHealthAccountRecord(params: {
       : ({
           ...snapshot,
           accountId: params.accountId,
-          configured,
         } satisfies ChannelAccountHealthSummary),
   );
-  if (record.configured === undefined) {
+  if (record.configured === undefined && probeAccount !== undefined) {
     record.configured = configured;
   }
   if (params.includeSensitive && record.probe === undefined && probe !== undefined) {

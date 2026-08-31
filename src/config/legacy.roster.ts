@@ -44,7 +44,7 @@ export function parseLegacyAgentRoster(
 
 export function migratePersistedImplicitMainRoster(
   raw: unknown,
-  options: { materializeWorkspace?: boolean } = {},
+  options: { materializeWorkspace?: boolean; materializeRoles?: boolean } = {},
 ): MigrationResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { config: raw, changed: false, diagnostics: [] };
@@ -126,7 +126,7 @@ export function migratePersistedImplicitMainRoster(
   let insertedPaths: string[][] = [];
   const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
   let changed = convertedLegacyList;
-  if (legacyDefaultAgentId) {
+  if (legacyDefaultAgentId && options.materializeRoles !== false) {
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
       legacyDefaultAgentId,
