@@ -601,15 +601,13 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
-    ...(quotedMessageId
+    quote: quotedMessageId
       ? {
-          quote: {
-            messageId: quotedMessageId,
-            groupPolicy: params.groupPolicy,
-            allowFrom: params.groupAllowFrom,
-          },
+          messageId: quotedMessageId,
+          groupPolicy: params.groupPolicy,
+          allowFrom: params.groupAllowFrom,
         }
-      : {}),
+      : undefined,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });

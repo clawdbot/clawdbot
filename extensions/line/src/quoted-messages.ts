@@ -17,19 +17,14 @@ export type LineQuotedMessage = {
   fromBot: boolean;
 };
 
-/** An inbound message plus the conversation that makes it quotable. */
-type LineInboundRecord = {
-  body?: string;
-  senderId?: string;
-  conversationId: string;
-};
+/** A stored answer plus the conversation that is allowed to receive it. */
+type LineInboundRecord = { quoted: LineQuotedMessage; conversationId: string };
 
 // LINE's webhook reports a quoted message's id but never its author or its text,
 // so the only way to answer "what was quoted" is to remember what passed through.
 // Bounded and in memory on purpose: after a restart a quote resolves to its id
 // alone, which is all LINE carries, rather than to a stale body.
-const SENT_MESSAGE_LIMIT = 500;
-const RECEIVED_MESSAGE_LIMIT = 500;
+const MESSAGE_LIMIT = 500;
 
 // A quoted message is context, not the turn's own input: bound the retained text
 // so one 5000-character LINE message cannot dominate the store or the prompt.
@@ -40,10 +35,10 @@ const QUOTED_BODY_MAX_CHARS = 2000;
 // quiet bot silently stops resolving quotes. The registries only grow with
 // configured accounts that have actually seen a message.
 //
-// Sent ids and received messages are also bounded apart. A group produces inbound
-// traffic in bursts while the bot answers a handful of times, so one shared bound
-// would evict the bot's own ids within minutes and quoting the bot would silently
-// stop counting as addressing it.
+// Sent ids and received messages are also bounded apart, one budget each. A group
+// produces inbound traffic in bursts while the bot answers a handful of times, so
+// one shared bound would evict the bot's own ids within minutes and quoting the
+// bot would silently stop counting as addressing it.
 const sentByAccount = new Map<string, Map<string, true>>();
 const receivedByAccount = new Map<string, Map<string, LineInboundRecord>>();
 
@@ -68,7 +63,7 @@ function remember<T>(
 /** Records the ids of messages this account just sent. */
 export function recordLineSentMessages(accountId: string, messageIds: readonly string[]): void {
   for (const messageId of messageIds) {
-    remember(sentByAccount, accountId, messageId, true, SENT_MESSAGE_LIMIT);
+    remember(sentByAccount, accountId, messageId, true, MESSAGE_LIMIT);
   }
 }
 
@@ -89,10 +84,13 @@ export function recordLineAgentVisibleMessage(
     message.id,
     {
       conversationId: message.conversationId,
-      ...(body ? { body } : {}),
-      ...(message.senderId ? { senderId: message.senderId } : {}),
+      quoted: {
+        fromBot: false,
+        ...(body ? { body } : {}),
+        ...(message.senderId ? { senderId: message.senderId } : {}),
+      },
     },
-    RECEIVED_MESSAGE_LIMIT,
+    MESSAGE_LIMIT,
   );
 }
 
@@ -116,14 +114,7 @@ export function resolveLineQuotedMessage(
     return { fromBot: true };
   }
   const received = receivedByAccount.get(accountId)?.get(quotedMessageId);
-  if (!received || received.conversationId !== conversationId) {
-    return undefined;
-  }
-  return {
-    fromBot: false,
-    ...(received.body ? { body: received.body } : {}),
-    ...(received.senderId ? { senderId: received.senderId } : {}),
-  };
+  return received?.conversationId === conversationId ? received.quoted : undefined;
 }
 
 /** Reads the quoted message id LINE reports on the message kinds a person can quote from. */
