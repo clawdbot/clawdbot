@@ -71,6 +71,7 @@ import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing
 import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
+  requestHeartbeatAndWait,
   requestHeartbeatRetry,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
@@ -573,6 +574,8 @@ export function buildGatewayCronService(params: {
           agentId?: string;
           sessionKey?: string;
           heartbeat?: HeartbeatWakeRequest["heartbeat"];
+          scheduledEveryMs?: number;
+          tasks?: HeartbeatWakeRequest["tasks"];
         }
       | undefined,
     direct = false,
@@ -595,6 +598,10 @@ export function buildGatewayCronService(params: {
         heartbeat: direct
           ? resolveCronHeartbeatOverride({ runtimeConfig, agentId, heartbeat: opts?.heartbeat })
           : sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        ...(opts?.scheduledEveryMs !== undefined
+          ? { scheduledEveryMs: opts.scheduledEveryMs }
+          : {}),
+        ...(opts?.tasks?.length ? { tasks: opts.tasks } : {}),
       },
     };
   };
@@ -883,19 +890,14 @@ export function buildGatewayCronService(params: {
       : {}),
     requestHeartbeat: (opts, retry) => {
       const { wake } = resolveCronHeartbeatWake(opts);
-      const request = {
-        ...wake,
-        ...(opts?.scheduledEveryMs !== undefined
-          ? { scheduledEveryMs: opts.scheduledEveryMs }
-          : {}),
-        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
-      };
       if (retry) {
-        requestHeartbeatRetry(request, retry);
+        requestHeartbeatRetry(wake, retry);
       } else {
-        requestHeartbeat(request);
+        requestHeartbeat(wake);
       }
     },
+    requestHeartbeatAndWait: (opts, lifecycle) =>
+      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts).wake, lifecycle),
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
       return await runHeartbeatOnce({
