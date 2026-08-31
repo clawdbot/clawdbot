@@ -899,6 +899,7 @@ const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map<string, string>(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
 const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "ui/vitest.config.ts",
   "vitest.config.ts",
   DEFAULT_VITEST_CONFIG,
   ...Object.values(VITEST_CONFIG_BY_KIND),

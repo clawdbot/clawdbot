@@ -42,6 +42,32 @@ function plan(runnerBackend = "blacksmith") {
 }
 
 describe("compact node prerequisite admission", () => {
+  it.each([
+    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 107] },
+    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 87] },
+    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 70] },
+    {
+      name: "core-runtime-infra-process",
+      measured: undefined,
+      blacksmith: [13, 13],
+      hybrid: [35, 35],
+    },
+  ])("keeps $name estimates owned by its direct measurement or unmeasured hint", (owner) => {
+    // Whole-config fixtures separate estimator precedence from file-count-dependent
+    // ceiling rounding in the repository's hosted child stripes.
+    for (const profile of ["blacksmith", "hybrid"] as const) {
+      setGroups([[owner.name, undefined, 0]]);
+      fixture.timings = {};
+      const [fallback, measured] = owner[profile];
+      expect(plan(profile).map((job) => job.predictedSeconds)).toEqual([fallback]);
+      fixture.timings =
+        owner.measured === undefined ? { unrelated: 999 } : { [owner.name]: owner.measured };
+      const jobs = plan(profile);
+      expect(jobs.map((job) => job.predictedSeconds)).toEqual([measured]);
+      expect(jobs[0]?.groups.map((group) => group.shard_name)).toEqual([owner.name]);
+    }
+  });
+
   it("charges a shared runtime build once for two groups in one job", () => {
     setGroups([
       ["runtime-a", "runtime", 100],

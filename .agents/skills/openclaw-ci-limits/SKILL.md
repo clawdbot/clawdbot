@@ -174,12 +174,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
 - `preflight` and `security-fast` start immediately without a debounce
-  or standalone admission job. On Node-relevant canonical main pushes and
-  same-repo pull requests, preflight owns the sole immutable semantic
-  dependency-cache write of workspace `node_modules` plus the local pnpm store
-  before fanout; all Blacksmith Node jobs are restore-only consumers and exact
-  misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
-  paths use only that store cache.
+  or standalone admission job. The protected `vitest-cache-warm` workflow
+  publishes the immutable semantic dependency archive after setup succeeds,
+  before build and transform warming. Preflight and downstream Node jobs are
+  restore-only consumers on eligible self-hosted runners; exact misses and
+  hosted/fork/manual paths use the ordinary pnpm-store cache.
 - Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
   the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
   Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
@@ -198,8 +197,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact
-  boundary gate. `main`, manual, and release runs stay full.
-- `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
+  boundary gate. `main` uses compact integration; manual and release runs use
+  full named shards.
+- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.

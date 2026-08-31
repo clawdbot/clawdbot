@@ -2001,14 +2001,28 @@ export function createVitestCacheWarmGroups(): Array<{
   if (missingShardNames.length > 0) {
     throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
   }
-  return [...coreShards, ...additionalShards].flatMap((shard) =>
-    shard.configs.map((config) => ({
-      configs: [config],
-      ...(shard.env ? { env: shard.env } : {}),
-      ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-      shard_name: `cache-warm:${shard.shardName}:${config}`,
-    })),
-  );
+  return [
+    ...[...coreShards, ...additionalShards].flatMap((shard) =>
+      shard.configs.map((config) => ({
+        configs: [config],
+        ...(shard.env ? { env: shard.env } : {}),
+        ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+        shard_name: `cache-warm:${shard.shardName}:${config}`,
+      })),
+    ),
+    {
+      // Seed the same root/aliases as checks-ui; repository-root UI transforms have different keys.
+      configs: ["ui/vitest.config.ts"],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "1" },
+      includePatterns: [
+        "ui/src/components/app-sidebar.test.ts",
+        "ui/src/pages/chat/chat-view.test.ts",
+        "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
+        "ui/src/pages/usage/metrics.node.test.ts",
+      ],
+      shard_name: "cache-warm:ui-package",
+    },
+  ];
 }
 
 function resolveCiNodeTestRunner(shard: NodeTestShard): string {

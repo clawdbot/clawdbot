@@ -1035,6 +1035,7 @@ jobs:
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
+          import { matchesGlob } from "node:path";
           import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
@@ -1377,9 +1378,14 @@ jobs:
                 plan_concurrency: shard.planConcurrency,
                 predicted_seconds: shard.predictedSeconds,
                 targets: shard.targets,
-                requires_go:
-                  shard.shardName.startsWith("core-tooling") ||
-                  shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
+                requires_go: (shard.groups ?? [shard]).some((plan) => {
+                  const patterns = plan.targets ?? plan.includePatterns;
+                  // Explicit stripes own their prerequisites; historical whole-config
+                  // plans retain the original tooling setup when selection is unknown.
+                  return patterns
+                    ? patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern))
+                    : (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
+                }),
                 requires_ripgrep:
                   shard.targets?.includes("src/agents/sessions/tools/index.test.ts") ||
                   shard.includePatterns?.includes("src/agents/sessions/tools/index.test.ts") ||
@@ -2273,6 +2279,10 @@ jobs:
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Test Control UI
+        env:
+          OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
+          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers", "3"]'
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
@@ -2283,7 +2293,7 @@ jobs:
           else
             # Three workers deliberately exercise stable non-default file packing so
             # isolate:false mock-registry leaks fail close to the introducing change.
-            pnpm --dir ui test --maxWorkers 3
+            node --import tsx scripts/ci-run-node-test-shard.mts
           fi
 
   checks-ui-e2e:

@@ -277,6 +277,7 @@ function runCiChangedScopeFixture(changedPaths: string[]): Record<string, string
 
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
+  nodeTestShards?: Record<string, unknown>[];
   changedPlannerImportFails?: boolean;
   changedPaths?: string[] | null;
   repository?: string;
@@ -309,8 +310,11 @@ function runCiManifestFixture(options: {
     mkdirSync(scriptsDir, { recursive: true });
     writeFileSync(
       path.join(scriptsDir, "ci-node-test-plan.mts"),
-      options.bundledPlanner
-        ? `
+      options.nodeTestShards
+        ? `export const createNodeTestShards = () => ${JSON.stringify(options.nodeTestShards)};
+           export const createNodeTestShardBundles = createNodeTestShards;`
+        : options.bundledPlanner
+          ? `
           export const createNodeTestShards = () => [{
             checkName: "legacy-node-plan",
             configs: ["test/vitest/legacy.config.ts"],
@@ -331,7 +335,7 @@ function runCiManifestFixture(options: {
             shardName: "bundled-node-plan",
           }];
         `
-        : `
+          : `
           export const createNodeTestShards = () => [{
             checkName: "legacy-node-plan",
             configs: ["test/vitest/legacy.config.ts"],
@@ -9695,6 +9699,57 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
     expect(goMod).toMatch(/^toolchain go1\.27\.0$/mu);
+
+    const tooling = {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      shard_name: "core-tooling-1",
+    };
+    const goTest = "test/scripts/docs-i18n.test.ts";
+    const otherTest = "test/scripts/ci-git-owner.test.ts";
+    const selections = [
+      { includePatterns: [goTest] },
+      { includePatterns: [otherTest] },
+      { includePatterns: ["test/scripts/docs-*.test.ts"] },
+      { targets: [goTest] },
+      { targets: [otherTest] },
+      {},
+      { groups: [{ ...tooling, includePatterns: [otherTest] }] },
+      {
+        groups: [
+          { ...tooling, includePatterns: [otherTest] },
+          { ...tooling, includePatterns: [goTest] },
+        ],
+      },
+      { groups: [{ ...tooling, configs: ["test/vitest/legacy-tooling.config.ts"] }] },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: selections.map((selection, index) => ({
+        checkName: `tooling-${index}`,
+        configs: tooling.configs,
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shardName: "groups" in selection ? "compact-small-1" : "core-tooling-1",
+        ...selection,
+      })),
+    });
+    expect(result.status, result.output).toBe(0);
+    const matrix = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
+    ) as {
+      include: { requires_go: boolean }[];
+    };
+    expect(matrix.include.map((row) => row.requires_go)).toEqual([
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+    ]);
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
@@ -9718,9 +9773,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(manifestStep.run).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestStep.run).toContain("requires_ripgrep:");
     expect(manifestStep.run).toContain("src/agents/sessions/tools/index.test.ts");
-    expect(manifestStep.run).toContain(
-      'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
-    );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",

@@ -647,6 +647,7 @@ describe("CI changed Node test plan", () => {
 
   it("fails safe when a targeted config needs special shard setup", () => {
     expect(createChangedNodeTestShards(["scripts/docs-i18n/main.go"])).toBeNull();
+    expect(createChangedNodeTestShards(["test/scripts/docs-i18n.test.ts"])).toBeNull();
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();
   });
 

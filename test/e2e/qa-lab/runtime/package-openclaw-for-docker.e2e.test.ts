@@ -116,6 +116,16 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
   throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
 
+async function joinCommandObservations(observations: Promise<unknown>[]): Promise<void> {
+  // Join PID discovery and the timeout assertion before cleanup, including on failure.
+  const results = await Promise.allSettled(observations);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
+
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -297,8 +307,12 @@ describe("package-openclaw-for-docker", () => {
           killAfterMs: 25,
           timeoutMs: 500,
         });
-        childPid = await readPid(childPidPath, 2_000);
-        await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+        await joinCommandObservations([
+          expect(runPromise).rejects.toThrow(/timed out after 500ms/u),
+          readPid(childPidPath, 2_000).then((pid) => {
+            childPid = pid;
+          }),
+        ]);
         await waitForDead(childPid, 2_000);
       } finally {
         if (childPid && isProcessAlive(childPid)) {
@@ -1595,7 +1609,7 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-timeout-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid;
+    let childPid = 0;
     try {
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -1614,9 +1628,12 @@ describe("package-openclaw-for-docker", () => {
         killAfterMs: 25,
         timeoutMs: 500,
       });
-      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
-      childPid = await readPid(childPidPath, 2000);
-      await timeoutAssertion;
+      await joinCommandObservations([
+        expect(runPromise).rejects.toThrow(/timed out after 500ms/u),
+        readPid(childPidPath, 2000).then((pid) => {
+          childPid = pid;
+        }),
+      ]);
       await waitForDead(childPid, 2000);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
@@ -1634,7 +1651,7 @@ describe("package-openclaw-for-docker", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-grace-"));
     const donePath = path.join(tempDir, "done");
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid;
+    let childPid = 0;
     try {
       const script = [
         "const fs = require('node:fs');",
@@ -1649,9 +1666,12 @@ describe("package-openclaw-for-docker", () => {
         killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
         timeoutMs: 500,
       });
-      childPid = await readPid(childPidPath, 2000);
-
-      await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+      await joinCommandObservations([
+        expect(runPromise).rejects.toThrow(/timed out after 500ms/u),
+        readPid(childPidPath, 2000).then((pid) => {
+          childPid = pid;
+        }),
+      ]);
       expect(fs.readFileSync(donePath, "utf8")).toBe("done");
     } finally {
       if (childPid && isProcessAlive(childPid)) {
