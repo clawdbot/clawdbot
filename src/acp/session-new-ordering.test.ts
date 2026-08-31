@@ -293,6 +293,26 @@ describe("AcpSessionNewOrdering", () => {
     }
   });
 
+  it("keeps ordering for a bridge that outlives any established-session bound", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    // A long-lived bridge that never closes its sessions: well past the 1024 bound
+    // this used to carry, ordering must still hold for the next session created.
+    for (let id = 1; id <= 1100; id += 1) {
+      steps.push(
+        { inbound: newSessionRequest(id) },
+        { outbound: newSessionResponse(id, `s${id}`) },
+      );
+    }
+    const update = sessionUpdate("late-session");
+    const created = newSessionResponse(9000, "late-session");
+    steps.push({ inbound: newSessionRequest(9000) }, { outbound: update }, { outbound: created });
+
+    const output = await runSteps(ordering, steps);
+
+    expect(output.slice(-2)).toEqual([created, update]);
+  });
+
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
     const ordering = new AcpSessionNewOrdering();
     const update = sessionUpdate("s");
@@ -338,54 +358,5 @@ describe("AcpSessionNewOrdering", () => {
     // Draining a2 alongside a1 would put it ahead of b1, which arrived first. The
     // queue drains from the front only, so a2 waits behind b1 until sb settles.
     expect(output).toEqual([resultA, a1, resultB, b1, a2]);
-  });
-
-  it("restores ordering after session/close frees tracking capacity", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    // One past the bound, so tracking is genuinely saturated before capacity returns.
-    for (let id = 1; id <= 1025; id += 1) {
-      steps.push(
-        { inbound: newSessionRequest(id) },
-        { outbound: newSessionResponse(id, `s${id}`) },
-      );
-    }
-    // Capacity comes back, so the boundary must resume ordering rather than stay
-    // failed open for the rest of the process.
-    steps.push({
-      inbound: {
-        jsonrpc: "2.0",
-        id: 9000,
-        method: "session/close",
-        params: { sessionId: "s1" },
-      } as AnyMessage,
-    });
-    const update = sessionUpdate("after-capacity");
-    const created = newSessionResponse(2000, "after-capacity");
-    steps.push({ inbound: newSessionRequest(2000) }, { outbound: update }, { outbound: created });
-
-    const output = await runSteps(ordering, steps);
-
-    expect(output.slice(-2)).toEqual([created, update]);
-  });
-
-  it("stops buffering once established tracking is saturated", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    for (let id = 1; id <= 1025; id += 1) {
-      steps.push(
-        { inbound: newSessionRequest(id) },
-        { outbound: newSessionResponse(id, `s${id}`) },
-      );
-    }
-    const late = sessionUpdate("late-session");
-    const lateResult = newSessionResponse(5000, "late-session");
-    steps.push({ inbound: newSessionRequest(5000) }, { outbound: late }, { outbound: lateResult });
-
-    const output = await runSteps(ordering, steps);
-
-    // Past the bound the boundary can no longer tell established from pending, so it
-    // fails open in arrival order rather than holding an update it may never release.
-    expect(output.slice(-2)).toEqual([late, lateResult]);
   });
 });

@@ -20,7 +20,6 @@ const SESSION_ESTABLISHING_METHODS = new Set(["session/load", "session/resume"])
 // many real session creations, and the per-session bound below still applies.
 const MAX_QUEUED_SESSIONS = 512;
 const MAX_QUEUED_UPDATES_PER_SESSION = 256;
-const MAX_ESTABLISHED_SESSIONS = 1024;
 
 type QueuedUpdate = { sessionId: string; message: AnyMessage };
 
@@ -37,7 +36,17 @@ type QueuedUpdate = { sessionId: string; message: AnyMessage };
  *    updates against each other.
  */
 export class AcpSessionNewOrdering {
-  /** Session IDs the protocol established, either by client assertion or by a `session/new` result. */
+  /**
+   * Session IDs the protocol established, either by client assertion or by a
+   * `session/new` result.
+   *
+   * Uncapped, and released by `session/close`. Every entry corresponds to a session
+   * that is live on the Gateway side, which costs orders of magnitude more than the
+   * ID string held here, so this can never be the binding constraint. Capping it
+   * would mean a bridge that reaches the cap stops being able to tell an established
+   * session from a pending one, and silently gives up ordering for the rest of its
+   * life — the same trade that made the two bounds below wrong.
+   */
   private readonly establishedSessionIds = new Set<string>();
   /** Queued updates in arrival order across all sessions; the only ordering authority. */
   private readonly queue: QueuedUpdate[] = [];
@@ -133,24 +142,13 @@ export class AcpSessionNewOrdering {
   }
 
   private shouldQueue(sessionId: string): boolean {
-    if (this.establishedSessionIds.has(sessionId) || this.isTrackingSaturated()) {
+    if (this.establishedSessionIds.has(sessionId)) {
       return false;
     }
     return this.pendingNewSessionRequestIds.size > 0;
   }
 
-  /**
-   * Recomputed rather than latched: `session/close` frees capacity, and a bridge that
-   * recovers room must recover ordering with it instead of failing open forever.
-   */
-  private isTrackingSaturated(): boolean {
-    return this.establishedSessionIds.size >= MAX_ESTABLISHED_SESSIONS;
-  }
-
   private establish(sessionId: string): void {
-    if (!this.establishedSessionIds.has(sessionId) && this.isTrackingSaturated()) {
-      return;
-    }
     this.establishedSessionIds.add(sessionId);
   }
 
