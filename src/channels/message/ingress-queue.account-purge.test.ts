@@ -55,7 +55,6 @@ async function seedEveryStatus(stateDir: string, channelId: string, accountId: s
     throw new Error("Expected to claim the row the test dead-letters");
   }
   await queue.fail(failing, { reason: "poison" });
-  return queue;
 }
 
 describe("channel ingress queue account purge", () => {

@@ -11,7 +11,6 @@ import {
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
-import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -24,6 +23,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { resolveChannelIngressQueueOwnerId } from "./ingress-queue-owner.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -47,25 +47,36 @@ function listAccountIds(
   return plugin.config.listAccountIds(cfg);
 }
 
+type IngressDiscardOutcome =
+  | { ok: true; purge: ChannelIngressQueueAccountPurge }
+  | { ok: false; message: string };
+
 /**
- * Resolves the id a channel account's durable ingress rows are stored under.
+ * Discards a removed account's ingress rows without letting that failure rewrite the
+ * outcome of the removal.
  *
- * The plugin runtime opens an ingress queue with the plugin's own id - see the
- * `channelId: pluginId` it forces in `openChannelIngressQueue` - which is not the
- * channel id whenever an installed plugin's package id differs from the channel
- * it serves. Prefer the live registration, fall back to the catalog entry that
- * installed the plugin when it is no longer registered, and finally to the
- * channel id, which every bundled channel also registers as its plugin id.
+ * The config write has already landed by the time this runs, so the account is gone
+ * whatever happens here. Letting the purge throw would surface a completed deletion as
+ * a failed command - the state store can refuse a write for reasons that have nothing
+ * to do with this account, such as another process owning it. Report the shortfall in
+ * the same line that reports the deletion instead, the way the pre-removal runtime stop
+ * already does.
  */
-function resolveIngressQueueOwnerId(params: {
+function discardRemovedAccountIngressRows(params: {
   channelId: string;
-  catalogPluginId?: string | undefined;
-}): string {
-  return (
-    getRegisteredChannelOwnerPluginId(params.channelId) ??
-    normalizeOptionalString(params.catalogPluginId) ??
-    params.channelId
-  );
+  accountId: string;
+}): IngressDiscardOutcome {
+  try {
+    return {
+      ok: true,
+      purge: purgeChannelIngressQueueAccount({
+        channelId: params.channelId,
+        accountId: params.accountId,
+      }),
+    };
+  } catch (error) {
+    return { ok: false, message: formatErrorMessage(error) };
+  }
 }
 
 async function stopGatewayRuntimeBeforeRemove(params: {
@@ -256,9 +267,9 @@ export async function channelsRemoveCommand(
   // running before the config write would drop inbound work for an account that is
   // still configured if that write fails. A disabled account keeps its rows because
   // re-enabling it drains them.
-  const discardedEvents = deleteConfig
-    ? purgeChannelIngressQueueAccount({
-        channelId: resolveIngressQueueOwnerId({
+  const discard = deleteConfig
+    ? discardRemovedAccountIngressRows({
+        channelId: resolveChannelIngressQueueOwnerId({
           channelId: plugin.id,
           catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
         }),
@@ -269,8 +280,11 @@ export async function channelsRemoveCommand(
     deleteConfig
       ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
       : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    ...(discardedEvents && discardedEvents.discarded > 0
-      ? [formatDiscardedIngressEvents(discardedEvents)]
+    ...(discard?.ok && discard.purge.discarded > 0
+      ? [formatDiscardedIngressEvents(discard.purge)]
+      : []),
+    ...(discard?.ok === false
+      ? [`Its stored ingress events could not be discarded: ${discard.message}`]
       : []),
   ].join(" ");
   if (useWizard && prompter) {

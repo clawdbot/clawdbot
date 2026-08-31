@@ -29,6 +29,10 @@ const registryRefreshMocks = vi.hoisted(() => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
 }));
 
+const ingressMocks = vi.hoisted(() => ({
+  purgeFailure: null as Error | null,
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({ stopped: true })),
 }));
@@ -65,6 +69,24 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
   const { createMockChannelSetupPluginInstallModule } =
     await import("./channels.plugin-install.test-helpers.js");
   return createMockChannelSetupPluginInstallModule(actual);
+});
+
+vi.mock("../channels/message/ingress-queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/message/ingress-queue.js")>(
+    "../channels/message/ingress-queue.js",
+  );
+  return {
+    ...actual,
+    // Real purge unless a test arms a failure, so the state store stays authoritative.
+    purgeChannelIngressQueueAccount: (
+      params: Parameters<typeof actual.purgeChannelIngressQueueAccount>[0],
+    ) => {
+      if (ingressMocks.purgeFailure) {
+        throw ingressMocks.purgeFailure;
+      }
+      return actual.purgeChannelIngressQueueAccount(params);
+    },
+  };
 });
 
 vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
@@ -119,6 +141,7 @@ describe("channelsRemoveCommand", () => {
     gatewayMocks.callGateway.mockResolvedValue({ stopped: true });
     wizardMocks.confirm.mockClear();
     wizardMocks.confirm.mockResolvedValue(true);
+    ingressMocks.purgeFailure = null;
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -525,13 +548,13 @@ describe("channelsRemoveCommand", () => {
       createExternalChatCatalogEntry(),
     ]);
     const deletePlugin = createExternalChatDeletePlugin();
-    const scopedPlugin = {
+    const scopedPlugin: ChannelPlugin = {
       ...deletePlugin,
       config: {
         ...deletePlugin.config,
-        setAccountEnabled: vi.fn(({ cfg }: { cfg: Record<string, unknown> }) => cfg),
+        setAccountEnabled: ({ cfg }) => cfg,
       },
-    } as ChannelPlugin;
+    };
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([
         {
@@ -541,8 +564,11 @@ describe("channelsRemoveCommand", () => {
         },
       ]),
     );
+    // Seed under the id a discard would actually target, so this stays a real negative
+    // control: seeding under the channel id would survive even if the disable path
+    // started discarding.
     const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "external-chat",
+      channelId: "@vendor/external-chat-plugin",
       accountId: "default",
     });
     await queue.enqueue("inbound-1", { text: "waiting for the account to come back" });
@@ -560,7 +586,96 @@ describe("channelsRemoveCommand", () => {
     // The account can be re-enabled, so its queued work is still deliverable. Reading it
     // back through the purge both proves it survived and leaves the worker state clean.
     expect(
-      purgeChannelIngressQueueAccount({ channelId: "external-chat", accountId: "default" }),
+      purgeChannelIngressQueueAccount({
+        channelId: "@vendor/external-chat-plugin",
+        accountId: "default",
+      }),
     ).toEqual({ discarded: 1, undelivered: 1 });
+  });
+
+  it("keeps the ingress rows when the config write fails, so nothing is dropped for a still-configured account", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "@vendor/external-chat-plugin",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "account is still configured" });
+    configMocks.writeConfigFile.mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(
+      channelsRemoveCommand(
+        { channel: "external-chat", account: "default", delete: true },
+        runtime,
+        { hasFlags: true },
+      ),
+    ).rejects.toThrow("disk full");
+
+    // The account is still in config, so its queued work must still be there to drain.
+    expect(
+      purgeChannelIngressQueueAccount({
+        channelId: "@vendor/external-chat-plugin",
+        accountId: "default",
+      }),
+    ).toEqual({ discarded: 1, undelivered: 1 });
+  });
+
+  it("still reports the deletion when the ingress discard fails", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    // The config write has already landed by then, so the account is gone either way.
+    ingressMocks.purgeFailure = new Error("state database is owned by another process");
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Its stored ingress events could not be discarded: state database is owned by another process',
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

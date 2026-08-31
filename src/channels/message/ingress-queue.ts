@@ -4,6 +4,7 @@
  * Stores, claims, completes, and tombstones inbound channel events in OpenClaw state.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
@@ -11,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { resolveDatabasePath } from "../../state/openclaw-state-db-maintenance.js";
 import type {
   ChannelIngressEvents,
   DB as OpenClawStateKyselyDatabase,
@@ -651,6 +653,14 @@ export function purgeChannelIngressQueueAccount(params: {
     normalizePart(params.channelId, "unknown"),
     normalizePart(params.accountId, "default"),
   );
+  // Removal must not be what creates the store. A host that never queued an inbound
+  // event has nothing to discard, and the creating opener would migrate a fresh
+  // database just to delete zero rows - the same reason the listing sibling above
+  // takes the non-creating path.
+  const env = params.stateDir ? createStateDirEnv(params.stateDir) : process.env;
+  if (!existsSync(resolveDatabasePath({ env }))) {
+    return { discarded: 0, undelivered: 0 };
+  }
   const database = openChannelIngressDatabase(params.stateDir);
   return runOpenClawStateWriteTransaction(
     (tx) => {
