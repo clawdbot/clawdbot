@@ -691,10 +691,10 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               setActivePluginRegistry(registry,'fixture-active');
               try {
                 assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
-                withPluginRuntimeGenerationScope({config,metadataSnapshot,pluginRegistry:registry},()=>{
+                withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},()=>{
                   assert.deepEqual(call(),payloads,'preparation must select the generation provider');
                   const callsBeforeEmptyGeneration = scopedCalls;
-                  withPluginRuntimeGenerationScope({config,metadataSnapshot},()=>{
+                  withPluginRuntimeGenerationScope({metadataSnapshot},()=>{
                     withPluginRuntimeRegistryScope(registry,()=>{
                       const absentOwner = prepare();
                       assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');

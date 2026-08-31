@@ -123,106 +123,102 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     const unlisten = onAgentEventForRun(runId, emitted);
     const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ runId, sessionId, sessionKey });
     try {
-      await withPluginRuntimeGenerationScope(
-        { config, metadataSnapshot, pluginRegistry },
-        async () => {
-          // Runtime preparation can select an endpoint owner that differs from the route label.
-          const runtimeHandle = resolveProviderRuntimePluginHandle({
-            provider: "custom-lifecycle-route",
-            providerOwner: ownerId,
-            modelId: testModel.id,
+      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
+        // Runtime preparation can select an endpoint owner that differs from the route label.
+        const runtimeHandle = resolveProviderRuntimePluginHandle({
+          provider: "custom-lifecycle-route",
+          providerOwner: ownerId,
+          modelId: testModel.id,
+          config,
+        });
+        expect(runtimeHandle.plugin?.id).toBe(ownerId);
+        const model = attachModelProviderRuntimePluginHandle(
+          { ...testModel, provider: "custom-lifecycle-route" },
+          runtimeHandle,
+        );
+        streamMocks.streamSimple.mockImplementation((activeModel) =>
+          createAssistantResultStream({
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "403 fixture refusal",
+            errorCode: "FIXTURE_REFUSAL",
+          }),
+        );
+        const { session, modelRegistry } = await createTestSession({ model });
+        const stream = prepareEmbeddedAttemptStream({
+          attempt: {
+            runId,
+            sessionId,
+            sessionKey,
+            sessionFile: sessionKey,
             config,
-          });
-          expect(runtimeHandle.plugin?.id).toBe(ownerId);
-          const model = attachModelProviderRuntimePluginHandle(
-            { ...testModel, provider: "custom-lifecycle-route" },
-            runtimeHandle,
-          );
-          streamMocks.streamSimple.mockImplementation((activeModel) =>
-            createAssistantResultStream({
-              ...createAssistant(activeModel, [], "error"),
-              errorMessage: "403 fixture refusal",
-              errorCode: "FIXTURE_REFUSAL",
-            }),
-          );
-          const { session, modelRegistry } = await createTestSession({ model });
-          const stream = prepareEmbeddedAttemptStream({
-            attempt: {
-              runId,
-              sessionId,
-              sessionKey,
-              sessionFile: sessionKey,
-              config,
-              model,
-              provider: model.provider,
-              modelId: model.id,
-              workspaceDir: process.cwd(),
-              prompt: "exercise terminal provider failure",
-              timeoutMs: 30_000,
-              thinkLevel: "off",
-              admittedRunContext: createTestAdmittedRunContext(runId),
-              authStorage: modelRegistry.authStorage,
-              modelRegistry,
-              authProfileStore: { version: 1, profiles: {} },
-              onAgentEvent,
-            },
-            activeSession: session,
-            hookRunner: null,
-            hookAgentId: "main",
-            diagnosticTrace: { traceId: "11111111111111111111111111111111" },
-            diagnosticOwner,
-            clientToolCallSlots: [],
-            nestedToolActivities: [],
-            isReplaySafeTool: () => false,
-            runAbortController: new AbortController(),
-            abortRun: () => {
-              void session.abort();
-            },
-            markExternalAbort: () => {},
-            getRunState: () => ({
-              aborted: false,
-              promptError: undefined,
-              timedOut: false,
-              yieldDetected: false,
-            }),
-            hasDeliveredSourceReply: () => false,
-            markSourceReplyDelivered: () => {},
-            onBlockReply: undefined,
-            onBlockReplyFlush: undefined,
-            sandboxSessionKey: sessionKey,
-            builtinToolNames: new Set(),
-            replaySafeToolNames: new Set(),
-          });
-          try {
-            await session.prompt("exercise terminal provider failure");
-            expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
-            for (const observer of [emitted, onAgentEvent]) {
-              const terminals = observer.mock.calls
-                .map(([event]) => event)
-                .filter((event) => event.stream === "lifecycle" && event.data.phase === "error");
-              expect.soft(terminals).toEqual([
-                expect.objectContaining({
-                  data: expect.objectContaining({
-                    phase: "error",
-                    error:
-                      "The AI service is temporarily overloaded. Please try again in a moment.",
-                  }),
-                }),
-              ]);
-            }
-            expect(hookContexts).toContainEqual(
+            model,
+            provider: model.provider,
+            modelId: model.id,
+            workspaceDir: process.cwd(),
+            prompt: "exercise terminal provider failure",
+            timeoutMs: 30_000,
+            thinkLevel: "off",
+            admittedRunContext: createTestAdmittedRunContext(runId),
+            authStorage: modelRegistry.authStorage,
+            modelRegistry,
+            authProfileStore: { version: 1, profiles: {} },
+            onAgentEvent,
+          },
+          activeSession: session,
+          hookRunner: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "11111111111111111111111111111111" },
+          diagnosticOwner,
+          clientToolCallSlots: [],
+          nestedToolActivities: [],
+          isReplaySafeTool: () => false,
+          runAbortController: new AbortController(),
+          abortRun: () => {
+            void session.abort();
+          },
+          markExternalAbort: () => {},
+          getRunState: () => ({
+            aborted: false,
+            promptError: undefined,
+            timedOut: false,
+            yieldDetected: false,
+          }),
+          hasDeliveredSourceReply: () => false,
+          markSourceReplyDelivered: () => {},
+          onBlockReply: undefined,
+          onBlockReplyFlush: undefined,
+          sandboxSessionKey: sessionKey,
+          builtinToolNames: new Set(),
+          replaySafeToolNames: new Set(),
+        });
+        try {
+          await session.prompt("exercise terminal provider failure");
+          expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
+          for (const observer of [emitted, onAgentEvent]) {
+            const terminals = observer.mock.calls
+              .map(([event]) => event)
+              .filter((event) => event.stream === "lifecycle" && event.data.phase === "error");
+            expect.soft(terminals).toEqual([
               expect.objectContaining({
-                provider: ownerId,
-                status: 403,
-                code: "FIXTURE_REFUSAL",
+                data: expect.objectContaining({
+                  phase: "error",
+                  error: "The AI service is temporarily overloaded. Please try again in a moment.",
+                }),
               }),
-            );
-          } finally {
-            stream.subscription.unsubscribe();
-            clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
+            ]);
           }
-        },
-      );
+          expect(hookContexts).toContainEqual(
+            expect.objectContaining({
+              provider: ownerId,
+              status: 403,
+              code: "FIXTURE_REFUSAL",
+            }),
+          );
+        } finally {
+          stream.subscription.unsubscribe();
+          clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
+        }
+      });
     } finally {
       unlisten();
       closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
