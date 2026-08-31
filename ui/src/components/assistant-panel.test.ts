@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RouteId } from "../app-route-paths.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
+import { createSessionCapability } from "../lib/sessions/index.ts";
+import { publishChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -19,7 +22,7 @@ vi.mock("./home-session.runtime.ts", () => {
 type TestAssistantPanel = HTMLElement & {
   custodianAvailable: boolean;
   homeAvailable: boolean;
-  sessionPage: boolean;
+  pageRouteId: RouteId;
   pageSessionKey: string;
   pageAgentId: string;
   assistantPanelOpen: boolean;
@@ -35,18 +38,23 @@ async function mountPanel(options: { global?: boolean } = {}) {
     reply: "Ready.",
     action: "none",
   });
-  const { context } = createContext(request, ["openclaw.chat", "chat.history", "chat.send"], {
-    agentsList: {
-      defaultId: "main",
-      mainKey: "home",
-      scope: options.global ? "global" : "per-sender",
-      agents: [
-        { id: "main", model: { primary: "openai/gpt-5.5" } },
-        { id: "research" },
-        { id: "care", kind: "system" },
-      ],
+  const { context: baseContext } = createContext(
+    request,
+    ["openclaw.chat", "chat.history", "chat.send"],
+    {
+      agentsList: {
+        defaultId: "main",
+        mainKey: "home",
+        scope: options.global ? "global" : "per-sender",
+        agents: [
+          { id: "main", model: { primary: "openai/gpt-5.5" } },
+          { id: "research" },
+          { id: "care", kind: "system" },
+        ],
+      },
     },
-  });
+  );
+  const context = { ...baseContext, sessions: createSessionCapability(baseContext.gateway) };
   const provider = createApplicationContextProvider(context);
   const store = new CustodianSessionStore();
   const panel = document.createElement("openclaw-assistant-panel") as TestAssistantPanel;
@@ -89,7 +97,7 @@ describe("assistant panel", () => {
       panel.custodianAvailable = false;
       panel.pageSessionKey = "agent:research:task";
       panel.pageAgentId = "research";
-      panel.sessionPage = true;
+      panel.pageRouteId = "chat";
       await panel.updateComplete;
       window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
       await vi.dynamicImportSettled();
@@ -125,7 +133,7 @@ describe("assistant panel", () => {
       await panel.updateComplete;
       expect(home()).toBeNull();
       expect(chatInputOwnerForContext(context).current).toBe("page");
-      panel.sessionPage = false;
+      panel.pageRouteId = "appearance";
       await panel.updateComplete;
       expect(home()?.agentId).toBe("research");
 
@@ -143,6 +151,69 @@ describe("assistant panel", () => {
       expect(chatInputOwnerForContext(context).current).toBe("page");
     },
   );
+
+  it("prepares current route and pane context when Home opens and the visible work changes", async () => {
+    const { context, panel } = await mountPanel({ global: true });
+    context.sessions.state.result = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        { key: "global", agentId: "main", kind: "global", updatedAt: 0, label: "Personal Home" },
+        {
+          key: "global",
+          agentId: "research",
+          kind: "global",
+          updatedAt: 0,
+          label: "Parser work",
+          sessionId: "research-incarnation",
+          spawnedWorkspaceDir: "/worktrees/parser",
+        },
+      ],
+    };
+    panel.pageSessionKey = "global";
+    panel.pageAgentId = "research";
+    panel.homeAvailable = true;
+    const pane = {};
+    publishChatWorkContext(context, pane, {
+      sessionKey: "global",
+      agentId: "research",
+      file: "src/parser.ts",
+    });
+    await panel.updateComplete;
+    window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+    await vi.dynamicImportSettled();
+    await panel.updateComplete;
+    const workContext = () =>
+      panel.querySelector<HTMLElement & { workContext: ChatWorkContext }>("openclaw-home-session")
+        ?.workContext;
+    const expected = {
+      page: "chat",
+      sessionKey: "global",
+      agentId: "research",
+      sessionId: "research-incarnation",
+      title: "Parser work",
+      workspace: "/worktrees/parser",
+      file: "src/parser.ts",
+    };
+    expect(workContext()).toEqual(expected);
+    panel.pageRouteId = "appearance";
+    await panel.updateComplete;
+    expect(workContext()).toEqual({ page: "appearance" });
+    panel.pageRouteId = "chat";
+    publishChatWorkContext(context, pane, {
+      sessionKey: "global",
+      agentId: "research",
+      file: "src/tokenizer.ts",
+    });
+    await panel.updateComplete;
+    expect(workContext()).toEqual({ ...expected, file: "src/tokenizer.ts" });
+    publishChatWorkContext(context, pane);
+    await panel.updateComplete;
+    const { file: _file, ...withoutFile } = expected;
+    expect(workContext()).toEqual(withoutFile);
+  });
 
   it("restores the Home destination after remount and shares one dock with Ask", async () => {
     const { panel } = await mountPanel();

@@ -66,11 +66,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
-  @property({ type: Boolean }) sessionPage = false;
   @property() pageSessionKey = "";
   @property() pageAgentId = "";
-  /** Route id of the page being worked on; the dock derives its own snapshot from it. */
-  @property() workPage = "";
+  @property() pageRouteId: RouteId = "chat";
   @state() private destination: AssistantDestination = "custodian";
   private readonly homeLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
@@ -121,6 +119,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         subscribeChatWorkContext(this.context, () => this.requestUpdate()),
         // The sidebar switcher owns agent choice; the dock follows it.
         this.context.agentSelection.subscribe(() => this.requestUpdate()),
+        // Snapshot changes need not change route facts; keep the open Home reference current.
+        this.context.sessions.subscribe(() => this.requestUpdate()),
+        this.context.agents.subscribe(() => this.requestUpdate()),
+        this.context.gateway.subscribe(() => this.requestUpdate()),
       ];
       this.contextCleanup = () => {
         for (const cleanup of cleanups) {
@@ -233,7 +235,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       return this.custodianSuppressed;
     }
     const context = this.context;
-    if (!context || !this.sessionPage) {
+    if (!context || this.pageRouteId !== "chat") {
       return false;
     }
     const page = resolveUiConversationIdentity(
@@ -346,10 +348,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const dock = this.dockLayout.dock;
     const home = this.homeTarget;
     const homeState = this.homeLoader.visibleState;
-    // Built here, not by the shell: the dock re-derives on its own work-context
-    // and agent-selection subscriptions without waiting for a shell render.
+    // The deferred panel owns preparation; the eager shell supplies route facts only.
     const workContext = this.context
-      ? buildHomeWorkContext(this.context, this.workPage, this.pageSessionKey)
+      ? buildHomeWorkContext(this.context, this.pageRouteId, this.pageSessionKey, this.pageAgentId)
       : undefined;
     const style =
       dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;

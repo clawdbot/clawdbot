@@ -64,9 +64,10 @@ export function subscribeChatWorkContext(context: object, listener: () => void):
 }
 
 export function buildHomeWorkContext(
-  context: Pick<ApplicationContext, "gateway" | "agents" | "agentSelection" | "sessions">,
+  context: Pick<ApplicationContext, "gateway" | "agents" | "sessions">,
   page: string,
-  sessionKey?: string,
+  sessionKey: string,
+  agentId: string,
 ): ChatWorkContext {
   if (!isSessionRouteId(page) || !sessionKey) {
     return { page };
@@ -74,11 +75,12 @@ export function buildHomeWorkContext(
   const defaults = {
     hello: context.gateway.snapshot.hello,
     agentsList: context.agents.state.agentsList,
-    assistantAgentId: context.agentSelection.state.selectedId,
+    assistantAgentId: agentId,
   };
   const identity = resolveUiConversationIdentity(defaults, sessionKey);
   const row = context.sessions.state.result?.sessions.find((candidate) =>
-    uiConversationMatches(defaults, identity.sessionKey, candidate.key, candidate.agentId),
+    // Keep the route's explicit agent: normalizing its main alias to bare global loses that owner.
+    uiConversationMatches(defaults, sessionKey, candidate.key, candidate.agentId),
   );
   const agent = defaults.agentsList?.agents.find((candidate) => candidate.id === identity.agentId);
   const workspace = resolveSessionWorkspace({ session: row, agentWorkspace: agent?.workspace });

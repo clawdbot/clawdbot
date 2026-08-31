@@ -639,10 +639,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         .custodianAvailable=${custodianPanelAvailable}
         .homeAvailable=${homePanelAvailable}
         .custodianSuppressed=${activeRoute === "custodian"}
-        .sessionPage=${activeRoute === "chat"}
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
-        .workPage=${activeRoute}
+        .pageRouteId=${activeRoute}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${isOptionalElementDefined(host.execApprovalElement)
