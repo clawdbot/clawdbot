@@ -1,4 +1,5 @@
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
+import { createSessionIdentityMutationFence } from "../../sessions/session-lifecycle-events.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -24,28 +25,49 @@ export const handleSessionsDescribe: GatewayRequestHandlers["sessions.describe"]
   if (!requestedAgent.ok) {
     return respond(false, undefined, requestedAgent.error);
   }
-  const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+  const initial = loadSessionEntriesForTarget({
     key,
     cfg,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
-  if (!entry) {
+  if (!initial.entry) {
     return respond(true, { session: null }, undefined);
   }
-  const preparedCatalog = await readPreparedServerMethodModelCatalog(context, {
-    agentId: target.agentId,
+  const identityMutationFence = createSessionIdentityMutationFence({
+    sessionKey: initial.target.canonicalKey,
+    sessionId: initial.entry.sessionId,
   });
-  const row = buildGatewaySessionRow({
-    cfg,
-    storePath,
-    store,
-    key: target.canonicalKey,
-    entry,
-    agentId: target.agentId,
-    ...(preparedCatalog !== undefined ? { modelCatalog: preparedCatalog.entries } : {}),
-    includeDerivedTitles: params.includeDerivedTitles,
-    includeLastMessage: params.includeLastMessage,
-    transcriptUsageMaxBytes: 64 * 1024,
-  });
-  respond(true, { session: { ...row, ...readSessionPlacementFields(context, row.sessionId) } });
+  try {
+    const preparedCatalog = await readPreparedServerMethodModelCatalog(context, {
+      agentId: initial.target.agentId,
+    });
+    const identityIsCurrent = identityMutationFence.isCurrent();
+    const current = identityIsCurrent
+      ? initial
+      : loadSessionEntriesForTarget({
+          key,
+          cfg,
+          ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+        });
+    if (!current.entry) {
+      return respond(true, { session: null }, undefined);
+    }
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: current.storePath,
+      store: current.store,
+      key: current.target.canonicalKey,
+      entry: current.entry,
+      agentId: current.target.agentId,
+      ...(identityIsCurrent && preparedCatalog !== undefined
+        ? { modelCatalog: preparedCatalog.entries }
+        : {}),
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
+      transcriptUsageMaxBytes: 64 * 1024,
+    });
+    respond(true, { session: { ...row, ...readSessionPlacementFields(context, row.sessionId) } });
+  } finally {
+    identityMutationFence.release();
+  }
 };

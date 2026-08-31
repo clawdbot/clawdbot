@@ -262,8 +262,8 @@ describe("startGatewayEventSubscriptions", () => {
     vi.useRealTimers();
     await unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
-    unsubs?.transcriptUnsub();
-    unsubs?.lifecycleUnsub();
+    await unsubs?.transcriptUnsub();
+    await unsubs?.lifecycleUnsub();
     void unsubs?.taskUnsub();
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
@@ -1067,8 +1067,8 @@ describe("startGatewayEventSubscriptions", () => {
     await staleSubs.taskUnsub();
     await staleSubs.agentUnsub();
     staleSubs.heartbeatUnsub();
-    staleSubs.transcriptUnsub();
-    staleSubs.lifecycleUnsub();
+    await staleSubs.transcriptUnsub();
+    await staleSubs.lifecycleUnsub();
     expect(getTaskRegistryObservers()).not.toBeNull();
 
     createTaskRecord({

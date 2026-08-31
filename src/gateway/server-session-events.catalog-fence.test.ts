@@ -98,6 +98,41 @@ describe("transcript session-event catalog fencing", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });
 
+  it("discards a revisionless message when its identity changes during catalog loading", async () => {
+    let resolveCatalog!: (value: ModelCatalogEntry[]) => void;
+    const loadModelCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+    const context = createContext(loadModelCatalog);
+    const handler = createTranscriptUpdateBroadcastHandler(context);
+
+    const pending = handler({
+      target: {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/catalog-revisionless-reset-sessions.json",
+      },
+      message: { role: "user", content: [{ type: "text", text: "stale" }] },
+      messageSeq: 1,
+    });
+
+    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledOnce());
+    emitSessionIdentityMutation({
+      kind: "reset",
+      previous: { sessionId: "sess-main", sessionKeys: ["agent:main:main"] },
+      current: { sessionId: "sess-replacement", sessionKeys: ["agent:main:main"] },
+    });
+    resolveCatalog([]);
+    await pending;
+
+    expect(mocks.loadGatewaySessionRow).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
   it("discards an event when the session identity changes during catalog loading", async () => {
     let resolveCatalog: ((value: ModelCatalogEntry[]) => void) | undefined;
     const loadModelCatalog = vi.fn(

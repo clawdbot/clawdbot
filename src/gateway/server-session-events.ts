@@ -32,6 +32,7 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import type { GatewaySessionTranscriptUpdate } from "./server-session-event-admission.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
@@ -113,7 +114,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   // updates independently, so lanes keyed by transcript identity keep message
   // order without one session's async seq reads stalling every other session.
   const broadcastQueues = new Map<string, Promise<void>>();
-  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+  return (update: GatewaySessionTranscriptUpdate): Promise<void> => {
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
     const lifecycleRevision =
@@ -137,6 +138,18 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     if (agentScope === null) {
       return Promise.resolve();
     }
+    const ownsIdentityMutationFence = update.identityMutationFence === undefined;
+    const identityMutationFence =
+      update.identityMutationFence ??
+      (sessionKey
+        ? createSessionIdentityMutationFence({
+            sessionKey,
+            sessionId:
+              normalizeOptionalString(update.target?.sessionId) ??
+              normalizeOptionalString(update.sessionId) ??
+              legacyMarker?.sessionId,
+          })
+        : undefined);
     // Raw global is per-agent storage identity; its qualified aliases must share a lane.
     const laneKey =
       sessionKey && agentScope?.[1]
@@ -145,7 +158,15 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     // Preserve transcript update order within the lane even when counting
     // messages requires an async read from the session file.
     const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
-    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate, agentScope));
+    const task = tail
+      .then(() =>
+        handleTranscriptUpdateBroadcast(params, queuedUpdate, agentScope, identityMutationFence),
+      )
+      .finally(() => {
+        if (ownsIdentityMutationFence) {
+          identityMutationFence?.release();
+        }
+      });
     const settled = task.then(
       () => undefined,
       () => undefined,
@@ -169,9 +190,13 @@ async function handleTranscriptUpdateBroadcast(
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     loadModelCatalog?: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
   },
-  update: InternalSessionTranscriptUpdate,
+  update: GatewaySessionTranscriptUpdate,
   capturedAgentScope: SessionEventAgentScope | undefined,
+  identityMutationFence: SessionIdentityMutationFence | undefined,
 ): Promise<void> {
+  if (identityMutationFence && !identityMutationFence.isCurrent()) {
+    return;
+  }
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
   const targetSessionId = normalizeOptionalString(update.target?.sessionId);
@@ -344,7 +369,10 @@ async function handleTranscriptUpdateBroadcast(
         )
       : undefined;
   }
-  if (lifecycleRevision && !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision)) {
+  if (
+    (identityMutationFence && !identityMutationFence.isCurrent()) ||
+    (lifecycleRevision && !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision))
+  ) {
     return;
   }
   // Message frames must keep transcript-derived live usage (dashboard API
@@ -356,9 +384,10 @@ async function handleTranscriptUpdateBroadcast(
       ? await params.loadModelCatalog(routingAgentId)
       : undefined;
   if (
-    lifecycleRevision &&
-    shouldLoadModelCatalog &&
-    !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision)
+    (identityMutationFence && !identityMutationFence.isCurrent()) ||
+    (lifecycleRevision &&
+      shouldLoadModelCatalog &&
+      !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision))
   ) {
     return;
   }

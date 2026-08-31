@@ -217,6 +217,54 @@ test("reasoning override clears broadcast an authoritative effective value", asy
   });
 });
 
+test("reasoning override clear succeeds when model metadata is unavailable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const targetKey = "agent:main:reasoning-clear-without-catalog";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      {
+        sessionId: "session-reasoning-clear-without-catalog",
+        updatedAt: 1,
+        reasoningLevel: "on",
+      },
+    );
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      throw new Error("catalog unavailable");
+    });
+    const broadcastToConnIds = vi.fn();
+    const context = {
+      getRuntimeConfig: () => ({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      }),
+      loadGatewayModelCatalog,
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+
+    await sessionMutationHandlers["sessions.patch"]!({
+      params: { key: targetKey, reasoningLevel: null },
+      respond,
+      context,
+      client: humanClient(),
+    } as never);
+    flushPendingSessionsChangedEvents(context);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("resolved.thinkingLevel");
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: targetKey })).not.toHaveProperty(
+      "reasoningLevel",
+    );
+    for (const [, payload] of broadcastToConnIds.mock.calls) {
+      expect(payload).not.toHaveProperty("effectiveReasoningLevel");
+    }
+  });
+});
+
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = Array.from({ length: 30 }, (_, index) => ({

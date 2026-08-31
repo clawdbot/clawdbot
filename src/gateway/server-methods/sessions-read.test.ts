@@ -376,6 +376,53 @@ test("sessions.describe preserves model-derived reasoning metadata", async () =>
   expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
+test("sessions.describe reloads a replacement committed during catalog projection", async () => {
+  const cfg = {
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+  const sessionKey = "agent:main:describe-catalog-replacement";
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    { sessionId: "session-before-catalog", updatedAt: 1 },
+  );
+  let resolveCatalog!: (value: {
+    entries: Array<{ provider: string; id: string; name: string; reasoning: boolean }>;
+  }) => void;
+  const readPreparedGatewayModelCatalog = vi.fn(
+    () =>
+      new Promise<{
+        entries: Array<{ provider: string; id: string; name: string; reasoning: boolean }>;
+      }>((resolve) => {
+        resolveCatalog = resolve;
+      }),
+  );
+
+  const pending = directSessionReq<{ session: { sessionId: string } | null }>(
+    "sessions.describe",
+    { key: sessionKey },
+    {
+      context: {
+        getRuntimeConfig: () => cfg,
+        readPreparedGatewayModelCatalog,
+      },
+    },
+  );
+  await vi.waitFor(() => expect(readPreparedGatewayModelCatalog).toHaveBeenCalledOnce());
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    { sessionId: "session-after-catalog", updatedAt: 2 },
+  );
+  resolveCatalog({
+    entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true }],
+  });
+
+  await expect(pending).resolves.toMatchObject({
+    ok: true,
+    payload: { session: { sessionId: "session-after-catalog" } },
+  });
+});
+
 test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
   const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
   const foreignKey = "agent:main:foreign-role-read";

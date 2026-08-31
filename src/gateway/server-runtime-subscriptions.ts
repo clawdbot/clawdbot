@@ -48,8 +48,10 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import { createGatewayEventDispatchOwner } from "./server-event-dispatch-owner.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { prepareGatewayTranscriptEventDispatch } from "./server-session-event-admission.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
@@ -167,6 +169,8 @@ export function startGatewayEventSubscriptions(params: {
       : undefined;
   const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
+  const transcriptEventDispatchOwner = createGatewayEventDispatchOwner();
+  const lifecycleEventDispatchOwner = createGatewayEventDispatchOwner();
   const trackedRunIds = (runId: string, clientRunId: string) =>
     runId === clientRunId ? [runId] : [runId, clientRunId];
   const clearTrackedActiveRun = (run: { runId: string; clientRunId: string }) => {
@@ -520,15 +524,22 @@ export function startGatewayEventSubscriptions(params: {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
   });
 
-  const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    void dispatchEventHandler({
-      loadHandler: getTranscriptUpdateHandler,
-      event: evt,
-      log: params.log,
-      failureMessage: "Transcript update dispatch failed",
-      context: { sessionKey: evt.sessionKey },
+  const unsubscribeTranscript = onInternalSessionTranscriptUpdate((evt) => {
+    transcriptEventDispatchOwner.tryRun(() => {
+      const prepared = prepareGatewayTranscriptEventDispatch(evt);
+      return dispatchEventHandler({
+        loadHandler: getTranscriptUpdateHandler,
+        event: prepared.event,
+        log: params.log,
+        failureMessage: "Transcript update dispatch failed",
+        context: { sessionKey: evt.sessionKey },
+      }).finally(prepared.release);
     });
   });
+  const transcriptUnsub = async () => {
+    unsubscribeTranscript();
+    await transcriptEventDispatchOwner.stopAndDrain();
+  };
 
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.broadcastToConnIds(
@@ -564,26 +575,37 @@ export function startGatewayEventSubscriptions(params: {
       : undefined;
   };
   const unsubscribeLifecycle = onSessionLifecycleEvent((evt) => {
-    const identityMutationFence = createSessionIdentityMutationFence({
-      sessionKey: evt.sessionKey,
+    lifecycleEventDispatchOwner.tryRun(() => {
+      const identityMutationFence = createSessionIdentityMutationFence({
+        sessionKey: evt.sessionKey,
+      });
+      try {
+        const projectedActiveRunState = captureLifecycleActiveRunState(evt);
+        return dispatchEventHandler({
+          loadHandler: getLifecycleEventHandler,
+          event: {
+            ...evt,
+            identityMutationFence,
+            ...(projectedActiveRunState !== undefined ? { projectedActiveRunState } : {}),
+          },
+          log: params.log,
+          failureMessage: "Lifecycle event dispatch failed",
+          context: { sessionKey: evt.sessionKey },
+        }).finally(() => identityMutationFence.release());
+      } catch (error) {
+        identityMutationFence.release();
+        params.log.warn("Lifecycle event dispatch failed", {
+          sessionKey: evt.sessionKey,
+          error,
+        });
+        return Promise.resolve();
+      }
     });
-    void dispatchEventHandler({
-      loadHandler: getLifecycleEventHandler,
-      event: {
-        ...evt,
-        identityMutationFence,
-        ...(evt.reason === "run-capacity"
-          ? { projectedActiveRunState: captureLifecycleActiveRunState(evt) }
-          : {}),
-      },
-      log: params.log,
-      failureMessage: "Lifecycle event dispatch failed",
-      context: { sessionKey: evt.sessionKey },
-    }).finally(() => identityMutationFence.release());
   });
-  const lifecycleUnsub = () => {
+  const lifecycleUnsub = async () => {
     unsubscribeProfileChanges();
     unsubscribeLifecycle();
+    await lifecycleEventDispatchOwner.stopAndDrain();
   };
 
   let taskObserverDisposed = false;

@@ -276,8 +276,8 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       unsubscribe();
       await subscriptions?.agentUnsub();
       subscriptions?.heartbeatUnsub();
-      subscriptions?.transcriptUnsub();
-      subscriptions?.lifecycleUnsub();
+      await subscriptions?.transcriptUnsub();
+      await subscriptions?.lifecycleUnsub();
       await subscriptions?.taskUnsub();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
