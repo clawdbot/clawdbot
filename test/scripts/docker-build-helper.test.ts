@@ -4203,6 +4203,7 @@ test -x "$npm_config_prefix/bin/busctl"
       mkdirSync(artifacts);
       const pidFile = join(artifacts, "supervisor.pid");
       const logFile = join(artifacts, "systemctl.log");
+      const invocation = join(artifacts, "update-invoked");
       writeFileSync(pidFile, "12345\n");
       // An earlier baseline restart must not count for the recovery invocation.
       writeFileSync(logFile, "--user restart openclaw-gateway.service\n");
@@ -4210,6 +4211,8 @@ test -x "$npm_config_prefix/bin/busctl"
         systemctl: "#!/usr/bin/env bash\nexit 0\n",
         openclaw: `#!${process.execPath}
 const fs = require("node:fs");
+if (process.argv[2] !== "update") throw new Error("expected updater invocation");
+fs.writeFileSync(${JSON.stringify(invocation)}, "update\\n");
 if (["pid-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "23456\\n");
 if (["request-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.appendFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "--user restart openclaw-gateway.service\\n");
 console.log(JSON.stringify({status:"ok",after:{version:"2026.8.1"},steps:[{name:"global update",exitCode:0}]}));
@@ -4237,6 +4240,7 @@ UPDATE_ERR="$ARTIFACT_ROOT/update.err"
 COMMAND_TIMEOUT=900s
 ROOT_MANAGED_VPS=0
 UPDATE_RESTART_MODE=auto-auth
+SCENARIO=base
 update_repair_required=1
 baseline_spec=openclaw@2026.4.15
 candidate_version=2026.8.1
@@ -4257,6 +4261,7 @@ update_candidate 1
         },
       );
       expect(result.status, result.stdout + result.stderr).toBe(mode === "replaced" ? 0 : 1);
+      expect(readFileSync(invocation, "utf8")).toBe("update\n");
     },
   );
 

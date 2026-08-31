@@ -97,6 +97,7 @@ import {
   findInstalledSystemdGatewayScope,
   findSystemdGatewayInstallation,
   formatDuelingScopesWarning,
+  hasSudoToRootSystemdUserManagerMismatch,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
@@ -510,13 +511,9 @@ describe("systemd availability", () => {
       homedir: "/root",
     });
 
-    expect(
-      resolveSystemdUserServiceAccount({
-        SUDO_USER: "debian",
-        USER: "root",
-        LOGNAME: "root",
-      }),
-    ).toBe("debian");
+    const env = { SUDO_USER: "debian", USER: "root", LOGNAME: "root" };
+    expect(resolveSystemdUserServiceAccount(env)).toBe("debian");
+    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(true);
   });
 
   it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
@@ -546,16 +543,16 @@ describe("systemd availability", () => {
       homedir: "/root",
     });
 
-    expect(
-      resolveSystemdUserServiceAccount({
-        HOME: "/root",
-        USER: "root",
-        LOGNAME: "root",
-        SUDO_USER: "debian",
-        XDG_RUNTIME_DIR: "/run/user/0",
-        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
-      }),
-    ).toBe("root");
+    const env = {
+      HOME: "/root",
+      USER: "root",
+      LOGNAME: "root",
+      SUDO_USER: "debian",
+      XDG_RUNTIME_DIR: "/run/user/0",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+    };
+    expect(resolveSystemdUserServiceAccount(env)).toBe("root");
+    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(false);
   });
 
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
@@ -1199,6 +1196,32 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
+  it.each([
+    ["activating", "auto-restart"],
+    ["deactivating", "stop-sigterm"],
+    ["reloading", "reload"],
+  ])("does not report %s/%s as a stopped service", async (state, subState) => {
+    const runtime = await readRuntimeFromShowOutput(
+      `ActiveState=${state}\nSubState=${subState}\nMainPID=0`,
+    );
+    expect(runtime).toMatchObject({ status: "unknown", state, subState });
+  });
+
+  it.each([
+    { loadState: "not-found", activeState: "inactive", missing: true, status: "stopped" },
+    { loadState: "loaded", activeState: "inactive", missing: false, status: "stopped" },
+    { loadState: "not-found", activeState: "active", missing: false, status: "running" },
+  ])(
+    "records native unit absence from a successful show ($loadState/$activeState)",
+    async ({ loadState, activeState, missing, status }) => {
+      const runtime = await readRuntimeFromShowOutput(
+        `LoadState=${loadState}\nActiveState=${activeState}\nSubState=${status === "running" ? "running" : "dead"}\nMainPID=0`,
+      );
+      expect(runtime.status).toBe(status);
+      expect(runtime.missingUnit === true).toBe(missing);
+    },
+  );
+
   it.each(["exit", "timeout", "signal"] as const)(
     "reports a missing unit only after a completed show command (%s)",
     async (termination) => {
@@ -1239,28 +1262,39 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
-  it("does not call an installed unit missing when systemd disagrees with its definition", async () => {
-    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
-      if (pathLikeToString(pathArg) === "/etc/systemd/system/openclaw-gateway.service") {
-        return;
-      }
-      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-    });
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      const detail = "Unit openclaw-gateway.service could not be found.";
-      cb(createExecFileError(detail, { stderr: detail }), "", detail);
-    });
-
-    try {
-      await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
-        status: "unknown",
-        detail: "Unit openclaw-gateway.service could not be found.",
-        missingUnit: false,
+  it.each(["error", "not-found"])(
+    "does not call an installed unit missing when systemd disagrees with its definition (%s)",
+    async (result) => {
+      const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
+        if (pathLikeToString(pathArg) === "/etc/systemd/system/openclaw-gateway.service") {
+          return;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
-    } finally {
-      accessSpy.mockRestore();
-    }
-  });
+      execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        if (result === "not-found") {
+          cb(null, "LoadState=not-found\nActiveState=inactive\nSubState=dead", "");
+          return;
+        }
+        const detail = "Unit openclaw-gateway.service could not be found.";
+        cb(createExecFileError(detail, { stderr: detail }), "", detail);
+      });
+
+      try {
+        await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toMatchObject(
+          {
+            status: result === "error" ? "unknown" : "stopped",
+            ...(result === "error"
+              ? { detail: "Unit openclaw-gateway.service could not be found." }
+              : {}),
+            missingUnit: false,
+          },
+        );
+      } finally {
+        accessSpy.mockRestore();
+      }
+    },
+  );
 
   it("parses Result and the restart counter for crash-loop give-up detection", async () => {
     // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
@@ -1351,7 +1385,7 @@ describe("readSystemdServiceRuntime", () => {
           GATEWAY_SERVICE,
           "--no-page",
           "--property",
-          "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+          "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
         ),
       );
     const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });

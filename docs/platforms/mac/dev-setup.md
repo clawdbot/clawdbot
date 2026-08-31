@@ -131,7 +131,8 @@ node scripts/test-macos-native.mts named \
   --skip-build --filter AppStateIsolationTests
 ```
 
-The ordinary CI invocation preserves its existing serial/parallel selection and
+The ordinary CI invocation bounds Swift Testing parallelism to the runner's logical
+CPU count, capped at 12, and runs the default and named partitions sequentially with
 coverage. Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a
 requirement to obtain the exact commit's `macos-swift` CI result; local build

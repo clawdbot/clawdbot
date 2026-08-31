@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -129,7 +130,10 @@ suite.define(() => {
           await expect
             .poll(() => model.evaluate((node) => node === document.activeElement))
             .toBe(true);
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+            : undefined;
           if (artifactDir && [320, 393, 560, 1280].includes(width)) {
             await page.screenshot({
               path: `${artifactDir}/${route}-model-effort-${width}.png`,
@@ -209,7 +213,10 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+            : undefined;
           if (artifactDir) {
             await page.screenshot({
               path: `${artifactDir}/chat-model-effort-split.png`,
@@ -309,7 +316,10 @@ suite.define(() => {
         await expect
           .poll(() => effort.evaluate((node) => node === document.activeElement))
           .toBe(true);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+          : undefined;
         if (artifactDir) {
           await page.screenshot({
             path: `${artifactDir}/chat-speed-only-320.png`,

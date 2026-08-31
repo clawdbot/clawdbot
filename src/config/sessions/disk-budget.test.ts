@@ -31,13 +31,7 @@ async function expectPathExists(targetPath: string): Promise<void> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function expectBudgetResult(
@@ -99,6 +93,12 @@ describe("enforceSessionDiskBudget", () => {
       // counting them would evict live history to pay for unreclaimable bytes.
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
+      for (const kind of ["branch", "openai-codex"]) {
+        await fs.writeFile(
+          path.join(dir, `legacy.jsonl.pre-doctor-${kind}-repair-2026-08-30T10-20-30-000Z.bak`),
+          Buffer.alloc(4096),
+        );
+      }
 
       const usage = await measureSessionPhysicalDiskUsage(storePath);
 
