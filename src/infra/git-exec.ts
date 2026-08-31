@@ -1,5 +1,6 @@
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
+import type { CommandOptions } from "../process/exec-runner.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../process/exec.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
@@ -7,12 +8,7 @@ export const GIT_TIMEOUT_MS = 120_000;
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    input?: string | Uint8Array;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  } = {},
+  options: Pick<CommandOptions, "env" | "input" | "timeoutMs" | "signal"> = {},
 ): Promise<SpawnResult & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
@@ -41,19 +37,15 @@ export function createGitCommandError(
 export async function requireGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: Parameters<typeof executeGitCommand>[2] = {},
 ): Promise<string> {
-  const result = await executeGitCommand(cwd, args, options);
-  if (result.code !== 0) {
-    throw createGitCommandError(`git ${args.join(" ")}`, result);
-  }
-  return result.stdout.trim();
+  return (await requireGitCommandRaw(cwd, args, options)).trim();
 }
 
 export async function requireGitCommandRaw(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: Parameters<typeof executeGitCommand>[2] = {},
 ): Promise<string> {
   const result = await executeGitCommand(cwd, args, options);
   if (result.code !== 0) {

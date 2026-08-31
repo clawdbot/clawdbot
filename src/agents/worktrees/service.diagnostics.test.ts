@@ -110,6 +110,48 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     return script;
   }
 
+  it.each([
+    {
+      name: "mixed",
+      stdout: "fatal: create local-fixture-input.txt and retry",
+      stderr: "warning: optional fixture hint is unset",
+    },
+    { name: "stdout-only", stdout: "fatal: create local-fixture-input.txt and retry", stderr: "" },
+    { name: "stderr-only", stdout: "", stderr: "fatal: create local-fixture-input.txt and retry" },
+  ])(
+    "reports actual $name setup output without losing diagnostics or cleanup",
+    async ({ stdout, stderr }) => {
+      const script = await writeFailingSetup();
+      await fs.writeFile(
+        script,
+        [
+          "#!/bin/sh",
+          'printf "%s\\n" "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"',
+          `printf '%s\\n' '${stdout}'`,
+          `printf '%s\\n' '${stderr}' >&2`,
+          "exit 23",
+          "",
+        ].join("\n"),
+      );
+      const message = await failureMessage(
+        service.create({ repoRoot: repo, name: "actual-failed-setup", baseRef: "HEAD" }),
+      );
+      const allocated = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
+      await expect(fs.stat(allocated)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
+        "actual-failed-setup",
+      );
+      expect(await git(repo, "branch", "--list", "openclaw/actual-failed-setup")).toBe("");
+      expect(service.listRegistryRecords()).toEqual([]);
+      expect(message).toContain("worktree setup failed (exit code 23)");
+      expect(message).toContain("create local-fixture-input.txt and retry");
+      if (stdout && stderr) {
+        expect(message).toContain("optional fixture hint is unset");
+      }
+      expect(message.length).toBeLessThanOrEqual(2_300);
+    },
+  );
+
   it.each(terminationCases)("reports setup $name and removes its allocation", async (entry) => {
     const script = await writeFailingSetup();
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {

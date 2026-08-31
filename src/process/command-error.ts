@@ -3,37 +3,43 @@ import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi
 import type { SpawnResult } from "./exec-result.js";
 import type { runCommandBuffered } from "./exec.js";
 
-export function formatCommandOutput(output: string | Buffer, maxChars = 800): string {
-  // Progress redraws use CR, not LF. Keep the last frame, including an
-  // unfinished redraw, before deciding whether this stream has visible text.
-  const normalized = stripAnsi(output.toString())
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
-    .join("\n")
-    .trim();
-  const tail = normalized.split("\n").slice(-12).join("\n");
-  const omitted = tail.length < normalized.length || tail.length > maxChars;
-  return `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, -maxChars)}`;
+function formatCommandOutputs(outputs: (string | Buffer)[], maxChars: number, shared = false) {
+  // CR redraws replace the current progress frame; keep its final visible content.
+  const normalized = outputs.map((output) =>
+    stripAnsi(output.toString())
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
+      .join("\n")
+      .trim(),
+  );
+  // Extra streams reserve their newline and omission marker inside the existing bound.
+  const count = shared ? Math.max(1, normalized.filter(Boolean).length) : 1;
+  const limit = shared ? Math.floor((maxChars - 3 * (count - 1)) / count) : maxChars;
+  return normalized.map((output) => {
+    const tail = output.split("\n").slice(-12).join("\n");
+    const omitted = tail.length < output.length || tail.length > limit;
+    return `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, -limit)}`;
+  });
 }
 
-/** Use an operation label, never argv that may contain credentials. */
+export function formatCommandOutput(output: string | Buffer, maxChars = 800): string {
+  return formatCommandOutputs([output], maxChars).join("");
+}
+
+// Pass an operation label, never argv that may contain credentials.
 export function formatCommandResult(command: string, result: SpawnResult): string {
   const label = truncateUtf16Safe(sanitizeForLog(command.replace(/[\r\n]+/g, " ")), 256);
   const termination = result.outputLimitExceeded ? "output-limit" : result.termination;
   const signal = result.signal ? `, signal=${result.signal}` : "";
   const killed = result.killed ? ", killed=true" : "";
   const status = result.code === 0 ? "exited" : "failed";
-  const lines = [
+  return [
     `${label} ${status} (code=${result.code}, termination=${termination}${signal}${killed})`,
-  ];
-  for (const stream of ["stderr", "stdout"] as const) {
-    const output = formatCommandOutput(result[stream]);
-    if (output) {
-      lines.push(`${stream}: ${output}`);
-    }
-  }
-  return lines.join("\n");
+    ...formatCommandOutputs([result.stderr, result.stdout], 800).flatMap((output, index) =>
+      output ? [`${index === 0 ? "stderr" : "stdout"}: ${output}`] : [],
+    ),
+  ].join("\n");
 }
 
 export function createCommandError(
@@ -41,8 +47,9 @@ export function createCommandError(
   result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
   options: { timeoutMs: number },
 ): Error {
-  const detail =
-    formatCommandOutput(result.stderr, 2000) || formatCommandOutput(result.stdout, 2000);
+  const detail = formatCommandOutputs([result.stderr, result.stdout], 2000, true)
+    .filter(Boolean)
+    .join("\n");
   const reasons: string[] = [];
   if (result.termination === "timeout") {
     reasons.push(`timed out after ${options.timeoutMs / 1000} seconds`);
