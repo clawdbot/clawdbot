@@ -821,6 +821,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
+  private readonly retiredManagedToolsSessionDelegates = new Map<string, Set<BaseAcpxRuntime>>();
   private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
@@ -937,6 +938,22 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return;
     }
     this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    this.retiredManagedToolsSessionDelegates.delete(normalizedSessionKey);
+  }
+
+  private retireManagedToolsDelegateForSession(sessionKey: string): void {
+    const normalizedSessionKey = sessionKey.trim();
+    const delegate = this.managedToolsSessionDelegates.get(normalizedSessionKey);
+    if (!delegate) {
+      return;
+    }
+    this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    const retired = this.retiredManagedToolsSessionDelegates.get(normalizedSessionKey);
+    if (retired) {
+      retired.add(delegate);
+      return;
+    }
+    this.retiredManagedToolsSessionDelegates.set(normalizedSessionKey, new Set([delegate]));
   }
 
   private async loadOperationSnapshotForHandle(
@@ -1877,9 +1894,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
-    // Fresh reset has no ACP handle to close the upstream client, but retaining
-    // a model-scoped delegate would reuse stale policy identity on the next ensure.
-    this.releaseManagedToolsDelegateForSession(input.sessionKey);
+    // Fresh reset has no ACP handle to close the upstream client. Retire the
+    // model-scoped delegate so it cannot be reused, then close it with the next owned handle.
+    this.retireManagedToolsDelegateForSession(input.sessionKey);
     this.sessionStore.markFresh(input.sessionKey);
   }
 
@@ -1891,11 +1908,21 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
       let closeSucceeded;
       try {
-        await delegate.close({
-          handle: input.handle,
-          reason: input.reason,
-          discardPersistentState: input.discardPersistentState,
-        });
+        const retired = this.retiredManagedToolsSessionDelegates.get(input.handle.sessionKey) ?? [];
+        const delegates = [...new Set([delegate, ...retired])];
+        const results = await Promise.allSettled(
+          delegates.map((candidate) =>
+            candidate.close({
+              handle: input.handle,
+              reason: input.reason,
+              discardPersistentState: input.discardPersistentState,
+            }),
+          ),
+        );
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") {
+          throw failure.reason;
+        }
         closeSucceeded = true;
       } finally {
         await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);

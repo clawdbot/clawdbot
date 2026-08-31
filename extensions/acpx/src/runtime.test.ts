@@ -350,10 +350,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
+      retiredManagedToolsSessionDelegates: Map<string, Set<unknown>>;
       resolveManagedToolsDelegateForSession(
         sessionKey: string,
         model?: string,
       ): {
+        close: AcpRuntime["close"];
         options?: {
           mcpServers?: Array<{ env?: Array<{ name: string; value: string }>; name: string }>;
         };
@@ -369,6 +371,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
+    expect(
+      exposedRuntime.retiredManagedToolsSessionDelegates
+        .get("agent:worker:main")
+        ?.has(firstDelegate),
+    ).toBe(true);
     const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
       "agent:worker:main",
       "openai/gpt-5.6",
@@ -378,6 +385,22 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
       value: "openai/gpt-5.6",
     });
+    const firstClose = vi.spyOn(firstDelegate, "close").mockResolvedValue(undefined);
+    const secondClose = vi.spyOn(secondDelegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:worker:main",
+        backend: "acpx",
+        runtimeSessionName: "agent:worker:main",
+      },
+      reason: "fresh-reset-cleanup",
+    });
+
+    expect(firstClose).toHaveBeenCalledOnce();
+    expect(secondClose).toHaveBeenCalledOnce();
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
+    expect(exposedRuntime.retiredManagedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
