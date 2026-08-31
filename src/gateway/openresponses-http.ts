@@ -23,6 +23,10 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import {
+  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
+  isDocumentExtractorCapacityError,
+} from "../media/document-extractors.runtime.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -37,10 +41,6 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
-import {
-  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
-  isDocumentExtractorCapacityError,
-} from "../media/document-extractors.runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
