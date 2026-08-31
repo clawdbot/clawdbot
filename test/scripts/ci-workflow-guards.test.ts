@@ -6922,7 +6922,15 @@ exit 1
       "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
     );
     const currentTargetBranch = testStep.run.split('elif [[ "$HISTORICAL_TARGET" == "true" ]]')[0];
-    expect(currentTargetBranch).toContain("swift_test_args+=(--parallel)");
+    expect(currentTargetBranch).toContain('logical_cpu="$(sysctl -n hw.logicalcpu)"');
+    expect(currentTargetBranch).toContain('[[ ! "$logical_cpu" =~ ^[1-9][0-9]*$ ]]');
+    expect(currentTargetBranch).toContain(
+      "swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))",
+    );
+    expect(currentTargetBranch).toContain(
+      'swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")',
+    );
+    expect(currentTargetBranch).not.toContain("swift_test_args+=(--parallel)");
     expect(currentTargetBranch).not.toContain("--no-parallel");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
@@ -6951,6 +6959,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         "utf8",
       );
       chmodSync(path.join(binDir, "swift"), 0o755);
+      writeFileSync(path.join(binDir, "sysctl"), "#!/usr/bin/env bash\nprintf '4\\n'\n", {
+        mode: 0o755,
+      });
       // This fixture executes the real launcher: never fall through to host Security.
       writeFileSync(
         path.join(binDir, "security"),
@@ -6986,7 +6997,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         "build --package-path apps/macos --build-system native --enable-code-coverage --build-tests",
         ...(buildExitCode === 0
           ? [
-              "test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --parallel --skip AppStateIsolationTests",
+              "test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests",
             ]
           : []),
       ]);

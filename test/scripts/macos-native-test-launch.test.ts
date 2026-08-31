@@ -19,6 +19,7 @@ function fixture(
   waitForSignal: false | "swift" | "security" = false,
   namedExitCode = 0,
   securityFailure = "",
+  logicalCpu = "3",
 ) {
   const root = temps.make("native-launch-");
   const bin = path.join(root, "bin");
@@ -85,6 +86,10 @@ if (tool === 'security') {
   fs.writeFileSync(settingsPath, JSON.stringify(settings));
 }
 if (tool === 'uname') console.log('Darwin');
+if (tool === 'sysctl') {
+  assert.deepEqual(args, ['-n', 'hw.logicalcpu']);
+  console.log(${JSON.stringify(logicalCpu)});
+}
 if (tool === 'rg') console.log('apps/macos/Sources/Fixture.swift');
 if (tool === 'git' && args[0] === 'rev-parse' && args[1] === '--show-toplevel') console.log(${JSON.stringify(root)});
 if (tool === 'git' && args[0] === 'diff' && args.includes('--name-only')) console.log('apps/macos/Sources/Fixture.swift');
@@ -96,7 +101,7 @@ if (tool === 'swift' && args[0] === 'test') {
   else process.exit(env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
 }
 `;
-  for (const tool of ["security", "swift", "pnpm", "node", "git", "uname", "rg"]) {
+  for (const tool of ["security", "swift", "pnpm", "node", "git", "uname", "sysctl", "rg"]) {
     if (tool === "node") {
       fs.symlinkSync(process.execPath, path.join(bin, tool));
     } else {
@@ -160,16 +165,19 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
   );
 
   it.each([
-    [0, 0],
-    [23, 0],
-    [0, 17],
+    { defaultCode: 0, namedCode: 0, logicalCpu: "3", expectedWidth: "3" },
+    { defaultCode: 23, namedCode: 0, logicalCpu: "12", expectedWidth: "12" },
+    { defaultCode: 0, namedCode: 17, logicalCpu: "32", expectedWidth: "12" },
   ] as const)(
-    "owns parallel CI resources despite stale ambient execution mode (exits %i/%i)",
-    (defaultCode, namedCode) => {
-      const f = fixture(defaultCode, false, namedCode);
+    "bounds Swift Testing on $logicalCpu logical CPUs to width $expectedWidth",
+    ({ defaultCode, namedCode, logicalCpu, expectedWidth }) => {
+      const f = fixture(defaultCode, false, namedCode, "", logicalCpu);
       const result = f.run(swiftStep);
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(defaultCode || namedCode);
+      expect(result.stdout).toContain(
+        `[macos-swift] Swift Testing parallelization width: ${expectedWidth}`,
+      );
       const calls = f.calls().filter((call) => call.tool === "swift");
       expect(calls).toHaveLength(defaultCode === 0 ? 3 : 2);
       const [build, ...tests] = calls;
@@ -193,7 +201,8 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           "native",
           "--enable-code-coverage",
           "--skip-build",
-          "--parallel",
+          "--experimental-maximum-parallelization-width",
+          expectedWidth,
           index === 0 ? "--skip" : "--filter",
           "AppStateIsolationTests",
         ]);
@@ -246,6 +255,14 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       expect(fs.readFileSync(f.env.GITHUB_OUTPUT, "utf8")).toContain("debug-tests-built=true");
     },
   );
+
+  it("fails closed when logical CPU detection is invalid", () => {
+    const f = fixture(0, false, 0, "", "not-a-count");
+    const result = f.run(swiftStep);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid macOS logical CPU count: not-a-count");
+    expect(f.calls().filter((call) => call.tool === "swift")).toHaveLength(1);
+  });
 
   it("uses fresh named preferences for successive launches", () => {
     const f = fixture();
