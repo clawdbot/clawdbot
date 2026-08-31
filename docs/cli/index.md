@@ -304,6 +304,19 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
+  fleet
+    create
+    backup
+    restore
+    doctor
+    list
+    status
+    logs
+    start
+    stop
+    restart
+    upgrade
+    rm
   daemon
     status
     install
