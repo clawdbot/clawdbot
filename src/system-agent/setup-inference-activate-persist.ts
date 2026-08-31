@@ -326,8 +326,6 @@ export async function persistActivatedSetupInference(input: {
         // Once this callback returns, the config writer owns the candidate.
         // Any later throw may be post-commit and needs reconciliation.
         throwIfSetupInferenceCancelled(params);
-        await params.beforePersistentEffect?.();
-        throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.(current);
         commitMayHaveStarted = true;
         state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;

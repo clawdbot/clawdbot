@@ -92,6 +92,7 @@ export async function installCandidate(params: {
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -169,6 +170,7 @@ async function installCandidatePackage(
       previousRecords: params.records,
       expectedIntegrity: candidate.expectedIntegrity,
       onCapabilityConsent: params.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
   const npmDir = resolveDefaultPluginNpmDir(params.env);
   const existingClawHubPackagePath = clawhubInstallSpec

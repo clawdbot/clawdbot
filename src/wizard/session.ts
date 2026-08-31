@@ -410,6 +410,7 @@ export class WizardSession {
 
   /** The underlying mutation crossed its durable commit point and must finish. */
   lockCancellation() {
+    this.signal.throwIfAborted();
     this.cancellationLocked = true;
   }
 

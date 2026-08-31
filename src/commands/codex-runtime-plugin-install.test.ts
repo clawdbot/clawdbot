@@ -101,7 +101,9 @@ describe("Codex runtime plugin install repair", () => {
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
         const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled } } } };
+        const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
+          expect(beforePersistentEffect).not.toHaveBeenCalled();
           if (promptError) {
             throw promptError;
           }
@@ -115,6 +117,7 @@ describe("Codex runtime plugin install repair", () => {
           model: "openai/gpt-5.6-luna",
           prompter: { confirm, note: vi.fn(async () => {}) } as never,
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          beforePersistentEffect,
         });
         if (promptError) {
           await expect(pending).rejects.toBe(promptError);
@@ -139,6 +142,7 @@ describe("Codex runtime plugin install repair", () => {
         expect(cfg.plugins?.entries?.codex?.enabled).toBe(enabled);
         expect(confirm).toHaveBeenCalledTimes(enabled ? 0 : 1);
         if (accepted && !enabled) {
+          expect(beforePersistentEffect).toHaveBeenCalledOnce();
           expect(mocks.writeInstallRecords).toHaveBeenCalledWith(
             expect.objectContaining({
               codex: expect.objectContaining({
@@ -149,6 +153,7 @@ describe("Codex runtime plugin install repair", () => {
             expect.any(Object),
           );
         } else {
+          expect(beforePersistentEffect).not.toHaveBeenCalled();
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
         }
         expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();

@@ -127,6 +127,11 @@ async function activateSetupInferenceUnredacted(
   codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
+  const beforePersistentEffect = async () => {
+    throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
+  };
   const resolveRouteMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
@@ -222,10 +227,9 @@ async function activateSetupInferenceUnredacted(
             {
               workspaceDir: workspace,
               onCapabilityConsent: params.prompter
-                ? createPluginCapabilityConsentPrompter(params.prompter, () =>
-                    throwIfSetupInferenceCancelled(params),
-                  )
+                ? createPluginCapabilityConsentPrompter(params.prompter)
                 : undefined,
+              beforePersistentEffect,
             },
           );
           if (!enabledCodexBase.enabled) {
@@ -246,11 +250,7 @@ async function activateSetupInferenceUnredacted(
             prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
             runtime: params.runtime,
             workspaceDir: tempDir,
-            beforePersistentEffect: async () => {
-              throwIfSetupInferenceCancelled(params);
-              await params.beforePersistentEffect?.();
-              throwIfSetupInferenceCancelled(params);
-            },
+            beforePersistentEffect,
           });
           if (!ensured.ok) {
             return {

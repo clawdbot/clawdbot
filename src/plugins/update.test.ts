@@ -1092,11 +1092,13 @@ describe("updateNpmInstalledPlugins", () => {
 
       const callbackFailure =
         review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
+      const beforePersistentEffect = vi.fn();
       let reviewed = false;
       const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
         review === "none"
           ? undefined
           : async (details) => {
+              expect(beforePersistentEffect).not.toHaveBeenCalled();
               reviewed = true;
               if (review === "throw" || review === "throw-undefined") {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw undefined; preserve that exact failure.
@@ -1118,6 +1120,7 @@ describe("updateNpmInstalledPlugins", () => {
             };
       const pendingUpdate = updatePlugin(config, pluginId, {
         onCapabilityConsent,
+        beforePersistentEffect,
         disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
@@ -1155,6 +1158,7 @@ describe("updateNpmInstalledPlugins", () => {
       }
 
       const install = result.config.plugins?.installs?.[pluginId];
+      expect(beforePersistentEffect).toHaveBeenCalledTimes(reviewRetryStage ? 2 : 1);
       expect(result.outcomes).toEqual([expect.objectContaining({ pluginId, status: "updated" })]);
       if (!ownerEnabled && !childEnabled) {
         expect(result.config.plugins?.entries).toEqual(config.plugins.entries);
