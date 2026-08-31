@@ -460,7 +460,13 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
             "tool_output_token_limit=10000",
           ]
         : undefined;
-  const openAiBaseUrl = process.env.OPENAI_BASE_URL?.trim();
+  // The proof may use a localhost Responses API while the configured OpenAI
+  // route remains official HTTPS so Codex harness selection can be validated.
+  // Keep this override scoped to the managed app-server process; putting the
+  // HTTP endpoint in the provider config intentionally selects OpenClaw.
+  const openAiBaseUrl =
+    process.env.OPENCLAW_LIVE_CODEX_HARNESS_APP_SERVER_BASE_URL?.trim() ??
+    process.env.OPENAI_BASE_URL?.trim();
   if (openAiBaseUrl) {
     return buildCodexHarnessAppServerArgs([
       ...(overrides ?? []),
