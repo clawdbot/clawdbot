@@ -429,10 +429,10 @@ describe("toStructuredErrorObject", () => {
     }
   });
 
-  it("falls back to the cause when a skipped field's descriptor trap rejects", () => {
-    // The isolation contract treats a rejecting descriptor uniformly: a trap on
-    // the skipped __proto__ key falls back to the cause exactly like any other
-    // enumeration failure instead of being exempted before the read.
+  it("keeps later details when an ignored key's descriptor trap rejects", () => {
+    // Ignored keys are exempted before descriptor access: a trap on the skipped
+    // __proto__ key must not isolate the whole copy, or one hostile payload
+    // field would discard every safe detail such as the error code.
     const hostile = new Proxy(
       {},
       {
@@ -450,13 +450,10 @@ describe("toStructuredErrorObject", () => {
 
     const error = toStructuredErrorObject(hostile);
 
-    expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
+    expect(error).toMatchObject({ name: "Error", message: "[object Object]", code: "EIO" });
     expect(error.cause).toBe(hostile);
     expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
     expect(Object.hasOwn(error, "__proto__")).toBe(false);
-    // Reading the skipped key's descriptor must happen before the exemption, so
-    // the rejection isolates the whole copy instead of leaving "code" behind.
-    expect(Object.hasOwn(error, "code")).toBe(false);
   });
 
   it("protects Error-owned and prototype-mutating fields without reading them", () => {

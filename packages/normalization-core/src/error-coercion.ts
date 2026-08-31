@@ -186,9 +186,13 @@ export function toStructuredErrorObject(value: unknown): Error {
   try {
     const detailKeys = Reflect.ownKeys(value).filter(
       (key) =>
-        Reflect.getOwnPropertyDescriptor(value, key)?.enumerable === true &&
         (typeof key !== "string" ||
-          (!STRUCTURED_ERROR_OWNED_FIELDS.has(key) && !STRUCTURED_ERROR_PROTOTYPE_FIELDS.has(key))),
+          (!STRUCTURED_ERROR_OWNED_FIELDS.has(key) &&
+            !STRUCTURED_ERROR_PROTOTYPE_FIELDS.has(key))) &&
+        // Ignored keys must be excluded before descriptor access: a proxy may
+        // throw from its trap for exactly the keys this coercer drops, and one
+        // throwing probe must not discard the remaining safe details.
+        Reflect.getOwnPropertyDescriptor(value, key)?.enumerable === true,
     );
     for (const key of detailKeys) {
       try {
