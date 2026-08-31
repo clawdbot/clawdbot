@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   resetHeartbeatWakeStateForTests,
@@ -31,6 +32,7 @@ import {
 import type { ReturnCovenantGatewayControl } from "./gateway.js";
 import {
   ReturnCovenantProtocolError,
+  sha256ReturnCovenant,
   type ReturnCovenantCaseRequest,
   type ReturnCovenantDriverAttestation,
   type ReturnCovenantPhaseRequest,
@@ -263,8 +265,19 @@ export class ReturnCovenantFixtureRun {
     request: Extract<ReturnCovenantPhaseRequest, { phase: "cleanup" }>,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
-    if (state.closed) {
-      throw new ReturnCovenantProtocolError("phase-replay", "case was already cleaned", 409);
+    requireReturnCovenantCasePhase(state, "observed");
+    if (!state.observation) {
+      throw new ReturnCovenantProtocolError(
+        "phase-order",
+        "cleanup requires a settled product observation",
+        409,
+      );
+    }
+    if (request.settlementWindowMs !== state.request.settlementWindowMs) {
+      throw new ReturnCovenantProtocolError(
+        "settlement-mismatch",
+        "cleanup settlement window differs from prepare",
+      );
     }
     await cleanupReturnCovenantCase({ context: this.#context, state });
     return {
@@ -328,15 +341,30 @@ export class ReturnCovenantFixtureRun {
         "run cleanup is missing evidence bindings",
       );
     }
+    const productObservationSetSha256 = this.#productObservationSetSha256();
+    if (
+      observationSetSha256 !== productObservationSetSha256 ||
+      driverAttestationSha256 !== attestation.attestationSha256
+    ) {
+      throw new ReturnCovenantProtocolError(
+        "evidence-mismatch",
+        "run cleanup evidence bindings do not match product observations and attestation",
+        409,
+      );
+    }
+    // The accepted harness chain includes harness-owned monotonic timing that is
+    // not sent to the product. Challenge authorization binds that opaque digest;
+    // docs validates the chain and owns the eventual PASS decision.
     this.#cleanupRun = {
       completed: true,
       receiptId: returnCovenantReceiptId("run-cleanup", {
-        observationSetSha256,
+        observationSetSha256: productObservationSetSha256,
         phaseChainSha256,
+        driverAttestationSha256: attestation.attestationSha256,
       }),
-      observationSetSha256,
+      observationSetSha256: productObservationSetSha256,
       phaseChainSha256,
-      driverAttestationSha256,
+      driverAttestationSha256: attestation.attestationSha256,
       runtimeConfigSha256: this.#context.plan.target.runtimeConfigSha256,
       runtimeArtifactManifestSha256: this.#context.plan.target.runtimeArtifactManifestSha256,
     };
@@ -380,6 +408,24 @@ export class ReturnCovenantFixtureRun {
         409,
       );
     }
+  }
+
+  #productObservationSetSha256(): string {
+    const observations: Record<string, unknown>[] = [];
+    for (const casePlan of this.#context.plan.cases) {
+      for (const form of casePlan.forms) {
+        const state = this.#states.get(returnCovenantExecutionKey(casePlan.id, form));
+        if (!state?.closed || state.phase !== "observed" || !state.observation) {
+          throw new ReturnCovenantProtocolError(
+            "incomplete-cleanup",
+            "run cleanup requires every planned case/form observation",
+            409,
+          );
+        }
+        observations.push(state.observation);
+      }
+    }
+    return sha256ReturnCovenant(stableStringify(observations));
   }
 
   #fallbackCleanupReceipt(

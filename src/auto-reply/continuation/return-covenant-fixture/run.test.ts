@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,7 +12,7 @@ import type {
   ReturnCovenantGatewayControl,
   ReturnCovenantGatewayRestart,
 } from "./gateway.js";
-import { parseReturnCovenantPhaseRequest } from "./protocol.js";
+import { parseReturnCovenantPhaseRequest, sha256ReturnCovenant } from "./protocol.js";
 import { ReturnCovenantFixtureRun } from "./run.js";
 import {
   createReturnCovenantTestAttestation,
@@ -127,6 +128,7 @@ describe("product return-covenant fixture run", () => {
       let checkedNegativeControls = false;
       const capturedGenerations: string[] = [];
       const forbiddenCurrentGenerations: string[] = [];
+      const observations: Record<string, unknown>[] = [];
       try {
         for (const casePlan of plan.cases) {
           for (const form of casePlan.forms) {
@@ -263,6 +265,7 @@ describe("product return-covenant fixture run", () => {
               attestation,
             );
             const observation = record(observed.observation);
+            observations.push(observation);
             expect(observation.effects).toMatchObject({
               observed: casePlan.expectedEffects[form],
             });
@@ -302,10 +305,40 @@ describe("product return-covenant fixture run", () => {
         }
 
         const cleanupBindings = {
-          observationSetSha256: "4".repeat(64),
+          observationSetSha256: sha256ReturnCovenant(stableStringify(observations)),
           phaseChainSha256: "5".repeat(64),
           driverAttestationSha256: attestation.attestationSha256,
         };
+        await expect(
+          run.handle(
+            createReturnCovenantTestRequest({
+              casePlan: plan.cases[0]!,
+              form: "typed-tool",
+              phase: "cleanup-run",
+              plan,
+              cleanupBindings: {
+                ...cleanupBindings,
+                observationSetSha256: "4".repeat(64),
+              },
+            }),
+            attestation,
+          ),
+        ).rejects.toThrow(/evidence bindings/u);
+        await expect(
+          run.handle(
+            createReturnCovenantTestRequest({
+              casePlan: plan.cases[0]!,
+              form: "typed-tool",
+              phase: "cleanup-run",
+              plan,
+              cleanupBindings: {
+                ...cleanupBindings,
+                driverAttestationSha256: "7".repeat(64),
+              },
+            }),
+            attestation,
+          ),
+        ).rejects.toThrow(/evidence bindings/u);
         const cleanup = await run.handle(
           createReturnCovenantTestRequest({
             casePlan: plan.cases[0]!,
@@ -347,6 +380,50 @@ describe("product return-covenant fixture run", () => {
           capturedGenerations.length + forbiddenCurrentGenerations.length,
         );
         expect(gateway.restarts).toBe(2);
+      } finally {
+        await gateway.stopAll();
+        await run.close();
+      }
+    });
+  });
+
+  it("refuses normal cleanup before a settled observation", async () => {
+    await withTestDir({ prefix: "openclaw-return-covenant-driver-" }, async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      setRuntimeConfigSnapshot(config);
+      const plan = createReturnCovenantTestPlan();
+      const attestation = createReturnCovenantTestAttestation(plan);
+      const gateway = new TestGateway();
+      const run = await ReturnCovenantFixtureRun.create({
+        config,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        gateway,
+        plan,
+      });
+      await gateway.start();
+      try {
+        const casePlan = plan.cases[0]!;
+        const prepared = await run.handle(
+          createReturnCovenantTestRequest({
+            casePlan,
+            form: "typed-tool",
+            phase: "prepare",
+            plan,
+          }),
+          attestation,
+        );
+        await expect(
+          run.handle(
+            createReturnCovenantTestRequest({
+              caseHandle: stringField(prepared, "caseHandle"),
+              casePlan,
+              form: "typed-tool",
+              phase: "cleanup",
+              plan,
+            }),
+            attestation,
+          ),
+        ).rejects.toThrow(/observed/u);
       } finally {
         await gateway.stopAll();
         await run.close();

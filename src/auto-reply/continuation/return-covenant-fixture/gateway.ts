@@ -1,12 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { lstat, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readFile, type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
-import type { ReturnCovenantPlan } from "./protocol.js";
+import {
+  RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
+  type ReturnCovenantPlan,
+} from "./protocol.js";
 
 export type ReturnCovenantGatewayBinding = {
   endpoint: string;
@@ -33,7 +37,13 @@ type ManagedGateway = ReturnCovenantGatewayBinding & {
   stdout: string;
 };
 
-function sha256(value: string): string {
+type GatewayCommandIdentity = {
+  device: number;
+  inode: number;
+  size: number;
+};
+
+function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -110,6 +120,8 @@ async function stopGateway(gateway: ManagedGateway): Promise<void> {
 export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewayControl {
   readonly #cwd: string;
   readonly #gatewayArgs: readonly string[];
+  readonly #gatewayEnvironment: NodeJS.ProcessEnv;
+  readonly #gatewayExpectedSha256: string;
   readonly #gatewayPath: string;
   readonly #gateways: ManagedGateway[] = [];
   readonly #port: number;
@@ -117,12 +129,23 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
 
   constructor(params: {
     cwd: string;
+    isolation: {
+      configPath: string;
+      homePath: string;
+      statePath: string;
+    };
     plan: ReturnCovenantPlan;
     runtimeConfig: { gateway?: { port?: number } };
   }) {
     this.#cwd = params.cwd;
-    this.#gatewayPath = path.resolve(params.cwd, params.plan.driver.gatewayCommand.relativePath);
+    this.#gatewayPath = path.resolve(params.cwd, RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH);
     this.#gatewayArgs = params.plan.driver.gatewayCommand.args;
+    this.#gatewayExpectedSha256 = params.plan.driver.gatewayCommand.sha256;
+    this.#gatewayEnvironment = {
+      HOME: params.isolation.homePath,
+      OPENCLAW_CONFIG_PATH: params.isolation.configPath,
+      OPENCLAW_STATE_DIR: params.isolation.statePath,
+    };
     this.#port = params.runtimeConfig.gateway?.port ?? DEFAULT_GATEWAY_PORT;
   }
 
@@ -180,44 +203,93 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
   }
 
   async #spawnGateway(label: string): Promise<ManagedGateway> {
-    const command = await lstat(this.#gatewayPath);
-    if (!command.isFile() || command.isSymbolicLink()) {
-      throw new Error("planned return-covenant gateway command is not a regular file");
-    }
+    // Hold the verified inode through spawn and recheck its pathname before
+    // releasing it, so command substitution around the spawn fails closed.
+    const verified = await this.#openVerifiedGatewayCommand();
     const port = this.#port + this.#gateways.length;
     if (port > 65_535) {
+      await verified.handle.close();
       throw new Error("return-covenant gateway replacement port exceeds TCP range");
     }
-    const child = spawn(process.execPath, [this.#gatewayPath, ...this.#gatewayArgs], {
-      cwd: this.#cwd,
-      env: { ...process.env, OPENCLAW_GATEWAY_PORT: String(port) },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (!child.pid) {
-      throw new Error(`gateway ${label} did not receive a process id`);
-    }
-    const managed: ManagedGateway = {
-      child,
-      endpoint: `http://127.0.0.1:${port}`,
-      label,
-      pid: child.pid,
-      startFingerprint: "",
-      stderr: "",
-      stdout: "",
-    };
-    const append = (field: "stderr" | "stdout", chunk: Buffer | string) => {
-      managed[field] = `${managed[field]}${chunk.toString()}`.slice(-1_000_000);
-    };
-    child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
-    this.#gateways.push(managed);
+    let managed: ManagedGateway | undefined;
     try {
-      managed.startFingerprint = await processStartFingerprint(managed.pid);
-      await waitForGatewayReady(managed, port);
-      return managed;
+      const child = spawn(process.execPath, [this.#gatewayPath, ...this.#gatewayArgs], {
+        cwd: this.#cwd,
+        env: {
+          ...this.#gatewayEnvironment,
+          OPENCLAW_GATEWAY_PORT: String(port),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (!child.pid) {
+        throw new Error(`gateway ${label} did not receive a process id`);
+      }
+      const activeGateway: ManagedGateway = {
+        child,
+        endpoint: `http://127.0.0.1:${port}`,
+        label,
+        pid: child.pid,
+        startFingerprint: "",
+        stderr: "",
+        stdout: "",
+      };
+      managed = activeGateway;
+      const append = (field: "stderr" | "stdout", chunk: Buffer | string) => {
+        activeGateway[field] = `${activeGateway[field]}${chunk.toString()}`.slice(-1_000_000);
+      };
+      child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
+      child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
+      this.#gateways.push(activeGateway);
+      await this.#assertGatewayCommandIdentity(verified.identity);
+      activeGateway.startFingerprint = await processStartFingerprint(activeGateway.pid);
+      await waitForGatewayReady(activeGateway, port);
+      return activeGateway;
     } catch (error) {
-      await stopGateway(managed).catch(() => undefined);
+      if (managed) {
+        await stopGateway(managed).catch(() => undefined);
+      }
       throw error;
+    } finally {
+      await verified.handle.close();
+    }
+  }
+
+  async #openVerifiedGatewayCommand(): Promise<{
+    handle: FileHandle;
+    identity: GatewayCommandIdentity;
+  }> {
+    const handle = await open(this.#gatewayPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const command = await handle.stat();
+      if (!command.isFile()) {
+        throw new Error("planned return-covenant gateway command is not a regular file");
+      }
+      if (sha256(await handle.readFile()) !== this.#gatewayExpectedSha256) {
+        throw new Error("planned return-covenant gateway command digest does not match");
+      }
+      const identity = {
+        device: command.dev,
+        inode: command.ino,
+        size: command.size,
+      };
+      await this.#assertGatewayCommandIdentity(identity);
+      return { handle, identity };
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+
+  async #assertGatewayCommandIdentity(expected: GatewayCommandIdentity): Promise<void> {
+    const command = await lstat(this.#gatewayPath);
+    if (
+      !command.isFile() ||
+      command.isSymbolicLink() ||
+      command.dev !== expected.device ||
+      command.ino !== expected.inode ||
+      command.size !== expected.size
+    ) {
+      throw new Error("planned return-covenant gateway command identity changed");
     }
   }
 }

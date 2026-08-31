@@ -58,6 +58,30 @@ describe("return-covenant fixture protocol", () => {
         target: { ...plan.target, runtimeBuildSha: "8".repeat(40) },
       }),
     ).toThrow(/runtime build SHA/u);
+    expect(() =>
+      parseReturnCovenantPlan({
+        ...plan,
+        driver: {
+          ...plan.driver,
+          gatewayCommand: {
+            ...plan.driver.gatewayCommand,
+            relativePath: "/tmp/substituted-gateway.mjs",
+          },
+        },
+      }),
+    ).toThrow(/tracked fixture command/u);
+    expect(() =>
+      parseReturnCovenantPlan({
+        ...plan,
+        driver: {
+          ...plan.driver,
+          gatewayCommand: {
+            ...plan.driver.gatewayCommand,
+            sha256: "c".repeat(64),
+          },
+        },
+      }),
+    ).toThrow(/command digest/u);
   });
 
   it("rejects malformed requests, challenge substitution, and nonce replay", () => {

@@ -4,6 +4,8 @@ import { z } from "zod";
 
 export const RETURN_COVENANT_DRIVER_PROTOCOL = "openclaw.k6.return-covenant-fixture-driver.v1";
 export const RETURN_COVENANT_DRIVER_READY_SCHEMA = "openclaw.k6.return-covenant-driver-ready.v1";
+export const RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH =
+  "scripts/return-covenant-fixture-driver.mjs";
 const RETURN_COVENANT_DRIVER_ATTESTATION_SCHEMA =
   "openclaw.k6.return-covenant-driver-attestation.v1";
 const RETURN_COVENANT_ROW_ID = "R-CD-RETURN-COVENANT-AUTHORITY";
@@ -156,6 +158,23 @@ const planSchema = z
         code: z.ZodIssueCode.custom,
         path: ["target", "runtimeBuildSha"],
         message: "runtime build SHA must equal the candidate SHA",
+      });
+    }
+    if (
+      plan.driver.fixtureCommand.relativePath !== RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH ||
+      plan.driver.gatewayCommand.relativePath !== RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["driver", "gatewayCommand", "relativePath"],
+        message: "driver and gateway must use the tracked fixture command",
+      });
+    }
+    if (plan.driver.gatewayCommand.sha256 !== plan.driver.fixtureCommand.sha256) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["driver", "gatewayCommand", "sha256"],
+        message: "driver and gateway command digests must match",
       });
     }
     if (plan.syntheticChannelKey !== `synthetic:proof:${plan.runId}:channel`) {

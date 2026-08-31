@@ -242,6 +242,11 @@ export async function runReturnCovenantFixtureDriver(
   setRuntimeConfigSnapshot(config, runtime.config);
   const gateway = new ProductReturnCovenantGatewayControl({
     cwd: process.cwd(),
+    isolation: {
+      configPath: runtime.configPath,
+      homePath: runtime.homePath,
+      statePath: runtime.statePath,
+    },
     plan,
     runtimeConfig: runtime.config,
   });

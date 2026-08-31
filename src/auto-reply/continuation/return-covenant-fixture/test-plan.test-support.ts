@@ -2,6 +2,7 @@ import {
   parseReturnCovenantDriverAttestation,
   parseReturnCovenantPhaseRequest,
   parseReturnCovenantPlan,
+  RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
   sha256ReturnCovenant,
   type ReturnCovenantDriverAttestation,
   type ReturnCovenantEffects,
@@ -106,12 +107,12 @@ export function createReturnCovenantTestPlan(): ReturnCovenantPlan {
       ownership: "product",
       fixtureCommand: {
         status: "available",
-        relativePath: "scripts/return-covenant-fixture-driver.mjs",
+        relativePath: RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
         sha256: "b".repeat(64),
       },
       gatewayCommand: {
-        relativePath: "openclaw.mjs",
-        sha256: "c".repeat(64),
+        relativePath: RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
+        sha256: "b".repeat(64),
         args: ["gateway"],
       },
     },
