@@ -225,6 +225,7 @@ export function workerProbe(
     import path from 'node:path';
     import { fileURLToPath } from 'node:url';
     import { DatabaseSync } from 'node:sqlite';
+    import { Worker } from 'node:worker_threads';
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
@@ -234,6 +235,7 @@ export function workerProbe(
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-readonly-location.ts"))};
+    import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     // Import acquisition must finish during collection, before any fixture hook starts.
     const tuiPresentAtCollection = tuiUrls.every(url => fs.existsSync(new URL(url)));
@@ -241,11 +243,15 @@ export function workerProbe(
       const actual = await original();
       return {...actual, execFile: vi.fn(actual.execFile)};
     });
+    vi.mock('node:worker_threads', async (original) => {
+      const actual = await original();
+      return {...actual, Worker: vi.fn(function(...args) { return new actual.Worker(...args); })};
+    });
     it('runs current SQLite code in the expected execution mode', async () => {
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
-      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(7);
+      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(9);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);
@@ -272,6 +278,10 @@ export function workerProbe(
           const args = cp.execFile.mock.calls[0][1];
           const generation = runtimeProcessEntrypoints.sqliteReadOnly.currentModuleUrl;
           const sourceMode = ${mode === "auto" ? "generation.endsWith('.ts')" : mode === "source"};
+          await expect(runSqliteTranscriptArchivePublishWorker([])).resolves.toEqual([]);
+          const [archiveUrl] = Worker.mock.calls.at(-1);
+          expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
+          if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           expect(tuiUrls).toHaveLength(4);
           for (const url of tuiUrls) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
