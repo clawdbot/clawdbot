@@ -1,6 +1,10 @@
 import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import {
+  findChatSubmissionMessage,
+  readChatInputReceipt,
+} from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -44,10 +48,8 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  chatMessagesContainQueuedSend,
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
-  readChatInputReceipt,
   retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
@@ -225,7 +227,7 @@ async function readCurrentStoredChatHistory(
   // uses the same delivery proof, even before the transcript marker is persisted.
   if (
     inputReceipt ||
-    chatMessagesContainQueuedSend(history.messages, item) ||
+    findChatSubmissionMessage(history.messages, item.sendRunId) ||
     sessionRunProvesQueuedDelivery(history.sessionInfo, item)
   ) {
     // Pending custody already owns the display bytes; other delivery proof must

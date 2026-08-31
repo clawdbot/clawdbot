@@ -2,9 +2,9 @@ import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protoc
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import {
-  chatMessagesContainQueuedSend,
+  findChatSubmissionMessage,
   readChatInputReceipt,
-} from "../../pages/chat/chat-send-support.ts";
+} from "../chat/history-message-identity.ts";
 import { formatUiError } from "../format-error.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
@@ -76,7 +76,7 @@ export async function advanceSessionPlacementDraft(params: {
     }
     const input = { sendRunId: recovery.messageId };
     const inputReceipt = readChatInputReceipt(history, input);
-    if (inputReceipt || chatMessagesContainQueuedSend(history.messages, input, true)) {
+    if (inputReceipt || findChatSubmissionMessage(history.messages, recovery.messageId, true)) {
       params.clearRecovery("resolved");
       return inputReceipt
         ? { status: "accepted" }

@@ -45,7 +45,7 @@ describe("application placement delivery recovery", () => {
         }
         throw new Error(`unexpected method ${method}`);
       });
-      const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
+      const { startup, input, chatSubmissions, client } = createPlacementStartupHarness(request);
       input.recovery = {
         ...input.recovery,
         target: { kind: "profile", profileId: "aws", machineClass: "fast" },
@@ -57,7 +57,7 @@ describe("application placement delivery recovery", () => {
         await vi.waitFor(() =>
           expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"),
         );
-        expect(initialUserMessage.read(input.recovery.sessionKey, client)).toBeNull();
+        expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).toBeNull();
         expect(
           readSessionPlacementRecovery(
             input.recovery.gatewayUrl,
@@ -95,7 +95,7 @@ describe("application placement delivery recovery", () => {
             machineClass: "fast",
           })),
         );
-        expect(initialUserMessage.read(input.recovery.sessionKey, client)?.pendingRunId).toBe(
+        expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)?.pendingRunId).toBe(
           sends[1]?.[1]?.idempotencyKey,
         );
       } finally {
@@ -258,7 +258,7 @@ describe("application placement delivery recovery", () => {
       }
       return Promise.resolve({ status: "started" });
     });
-    const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
+    const { startup, input, chatSubmissions, client } = createPlacementStartupHarness(request);
     input.recovery = { ...input.recovery, phase: "sending" };
     writeSessionPlacementRecovery(input.recovery);
     startup.resumeRecovery();
@@ -270,7 +270,7 @@ describe("application placement delivery recovery", () => {
         if (delivered) {
           expect(startup.get(input.recovery.sessionKey)).toBeNull();
           expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
-          const handoff = initialUserMessage.read(input.recovery.sessionKey, client);
+          const handoff = chatSubmissions.readInitial(input.recovery.sessionKey, client);
           if (acceptedInput) {
             expect(handoff).toBeNull();
           } else {
@@ -317,7 +317,7 @@ describe("application placement delivery recovery", () => {
         }
         return Promise.resolve({ status: "started" });
       });
-      const { startup, input, client, initialUserMessage } = createPlacementStartupHarness(request);
+      const { startup, input, client, chatSubmissions } = createPlacementStartupHarness(request);
       input.recovery = { ...input.recovery, phase: "sending" };
       writeSessionPlacementRecovery(input.recovery);
       startup.resumeRecovery();
@@ -345,7 +345,7 @@ describe("application placement delivery recovery", () => {
             input.recovery.sessionKey,
           ),
         ).toEqual(retained);
-        expect(initialUserMessage.read(input.recovery.sessionKey, client)).toBeNull();
+        expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).toBeNull();
         expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
       } finally {
         startup.dispose();

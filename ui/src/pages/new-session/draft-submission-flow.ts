@@ -17,7 +17,7 @@ import {
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
-import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
+import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
 import { NewSessionCapabilityController } from "./capability-controller.ts";
@@ -618,13 +618,15 @@ export class DraftSubmissionFlow {
         });
       if (result.initialRun.status === "started") {
         const { hello, selfUser } = context.gateway.snapshot;
-        const sender = resolveCurrentUserIdentity(hello, submissionClient.instanceId, selfUser);
-        prepareInitialUserMessageHandoff(
-          context.initialUserMessage,
-          result.key,
-          { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
-          submissionClient,
-          { runId: result.initialRun.runId },
+        const sender =
+          resolveCurrentUserIdentity(hello, submissionClient.instanceId, selfUser) ?? undefined;
+        context.chatSubmissions.retain(
+          buildInitialChatSubmission(
+            result.key,
+            { text: message, attachments, createdAt: submittedAt, sender },
+            submissionClient,
+            result.initialRun.runId,
+          ),
         );
       }
       await this.draftPersistence.clearSubmittedDraft();
