@@ -12,9 +12,11 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import * as environmentServiceModule from "./service.js";
 import {
   SOURCE,
   CHILD,
@@ -693,6 +695,102 @@ describe("worker session tool topology", () => {
     expect(gatewayRequest).not.toHaveBeenCalled();
     expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
   });
+});
+
+describe("worker spawn startup composition", () => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
+
+  it.each([false, true])(
+    "retains parent authority across runtime-bound provisioning (closed=%s)",
+    async (closed) => {
+      const { root, placements, identity, setEntry, activate, closeSourceRun } = getFixture();
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      const { createDesktopSessionRegistry } = await import("../desktop/session-registry.js");
+      const { createGatewayWorkerEnvironmentRuntime, loadGatewayWorkerEnvironmentStartupState } =
+        await import("../server-worker-environment-startup.js");
+      const factory = vi.spyOn(environmentServiceModule, "createWorkerEnvironmentService");
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+          const startup = await loadGatewayWorkerEnvironmentStartupState();
+          const runtime = await createGatewayWorkerEnvironmentRuntime({
+            getPluginRegistry: () => ({
+              workerProviders: new Map(),
+              plugins: [],
+              agentHarnesses: [],
+              nodeHostCommands: [],
+            }),
+            getPortalRuntime: () => undefined,
+            resolveGatewayContext,
+            desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+            startup: { ...startup, placementStore: placements },
+            log: { child: () => ({ warn: () => {} }) },
+          });
+          const service = runtime.workerEnvironmentService;
+          const execute = factory.mock.calls.at(-1)?.[0].executeSessionTool;
+          if (!service || !execute || !runtime.bindWorkerSessionDispatch) {
+            throw new Error("worker session-tool runtime was not composed");
+          }
+          const base = startup.store.createIntent({
+            environmentId: SOURCE.environmentId,
+            providerId: "fake",
+            profileId: "cloud-profile",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+            provisionOperationId: "source-provision",
+          });
+          const getEnvironment = vi.spyOn(service, "get").mockImplementation((environmentId) => {
+            const owner = environmentId === SOURCE.environmentId ? SOURCE : CHILD;
+            return {
+              ...base,
+              environmentId,
+              state: "attached",
+              ownerEpoch: owner.ownerEpoch,
+              attachedSessionIds: [owner.sessionId],
+            };
+          });
+          const provisioning = createDeferred();
+          const finishProvisioning = createDeferred();
+          runtime.bindWorkerSessionDispatch(async (request, _onTransition, authorize) => {
+            provisioning.resolve();
+            await finishProvisioning.promise;
+            authorize?.();
+            activate({ ...CHILD, sessionKey: request.sessionKey });
+            const placement = placements.get(CHILD.sessionId);
+            if (placement?.state !== "active") {
+              throw new Error("child fixture did not activate");
+            }
+            return placement;
+          });
+          try {
+            const pending = execute({
+              identity,
+              toolName: "sessions_spawn",
+              request: { toolCallId: "startup-parent-closure", task: "start the child" },
+            });
+            await Promise.race([
+              provisioning.promise,
+              pending.then(() => {
+                throw new Error("worker spawn completed before provisioning");
+              }),
+            ]);
+            if (closed) {
+              closeSourceRun();
+            }
+            finishProvisioning.resolve();
+            const result = await pending;
+            expect(placements.get(CHILD.sessionId)?.state).toBe(closed ? undefined : "active");
+            expect(gatewayRequest).toHaveBeenCalledTimes(closed ? 0 : 1);
+            expect(result.resultJson.includes('"status":"error"')).toBe(closed);
+          } finally {
+            finishProvisioning.resolve();
+            getEnvironment.mockRestore();
+            await service.stop();
+          }
+        });
+      } finally {
+        factory.mockRestore();
+      }
+    },
+  );
 });
 
 describe.each([false, true])(

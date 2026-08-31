@@ -315,6 +315,7 @@ async function createWorkerSessionToolTestFixture(
   }
 
   return {
+    root,
     placements,
     identity,
     execute,

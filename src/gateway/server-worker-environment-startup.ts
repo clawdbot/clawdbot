@@ -502,7 +502,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           resolveGatewayContext: params.resolveGatewayContext,
           placements: params.startup.placementStore,
           environments: workerEnvironmentService,
-          dispatchChild: (childRequest) => dispatchChild(childRequest),
+          dispatchChild: (...args) => dispatchChild(...args),
           githubPublication: {
             requestForClaim: (publicationRequest) =>
               githubPublication.requestForClaim(publicationRequest),
