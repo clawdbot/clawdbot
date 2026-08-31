@@ -110,6 +110,8 @@ export class ReturnCovenantFixtureRun {
         return await this.#cleanup(request);
       case "cleanup-run":
         return await this.#cleanupWholeRun(request, attestation);
+      default:
+        return request satisfies never;
     }
   }
 

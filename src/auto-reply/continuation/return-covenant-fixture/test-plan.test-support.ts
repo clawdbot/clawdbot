@@ -128,21 +128,25 @@ export function createReturnCovenantTestPlan(): ReturnCovenantPlan {
       const expected = id.startsWith("allowed-")
         ? allowedEffects[id as keyof typeof allowedEffects]
         : zeroEffects;
-      return {
-        id,
-        kind: id.startsWith("allowed-") ? "allowed" : "forbidden",
-        lifecycleEdge,
-        returnMode,
-        logicalSessionKey: `agent:proof:${runId}:${id}`,
-        databaseProfile,
-        forms: ["typed-tool", "bracket-token"],
-        expectedEffects: {
-          "typed-tool": expected,
-          "bracket-token": expected,
+      return Object.assign(
+        {
+          id,
+          kind: id.startsWith("allowed-") ? "allowed" : "forbidden",
+          lifecycleEdge,
+          returnMode,
+          logicalSessionKey: `agent:proof:${runId}:${id}`,
+          databaseProfile,
+          forms: ["typed-tool", "bracket-token"],
+          expectedEffects: {
+            "typed-tool": expected,
+            "bracket-token": expected,
+          },
+          restartBetweenAcceptanceAndRelease: id === "allowed-gateway-restart-replay",
         },
-        restartBetweenAcceptanceAndRelease: id === "allowed-gateway-restart-replay",
-        ...(id === "forbidden-explicit-revocation" ? { applicability: "required-if-exposed" } : {}),
-      };
+        id === "forbidden-explicit-revocation"
+          ? { applicability: "required-if-exposed" as const }
+          : {},
+      );
     }),
   });
 }

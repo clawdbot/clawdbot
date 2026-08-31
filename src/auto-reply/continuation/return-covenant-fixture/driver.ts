@@ -95,7 +95,7 @@ async function validateIsolatedRuntime(params: {
     homeRoot !== path.join(runRoot, "home") ||
     stateRoot !== path.join(runRoot, "state") ||
     configFile !== path.join(runRoot, "config", "openclaw.json") ||
-    path.relative(process.cwd(), runRoot).startsWith("..") === false
+    !path.relative(process.cwd(), runRoot).startsWith("..")
   ) {
     throw new Error("return-covenant fixture paths do not match the isolated run layout");
   }
@@ -142,7 +142,7 @@ function readRequestBody(request: http.IncomingMessage): Promise<unknown> {
     request.once("end", () => {
       try {
         resolve(JSON.parse(raw));
-      } catch (error) {
+      } catch {
         reject(
           new ReturnCovenantProtocolError(
             "invalid-json",
@@ -300,8 +300,11 @@ export async function runReturnCovenantFixtureDriver(
       }
     }
     if (server) {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      const activeServer = server;
+      activeServer.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        activeServer.close(() => resolve());
+      });
     }
     if (failures.length > 0) {
       const error = new AggregateError(failures, "return-covenant fixture cleanup failed");
@@ -428,7 +431,9 @@ export async function runReturnCovenantFixtureDriver(
     if (failures.length === 1) {
       throw error;
     }
-    throw new AggregateError(failures, "return-covenant startup failed and cleanup also failed");
+    throw new AggregateError(failures, "return-covenant startup failed and cleanup also failed", {
+      cause: error,
+    });
   }
 }
 

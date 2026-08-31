@@ -602,6 +602,8 @@ function receiptForPhase(phase: ReturnCovenantPhase, payload: Record<string, unk
       return payload.cleanup;
     case "cleanup-run":
       return payload.cleanupRun;
+    default:
+      return phase satisfies never;
   }
 }
 

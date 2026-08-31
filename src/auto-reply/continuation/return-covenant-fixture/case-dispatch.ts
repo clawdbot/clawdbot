@@ -110,7 +110,7 @@ async function invokeReturnCovenantDelegateForm(params: {
     enabled: true,
     sessionKey: state.casePlan.logicalSessionKey,
   });
-  if (extracted.signal?.kind !== "delegate" || extracted.fromBracket !== true) {
+  if (extracted.signal?.kind !== "delegate" || !extracted.fromBracket) {
     throw new Error("bracket continuation form did not parse as a delegate");
   }
   let activeEntry = loadSessionEntry({
