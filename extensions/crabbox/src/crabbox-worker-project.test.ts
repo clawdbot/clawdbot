@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
@@ -8,6 +9,7 @@ import {
   CLASSLESS_PROFILE,
   PROFILE,
   commandResult,
+  checkpointResult,
   createWarmProvider,
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
@@ -62,6 +64,47 @@ function projectOptions(events: string[], controller = new AbortController()) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each(["aws", "azure", "gcp"])(
+    "settles a retained %s checkpoint before enrollment without repeating capture",
+    async (backend) => {
+      const events: string[] = [];
+      const { options, observe } = projectOptions(events);
+      const entered = createDeferred<void>();
+      const available = createDeferred<void>();
+      const { provider, calls } = createWarmProvider(async (call) => {
+        observe(call);
+        if (call.argv[2] !== "create") {
+          return undefined;
+        }
+        entered.resolve();
+        // Crabbox only continues an admitted checkpoint_pending response when wait is enabled.
+        if (call.argv.includes("--wait=false")) {
+          return commandResult({ code: 1, stderr: "http 503: checkpoint_pending" });
+        }
+        await available.promise;
+        return checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available");
+      });
+      const provision = expect(
+        provider.provision({ ...PROFILE, provider: backend }, "retained-capture", options),
+      ).resolves.toMatchObject({ node: { deviceId: "project-node" } });
+      await entered.promise;
+      try {
+        expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      } finally {
+        available.resolve();
+      }
+      await provision;
+      expect(listCrabboxWarmImages()[0]).toMatchObject({
+        checkpointId: CHECKPOINT_ID,
+        state: "available",
+        allocations: { [operationLeaseId("retained-capture")]: { phase: "enrolled" } },
+      });
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
+      expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+    },
+  );
+
   it.each(["runtime-install", "enrollment-install"])(
     "completes internal %s without another provider readiness request",
     async (phase) => {
@@ -85,7 +128,7 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
-  it.each(["aws", "daytona"])(
+  it.each(["aws", "daytona", "machine0"])(
     "captures the prepared %s project before enrollment and reuses it",
     async (backend) => {
       const profile = { ...PROFILE, provider: backend };
@@ -136,7 +179,9 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
       expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
       // A cache hit does not restart the machine; only allocation needs provider readiness.
-      expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
+      expect(
+        calls.filter(({ argv }) => argv[1] === "inspect" || argv[1] === "status"),
+      ).toHaveLength(1);
     },
   );
 
@@ -225,7 +270,7 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
-  it.each(["aborted", "uncertain"] as const)(
+  it.each(["aborted", "uncertain", "timed out"] as const)(
     "does not enroll after an %s native capture",
     async (failure) => {
       const events: string[] = [];
@@ -239,7 +284,10 @@ describe("Crabbox project snapshot provisioning", () => {
         if (failure === "aborted") {
           controller.abort();
         }
-        return commandResult({ code: 7, stderr: "capture response lost" });
+        expect(call.options.signal).toBe(controller.signal);
+        return failure === "timed out"
+          ? commandResult({ code: null, killed: true, termination: "timeout" })
+          : commandResult({ code: 7, stderr: "capture response lost" });
       });
 
       await expect(provider.provision(PROFILE, `project-${failure}`, options)).rejects.toThrow();
@@ -248,7 +296,7 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(events).not.toContain("enrollment-install");
       expect(listCrabboxWarmImages()[0]?.capture?.phase).toBe("uncertain");
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure === "uncertain");
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
     },
   );
 

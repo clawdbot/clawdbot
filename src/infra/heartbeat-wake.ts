@@ -509,8 +509,9 @@ async function dispatchPendingWakeGroup(params: {
       let result: HeartbeatRunResult;
       try {
         // Admission spans the entire target turn so gateway drain can observe it.
-        result = await runWithGatewayIndependentRootWorkAdmission(async () =>
-          runAbortableHeartbeatWake(active, wakeOpts, abortSignal),
+        result = await runWithGatewayIndependentRootWorkAdmission(
+          async () => runAbortableHeartbeatWake(active, wakeOpts, abortSignal),
+          "heartbeat:wake",
         );
         wakeLog.debug(
           `completed: source=${pendingWake.source} intent=${pendingWake.intent} ` +

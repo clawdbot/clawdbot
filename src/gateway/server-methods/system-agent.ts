@@ -202,17 +202,19 @@ function queueDelegatedApproval(params: {
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
     afterDecision: async (decision) =>
-      await runWithGatewayIndependentRootWorkContinuation(() =>
-        runSystemAgentGatewayTask(async () => {
-          // The original request has returned; keep approval, audit, and restart drain-visible.
-          if (params.sessions.get(params.sessionId) !== params.session) {
-            return;
-          }
-          if (params.session.pendingApproval?.id === record.id) {
-            params.session.pendingApproval = undefined;
-          }
-          await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-        }),
+      await runWithGatewayIndependentRootWorkContinuation(
+        () =>
+          runSystemAgentGatewayTask(async () => {
+            // The original request has returned; keep approval, audit, and restart drain-visible.
+            if (params.sessions.get(params.sessionId) !== params.session) {
+              return;
+            }
+            if (params.session.pendingApproval?.id === record.id) {
+              params.session.pendingApproval = undefined;
+            }
+            await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
+          }),
+        "system-agent:task",
       ),
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });

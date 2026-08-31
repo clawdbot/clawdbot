@@ -699,8 +699,10 @@ work. The delivery path depends on that shape.
     its own parent-owned one-shot ACP child. In that case, running A2A on top
     of task completion can wake the parent with the child's result, forward
     the parent's reply back into the child, and create a parent/child echo
-    loop. The `sessions_send` result reports `delivery.status="skipped"` for
-    that owned-child case because the completion path is already responsible
+    loop. Accepted `sessions_send` results report target admission separately
+    from announcement delivery: `targetDisposition` is `queued` or `steered`,
+    while `delivery.status` is `pending` or `skipped`. For this owned-child case,
+    `delivery.status="skipped"` because the completion path is already responsible
     for the result.
 
   </Accordion>

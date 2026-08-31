@@ -396,7 +396,7 @@ export function listSessionEntriesCore(scope: SessionEntryListScope = {}): Sessi
 
 /**
  * Synchronous read view: `get` queries one exact persisted key without alias resolution;
- * `entries` reuses a validated store snapshot. List rows and their nested values are
+ * `entries` caches listing metadata or loads complete entries. Rows and nested values are
  * borrowed: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
