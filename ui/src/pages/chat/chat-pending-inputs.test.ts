@@ -5,7 +5,10 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
-import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import {
+  captureChatOutboxAdmission,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -48,7 +51,12 @@ async function retainDeliveredUserTurn(
   host: Parameters<typeof retireDeliveredQueuedUserTurn>[0],
   item: ChatQueueItem,
 ): Promise<void> {
-  expect(admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)).toBe(true);
+  const admission = captureChatOutboxAdmission(
+    host,
+    item.sessionKey ?? host.sessionKey,
+    item.agentId,
+  );
+  expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
   const outbox = expectDefined(
     listStoredChatOutboxes(host).find((entry) =>
       entry.queue.some((queued) => queued.id === item.id),
@@ -502,7 +510,13 @@ describe("server-owned pending input display", () => {
         expect(stored.value).toHaveLength(1);
         expect(Buffer.from(await stored.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
       }
-      expect(admitQueuedMessageForSession(host, sessionKey, queued)).toBe(true);
+      expect(
+        admitQueuedMessageForSession(
+          host,
+          captureChatOutboxAdmission(host, sessionKey, queued.agentId),
+          queued,
+        ),
+      ).toBe(true);
       expect(
         loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();

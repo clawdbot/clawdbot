@@ -38,8 +38,15 @@ import {
   wrapToolWithGatewayCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import {
+  getCoreTtsToolResultMediaUrls,
+  transferCoreTtsToolResultProvenance,
+} from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { registerAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
+import {
+  registerAgentHarnessScheduledToolProjectionCapability,
+  registerAgentHarnessTtsProvenanceTransferCapability,
+} from "./host-private-capabilities.js";
 import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
@@ -103,7 +110,11 @@ function cloneSnapshot<T>(value: T): T {
   return freezeSnapshot(structuredClone(value));
 }
 
-function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTool {
+function gateBoundTool(
+  tool: AnyAgentTool,
+  assertActive: () => void,
+  observeResult: (result: unknown) => void,
+): AnyAgentTool {
   const execute = tool.execute;
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (!execute && !sourcePreparer) {
@@ -117,6 +128,7 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
             assertActive();
             const result = await execute(...args);
             assertActive();
+            observeResult(result);
             return result;
           },
         }
@@ -134,6 +146,9 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
         throw error;
       }
       if (prepared.kind === "immediate") {
+        if (prepared.outcome.kind === "result") {
+          observeResult(prepared.outcome.result);
+        }
         return prepared;
       }
       return {
@@ -142,6 +157,7 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
           assertActive();
           const result = await prepared.execute(onImplementationStart);
           assertActive();
+          observeResult(result);
           return result;
         },
       };
@@ -190,6 +206,7 @@ export function createAgentHarnessHostCapabilities(params: {
   }
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
+  const coreTtsToolResults = new WeakSet<object>();
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
@@ -210,6 +227,11 @@ export function createAgentHarnessHostCapabilities(params: {
       throw new Error("agent harness host capability is no longer active");
     }
   }
+  const observeCoreTtsToolResult = (result: unknown) => {
+    if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
+      coreTtsToolResults.add(result);
+    }
+  };
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
@@ -340,7 +362,11 @@ export function createAgentHarnessHostCapabilities(params: {
     AnyAgentTool,
     Readonly<{ targetTool: "exec" | "process"; execute: AnyAgentTool["execute"] }>
   >();
-  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) => {
+  const bindTools = (
+    tools: AnyAgentTool[],
+    options: Readonly<{ cwd?: string }> | undefined,
+    observeResult: (result: unknown) => void,
+  ) => {
     assertActive();
     const boundAbortSignal = attempt.abortSignal
       ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
@@ -359,8 +385,10 @@ export function createAgentHarnessHostCapabilities(params: {
         callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
       )
       .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-      .map((tool) => gateBoundTool(tool, assertActive));
+      .map((tool) => gateBoundTool(tool, assertActive, observeResult));
   };
+  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
+    bindTools(tools, options, () => {});
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -407,9 +435,12 @@ export function createAgentHarnessHostCapabilities(params: {
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
       assertActive();
-      const tools = bindToolSurface(
+      // Only host-created core tools can seed TTS provenance. Plugin-bound tools
+      // must not replay a retained core result into this attempt's authority set.
+      const tools = bindTools(
         createOpenClawCodingTools({ ...options, operationalRunInstance }),
         bindingOptions,
+        observeCoreTtsToolResult,
       );
       for (const tool of tools) {
         if (tool.name === "exec" || tool.name === "process") {
@@ -516,6 +547,26 @@ export function createAgentHarnessHostCapabilities(params: {
         assertActive,
         source.targetTool,
         projection,
+      );
+    },
+  });
+  registerAgentHarnessTtsProvenanceTransferCapability({
+    hostCapabilities: capabilities,
+    ownerPluginId: params.pluginId,
+    transfer: (toolResult, attemptResult, eligibleMediaUrls) => {
+      assertActive();
+      if (
+        typeof toolResult !== "object" ||
+        toolResult === null ||
+        !coreTtsToolResults.has(toolResult)
+      ) {
+        return attemptResult;
+      }
+      return transferCoreTtsToolResultProvenance(
+        toolResult,
+        attemptResult,
+        eligibleMediaUrls,
+        operationalRunInstance,
       );
     },
   });
