@@ -109,8 +109,11 @@ describe("scheduled Codex app authority", () => {
     { name: "user home", overrides: { homeScope: "user" }, message: "user-home runtime" },
     {
       name: "missing account identity",
-      overrides: { hasPreparedAccountIdentity: false },
-      message: "genuine ChatGPT account identity",
+      overrides: {
+        hasPreparedAccountIdentity: false,
+        hasConfiguredAppServerIdentity: false,
+      },
+      message: "configured app-server identity",
     },
   ])("refuses creator capture for $name before mutation", ({ overrides, message }) => {
     const decision = resolveScheduledCodexAppCreatorCaptureDecision({
@@ -119,6 +122,7 @@ describe("scheduled Codex app authority", () => {
       usesSupervisionConnection: false,
       homeScope: "agent",
       hasPreparedAccountIdentity: true,
+      hasConfiguredAppServerIdentity: false,
       ...overrides,
     });
 
@@ -127,14 +131,18 @@ describe("scheduled Codex app authority", () => {
     expect(decision.unavailableReason).toContain("no automation changes were saved");
   });
 
-  it("supports creator capture only with a prepared exact account identity", () => {
+  it.each([
+    ["prepared profile", true, false],
+    ["configured app-server", false, true],
+  ])("supports creator capture with a %s identity", (_name, prepared, configured) => {
     expect(
       resolveScheduledCodexAppCreatorCaptureDecision({
         appsMayBeVisible: true,
         authenticatedScheduledMode: false,
         usesSupervisionConnection: false,
         homeScope: "agent",
-        hasPreparedAccountIdentity: true,
+        hasPreparedAccountIdentity: prepared,
+        hasConfiguredAppServerIdentity: configured,
       }),
     ).toEqual({ required: true, supported: true });
   });
@@ -178,8 +186,11 @@ describe("scheduled Codex app authority", () => {
       client: { request } as never,
       threadId: "thread-final",
       policyContext: policyContext(),
-      profileId: "openai:work",
-      accountId: "acct-1",
+      auth: {
+        kind: "prepared-profile",
+        profileId: "openai:work",
+        accountId: "acct-1",
+      },
       configCwd: "/workspace",
     });
 
@@ -219,8 +230,11 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
       }),
     ).resolves.toBeUndefined();
   });
@@ -250,8 +264,11 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
         timeoutMs: 100,
       }),
     ).rejects.toThrow(
@@ -282,10 +299,93 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
       }),
     ).rejects.toThrow("No automation changes were saved");
+  });
+
+  it("captures the configured app-server account without storing credentials", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed") {
+        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+      }
+      if (method === "mcpServerStatus/list") {
+        return {
+          data: [
+            {
+              name: "codex_apps",
+              tools: { list: { _meta: { connector_id: "calendar" } } },
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "account/rateLimits/read") {
+        return { accountId: "configured-account" };
+      }
+      if (method === "config/read") {
+        return { config: {} };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await expect(
+      captureScheduledCodexAppAuthority({
+        client: { request } as never,
+        threadId: "thread-final",
+        policyContext: policyContext(),
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: "configured-connection",
+        },
+      }),
+    ).resolves.toEqual(
+      authority({
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: "configured-connection",
+          accountId: "configured-account",
+        },
+      }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "account/rateLimits/read",
+      {},
+      expect.any(Object),
+    );
+  });
+
+  it("refuses configured app authority when the account identity is unavailable", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed") {
+        return { apps: [] };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      if (method === "account/rateLimits/read") {
+        return { accountId: null };
+      }
+      return { config: {} };
+    });
+
+    await expect(
+      captureScheduledCodexAppAuthority({
+        client: { request } as never,
+        threadId: "thread-final",
+        policyContext: policyContext(),
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: "configured-connection",
+        },
+      }),
+    ).rejects.toThrow(
+      "Codex app authority requires a genuine ChatGPT account identity from the configured app-server",
+    );
   });
 
   it("intersects stored and current app/tool authority without admitting new apps", () => {
@@ -373,6 +473,26 @@ describe("scheduled Codex app authority", () => {
         toolNamesByApp: new Map(),
       }),
     ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
+  });
+
+  it("fails before execution when the configured app-server account changes", () => {
+    expect(() =>
+      intersectCodexPluginThreadConfigWithScheduledAuthority(
+        threadConfig(),
+        authority({
+          auth: {
+            kind: "configured-app-server",
+            connectionFingerprint: "configured-connection",
+            accountId: "creator-account",
+          },
+        }),
+        {
+          config: {},
+          toolNamesByApp: new Map([["calendar", new Set(["list"])]]),
+          accountId: "runtime-account",
+        },
+      ),
+    ).toThrow("different configured Codex ChatGPT account");
   });
 
   it.each([

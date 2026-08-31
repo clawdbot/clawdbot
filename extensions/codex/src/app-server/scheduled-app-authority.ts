@@ -33,7 +33,39 @@ type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
   toolNamesByApp: ReadonlyMap<string, ReadonlySet<string>>;
+  accountId?: string;
 };
+
+export type ScheduledCodexAppCreatorAuth =
+  | { kind: "prepared-profile"; profileId: string; accountId: string }
+  | { kind: "configured-app-server"; connectionFingerprint: string };
+
+/** Hashes stable configured endpoint identity without retaining credentials or endpoint details. */
+export function buildScheduledCodexAppServerConnectionIdentity(
+  appServer: Pick<
+    CodexAttemptConnection["appServer"],
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
+  >,
+): string {
+  const start = appServer.start;
+  return crypto
+    .createHash("sha256")
+    .update("openclaw:codex:scheduled-app-server:v1\0")
+    .update(
+      JSON.stringify({
+        transport: start.transport,
+        command: start.command,
+        commandSource: start.commandSource ?? null,
+        args: start.args,
+        cwd: start.cwd ?? null,
+        url: start.url ?? null,
+        homeScope: start.homeScope ?? null,
+        connectionClass: appServer.connectionClass,
+        remoteWorkspaceRoot: appServer.remoteWorkspaceRoot ?? null,
+      }),
+    )
+    .digest("hex");
+}
 
 export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   appsMayBeVisible: boolean;
@@ -41,6 +73,7 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   usesSupervisionConnection: boolean;
   homeScope: string | undefined;
   hasPreparedAccountIdentity: boolean;
+  hasConfiguredAppServerIdentity: boolean;
 }): { required: boolean; supported: boolean; unavailableReason?: string } {
   if (!params.appsMayBeVisible) {
     return { required: false, supported: false };
@@ -51,8 +84,8 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
       ? "Codex apps are visible through a supervised connection that cannot capture creator authority. Use an isolated prepared-profile Codex creator turn; no automation changes were saved."
       : params.homeScope === "user"
         ? "Codex apps are visible through a user-home runtime that cannot capture isolated creator authority. Use an agent-scoped prepared-profile Codex creator turn; no automation changes were saved."
-        : !params.hasPreparedAccountIdentity
-          ? "Codex app authority requires a genuine ChatGPT account identity. Reauthenticate the selected Codex profile, then retry; no automation changes were saved."
+        : !params.hasPreparedAccountIdentity && !params.hasConfiguredAppServerIdentity
+          ? "Codex app authority requires either a prepared ChatGPT profile or an isolated configured app-server identity. Reauthenticate the selected Codex profile or configured app-server, then retry; no automation changes were saved."
           : undefined;
   return {
     required: true,
@@ -61,9 +94,23 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   };
 }
 
+type ScheduledCodexAppPreparedProfileAuth = {
+  kind?: undefined;
+  profileId: string;
+  accountId: string;
+};
+type ScheduledCodexAppConfiguredServerAuth = {
+  kind: "configured-app-server";
+  connectionFingerprint: string;
+  accountId: string;
+};
+type ScheduledCodexAppAuthorityAuth =
+  | ScheduledCodexAppPreparedProfileAuth
+  | ScheduledCodexAppConfiguredServerAuth;
+
 type ScheduledCodexAppAuthorityPayload = {
   version: 1;
-  auth: { profileId: string; accountId: string };
+  auth: ScheduledCodexAppAuthorityAuth;
   apps: Array<{
     id: string;
     allowDestructiveActions: boolean;
@@ -106,8 +153,15 @@ function parseScheduledCodexAppAuthority(
   const payload = asOptionalRecord(authority.payload);
   const auth = asOptionalRecord(payload?.auth);
   const profileId = normalizeOptionalString(auth?.profileId);
+  const connectionFingerprint = normalizeOptionalString(auth?.connectionFingerprint);
   const accountId = normalizeOptionalString(auth?.accountId);
-  if (payload?.version !== 1 || !profileId || !accountId || !Array.isArray(payload.apps)) {
+  const parsedAuth: ScheduledCodexAppAuthorityAuth | undefined =
+    auth?.kind === "configured-app-server" && connectionFingerprint && accountId
+      ? { kind: "configured-app-server", connectionFingerprint, accountId }
+      : auth?.kind === undefined && profileId && accountId
+        ? { profileId, accountId }
+        : undefined;
+  if (payload?.version !== 1 || !parsedAuth || !Array.isArray(payload.apps)) {
     throw new Error("Stored Codex app authority is invalid; reauthorize this automation.");
   }
   const seen = new Set<string>();
@@ -144,7 +198,7 @@ function parseScheduledCodexAppAuthority(
       tools,
     };
   });
-  return { version: 1, auth: { profileId, accountId }, apps };
+  return { version: 1, auth: parsedAuth, apps };
 }
 
 type CodexScheduledAppPolicyRequest = (
@@ -209,20 +263,35 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
   request: CodexScheduledAppPolicyRequest;
   configCwd?: string;
   threadId?: string;
+  readAccountIdentity?: boolean;
+  accountIdentityUnavailableMessage?: string;
 }): Promise<CurrentCodexScheduledAppPolicy> {
-  const [configResponse, toolNamesByApp] = await Promise.all([
+  const [configResponse, toolNamesByApp, accountResponse] = await Promise.all([
     params.request("config/read", {
       includeLayers: false,
       ...(params.configCwd ? { cwd: params.configCwd } : {}),
     }),
     readCodexScheduledAppToolNamesByApp(params),
+    params.readAccountIdentity
+      ? params.request("account/rateLimits/read", {})
+      : Promise.resolve(undefined),
   ]);
   if (!isJsonObject(configResponse)) {
     throw new Error("Codex config/read returned an invalid scheduled app policy response");
   }
+  const accountId = isJsonObject(accountResponse)
+    ? normalizeOptionalString(accountResponse.accountId)
+    : undefined;
+  if (params.readAccountIdentity && !accountId) {
+    throw new Error(
+      params.accountIdentityUnavailableMessage ??
+        "The configured Codex app-server did not expose a genuine ChatGPT account identity.",
+    );
+  }
   return {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
     toolNamesByApp,
+    ...(accountId ? { accountId } : {}),
   };
 }
 
@@ -242,8 +311,7 @@ export async function captureScheduledCodexAppAuthority(params: {
   client: Pick<CodexAppServerClient, "request">;
   threadId: string;
   policyContext: PluginAppPolicyContext;
-  profileId: string;
-  accountId: string;
+  auth: ScheduledCodexAppCreatorAuth;
   configCwd?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -285,6 +353,9 @@ export async function captureScheduledCodexAppAuthority(params: {
             boundedClient.request(method as never, requestParams as never),
           threadId: params.threadId,
           configCwd: params.configCwd,
+          readAccountIdentity: params.auth.kind === "configured-app-server",
+          accountIdentityUnavailableMessage:
+            "Codex app authority requires a genuine ChatGPT account identity from the configured app-server. Reauthenticate that app-server, then retry; no automation changes were saved.",
         }),
       ]),
       timeoutMs,
@@ -333,13 +404,27 @@ export async function captureScheduledCodexAppAuthority(params: {
   if (apps.length === 0) {
     return undefined;
   }
+  const configuredAccountId = currentPolicy.accountId;
+  if (params.auth.kind === "configured-app-server" && !configuredAccountId) {
+    throw new Error(
+      "Codex app authority requires a genuine ChatGPT account identity from the configured app-server. Reauthenticate that app-server, then retry; no automation changes were saved.",
+    );
+  }
+  const auth: ScheduledCodexAppAuthorityAuth =
+    params.auth.kind === "prepared-profile"
+      ? { profileId: params.auth.profileId, accountId: params.auth.accountId }
+      : {
+          kind: "configured-app-server",
+          connectionFingerprint: params.auth.connectionFingerprint,
+          accountId: configuredAccountId,
+        };
   return {
     version: 1,
     runtimeId: "codex",
     namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
     payload: {
       version: 1,
-      auth: { profileId: params.profileId, accountId: params.accountId },
+      auth,
       apps,
     },
   };
@@ -418,6 +503,14 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const scheduled = parseScheduledCodexAppAuthority(authority);
   if (!scheduled) {
     return config;
+  }
+  if (
+    scheduled.auth.kind === "configured-app-server" &&
+    currentPolicy.accountId !== scheduled.auth.accountId
+  ) {
+    throw new AgentHarnessPreflightError(
+      "This automation was authorized for a different configured Codex ChatGPT account. Restore that account or reauthorize the automation from a fresh owner turn.",
+    );
   }
   const omittedAppIds = scheduled.apps
     .map((app) => app.id)
@@ -520,6 +613,12 @@ function readScheduledCodexAppAuthorityAuth(
   return parseScheduledCodexAppAuthority(authority)?.auth;
 }
 
+export function scheduledCodexAppAuthorityUsesConfiguredServer(
+  authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
+): boolean {
+  return readScheduledCodexAppAuthorityAuth(authority)?.kind === "configured-app-server";
+}
+
 export function assertScheduledCodexAppAuthorityRuntime(
   connection: Pick<
     CodexAttemptConnection,
@@ -537,8 +636,19 @@ export function assertScheduledCodexAppAuthorityRuntime(
     connection.appServer.start.homeScope === "user"
   ) {
     throw new AgentHarnessPreflightError(
-      "This automation's Codex app authority requires an isolated scheduled prepared-profile runtime. Reauthorize it from a supported Codex creator turn.",
+      "This automation's Codex app authority requires an isolated scheduled runtime. Reauthorize it from a supported Codex creator turn.",
     );
+  }
+  if (scheduledAuth.kind === "configured-app-server") {
+    const connectionFingerprint = buildScheduledCodexAppServerConnectionIdentity(
+      connection.appServer,
+    );
+    if (connectionFingerprint !== scheduledAuth.connectionFingerprint) {
+      throw new AgentHarnessPreflightError(
+        "This automation was authorized for a different configured Codex app-server. Restore that connection or reauthorize the automation from a fresh owner turn.",
+      );
+    }
+    return;
   }
   const prepared = connection.startupPreparedAuth;
   if (

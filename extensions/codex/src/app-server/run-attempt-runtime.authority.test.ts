@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertScheduledCodexAppAuthorityRuntime } from "./scheduled-app-authority.js";
+import {
+  assertScheduledCodexAppAuthorityRuntime,
+  buildScheduledCodexAppServerConnectionIdentity,
+} from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 
 const eligible = {
@@ -81,6 +84,60 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
         scheduledRuntimeAuthority: scheduledAuthority,
       }),
     ).not.toThrow();
+  });
+
+  it("admits the exact configured app-server connection", () => {
+    const appServer = {
+      start: {
+        transport: "websocket",
+        homeScope: "agent",
+        command: "codex",
+        args: [],
+        headers: {},
+        url: "wss://codex.example.com/app-server",
+      },
+      connectionClass: "remote",
+    } as const;
+    const agentDir = "/agent";
+    const connectionIdentity = buildScheduledCodexAppServerConnectionIdentity(appServer);
+    const configuredAuthority = {
+      ...scheduledAuthority,
+      payload: {
+        ...scheduledAuthority.payload,
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: connectionIdentity,
+          accountId: "account-1",
+        },
+      },
+    };
+    expect(
+      buildScheduledCodexAppServerConnectionIdentity({
+        ...appServer,
+        start: {
+          ...appServer.start,
+          authToken: "rotated",
+          headers: { Authorization: "Bearer rotated" },
+        },
+      }),
+    ).toBe(connectionIdentity);
+
+    expect(() =>
+      assertScheduledCodexAppAuthorityRuntime(
+        scheduledConnection({ appServer, agentDir, startupPreparedAuth: undefined }),
+        { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertScheduledCodexAppAuthorityRuntime(
+        scheduledConnection({
+          appServer: { ...appServer, start: { ...appServer.start, url: "wss://other.example.com" } },
+          agentDir,
+          startupPreparedAuth: undefined,
+        }),
+        { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
+      ),
+    ).toThrow("different configured Codex app-server");
   });
 
   it.each([

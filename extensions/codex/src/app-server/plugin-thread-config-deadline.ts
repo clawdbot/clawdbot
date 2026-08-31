@@ -31,6 +31,7 @@ import {
 import {
   intersectCodexPluginThreadConfigWithScheduledAuthority,
   readCurrentCodexScheduledAppPolicy as readCurrentCodexScheduledAppPolicyShared,
+  scheduledCodexAppAuthorityUsesConfiguredServer,
 } from "./scheduled-app-authority.js";
 import type { CurrentCodexScheduledAppPolicy } from "./scheduled-app-authority.js";
 import { withAbortableTimeout } from "./timeout.js";
@@ -204,6 +205,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
                   request,
                   params.configCwd,
                   buildOptions?.threadId,
+                  scheduledCodexAppAuthorityUsesConfiguredServer(params.scheduledRuntimeAuthority),
                 ),
               )
           : undefined,
@@ -220,11 +222,15 @@ async function readCurrentCodexScheduledAppPolicy(
   request: CodexPluginRuntimeRequest,
   cwd: string | undefined,
   threadId: string | undefined,
+  readAccountIdentity: boolean,
 ): Promise<CurrentCodexScheduledAppPolicy> {
   return await readCurrentCodexScheduledAppPolicyShared({
     request,
     configCwd: cwd,
     threadId,
+    readAccountIdentity,
+    accountIdentityUnavailableMessage:
+      "This automation's configured Codex ChatGPT account identity is unavailable. Restore the account or reauthorize the automation from a fresh owner turn.",
   });
 }
 
