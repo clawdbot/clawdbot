@@ -1015,26 +1015,32 @@ describe("poll vote echo guard", () => {
     expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
   });
 
-  it("allows a same-route echo at the exact TTL boundary", async () => {
-    vi.useFakeTimers();
+  it.each([
+    { elapsedMs: 29_999, suppressed: true },
+    { elapsedMs: 30_000, suppressed: false },
+    { elapsedMs: 30_001, suppressed: false },
+  ])("expires the same-route vote after $elapsedMs ms", async ({ elapsedMs, suppressed }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
     try {
-      vi.setSystemTime(100_000);
-      const sessionKey = "agent:test:imessage:direct:ttl-boundary";
+      const sessionKey = `agent:test:imessage:direct:ttl-${elapsedMs}`;
       const voteTool = createPollVoteTool("Black", sessionKey);
       await castBlueVote(voteTool);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      now.mockReturnValue(100_000 + elapsedMs);
       const nextRunTool = createPollVoteTool("Black", sessionKey);
       const result = await nextRunTool.execute("send", {
         action: "send",
         channel: "imessage",
         message: "🦞 Black.",
       });
-
-      expect(result.details).not.toMatchObject({ status: "suppressed" });
-      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+      if (suppressed) {
+        expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+      } else {
+        expect(result.details).not.toMatchObject({ status: "suppressed" });
+      }
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
     } finally {
-      vi.useRealTimers();
+      now.mockRestore();
     }
   });
 

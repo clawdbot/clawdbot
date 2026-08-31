@@ -703,7 +703,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           // sends a follow-up text can't leak a record forever in a long-lived
           // gateway; the map stays bounded to sessions that voted within the TTL.
           for (const [key, entry] of recentPollVoteBySession) {
-            if (recordedAt - entry.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+            if (recordedAt - entry.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
               recentPollVoteBySession.delete(key);
             }
           }
