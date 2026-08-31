@@ -1042,7 +1042,8 @@ extension ApplicationRelocator {
         do {
             try releaseQuarantine(at: destination, fileManager: fileManager)
         } catch {
-            self.logger.error("Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
+            self.logger.error(
+                "Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
             return self.relaunchFailure(
                 "OpenClaw is installed in Applications, but macOS could not prepare it to reopen. " +
                     "Move a fresh copy there with Finder, then open it.")
