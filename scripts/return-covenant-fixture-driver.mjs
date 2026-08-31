@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { fileURLToPath } from "node:url";
+
 try {
+  process.chdir(fileURLToPath(new URL("..", import.meta.url)));
   const { runReturnCovenantFixtureDriver } =
     await import("../dist/test-runtime/return-covenant-fixture-driver.js");
   await runReturnCovenantFixtureDriver(process.argv.slice(2));
