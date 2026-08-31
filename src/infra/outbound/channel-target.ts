@@ -8,7 +8,7 @@ import { MESSAGE_ACTION_TARGET_MODE } from "./message-action-spec.js";
 
 /** Human-readable description for a single message-action destination. */
 export const CHANNEL_TARGET_DESCRIPTION =
-  "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id";
+  "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage chat_id:<rowid>, full +E.164 handle, email, or sms:<short-code>";
 
 /** Human-readable description for repeated message-action destinations. */
 export const CHANNEL_TARGETS_DESCRIPTION =

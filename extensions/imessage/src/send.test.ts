@@ -99,6 +99,33 @@ function createApprovalPrompt(id = "approval-123") {
 describe("sendMessageIMessage receipts", () => {
   let openClawState: OpenClawTestState;
 
+  it("rejects a bare short numeric handle over auto/iMessage but delivers it as an SMS short code (#125461)", async () => {
+    await loadFreshSendModule();
+    const client = createClient({ guid: "p:0/imsg-sms-short-code", status: "sent" });
+    // Auto service rides the iMessage transport, where a bare digit string is
+    // a chat row id typo rather than a deliverable handle.
+    await expect(
+      sendMessageIMessage("5", "hello", { config: IMESSAGE_TEST_CFG, client }),
+    ).rejects.toThrow(/chat_id/);
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+
+    // A configured SMS service turns the same short code into a valid target.
+    const smsCfg = {
+      channels: { imessage: { service: "sms" as const, accounts: { default: {} } } },
+    };
+    await sendMessageIMessage("12345", "hello", { config: smsCfg, client });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+    getClientMocks(client).request.mockClear();
+
+    // An option-selected service wins the same way.
+    await sendMessageIMessage("12345", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      service: "sms",
+      client,
+    });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+  });
+
   beforeEach(async () => {
     openClawState = await createOpenClawTestState({
       layout: "state-only",

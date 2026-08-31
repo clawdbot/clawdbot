@@ -17,6 +17,26 @@ import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
 
+// iMessage setup-status labels are translated once at module evaluation
+// (setup-core derives its status base from module-scope translator output), so
+// the locale must already be English when the imports above resolve for the
+// asserted copy to exist. vi.hoisted runs before those imports; the afterAll
+// restore hands the developer locale back because a raw assignment is
+// invisible to the runner's vi.unstubAllEnvs file cleanup.
+const restorePinnedLocale = vi.hoisted(() => {
+  const original = process.env.OPENCLAW_LOCALE;
+  process.env.OPENCLAW_LOCALE = "en";
+  return () => {
+    if (original === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = original;
+    }
+  };
+});
+
+afterAll(() => restorePinnedLocale());
+
 const getIMessageSetupStatus = createPluginSetupWizardStatus({
   id: "imessage",
   meta: {

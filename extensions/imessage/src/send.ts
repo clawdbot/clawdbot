@@ -66,10 +66,12 @@ import {
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
+  assertDeliverableIMessageHandle,
   formatIMessageChatTarget,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
+  resolveIMessageTargetService,
 } from "./targets.js";
 
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
@@ -198,16 +200,6 @@ function resolveOutboundMessageGuid(
 
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
-}
-
-function resolveTargetService(target: ParsedIMessageTarget): IMessageService | undefined {
-  if (target.kind !== "handle") {
-    return undefined;
-  }
-  if (target.serviceExplicit || target.service !== "auto") {
-    return target.service;
-  }
-  return undefined;
 }
 
 function normalizeResolvedMessageGuid(value: unknown): string | null {
@@ -840,8 +832,11 @@ export async function sendMessageIMessage(
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
-    resolveTargetService(target) ??
+    resolveIMessageTargetService(target) ??
     (account.config.service as IMessageService | undefined);
+  // The bare-numeric verdict needs the effective service: a short code is a
+  // legitimate SMS target, so only reject it once "sms" failed to win.
+  assertDeliverableIMessageHandle({ target, service });
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
   const resolvedReplyToId = resolveAuthorizedIMessageReplyReference({
     account,
