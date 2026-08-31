@@ -753,20 +753,6 @@ extension OnboardingAISetupModel {
             "No Gateway is selected. Select a Gateway, then try again.")
     }
 
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    private func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
-    }
-
     func userSelect(kind: String) {
         guard self.canSelectCandidate(kind: kind) else { return }
         var supersededKind: String?
@@ -1241,17 +1227,6 @@ extension OnboardingAISetupModel {
         }
     }
 
-    func continueProviderAuth() {
-        guard let step = authStep else { return }
-        let value: AnyCodable? = switch wizardStepType(step) {
-        case "text": AnyCodable(self.authText)
-        case "select": self.selectedAuthWizardOption?.value
-        case "confirm": AnyCodable(self.authConfirmation)
-        default: nil
-        }
-        self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
     func cancelProviderAuth() {
         let sessionID = self.authSessionID
         let authServerLease = self.serverLease
@@ -1291,7 +1266,7 @@ extension OnboardingAISetupModel {
         }
     }
 
-    private func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
+    func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
         guard let sessionID = authSessionID, let serverLease else { return }
         self.authBusy = true
         self.authError = nil
@@ -1306,12 +1281,31 @@ extension OnboardingAISetupModel {
         let token = self.attemptToken
         let authAttemptID = self.authAttemptID
         Task {
+            var requestLease = serverLease
             do {
-                let data = try await self.gateway.request(
-                    method: "wizard.next",
-                    params: params,
-                    timeoutMs: Self.providerAuthRequestTimeoutMs,
-                    ifCurrentServerLease: serverLease)
+                let data: Data
+                do {
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                } catch OpenClawChatTransportSendError.notDispatched {
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    // Only this error proves the callback never reached the Gateway.
+                    // Keep the wizard identity and retry once on the same route.
+                    let replacementLease = try await self.gateway.acquireServerLease(
+                        ifSameRouteAs: requestLease,
+                        timeoutMs: 5000)
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    requestLease = replacementLease
+                    self.serverLease = requestLease
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                }
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
                 self.applyAuthWizardResult(
@@ -1321,13 +1315,13 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
-                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: serverLease)
+                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: requestLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 if cancellation != .cancelled,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
-                       originalServerLease: serverLease)
+                       originalServerLease: requestLease)
                 {
                     return
                 }
