@@ -215,6 +215,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
   const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
   const payload = buildTypedExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
+    instanceId: params.request.instanceId,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
     warningText: params.request.request.warningText ?? undefined,

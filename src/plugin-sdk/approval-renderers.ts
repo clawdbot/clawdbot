@@ -21,6 +21,7 @@ const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as cons
 type BuildApprovalPendingReplyPayloadParams = {
   /** Stable approval id used by `/approve` commands and metadata correlation. */
   approvalId: string;
+  instanceId?: string;
   /** Short channel-facing approval slug for compact metadata displays. */
   approvalSlug: string;
   /** Visible approval request text sent to the channel. */
@@ -51,6 +52,7 @@ export function buildApprovalPendingReplyPayload(
     channelData: {
       execApproval: {
         approvalId: params.approvalId,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         approvalSlug: params.approvalSlug,
         approvalKind: params.approvalKind ?? "exec",
         agentId: normalizeOptionalString(params.agentId),
@@ -72,6 +74,7 @@ export function buildTypedApprovalPendingReplyPayload(
     ...payload,
     presentation: buildTypedApprovalPresentation({
       approvalId: params.approvalId,
+      instanceId: params.instanceId,
       approvalKind: params.approvalKind,
       allowedDecisions: params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS,
     }),
@@ -124,6 +127,7 @@ export function buildPluginApprovalPendingReplyPayload(
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
+    instanceId: params.request.instanceId,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
     allowedDecisions:
@@ -140,6 +144,7 @@ export function buildTypedPluginApprovalPendingReplyPayload(
   return buildTypedApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
+    instanceId: params.request.instanceId,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
     allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({

@@ -222,6 +222,7 @@ export type ExecApprovalRequest = {
   /** Descriptive wire metadata; readers derive it from the payload when absent. */
   approvalKind?: "exec";
   id: string;
+  instanceId?: string;
   request: ExecApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;

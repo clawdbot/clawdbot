@@ -89,6 +89,7 @@ function buildPendingPayload(params: {
         })
       : buildExecApprovalPendingReplyPayload({
           approvalId: params.request.id,
+          instanceId: params.request.instanceId,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
           warningText:

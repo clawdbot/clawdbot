@@ -60,6 +60,7 @@ type CreateApprovalHandlersParams = {
 function buildApprovalSnapshot(
   record: OperatorApprovalRecord,
   controlUiBasePath: string,
+  instanceId?: string,
 ): ApprovalSnapshot | null {
   const common = {
     id: record.id,
@@ -68,6 +69,7 @@ function buildApprovalSnapshot(
     urlPath: `${controlUiBasePath}/approve/${encodeURIComponent(record.id)}`,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
+    ...(record.status === "pending" && instanceId ? { instanceId } : {}),
   };
   if (record.status === "pending") {
     return common as ApprovalSnapshot;
@@ -102,6 +104,17 @@ function buildApprovalSnapshot(
     return { ...terminal, decision: "deny" } as ApprovalSnapshot;
   }
   return terminal as ApprovalSnapshot;
+}
+
+function getLiveApprovalRecord(
+  params: CreateApprovalHandlersParams,
+  record: OperatorApprovalRecord,
+) {
+  return record.kind === "exec"
+    ? params.execApprovalManager.getLiveSnapshot(record.id)
+    : record.kind === "plugin"
+      ? params.pluginApprovalManager.getLiveSnapshot(record.id)
+      : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
 }
 
 function resolveApprovalResolver(client: GatewayClient | null): OperatorApprovalResolver {
@@ -386,7 +399,10 @@ export function createApprovalHandlers(
       const controlUiBasePath = normalizeControlUiBasePath(
         context.getRuntimeConfig()?.gateway?.controlUi?.basePath,
       );
-      const approval = record ? buildApprovalSnapshot(record, controlUiBasePath) : null;
+      const liveRecord = record ? getLiveApprovalRecord(params, record) : undefined;
+      const approval = record
+        ? buildApprovalSnapshot(record, controlUiBasePath, liveRecord?.instanceId)
+        : null;
       if (!approval) {
         respondApprovalNotFound(respond);
         return;
@@ -433,12 +449,7 @@ export function createApprovalHandlers(
             reviewer: resolveParams.reviewer,
           })
         : null;
-      const liveRecord =
-        record.kind === "exec"
-          ? params.execApprovalManager.getLiveSnapshot(record.id)
-          : record.kind === "plugin"
-            ? params.pluginApprovalManager.getLiveSnapshot(record.id)
-            : undefined;
+      const liveRecord = getLiveApprovalRecord(params, record);
       if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
@@ -455,6 +466,10 @@ export function createApprovalHandlers(
           return;
         }
         respond(true, { applied: false, approval }, undefined);
+        return;
+      }
+      if (resolveParams?.instanceId && liveRecord?.instanceId !== resolveParams.instanceId) {
+        respondApprovalNotFound(respond);
         return;
       }
       const resolver = custody

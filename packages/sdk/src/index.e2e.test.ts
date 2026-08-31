@@ -303,7 +303,11 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       }
 
       if (frame.method === "exec.approval.resolve") {
-        expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
+        expect(frame.params).toMatchObject({
+          id: "approval-1",
+          instanceId: "approval-instance-1",
+          decision: "allow-once",
+        });
         reply({ ok: true, params: frame.params as JsonObject | undefined });
         return;
       }
@@ -488,7 +492,10 @@ describe("OpenClaw SDK websocket e2e", () => {
       const approvals = expectJsonObject(await oc.approvals.list());
       expect(approvals.approvals).toEqual([]);
       const approvalResult = expectJsonObject(
-        await oc.approvals.respond("approval-1", { decision: "allow-once" }),
+        await oc.approvals.respond("approval-1", {
+          instanceId: "approval-instance-1",
+          decision: "allow-once",
+        }),
       );
       expect(approvalResult.ok).toBe(true);
 

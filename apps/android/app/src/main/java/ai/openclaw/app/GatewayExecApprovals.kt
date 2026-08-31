@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 data class GatewayExecApprovalSummary(
   val id: String,
+  val instanceId: String? = null,
   val commandText: NativeText,
   val commandPreview: String?,
   val warningText: String?,
@@ -211,9 +212,11 @@ internal fun buildGatewayExecApprovalGetParams(id: String): JsonObject = buildJs
 internal fun buildGatewayExecApprovalResolveParams(
   id: String,
   decision: String,
+  instanceId: String? = null,
 ): JsonObject =
   buildJsonObject {
     put("id", id)
+    instanceId?.let { put("instanceId", it) }
     put("kind", "exec")
     put("decision", decision)
   }
@@ -387,15 +390,23 @@ internal fun legacyGatewayExecApprovalTerminal(
 private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprovalSnapshot? {
   val status = obj.strictString("status") ?: return null
   val expectedKeys = APPROVAL_SNAPSHOT_KEYS_BY_STATUS[status] ?: return null
-  if (!obj.hasExactKeys(expectedKeys)) return null
+  if (
+    status == "pending" &&
+    !obj.hasExactKeys(expectedKeys) &&
+    !obj.hasExactKeys(expectedKeys + "instanceId")
+  ) {
+    return null
+  }
+  if (status != "pending" && !obj.hasExactKeys(expectedKeys)) return null
   val id = obj.strictApprovalId("id") ?: return null
+  val instanceId = obj.optionalString("instanceId", requireNonEmpty = true) ?: return null
   obj.strictNonEmptyString("urlPath") ?: return null
   val createdAtMs = obj.strictNonNegativeLong("createdAtMs") ?: return null
   val expiresAtMs = obj.strictNonNegativeLong("expiresAtMs") ?: return null
   val presentation = obj["presentation"].asObjectOrNull() ?: return null
   val summary = parseGatewayExecApprovalPresentation(id, createdAtMs, expiresAtMs, presentation) ?: return null
   return when (status) {
-    "pending" -> GatewayExecApprovalSnapshot.Pending(summary)
+    "pending" -> GatewayExecApprovalSnapshot.Pending(summary.copy(instanceId = instanceId.value))
     "allowed" ->
       parseTerminalApproval(
         obj = obj,
@@ -528,8 +539,8 @@ private fun JsonObject.strictNonNegativeLong(key: String): Long? =
     ?.longOrNull
     ?.takeIf { it >= 0 }
 
-// Closed-schema contract: the gateway protocol declares approval results with
-// additionalProperties:false, so additive protocol changes hard-fail old clients by design.
+// Closed-schema contract: accept only the fields declared by the negotiated
+// approval projection, including its optional pending instance token.
 private fun JsonObject.hasExactKeys(expected: Set<String>): Boolean = keys == expected
 
 private fun JsonObject.hasOnlyKeys(allowed: Set<String>): Boolean = keys.all(allowed::contains)

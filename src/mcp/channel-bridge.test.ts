@@ -44,6 +44,13 @@ type BridgeInternals = {
     message: { role: string; content: unknown };
   }) => Promise<void>;
   listPendingApprovals: () => unknown[];
+  respondToApproval: (params: {
+    kind: "exec" | "plugin";
+    id: string;
+    instanceId?: string;
+    decision: "allow-once" | "allow-always" | "deny";
+  }) => Promise<Record<string, unknown>>;
+  requestGateway: ReturnType<typeof vi.fn>;
   close: () => Promise<void>;
   server: { server: { notification: (n: unknown) => Promise<void> } } | null;
   sendNotification: (notification: { method: string }) => Promise<void>;
@@ -208,6 +215,37 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
 
       vi.advanceTimersByTime(SWEEP_INTERVAL_MS + ONE_MINUTE_MS);
       expect(bridge.pendingApprovals.size).toBe(0);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("approval responses retain the observed request instance across same-id replacement", async () => {
+    const bridge = makeBridge();
+    bridge.requestGateway = vi.fn(async () => ({ ok: true }));
+    try {
+      await bridge.handleGatewayEvent({
+        event: "exec.approval.requested",
+        payload: { id: "approval-1", instanceId: "instance-old" },
+      });
+      const [observed] = bridge.listPendingApprovals() as Array<{ instanceId?: string }>;
+      await bridge.handleGatewayEvent({
+        event: "exec.approval.requested",
+        payload: { id: "approval-1", instanceId: "instance-replacement" },
+      });
+
+      await bridge.respondToApproval({
+        kind: "exec",
+        id: "approval-1",
+        instanceId: observed?.instanceId,
+        decision: "deny",
+      });
+
+      expect(bridge.requestGateway).toHaveBeenCalledWith("exec.approval.resolve", {
+        id: "approval-1",
+        instanceId: "instance-old",
+        decision: "deny",
+      });
     } finally {
       await bridge.close();
     }

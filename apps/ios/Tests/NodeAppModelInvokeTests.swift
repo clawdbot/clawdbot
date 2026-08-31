@@ -418,6 +418,7 @@ private func pluginApprovalPresentation(
 private func makePendingApprovalJSON(
     id: String,
     presentation: ApprovalPresentation,
+    instanceID: String? = nil,
     createdAtMs: Int = 100,
     expiresAtMs: Int = 4_000_000_000_000) -> String
 {
@@ -427,11 +428,13 @@ private func makePendingApprovalJSON(
         createdatms: createdAtMs,
         expiresatms: expiresAtMs,
         presentation: presentation,
+        instanceid: instanceID,
         status: "pending"))))
 }
 
 private func makePendingExecApprovalJSON(
     _ approvalID: String,
+    instanceID: String? = nil,
     commandText: String = "echo held",
     commandPreview: String? = nil,
     warningText: String? = nil,
@@ -445,7 +448,8 @@ private func makePendingExecApprovalJSON(
             commandPreview: commandPreview,
             warningText: warningText,
             agentID: agentID,
-            allowedDecisions: allowedDecisions))
+            allowedDecisions: allowedDecisions),
+        instanceID: instanceID)
 }
 
 private func makeDeniedExecApprovalJSON(
@@ -1565,11 +1569,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `unified approval resolve reports and applies canonical late winner`() async throws {
         let paramsData = try JSONEncoder().encode(ApprovalResolveParams(
             id: "approval-race",
+            instanceid: "instance-race",
             kind: .exec,
             decision: .deny))
         let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: String])
         #expect(params == [
             "id": "approval-race",
+            "instanceId": "instance-race",
             "kind": "exec",
             "decision": "deny",
         ])
@@ -6938,6 +6944,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `watch exec approval codec preserves gateway owner`() throws {
         let approval = OpenClawWatchExecApprovalItem(
             id: "approval-a",
+            instanceId: " instance-a ",
             gatewayStableID: "gateway-a",
             commandText: "echo safe",
             warningText: "Review shell expansion",
@@ -6946,16 +6953,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             OpenClawWatchExecApprovalPromptMessage(approval: approval))
         let encodedApproval = try #require(prompt["approval"] as? [String: Any])
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
+        #expect(encodedApproval["instanceId"] as? String == " instance-a ")
         #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
         let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "replyId": "reply-a",
             "approvalId": "approval-a",
+            "approvalInstanceId": " instance-a ",
             "gatewayStableID": "gateway-a",
             "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
         ], transport: "sendMessage"))
         #expect(reply.gatewayStableID == "gateway-a")
+        #expect(reply.approvalInstanceId == " instance-a ")
 
         let resolved = WatchMessagingPayloadCodec.encodeExecApprovalResolvedPayload(
             OpenClawWatchExecApprovalResolvedMessage(

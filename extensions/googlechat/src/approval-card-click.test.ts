@@ -144,6 +144,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       token: "token-1",
       accountId: "default",
       approvalId: "approval-1",
+      instanceId: "approval-1-instance",
       approvalKind: "exec",
       decision: "allow-once",
       allowedDecisions: ["allow-once", "deny"],
@@ -163,6 +164,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       approvalId: "approval-1",
+      instanceId: "approval-1-instance",
       approvalKind: "exec",
       decision: "allow-once",
       channel: "googlechat",

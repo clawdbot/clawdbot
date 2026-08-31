@@ -14,9 +14,10 @@ function isApprovalDecision(value: unknown): value is SlackApprovalAction["decis
 
 /** Encode portable approval facts without exposing a slash command to Slack callbacks. */
 export function encodeSlackApprovalAction(action: SlackApprovalAction): string {
-  const encode = (approvalId: string) =>
+  const encode = (approvalId: string, includeInstance = true) =>
     `${SLACK_APPROVAL_VALUE_PREFIX}${JSON.stringify({
       approvalId,
+      ...(includeInstance && action.instanceId ? { instanceId: action.instanceId } : {}),
       approvalKind: action.approvalKind,
       decision: action.decision,
     })}`;
@@ -27,7 +28,9 @@ export function encodeSlackApprovalAction(action: SlackApprovalAction): string {
         buildApprovalResolutionRef({
           approvalId: action.approvalId,
           approvalKind: action.approvalKind,
+          instanceId: action.instanceId,
         }),
+        false,
       );
 }
 
@@ -42,10 +45,21 @@ export function decodeSlackApprovalAction(value: unknown): SlackApprovalAction |
       return null;
     }
     const record = decoded as Record<string, unknown>;
+    const keys = Object.keys(record);
     if (
-      Object.keys(record).length !== 3 ||
+      (keys.length !== 3 && keys.length !== 4) ||
+      keys.some(
+        (key) =>
+          key !== "approvalId" &&
+          key !== "instanceId" &&
+          key !== "approvalKind" &&
+          key !== "decision",
+      ) ||
       typeof record.approvalId !== "string" ||
       record.approvalId.length === 0 ||
+      (record.instanceId !== undefined &&
+        (typeof record.instanceId !== "string" || record.instanceId.length === 0)) ||
+      (keys.length === 4 && typeof record.instanceId !== "string") ||
       (record.approvalKind !== "exec" && record.approvalKind !== "plugin") ||
       !isApprovalDecision(record.decision)
     ) {
@@ -54,6 +68,7 @@ export function decodeSlackApprovalAction(value: unknown): SlackApprovalAction |
     return {
       type: "approval",
       approvalId: record.approvalId,
+      ...(typeof record.instanceId === "string" ? { instanceId: record.instanceId } : {}),
       approvalKind: record.approvalKind,
       decision: record.decision,
     };

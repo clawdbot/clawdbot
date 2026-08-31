@@ -42,6 +42,7 @@ export type TuiTaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParam
 
 export type TuiPluginApproval = {
   id: string;
+  instanceId?: string;
   request: {
     title: string;
     description?: string | null;
@@ -213,7 +214,11 @@ export type TuiBackend = {
   listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
-  resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  resolvePluginApproval?: (
+    id: string,
+    decision: TuiApprovalDecision,
+    instanceId?: string,
+  ) => Promise<{ ok?: boolean }>;
   getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
   listCloudWorkerProfiles?: () => Promise<string[]>;

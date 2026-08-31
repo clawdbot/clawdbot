@@ -41,6 +41,7 @@ type MatrixApprovalReactionBinding = {
 
 type MatrixApprovalReactionResolution = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
@@ -48,6 +49,7 @@ type MatrixApprovalReactionResolution = {
 type MatrixApprovalReactionTarget = {
   accountId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   roomId: string;
   eventId: string;
@@ -98,6 +100,9 @@ function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | nu
   return {
     accountId,
     approvalId,
+    ...(typeof value.instanceId === "string" && value.instanceId
+      ? { instanceId: value.instanceId }
+      : {}),
     approvalKind: value.approvalKind,
     roomId,
     eventId,
@@ -199,6 +204,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   roomId: string;
   eventId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
@@ -226,6 +232,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   const target = {
     accountId,
     approvalId,
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     approvalKind: params.approvalKind,
     roomId: params.roomId.trim(),
     eventId: params.eventId.trim(),
@@ -257,6 +264,7 @@ export function unregisterMatrixApprovalReactionTarget(params: {
 export async function unregisterMatrixApprovalReactionTargetsForApproval(params: {
   accountId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
 }): Promise<MatrixApprovalReactionTargetRef[]> {
   const accountId = normalizeAccountId(params.accountId);
@@ -270,6 +278,7 @@ export async function unregisterMatrixApprovalReactionTargetsForApproval(params:
     if (
       entry.target.approvalId === approvalId &&
       entry.target.accountId === accountId &&
+      (params.instanceId === undefined || entry.target.instanceId === params.instanceId) &&
       entry.target.approvalKind === params.approvalKind
     ) {
       matches.set(key, entry.target);
@@ -287,6 +296,7 @@ export async function unregisterMatrixApprovalReactionTargetsForApproval(params:
       if (
         target?.approvalId === approvalId &&
         target.accountId === accountId &&
+        (params.instanceId === undefined || target.instanceId === params.instanceId) &&
         target.approvalKind === params.approvalKind &&
         buildReactionTargetKey(target.accountId, target.roomId, target.eventId) === entry.key
       ) {
@@ -330,6 +340,7 @@ function resolveTarget(params: {
   }
   return {
     approvalId: target.approvalId,
+    ...(target.instanceId ? { instanceId: target.instanceId } : {}),
     approvalKind: target.approvalKind,
     decision,
   };

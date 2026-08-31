@@ -226,6 +226,7 @@ describe("application approval overlays", () => {
 
     expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-authorized",
+      instanceId: "approval-authorized:1000",
       decision: "allow-once",
     });
     overlays.dispose();
@@ -485,6 +486,7 @@ describe("application approval overlays", () => {
 
     expect(request).toHaveBeenCalledWith("approval.resolve", {
       id: "system-agent:1",
+      instanceId: "system-agent:1:1000",
       kind: "system-agent",
       decision: "allow-once",
     });
@@ -687,6 +689,7 @@ describe("application approval overlays", () => {
 
     expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-newer",
+      instanceId: "approval-newer:2000",
       decision: "deny",
     });
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-oldest"]);

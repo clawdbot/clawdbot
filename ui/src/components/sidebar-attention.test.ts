@@ -353,6 +353,7 @@ describe("sidebar attention refresh ownership", () => {
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", "selected");
       expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
         id: "selected",
+        instanceId: "selected:2",
         decision: "allow-once",
       });
       if (reopen) {

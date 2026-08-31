@@ -388,6 +388,7 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
           token: actionToken.token,
           accountId: entry.accountId,
           approvalId: request.id,
+          instanceId: request.instanceId,
           approvalKind,
           decision: actionToken.decision,
           allowedDecisions: pendingPayload.allowedDecisions,

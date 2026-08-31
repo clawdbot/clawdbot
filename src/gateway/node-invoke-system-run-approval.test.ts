@@ -125,6 +125,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const effectiveBindingArgv = bindingArgv ?? commandArgv ?? [command];
     return {
       id: "approval-1",
+      instanceId: "approval-instance-1",
       request: {
         host: "node",
         nodeId: "node-1",

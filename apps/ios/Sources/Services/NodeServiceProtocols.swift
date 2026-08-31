@@ -109,6 +109,7 @@ enum WatchMessageKind: String, Codable, Equatable {
 struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var replyId: String
     var approvalId: String
+    var approvalInstanceId: String?
     var gatewayStableID: String?
     var decision: OpenClawWatchExecApprovalDecision
     var sentAtMs: Int64?

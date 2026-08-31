@@ -71,6 +71,7 @@ type PreparedIMessageApprovalTarget = {
 };
 type IMessageApprovalPromptBinding = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
@@ -226,6 +227,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   question: string;
@@ -298,6 +300,7 @@ async function deliverIMessageApprovalPoll(params: {
       conversation: { chatGuid },
       ...(pollGuid ? { pollGuid } : {}),
       approvalId: params.approvalId,
+      instanceId: params.instanceId,
       approvalKind: params.approvalKind,
       optionDecisions,
       expiresAtMs: params.expiresAtMs,
@@ -428,6 +431,7 @@ const eagerlyBoundApprovalEntries = new WeakSet<PendingIMessageApprovalEntry>();
 function bindIMessageApprovalEntry(params: {
   entry: PendingIMessageApprovalEntry;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
@@ -458,6 +462,7 @@ function bindIMessageApprovalEntry(params: {
               conversation: params.entry.conversation,
               messageId,
               approvalId: params.approvalId,
+              instanceId: params.instanceId,
               approvalKind: params.approvalKind,
               allowedDecisions: params.allowedDecisions,
               ttlMs,
@@ -471,6 +476,7 @@ function bindIMessageApprovalEntry(params: {
         conversation: params.entry.conversation,
         pollGuid: params.entry.poll.pollGuid,
         approvalId: params.approvalId,
+        instanceId: params.instanceId,
         approvalKind: params.approvalKind,
         optionDecisions: params.entry.poll.optionDecisions,
         expiresAtMs: params.expiresAtMs,
@@ -585,6 +591,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                 cfg,
                 target: preparedTarget,
                 approvalId: view.approvalId,
+                instanceId: view.instanceId,
                 approvalKind: view.approvalKind,
                 expiresAtMs: view.expiresAtMs,
                 question: pendingPayload.pollText,
@@ -620,6 +627,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const bound = bindIMessageApprovalEntry({
           entry,
           approvalId: view.approvalId,
+          instanceId: view.instanceId,
           approvalKind: view.approvalKind,
           allowedDecisions: pendingPayload.allowedDecisions,
           expiresAtMs: view.expiresAtMs,
@@ -658,6 +666,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       return bindIMessageApprovalEntry({
         entry,
         approvalId: request.id,
+        instanceId: view.instanceId,
         approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.allowedDecisions,
         expiresAtMs: view.expiresAtMs,

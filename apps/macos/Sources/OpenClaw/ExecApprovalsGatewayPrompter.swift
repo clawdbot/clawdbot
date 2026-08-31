@@ -13,6 +13,7 @@ final class ExecApprovalsGatewayPrompter {
 
     struct GatewayApprovalRequest: Codable {
         var id: String
+        var instanceId: String?
         var request: ExecApprovalPromptRequest
         var createdAtMs: Int
         var expiresAtMs: Int
@@ -59,21 +60,29 @@ final class ExecApprovalsGatewayPrompter {
                 return
             }
             if evt.event == "openclaw.approval.requested" {
+                var params: [String: AnyCodable] = [
+                    "id": AnyCodable(request.id),
+                    "kind": AnyCodable("system-agent"),
+                    "decision": AnyCodable(decision.rawValue),
+                ]
+                if let instanceId = request.instanceId {
+                    params["instanceId"] = AnyCodable(instanceId)
+                }
                 try await GatewayConnection.shared.requestVoid(
                     method: .approvalResolve,
-                    params: [
-                        "id": AnyCodable(request.id),
-                        "kind": AnyCodable("system-agent"),
-                        "decision": AnyCodable(decision.rawValue),
-                    ],
+                    params: params,
                     timeoutMs: 10000)
             } else {
+                var params: [String: AnyCodable] = [
+                    "id": AnyCodable(request.id),
+                    "decision": AnyCodable(decision.rawValue),
+                ]
+                if let instanceId = request.instanceId {
+                    params["instanceId"] = AnyCodable(instanceId)
+                }
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
-                    params: [
-                        "id": AnyCodable(request.id),
-                        "decision": AnyCodable(decision.rawValue),
-                    ],
+                    params: params,
                     timeoutMs: 10000)
             }
         } catch {

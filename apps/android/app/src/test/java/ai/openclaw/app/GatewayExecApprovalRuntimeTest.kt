@@ -44,6 +44,74 @@ class GatewayExecApprovalRuntimeTest {
   }
 
   @Test
+  fun canonicalResolveEchoesPendingInstanceId() =
+    runBlocking {
+      val runtime =
+        approvalRuntime(approvals = listOf(approvalSummary(instanceId = "instance:approval-1")))
+      var sentParams: String? = null
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        check(method == "approval.resolve")
+        sentParams = params
+        unifiedResolve(applied = true, status = "denied", decision = "deny")
+      }
+
+      runtime.resolveExecApproval("approval-1", "deny", "instance:approval-1")
+      waitUntil { runtime.execApprovals.value.isEmpty() }
+
+      assertEquals(
+        """{"id":"approval-1","instanceId":"instance:approval-1","kind":"exec","decision":"deny"}""",
+        sentParams,
+      )
+    }
+
+  @Test
+  fun staleInstanceCannotResolveSameIdReplacement() =
+    runBlocking {
+      val runtime =
+        approvalRuntime(approvals = listOf(approvalSummary(instanceId = "instance:replacement")))
+      var requestCount = 0
+      runtime.gatewayDataRequestOverrideForTests = { _, _, _ ->
+        requestCount += 1
+        unifiedResolve(applied = true, status = "denied", decision = "deny")
+      }
+
+      runtime.resolveExecApproval("approval-1", "deny", "instance:stale")
+      delay(50)
+
+      assertEquals(0, requestCount)
+      assertEquals(
+        "instance:replacement",
+        runtime.execApprovals.value
+          .single()
+          .instanceId,
+      )
+    }
+
+  @Test
+  fun legacyResolveEchoesPendingInstanceId() =
+    runBlocking {
+      val runtime =
+        approvalRuntime(
+          methods = legacyMethods,
+          approvals = listOf(approvalSummary(instanceId = "instance:approval-1")),
+        )
+      var sentParams: String? = null
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        check(method == "exec.approval.resolve")
+        sentParams = params
+        """{"ok":true}"""
+      }
+
+      runtime.resolveExecApproval("approval-1", "deny", "instance:approval-1")
+      waitUntil { runtime.execApprovals.value.isEmpty() }
+
+      assertEquals(
+        """{"id":"approval-1","instanceId":"instance:approval-1","decision":"deny"}""",
+        sentParams,
+      )
+    }
+
+  @Test
   fun anotherSurfaceWinnerClosesLocalCardFromCanonicalResolveResult() =
     runBlocking {
       val runtime = approvalRuntime()
@@ -1091,9 +1159,11 @@ class GatewayExecApprovalRuntimeTest {
   private fun approvalSummary(
     id: String = "approval-1",
     commandText: String = "echo ok",
+    instanceId: String? = null,
   ): GatewayExecApprovalSummary =
     GatewayExecApprovalSummary(
       id = id,
+      instanceId = instanceId,
       commandText = verbatimText(commandText),
       commandPreview = "echo",
       warningText = null,

@@ -139,6 +139,7 @@ const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
 export const ExecApprovalPresentationSchema = Type.Object(
   {
     kind: Type.Literal("exec"),
+    instanceId: Type.Optional(NonEmptyString),
     commandText: NonEmptyString,
     commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -158,6 +159,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
 /** Plugin-supplied reviewer text safe to persist and render across surfaces. */
 export const PluginApprovalPresentationSchema = closedObject({
   kind: Type.Literal("plugin"),
+  instanceId: Type.Optional(NonEmptyString),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
   detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16_384 })),
@@ -172,6 +174,7 @@ export const PluginApprovalPresentationSchema = closedObject({
 /** Reviewer-safe OpenClaw system change. Exact operation stays host-local. */
 export const SystemAgentApprovalPresentationSchema = closedObject({
   kind: Type.Literal("system-agent"),
+  instanceId: Type.Optional(NonEmptyString),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
   proposalHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
@@ -220,6 +223,7 @@ const ApprovalResolutionFields = {
 /** Approval that has not yet accepted a reviewer decision. */
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
+  instanceId: Type.Optional(NonEmptyString),
   status: Type.Literal("pending"),
   /** Canonical raising session when projected into a session-scoped reviewer surface. */
   sourceSessionKey: Type.Optional(NonEmptyString),
@@ -304,6 +308,7 @@ export const ApprovalChannelReviewerSchema = closedObject({
 
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
+  instanceId: Type.Optional(NonEmptyString),
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
   reviewer: Type.Optional(ApprovalChannelReviewerSchema),

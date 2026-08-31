@@ -99,6 +99,7 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     result = await resolveApprovalOverGateway({
       cfg: deps.cfg,
       approvalId: consumed.approvalId,
+      ...(consumed.instanceId ? { instanceId: consumed.instanceId } : {}),
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       channel: "msteams",

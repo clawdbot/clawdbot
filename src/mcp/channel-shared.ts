@@ -91,6 +91,7 @@ export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type PendingApproval = {
   kind: ChannelApprovalKind;
   id: string;
+  instanceId?: string;
   request?: Record<string, unknown>;
   createdAtMs?: number;
   expiresAtMs?: number;

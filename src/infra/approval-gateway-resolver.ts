@@ -17,6 +17,7 @@ import type { ChannelApprovalKind } from "./approval-types.js";
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
   approvalId: string;
+  instanceId?: string;
   decision: ApprovalDecision;
   channel?: string;
   accountId?: string | null;
@@ -133,6 +134,7 @@ export async function resolveApprovalOverGateway(
       "approval.resolve",
       {
         id: approvalId,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         kind: canonicalKind,
         decision: params.decision,
         ...(reviewer ? { reviewer } : {}),
@@ -150,6 +152,7 @@ export async function resolveApprovalOverGateway(
     if (hasCanonicalKind) {
       const resolveParams: ApprovalResolveParams = {
         id: approvalId,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         kind: canonicalKind,
         decision: params.decision,
         ...(reviewer ? { reviewer } : {}),
@@ -162,6 +165,7 @@ export async function resolveApprovalOverGateway(
     ): Promise<void> => {
       await gatewayClient.request(method, {
         id: approvalId,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         decision: params.decision,
         ...(reviewer ? { reviewer } : {}),
       });

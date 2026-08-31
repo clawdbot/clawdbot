@@ -1286,6 +1286,34 @@ describe("handlePendingApprovalRequest", () => {
     expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
   });
 
+  it("rejects a decision bound to an older approval instance", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo replacement" }, 60_000, "approval-reused");
+    void manager.register(record, 60_000);
+    const respond = vi.fn();
+
+    await handleApprovalResolve({
+      approvalKind: "exec",
+      manager,
+      inputId: record.id,
+      instanceId: "older-instance",
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+      } as unknown as GatewayRequestContext,
+      client: null,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown or expired approval id" }),
+    );
+    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+  });
+
   it("does not wait on decisions for approvals hidden from the caller", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(

@@ -52,6 +52,7 @@ async function retireMatrixApprovalReactionTargets(params: {
   roomId: string;
   targetEventId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   result: ApprovalResolveResult;
   logVerboseMessage: (message: string) => void;
@@ -60,6 +61,7 @@ async function retireMatrixApprovalReactionTargets(params: {
   const registeredTargets = await unregisterMatrixApprovalReactionTargetsForApproval({
     accountId,
     approvalId: params.approvalId,
+    instanceId: params.instanceId,
     approvalKind: params.approvalKind,
   });
   const targets = new Map<string, { accountId: string; roomId: string; eventId: string }>();
@@ -127,6 +129,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: params.target.approvalId,
+      ...(params.target.instanceId ? { instanceId: params.target.instanceId } : {}),
       approvalKind: params.target.approvalKind,
       decision: params.target.decision,
       channel: "matrix",
@@ -142,6 +145,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
       roomId: params.roomId,
       targetEventId: params.targetEventId,
       approvalId: params.target.approvalId,
+      instanceId: params.target.instanceId,
       approvalKind: params.target.approvalKind,
       result,
       logVerboseMessage: params.logVerboseMessage,
@@ -156,6 +160,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
       await unregisterMatrixApprovalReactionTargetsForApproval({
         accountId: params.accountId,
         approvalId: params.target.approvalId,
+        instanceId: params.target.instanceId,
         approvalKind: params.target.approvalKind,
       });
       params.logVerboseMessage(

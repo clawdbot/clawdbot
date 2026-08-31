@@ -403,7 +403,6 @@ export class ApprovalPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const kind = approval.presentation.kind;
     const generation = ++this.operationGeneration;
     const isCurrentDecision = () =>
       this.isCurrentOperation({ client, generation, id }) && this.hasApprovalGrantAccess;
@@ -416,7 +415,8 @@ export class ApprovalPage extends OpenClawLightDomElement {
     try {
       const result = await client.request<ApprovalResolveResult>("approval.resolve", {
         id,
-        kind,
+        ...(approval.instanceId ? { instanceId: approval.instanceId } : {}),
+        kind: approval.presentation.kind,
         decision,
       });
       if (!isCurrentDecision()) {
@@ -425,7 +425,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       if (
         !validateApprovalResolveResult(result) ||
         result.approval.id !== id ||
-        result.approval.presentation.kind !== kind ||
+        result.approval.presentation.kind !== approval.presentation.kind ||
         !appliedDecisionMatches(result, decision)
       ) {
         // The write outcome is unknown. Keep every decision disabled until a

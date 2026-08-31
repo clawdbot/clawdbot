@@ -2395,7 +2395,7 @@ internal data class SettingsMetric(
 @Composable
 private fun ExecApprovalsPanel(
   approvals: List<GatewayExecApprovalSummary>,
-  onResolve: (String, String) -> Unit,
+  onResolve: (String, String, String?) -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     approvals.forEach { approval ->
@@ -2410,7 +2410,7 @@ private fun ExecApprovalsPanel(
 @Composable
 private fun ExecApprovalCard(
   approval: GatewayExecApprovalSummary,
-  onResolve: (String, String) -> Unit,
+  onResolve: (String, String, String?) -> Unit,
 ) {
   val resolving = approval.resolvingDecision != null
   ClawPanel {
@@ -2437,14 +2437,14 @@ private fun ExecApprovalCard(
           if (action.decision == "allow-once") {
             ClawPrimaryButton(
               text = action.label,
-              onClick = { onResolve(approval.id, action.decision) },
+              onClick = { onResolve(approval.id, action.decision, approval.instanceId) },
               enabled = !resolving,
               modifier = Modifier.fillMaxWidth(),
             )
           } else {
             ClawSecondaryButton(
               text = action.label,
-              onClick = { onResolve(approval.id, action.decision) },
+              onClick = { onResolve(approval.id, action.decision, approval.instanceId) },
               enabled = !resolving,
               modifier = Modifier.fillMaxWidth(),
             )

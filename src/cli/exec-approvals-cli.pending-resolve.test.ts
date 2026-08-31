@@ -60,11 +60,13 @@ function pendingApprovalSnapshot(params: {
   kind?: "exec" | "plugin" | "system-agent";
   allowedDecisions?: string[];
   expiresAtMs?: number;
+  instanceId?: string;
 }) {
   const kind = params.kind ?? "exec";
   return {
     approval: {
       id: params.id,
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
       status: "pending",
       urlPath: `/approve/${params.id}`,
       createdAtMs: Date.now() - 1_000,
@@ -362,7 +364,7 @@ describe("exec approvals pending and resolve CLI", () => {
           if (requestedId === displayId) {
             throw new Error("approval not found");
           }
-          return pendingApprovalSnapshot({ id: approvalId });
+          return pendingApprovalSnapshot({ id: approvalId, instanceId: "instance-cli" });
         }
         if (method === "approval.resolve") {
           return {
@@ -383,6 +385,7 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("approval.resolve");
     expect(callGatewayFromCli.mock.calls[2]?.[2]).toEqual({
       id: approvalId,
+      instanceId: "instance-cli",
       kind: "exec",
       decision: "allow-once",
     });

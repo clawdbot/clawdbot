@@ -68,6 +68,7 @@ describe("Signal approval reactions", () => {
     };
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "exec-structured-approval",
+      instanceId: "exec-structured-instance",
       approvalSlug: "exec-str",
       allowedDecisions: ["allow-once", "deny"],
       command: "printf test",
@@ -113,6 +114,7 @@ describe("Signal approval reactions", () => {
       }),
     ).resolves.toEqual({
       approvalId: "exec-structured-approval",
+      instanceId: "exec-structured-instance",
       approvalKind: "exec",
       decision: "allow-once",
       route: {
@@ -765,6 +767,55 @@ describe("Signal approval reactions", () => {
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
+  });
+
+  it("keeps a same-id replacement actionable after a stale lifecycle reaction", async () => {
+    const cfg = {
+      channels: { signal: { allowFrom: ["+15551230000"] } },
+      approvals: { exec: { enabled: true, mode: "session" as const } },
+    };
+    for (const [messageId, instanceId] of [
+      ["old-message", "old-instance"],
+      ["current-message", "current-instance"],
+    ] as const) {
+      registerSignalApprovalReactionTarget({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId,
+        approvalId: "exec-reused",
+        instanceId,
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once"],
+        targetAuthorKeys: ["+15550009999"],
+        route: approvalRoute,
+        routeAllowed: true,
+      });
+    }
+    resolverMocks.resolveSignalApproval
+      .mockRejectedValueOnce(new Error("stale lifecycle"))
+      .mockResolvedValueOnce({
+        applied: true,
+        approval: { status: "allowed", decision: "allow-once" },
+      });
+    resolverMocks.isApprovalNotFoundError.mockReturnValueOnce(true);
+
+    for (const messageId of ["old-message", "current-message"]) {
+      await expect(
+        maybeResolveSignalApprovalReaction({
+          cfg,
+          accountId: "default",
+          conversationKey: "+15551230000",
+          messageId,
+          reactionKey: "👍",
+          actorId: "+15551230000",
+          targetAuthor: "+15550009999",
+        }),
+      ).resolves.toBe(true);
+    }
+
+    expect(
+      resolverMocks.resolveSignalApproval.mock.calls.map(([request]) => request.instanceId),
+    ).toEqual(["old-instance", "current-instance"]);
   });
 
   it("authorizes reactions using Signal defaultTo approvers", async () => {

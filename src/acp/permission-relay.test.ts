@@ -12,6 +12,7 @@ function buildOptionsForAllowedDecisions(allowedDecisions: unknown) {
     sessionId: "session-1",
     event: {
       approvalId: "approval-1",
+      instanceId: "instance:approval-1",
       command: "echo ok",
     },
     details: { allowedDecisions },
@@ -34,6 +35,7 @@ describe("ACP permission relay helpers", () => {
       kind: "exec",
       status: "pending",
       approvalId: "approval-1",
+      instanceId: "instance:approval-1",
       title: "Command approval requested",
       toolCallId: "tool-1",
       command: "echo stale",
@@ -42,6 +44,7 @@ describe("ACP permission relay helpers", () => {
     if (!event) {
       throw new Error("approval event did not parse");
     }
+    expect(event.instanceId).toBe("instance:approval-1");
 
     expect(
       buildAcpPermissionRequest({
@@ -95,6 +98,7 @@ describe("ACP permission relay helpers", () => {
     expect(
       parseGatewayExecApprovalRequestEventPayload({
         id: "approval-raw",
+        instanceId: "instance:approval-raw",
         request: {
           command: "echo raw",
           host: "gateway",
@@ -104,6 +108,7 @@ describe("ACP permission relay helpers", () => {
       }),
     ).toEqual({
       approvalId: "approval-raw",
+      instanceId: "instance:approval-raw",
       command: "echo raw",
       host: "gateway",
       toolCallId: "tool-raw",

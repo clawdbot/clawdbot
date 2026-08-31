@@ -319,6 +319,7 @@ describe("buildDiscordInteractiveComponents", () => {
               action: {
                 type: "approval",
                 approvalId: "opaque:approval;id=7",
+                instanceId: "instance-1",
                 approvalKind: "plugin",
                 decision: "deny",
               },
@@ -339,7 +340,7 @@ describe("buildDiscordInteractiveComponents", () => {
               label: "Deny",
               style: "danger",
               internalCustomId:
-                "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
+                "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;instance=instance-1;action=deny",
             },
           ],
         },
@@ -360,6 +361,7 @@ describe("buildDiscordInteractiveComponents", () => {
     expect(built.entries).toEqual([]);
     expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
       approvalId: "opaque:approval;id=7",
+      instanceId: "instance-1",
       approvalKind: "plugin",
       action: "deny",
     });
@@ -478,6 +480,7 @@ describe("buildDiscordInteractiveComponents", () => {
               action: {
                 type: "approval",
                 approvalId: overlongId,
+                instanceId: "instance-1",
                 approvalKind: "exec",
                 decision: "allow-once",
               },
@@ -491,7 +494,11 @@ describe("buildDiscordInteractiveComponents", () => {
       firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
     expect(customId?.length).toBeLessThanOrEqual(100);
     expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
-      approvalId: buildApprovalResolutionRef({ approvalId: overlongId, approvalKind: "exec" }),
+      approvalId: buildApprovalResolutionRef({
+        approvalId: overlongId,
+        approvalKind: "exec",
+        instanceId: "instance-1",
+      }),
       approvalKind: "exec",
       action: "allow-once",
     });

@@ -32,6 +32,7 @@ function createApprovalEvent(params: {
   runId: string;
   sessionKey?: string;
   toolCallId?: string;
+  instanceId?: string;
 }): EventFrame {
   return {
     type: "event",
@@ -46,6 +47,7 @@ function createApprovalEvent(params: {
         status: "pending",
         title: "Command approval requested",
         approvalId: params.approvalId ?? "approval-1",
+        instanceId: params.instanceId,
         toolCallId: params.toolCallId,
         command: "echo event",
         host: "gateway",
@@ -59,12 +61,14 @@ function createApprovalRequestEvent(params: {
   sessionKey?: string;
   command?: string;
   toolCallId?: string;
+  instanceId?: string;
 }): EventFrame {
   return {
     type: "event",
     event: "exec.approval.requested",
     payload: {
       id: params.approvalId ?? "approval-1",
+      instanceId: params.instanceId,
       createdAtMs: 1,
       expiresAtMs: 2,
       request: {
@@ -167,10 +171,10 @@ function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
 function approvalRelayPendingDecision(agent: AcpGatewayAgent, approvalId: string): unknown {
   const relayMap = (
     agent as unknown as {
-      approvalRelays: Map<string, { pendingDecision?: unknown }>;
+      approvalRelays: Map<string, { approvalId: string; pendingDecision?: unknown }>;
     }
   ).approvalRelays;
-  return relayMap.get(approvalId)?.pendingDecision;
+  return [...relayMap.values()].find((relay) => relay.approvalId === approvalId)?.pendingDecision;
 }
 
 function captureApprovalDecisionRetry(
@@ -178,13 +182,13 @@ function captureApprovalDecisionRetry(
   approvalId: string,
 ): () => Promise<void> {
   const internal = agent as unknown as {
-    approvalRelays: Map<string, unknown>;
+    approvalRelays: Map<string, { approvalId: string }>;
     promptStream: {
       agentEvents: { retryApprovalRelayDecision: (relay: unknown) => Promise<void> };
     };
   };
   const relay = expectDefined(
-    internal.approvalRelays.get(approvalId),
+    [...internal.approvalRelays.values()].find((candidate) => candidate.approvalId === approvalId),
     "approval relay test invariant",
   );
   return () => internal.promptStream.agentEvents.retryApprovalRelayDecision(relay);
@@ -265,6 +269,31 @@ describe("ACP translator permission relay", () => {
       expect(approvalResolveCalls(harness.request)).toHaveLength(1);
     });
 
+    await cleanupHarness(harness);
+  });
+
+  it("keeps same-id replacement relays distinct and echoes each instance", async () => {
+    const harness = await createHarness();
+    const first = createApprovalEvent({
+      runId: harness.runId,
+      approvalId: "approval-reused",
+      instanceId: "instance:first",
+    });
+    const replacement = createApprovalEvent({
+      runId: harness.runId,
+      approvalId: "approval-reused",
+      instanceId: "instance:replacement",
+    });
+
+    await harness.agent.handleGatewayEvent(first);
+    await vi.waitFor(() => expect(approvalResolveCalls(harness.request)).toHaveLength(1));
+    await harness.agent.handleGatewayEvent(replacement);
+    await vi.waitFor(() => expect(approvalResolveCalls(harness.request)).toHaveLength(2));
+
+    expect(approvalResolveCalls(harness.request).map(([, params]) => params)).toEqual([
+      { id: "approval-reused", instanceId: "instance:first", decision: "allow-once" },
+      { id: "approval-reused", instanceId: "instance:replacement", decision: "allow-once" },
+    ]);
     await cleanupHarness(harness);
   });
 
@@ -445,7 +474,11 @@ describe("ACP translator permission relay", () => {
       resolveApproval,
       requestPermission: vi.fn(() => permission.promise),
     });
-    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-replay" });
+    const event = createApprovalEvent({
+      runId: harness.runId,
+      approvalId: "approval-replay",
+      instanceId: "instance:replay",
+    });
 
     await harness.agent.handleGatewayEvent(event);
     await vi.waitFor(() => {
@@ -462,6 +495,7 @@ describe("ACP translator permission relay", () => {
     });
     expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-replay",
+      instanceId: "instance:replay",
       decision: "allow-once",
     });
     expect(harness.requestPermission).toHaveBeenCalledTimes(1);

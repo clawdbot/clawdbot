@@ -151,6 +151,7 @@ export type ApprovalMode = "ask" | "never" | "auto" | "trusted";
 
 export type ApprovalDecisionParams = {
   decision: "allow-once" | "allow-always" | "deny";
+  instanceId?: string;
 };
 
 /** Terminal and non-terminal status values returned by Run.wait. */

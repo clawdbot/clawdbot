@@ -91,6 +91,34 @@ describe("approval callback data", () => {
     expect(parseTelegramApprovalCallbackData(callbackData)).toEqual(action);
   });
 
+  it("round-trips the approval lifecycle and binds compact callbacks to it", () => {
+    const exact = {
+      type: "approval" as const,
+      approvalId: "approval-1",
+      approvalKind: "exec" as const,
+      instanceId: "instance-1",
+      decision: "deny" as const,
+    };
+    expect(parseTelegramApprovalCallbackData(buildTelegramApprovalCallbackData(exact))).toEqual(
+      exact,
+    );
+
+    const approvalId = "x".repeat(80);
+    expect(
+      parseTelegramApprovalCallbackData(
+        buildTelegramApprovalCallbackData({ ...exact, approvalId }),
+      ),
+    ).toEqual({
+      ...exact,
+      approvalId: buildApprovalResolutionRef({
+        approvalId,
+        approvalKind: "exec",
+        instanceId: "instance-1",
+      }),
+      instanceId: undefined,
+    });
+  });
+
   it("uses the canonical id at the Unicode byte boundary and compacts beyond it", () => {
     const exactId = "\u{1F4F1}".repeat(13);
     const compactedId = "\u{1F4F1}".repeat(14);

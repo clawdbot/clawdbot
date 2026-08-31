@@ -765,6 +765,9 @@ async function resolvePendingApproval(
     opts,
     {
       id,
+      ...(current.status === "pending" && current.instanceId
+        ? { instanceId: current.instanceId }
+        : {}),
       kind: current.presentation.kind,
       decision,
       ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),

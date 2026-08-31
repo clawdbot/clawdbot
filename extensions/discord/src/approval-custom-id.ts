@@ -11,6 +11,7 @@ function encodeDiscordApprovalCustomId(action: DiscordApprovalAction): string {
   return [
     `execapproval:kind=${action.approvalKind}`,
     `id=${encodeURIComponent(action.approvalId)}`,
+    ...(action.instanceId ? [`instance=${encodeURIComponent(action.instanceId)}`] : []),
     `action=${action.decision}`,
   ].join(";");
 }
@@ -27,7 +28,9 @@ function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): st
     approvalId: buildApprovalResolutionRef({
       approvalId: action.approvalId,
       approvalKind: action.approvalKind,
+      instanceId: action.instanceId,
     }),
+    instanceId: undefined,
   });
 }
 
@@ -48,10 +51,12 @@ export function buildExecApprovalCustomId(
   approvalId: string,
   approvalKind: DiscordApprovalAction["approvalKind"],
   decision: DiscordApprovalAction["decision"],
+  instanceId?: string,
 ): string {
   return encodeBoundedDiscordApprovalCustomId({
     type: "approval",
     approvalId,
+    ...(instanceId ? { instanceId } : {}),
     approvalKind,
     decision,
   });
@@ -67,6 +72,7 @@ function decodeCustomIdValue(value: string): string | null {
 
 export function parseExecApprovalData(data: ComponentData): {
   approvalId: string;
+  instanceId?: string;
   approvalKind: DiscordApprovalAction["approvalKind"];
   action: DiscordApprovalAction["decision"];
 } | null {
@@ -78,6 +84,7 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
+  const rawInstanceId = coerce(data.instance);
   if (!rawId || (rawKind !== "exec" && rawKind !== "plugin") || !rawAction) {
     return null;
   }
@@ -85,11 +92,13 @@ export function parseExecApprovalData(data: ComponentData): {
     return null;
   }
   const approvalId = decodeCustomIdValue(rawId);
-  if (!approvalId) {
+  const instanceId = rawInstanceId ? decodeCustomIdValue(rawInstanceId) : undefined;
+  if (!approvalId || (rawInstanceId && !instanceId)) {
     return null;
   }
   return {
     approvalId,
+    ...(instanceId ? { instanceId } : {}),
     approvalKind: rawKind,
     action: rawAction,
   };

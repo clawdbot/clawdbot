@@ -68,6 +68,7 @@ type MatrixApprovalMetadataBase = {
   version: 1;
   type: "approval.request";
   id: string;
+  instanceId?: string;
   state: "pending";
   kind: PendingApprovalView["approvalKind"];
   phase: "pending";
@@ -107,6 +108,7 @@ type MatrixApprovalExtraContent = {
 };
 type PendingApprovalContent = {
   approvalId: string;
+  instanceId?: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   extraContent: MatrixApprovalExtraContent;
@@ -248,6 +250,7 @@ function buildMatrixApprovalMetadata(params: {
     version: 1,
     type: "approval.request",
     id: params.view.approvalId,
+    ...(params.view.instanceId ? { instanceId: params.view.instanceId } : {}),
     state: "pending",
     kind: params.view.approvalKind,
     phase: params.view.phase,
@@ -301,6 +304,7 @@ function buildPendingApprovalContent(params: {
           request: {
             approvalKind: "plugin",
             id: params.view.approvalId,
+            instanceId: params.view.instanceId,
             request: {
               title: params.view.title,
               description: params.view.description ?? "",
@@ -318,6 +322,7 @@ function buildPendingApprovalContent(params: {
         })
       : buildExecApprovalPendingReplyPayload({
           approvalId: params.view.approvalId,
+          instanceId: params.view.instanceId,
           approvalSlug: params.view.approvalId.slice(0, 8),
           approvalCommandId: params.view.approvalId,
           ask: params.view.ask ?? undefined,
@@ -336,6 +341,7 @@ function buildPendingApprovalContent(params: {
   const text = payload.text ?? "";
   return {
     approvalId: params.view.approvalId,
+    ...(params.view.instanceId ? { instanceId: params.view.instanceId } : {}),
     text: hint ? (text ? `${hint}\n\n${text}` : hint) : text,
     allowedDecisions,
     extraContent: {
@@ -494,6 +500,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         roomId: result.roomId,
         eventId: reactionEventId,
         approvalId: pendingPayload.approvalId,
+        instanceId: pendingPayload.instanceId,
         approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.allowedDecisions,
         ttlMs: view.expiresAtMs - Date.now(),
@@ -580,6 +587,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         roomId: target.roomId,
         eventId: target.eventId,
         approvalId: params.pendingPayload.approvalId,
+        instanceId: params.pendingPayload.instanceId,
         approvalKind: params.view.approvalKind,
         allowedDecisions: params.pendingPayload.allowedDecisions,
         ttlMs: params.view.expiresAtMs - Date.now(),

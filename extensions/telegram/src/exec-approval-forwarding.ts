@@ -33,6 +33,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
 }) {
   return buildTypedExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
+    instanceId: params.request.instanceId,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
     warningText: params.request.request.warningText ?? undefined,

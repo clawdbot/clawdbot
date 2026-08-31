@@ -28,6 +28,7 @@ export type PendingIMessageApprovalReactionPollTarget = {
   conversation: IMessageApprovalConversationKey;
   messageId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
@@ -158,6 +159,7 @@ function readPersistedPollTarget(value: unknown): PendingIMessageApprovalReactio
     conversation,
     messageId,
     approvalId,
+    ...(typeof target.instanceId === "string" ? { instanceId: target.instanceId } : {}),
     approvalKind: target.approvalKind,
     allowedDecisions,
     expiresAtMs,
@@ -170,6 +172,7 @@ export function recordIMessageApprovalReactionPollTarget(params: {
   conversation: IMessageApprovalConversationKey;
   messageId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
@@ -183,6 +186,7 @@ export function recordIMessageApprovalReactionPollTarget(params: {
     conversation: params.conversation,
     messageId: params.messageId,
     approvalId: params.approvalId,
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     approvalKind: params.approvalKind,
     allowedDecisions: params.allowedDecisions,
     expiresAtMs: expiry.expiresAtMs,

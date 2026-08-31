@@ -10,6 +10,7 @@ export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny"
 
 export type GatewayExecApprovalEvent = {
   approvalId: string;
+  instanceId?: string;
   command?: string;
   host?: string;
   title?: string;
@@ -87,6 +88,7 @@ export function parseGatewayExecApprovalEventData(
   }
   return {
     approvalId,
+    instanceId: readNonEmptyString(data.instanceId),
     command: readNonEmptyString(data.command),
     host: readNonEmptyString(data.host),
     title: readNonEmptyString(data.title),
@@ -106,6 +108,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
   const requestRecord = request as Record<string, unknown>;
   return {
     approvalId,
+    instanceId: readNonEmptyString(payload.instanceId),
     command:
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),

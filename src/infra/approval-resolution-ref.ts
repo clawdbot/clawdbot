@@ -7,12 +7,16 @@ const APPROVAL_RESOLUTION_REF_LENGTH = 43;
 export function buildApprovalResolutionRef(params: {
   approvalId: string;
   approvalKind: "exec" | "plugin" | "system-agent";
+  instanceId?: string;
 }): string {
-  return createHash("sha256")
+  const hash = createHash("sha256")
     .update(params.approvalKind, "utf8")
     .update("\0", "utf8")
-    .update(params.approvalId, "utf8")
-    .digest("base64url");
+    .update(params.approvalId, "utf8");
+  if (params.instanceId) {
+    hash.update("\0", "utf8").update(params.instanceId, "utf8");
+  }
+  return hash.digest("base64url");
 }
 
 export function isApprovalResolutionRef(value: string): boolean {

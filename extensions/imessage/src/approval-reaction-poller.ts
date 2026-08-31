@@ -178,6 +178,7 @@ function bindObservedConversation(params: {
       conversation,
       messageId,
       approvalId: params.target.approvalId,
+      instanceId: params.target.instanceId,
       approvalKind: params.target.approvalKind,
       allowedDecisions: params.target.allowedDecisions,
       ttlMs,

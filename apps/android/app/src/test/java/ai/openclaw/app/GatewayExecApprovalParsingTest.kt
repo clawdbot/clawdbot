@@ -297,6 +297,27 @@ class GatewayExecApprovalParsingTest {
       """{"id":"approval-1","kind":"exec","decision":"deny"}""",
       buildGatewayExecApprovalResolveParams(id = "approval-1", decision = "deny").toString(),
     )
+    assertEquals(
+      """{"id":"approval-1","instanceId":"instance:approval-1","kind":"exec","decision":"deny"}""",
+      buildGatewayExecApprovalResolveParams(
+        id = "approval-1",
+        decision = "deny",
+        instanceId = "instance:approval-1",
+      ).toString(),
+    )
+  }
+
+  @Test
+  fun parsesOptionalPendingInstanceId() {
+    val payload =
+      pendingGetPayload().replace(
+        "\"status\": \"pending\"",
+        "\"status\": \"pending\", \"instanceId\": \"instance:approval-1\"",
+      )
+    val pending =
+      parseGatewayExecApprovalGetPayload(payload, json, expectedId = "approval-1")
+        as? GatewayExecApprovalSnapshot.Pending
+    assertEquals("instance:approval-1", pending?.summary?.instanceId)
   }
 
   @Test

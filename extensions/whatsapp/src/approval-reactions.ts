@@ -34,6 +34,7 @@ type WhatsAppApprovalDeliveryBinding = ApprovalReactionDeliveryBinding;
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
@@ -129,6 +130,9 @@ function readPersistedTarget(target: unknown): WhatsAppApprovalReactionTarget | 
   }
   return {
     approvalId: value.approvalId,
+    ...(typeof value.instanceId === "string" && value.instanceId
+      ? { instanceId: value.instanceId }
+      : {}),
     approvalKind: value.approvalKind,
     allowedDecisions,
   };
@@ -225,6 +229,7 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
@@ -244,6 +249,7 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   }
   const target: WhatsAppApprovalReactionTarget = {
     approvalId,
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     approvalKind: params.approvalKind,
     allowedDecisions,
   };
@@ -324,6 +330,7 @@ export function registerWhatsAppApprovalReactionTargetForDeliveredPayload(params
           remoteJid,
           messageId,
           approvalId: binding.approvalId,
+          instanceId: binding.instanceId,
           approvalKind: binding.approvalKind,
           allowedDecisions: binding.allowedDecisions,
           ttlMs: params.ttlMs,
@@ -356,6 +363,7 @@ function resolveTarget(params: {
   return resolved
     ? {
         approvalId: resolved.approvalId,
+        ...(resolved.instanceId ? { instanceId: resolved.instanceId } : {}),
         approvalKind: resolved.approvalKind,
         decision: resolved.decision,
       }
@@ -507,6 +515,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
+      ...(target.instanceId ? { instanceId: target.instanceId } : {}),
       approvalKind: target.approvalKind,
       decision: target.decision,
       channel: "whatsapp",

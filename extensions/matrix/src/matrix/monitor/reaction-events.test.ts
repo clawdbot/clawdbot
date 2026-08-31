@@ -176,6 +176,7 @@ describe("matrix approval reactions", () => {
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
       approvalId: "req-123",
+      instanceId: "req-123-instance",
       approvalKind: "exec",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
@@ -196,6 +197,7 @@ describe("matrix approval reactions", () => {
     expect(resolveMatrixApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "req-123",
+      instanceId: "req-123-instance",
       approvalKind: "exec",
       decision: "allow-once",
       channel: "matrix",

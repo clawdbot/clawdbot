@@ -777,7 +777,11 @@ describe("OpenClaw SDK", () => {
     });
 
     await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
-    const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
+    const staleDecision = {
+      id: "stale-approval",
+      instanceId: "approval-instance-old",
+      decision: "allow-once" as const,
+    };
     await expect(oc.approvals.respond("approval-123", staleDecision)).resolves.toEqual({
       ok: true,
     });
@@ -791,7 +795,11 @@ describe("OpenClaw SDK", () => {
       {
         method: "exec.approval.resolve",
         options: undefined,
-        params: { id: "approval-123", decision: "allow-once" },
+        params: {
+          id: "approval-123",
+          instanceId: "approval-instance-old",
+          decision: "allow-once",
+        },
       },
     ]);
   });

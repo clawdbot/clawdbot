@@ -145,6 +145,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
         approvalId: request.id,
+        instanceId: request.instanceId,
         approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),

@@ -58,6 +58,7 @@ type RequestedApprovalEvent<
 > = {
   approvalKind?: TKind;
   id: string;
+  instanceId?: string;
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
@@ -75,6 +76,7 @@ type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-sour
 
 type ApprovalResolveParams = {
   id: string;
+  instanceId?: string;
   decision: string;
   reviewer?: ApprovalChannelReviewer;
 };
@@ -153,6 +155,7 @@ export function buildRequestedApprovalEvent<
   return {
     ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
+    instanceId: record.instanceId,
     request: record.request,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
@@ -167,6 +170,7 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
   respond: RespondFn;
 }): {
   inputId: string;
+  instanceId?: string;
   decision: ExecApprovalDecision;
   reviewer?: ApprovalChannelReviewer;
 } | null {
@@ -180,6 +184,7 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
   }
   return {
     inputId: rawParams.id,
+    ...(rawParams.instanceId ? { instanceId: rawParams.instanceId } : {}),
     decision: rawParams.decision,
     ...(rawParams.reviewer ? { reviewer: rawParams.reviewer } : {}),
   };
@@ -484,6 +489,7 @@ export async function handleApprovalResolve<
   approvalKind: ChannelApprovalKind;
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
+  instanceId?: string;
   decision: ExecApprovalDecision;
   respond: RespondFn;
   context: GatewayRequestContext;
@@ -557,6 +563,11 @@ export async function handleApprovalResolve<
       return;
     }
     respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
+    return;
+  }
+
+  if (params.instanceId && resolved.snapshot.instanceId !== params.instanceId) {
+    respondUnknownOrExpiredApproval(params.respond);
     return;
   }
 

@@ -41,12 +41,17 @@ function approvalConfig(allowFrom: string[]) {
   };
 }
 
-function registerExecApprovalTarget(params: { remoteJid: string; approvalId?: string }): void {
+function registerExecApprovalTarget(params: {
+  remoteJid: string;
+  approvalId?: string;
+  instanceId?: string;
+}): void {
   registerWhatsAppApprovalReactionTarget({
     accountId: "default",
     remoteJid: params.remoteJid,
     messageId: "approval-message",
     approvalId: params.approvalId ?? "exec-direct",
+    instanceId: params.instanceId,
     approvalKind: "exec",
     allowedDecisions: ["allow-once", "deny"],
   });
@@ -337,7 +342,10 @@ describe("WhatsApp approval reactions", () => {
       actorId: "+15551230001",
     },
   ])("resolves direct approval reactions across PN/LID target drift: $name", async (testCase) => {
-    registerExecApprovalTarget({ remoteJid: testCase.storedRemoteJid });
+    registerExecApprovalTarget({
+      remoteJid: testCase.storedRemoteJid,
+      instanceId: "exec-direct-instance",
+    });
     const lidLookup: LidLookup = {
       getLIDForPN: vi.fn().mockResolvedValue(testCase.lidForPn ?? null),
       getPNForLID: vi.fn().mockResolvedValue(testCase.pnForLid ?? null),
@@ -359,6 +367,7 @@ describe("WhatsApp approval reactions", () => {
     expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledWith({
       cfg: approvalConfig([testCase.actorId]),
       approvalId: "exec-direct",
+      instanceId: "exec-direct-instance",
       approvalKind: "exec",
       decision: "allow-once",
       channel: "whatsapp",

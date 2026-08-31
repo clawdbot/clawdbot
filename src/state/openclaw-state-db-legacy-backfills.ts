@@ -17,11 +17,14 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   runSqliteImmediateTransactionSync(db, () => {
     ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
     const rows = db
-      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .prepare(
+        "SELECT approval_id, kind, resolution_ref, presentation_json FROM operator_approvals",
+      )
       .all() as Array<{
       approval_id?: unknown;
       kind?: unknown;
       resolution_ref?: unknown;
+      presentation_json?: unknown;
     }>;
     const update = db.prepare(
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
@@ -33,9 +36,15 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
       ) {
         throw new Error("operator approval row cannot be assigned a transport reference");
       }
+      const rawInstanceId =
+        typeof row.presentation_json === "string"
+          ? safeParseJsonRecord(row.presentation_json)?.instanceId
+          : undefined;
+      const instanceId = typeof rawInstanceId === "string" ? rawInstanceId : undefined;
       const resolutionRef = buildApprovalResolutionRef({
         approvalId: row.approval_id,
         approvalKind: row.kind,
+        instanceId,
       });
       if (row.resolution_ref !== resolutionRef) {
         update.run(resolutionRef, row.approval_id);

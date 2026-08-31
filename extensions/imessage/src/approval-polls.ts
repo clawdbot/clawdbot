@@ -48,6 +48,7 @@ const APPROVAL_DECISIONS = new Set<ExecApprovalReplyDecision>([
 /** JSON-safe: option pairs stay an array so the persistent store round-trips. */
 type IMessageApprovalPollTarget = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
 };
@@ -89,7 +90,12 @@ function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null 
       : [];
   });
   return optionDecisions.length > 0
-    ? { approvalId: target.approvalId, approvalKind: target.approvalKind, optionDecisions }
+    ? {
+        approvalId: target.approvalId,
+        ...(typeof target.instanceId === "string" ? { instanceId: target.instanceId } : {}),
+        approvalKind: target.approvalKind,
+        optionDecisions,
+      }
     : null;
 }
 
@@ -162,6 +168,7 @@ function registerIMessageApprovalPollTarget(params: {
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs: number;
@@ -190,6 +197,7 @@ function registerIMessageApprovalPollTarget(params: {
   }
   const target: IMessageApprovalPollTarget = {
     approvalId,
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     approvalKind: params.approvalKind,
     optionDecisions: params.optionDecisions,
   };
@@ -462,6 +470,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   if (event.malformedVotes) {
     warn("approval poll vote ignored: malformed complete vote set", {
       approvalId: target.approvalId,
+      instanceId: target.instanceId,
       actorHandle: event.actorHandle,
     });
     return true;
@@ -541,6 +550,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
+      instanceId: target.instanceId,
       approvalKind: target.approvalKind,
       decision,
       channel: "imessage",

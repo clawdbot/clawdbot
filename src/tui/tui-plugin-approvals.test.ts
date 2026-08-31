@@ -15,6 +15,7 @@ type TestSelector = Component & {
 function approvalPayload(overrides: Record<string, unknown> = {}) {
   return {
     id: "plugin:skill-1",
+    instanceId: "instance:plugin-1",
     request: {
       title: "Apply workspace skill proposal",
       description: "Apply a pending workspace skill proposal into live workspace skills.",
@@ -151,7 +152,11 @@ describe("TUI plugin approvals", () => {
     harness.selectors[0]?.onSelectionChange?.({ value: "allow-once", label: "Allow once" });
     harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
     await vi.waitFor(() => {
-      expect(harness.resolvePluginApproval).toHaveBeenCalledWith("plugin:skill-1", "allow-once");
+      expect(harness.resolvePluginApproval).toHaveBeenCalledWith(
+        "plugin:skill-1",
+        "allow-once",
+        "instance:plugin-1",
+      );
     });
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
     expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
@@ -427,7 +432,11 @@ describe("TUI plugin approvals", () => {
 
     harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
     await vi.waitFor(() => {
-      expect(harness.resolvePluginApproval).toHaveBeenCalledWith("plugin:skill-1", "allow-once");
+      expect(harness.resolvePluginApproval).toHaveBeenCalledWith(
+        "plugin:skill-1",
+        "allow-once",
+        "instance:plugin-1",
+      );
     });
   });
 

@@ -21,6 +21,24 @@ describe("approval resolution references", () => {
     );
   });
 
+  it("binds lifecycle-aware locators without changing legacy locators", () => {
+    const legacy = buildApprovalResolutionRef({ approvalId: "same-id", approvalKind: "exec" });
+    const first = buildApprovalResolutionRef({
+      approvalId: "same-id",
+      approvalKind: "exec",
+      instanceId: "instance-1",
+    });
+
+    expect(first).not.toBe(legacy);
+    expect(
+      buildApprovalResolutionRef({
+        approvalId: "same-id",
+        approvalKind: "exec",
+        instanceId: "instance-2",
+      }),
+    ).not.toBe(first);
+  });
+
   it.each(["", "a".repeat(42), "a".repeat(44), "!".repeat(43)])(
     "rejects malformed transport references %#",
     (value) => {

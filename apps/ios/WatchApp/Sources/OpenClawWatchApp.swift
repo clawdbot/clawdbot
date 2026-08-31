@@ -49,7 +49,7 @@ struct OpenClawWatchApp: App {
                         self.inboxStore.markReplyResult(result, actionLabel: action.label, attemptID: attemptID)
                     }
                 },
-                onExecApprovalDecision: { approvalId, gatewayStableID, decision in
+                onExecApprovalDecision: { approvalId, approvalInstanceId, gatewayStableID, decision in
                     guard let receiver = self.receiver else { return }
                     guard let attemptID = self.inboxStore.beginExecApprovalDecision(
                         approvalId: approvalId,
@@ -59,6 +59,7 @@ struct OpenClawWatchApp: App {
                     Task { @MainActor in
                         let result = await receiver.sendExecApprovalResolve(
                             approvalId: approvalId,
+                            approvalInstanceId: approvalInstanceId,
                             gatewayStableID: gatewayStableID,
                             attemptID: attemptID,
                             decision: decision)

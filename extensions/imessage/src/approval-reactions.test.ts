@@ -577,6 +577,7 @@ describe("iMessage approval reactions", () => {
       conversation: { chatId: 42, chatGuid: "iMessage;+;restart" },
       messageId: "restart-message",
       approvalId: "exec-restart",
+      instanceId: "instance-restart",
       allowedDecisions: ["allow-once", "deny"],
     });
     await vi.waitFor(async () => {
@@ -592,6 +593,7 @@ describe("iMessage approval reactions", () => {
     ).toEqual([
       expect.objectContaining({
         approvalId: "exec-restart",
+        instanceId: "instance-restart",
         messageId: "restart-message",
         conversation: expect.objectContaining({ chatId: 42, chatGuid: "iMessage;+;restart" }),
       }),
@@ -698,6 +700,7 @@ describe("iMessage approval reactions", () => {
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
       approvalId: "exec-success",
+      instanceId: "instance-success",
       allowedDecisions: ["allow-once", "deny"],
     });
 
@@ -716,6 +719,9 @@ describe("iMessage approval reactions", () => {
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "instance-success" }),
+    );
 
     // Second tapback (toggle to 👎) must not hit the resolver — the in-memory
     // binding was cleared on the first success.

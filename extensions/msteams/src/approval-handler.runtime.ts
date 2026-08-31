@@ -111,6 +111,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
             token: actionToken.token,
             accountId: entry.accountId,
             approvalId: request.id,
+            instanceId: request.instanceId,
             approvalKind,
             decision: actionToken.decision,
             allowedDecisions: pendingPayload.allowedDecisions,

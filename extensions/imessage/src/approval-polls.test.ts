@@ -44,6 +44,7 @@ function bind(overrides?: {
     conversation: { handle: APPROVER },
     pollGuid: POLL_GUID,
     approvalId: "exec-1",
+    instanceId: "instance-1",
     approvalKind: "exec",
     optionDecisions:
       overrides?.optionDecisions ??
@@ -177,6 +178,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalId: "exec-1",
+        instanceId: "instance-1",
         decision: "allow-once",
         senderId: APPROVER,
         gatewayRuntime,

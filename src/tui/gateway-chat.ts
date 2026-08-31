@@ -469,9 +469,10 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request("plugin.approval.list", {});
   }
 
-  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision, instanceId?: string) {
     return await this.client.request<{ ok?: boolean }>("plugin.approval.resolve", {
       id,
+      ...(instanceId ? { instanceId } : {}),
       decision,
     });
   }

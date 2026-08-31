@@ -82,6 +82,7 @@ export const PluginApprovalRequestParamsSchema = closedObject({
 /** Reviewer decision payload resolving one pending plugin approval request. */
 export const PluginApprovalResolveParamsSchema = closedObject({
   id: NonEmptyString,
+  instanceId: Type.Optional(NonEmptyString),
   decision: NonEmptyString,
   reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });

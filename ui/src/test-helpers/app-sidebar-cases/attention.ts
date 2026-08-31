@@ -261,6 +261,7 @@ describe("AppSidebar session attention", () => {
   it("shows approval attention ahead of a run error", async () => {
     const approval = {
       id: "approval-1",
+      instanceId: "approval-instance-1",
       kind: "exec",
       request: { command: "git status", sessionKey },
       createdAtMs: Date.now(),
@@ -285,6 +286,7 @@ describe("AppSidebar session attention", () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
+      instanceId: "approval-main-instance",
       kind: "exec",
       request: { command: "git status", sessionKey: mainKey },
       createdAtMs: Date.now(),
@@ -406,6 +408,7 @@ describe("AppSidebar session attention", () => {
       ]);
       const approval = {
         id: "approval-child",
+        instanceId: "approval-child-instance",
         kind: "exec",
         request: { command: "git status", sessionKey: childKey },
         createdAtMs: Date.now(),

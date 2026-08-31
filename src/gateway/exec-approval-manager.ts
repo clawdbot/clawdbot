@@ -86,6 +86,7 @@ type ExecApprovalResolutionSource = "operator" | "auto-review";
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
+  instanceId: string;
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
@@ -275,6 +276,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const resolvedId = hasExplicitId ? id : randomUUID();
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
+      instanceId: randomUUID(),
       request,
       createdAtMs: now,
       expiresAtMs,
@@ -307,6 +309,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       ? buildApprovalPresentation({
           kind: this.approvalKind,
           request: record.request,
+          instanceId: record.instanceId,
           allowedDecisions: allowedDecisions ?? [],
         })
       : null;
@@ -341,6 +344,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       const inserted = insertOperatorApproval({
         approval: {
           id: record.id,
+          resolutionRef: buildApprovalResolutionRef({
+            approvalId: record.id,
+            approvalKind: this.approvalKind,
+            instanceId: record.instanceId,
+          }),
           kind: this.approvalKind,
           presentation: presentation!,
           requester: {
@@ -405,6 +413,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const presentation = buildApprovalPresentation({
       kind: this.approvalKind,
       request: record.request,
+      instanceId: record.instanceId,
       allowedDecisions: normalizeAllowedDecisions(
         this.options.resolveAllowedDecisions?.(record.request),
       ),
@@ -419,6 +428,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       resolutionRef: buildApprovalResolutionRef({
         approvalId: record.id,
         approvalKind: this.approvalKind,
+        instanceId: record.instanceId,
       }),
       kind: this.approvalKind,
       status,

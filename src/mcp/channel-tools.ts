@@ -197,10 +197,16 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     {
       kind: z.enum(["exec", "plugin"]),
       id: z.string().min(1),
+      instance_id: z.string().min(1).optional(),
       decision: z.enum(["allow-once", "allow-always", "deny"]),
     },
-    async ({ kind, id, decision }) => {
-      const result = await bridge.respondToApproval({ kind, id, decision });
+    async ({ kind, id, instance_id, decision }) => {
+      const result = await bridge.respondToApproval({
+        kind,
+        id,
+        ...(instance_id ? { instanceId: instance_id } : {}),
+        decision,
+      });
       return {
         content: [{ type: "text", text: "approval resolved" }],
         structuredContent: { result },

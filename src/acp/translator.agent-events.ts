@@ -173,16 +173,16 @@ export class AcpTranslatorAgentEvents {
     runId?: string,
     opts: { denyActive?: boolean } = {},
   ): void {
-    for (const [approvalId, relay] of this.approvalRelays) {
+    for (const [relayKey, relay] of this.approvalRelays) {
       if (relay.sessionId !== sessionId) {
         continue;
       }
       if (runId && relay.runId !== runId) {
         continue;
       }
-      this.approvalRelays.delete(approvalId);
+      this.approvalRelays.delete(relayKey);
       if (opts.denyActive && relay.state === "active") {
-        void this.resolveGatewayApproval(approvalId, "deny");
+        void this.resolveGatewayApproval(relay, "deny");
       }
     }
   }
@@ -209,7 +209,8 @@ export class AcpTranslatorAgentEvents {
     approvalEvent: GatewayExecApprovalEvent;
   }): void {
     const approvalEvent = params.approvalEvent;
-    const existing = this.approvalRelays.get(approvalEvent.approvalId);
+    const relayKey = this.approvalRelayKey(approvalEvent);
+    const existing = this.approvalRelays.get(relayKey);
     if (existing) {
       void this.retryApprovalRelayDecision(existing);
       return;
@@ -229,12 +230,14 @@ export class AcpTranslatorAgentEvents {
 
     const relay: AcpPendingApprovalRelay = {
       approvalId: approvalEvent.approvalId,
+      instanceId: approvalEvent.instanceId,
+      relayKey,
       runId: pending.idempotencyKey,
       sessionId: pending.sessionId,
       sessionKey: pending.sessionKey,
       state: "active",
     };
-    this.approvalRelays.set(relay.approvalId, relay);
+    this.approvalRelays.set(relay.relayKey, relay);
     void this.runApprovalRelay(relay, correlatedApprovalEvent);
   }
 
@@ -276,7 +279,7 @@ export class AcpTranslatorAgentEvents {
     try {
       const details = await this.getGatewayApprovalDetails(relay.approvalId);
       if (!this.isApprovalRelayActive(relay)) {
-        resolved = await this.resolveGatewayApproval(relay.approvalId, "deny");
+        resolved = await this.resolveGatewayApproval(relay, "deny");
         return;
       }
 
@@ -293,9 +296,9 @@ export class AcpTranslatorAgentEvents {
       }
 
       const selectedDecision = this.isApprovalRelayActive(relay) && decision ? decision : "deny";
-      resolved = await this.resolveGatewayApproval(relay.approvalId, selectedDecision);
+      resolved = await this.resolveGatewayApproval(relay, selectedDecision);
     } finally {
-      const current = this.approvalRelays.get(relay.approvalId);
+      const current = this.approvalRelays.get(relay.relayKey);
       if (current === relay && current.state === "active") {
         if (resolved) {
           // Keep completed relays until prompt cleanup as replay/dedup sentinels.
@@ -305,7 +308,7 @@ export class AcpTranslatorAgentEvents {
           // decision until reconnect or a duplicate event can deliver it.
           current.pendingDecision = decision;
         } else {
-          this.approvalRelays.delete(relay.approvalId);
+          this.approvalRelays.delete(relay.relayKey);
         }
       }
     }
@@ -318,7 +321,7 @@ export class AcpTranslatorAgentEvents {
     if (!decision || !this.isApprovalRelayActive(relay)) {
       return;
     }
-    const resolved = await this.resolveGatewayApproval(relay.approvalId, decision);
+    const resolved = await this.resolveGatewayApproval(relay, decision);
     if (!resolved || !this.isApprovalRelayActive(relay)) {
       return;
     }
@@ -346,27 +349,34 @@ export class AcpTranslatorAgentEvents {
   }
 
   private async resolveGatewayApproval(
-    approvalId: string,
+    relay: AcpPendingApprovalRelay,
     decision: GatewayExecApprovalDecision,
   ): Promise<boolean> {
     try {
       await this.gateway.request("exec.approval.resolve", {
-        id: approvalId,
+        id: relay.approvalId,
+        ...(relay.instanceId ? { instanceId: relay.instanceId } : {}),
         decision,
       });
       return true;
     } catch (err) {
-      this.log(`approval relay resolve failed for ${approvalId}: ${String(err)}`);
+      this.log(`approval relay resolve failed for ${relay.approvalId}: ${String(err)}`);
       return false;
     }
   }
 
   private isApprovalRelayActive(relay: AcpPendingApprovalRelay): boolean {
     return (
-      this.approvalRelays.get(relay.approvalId) === relay &&
+      this.approvalRelays.get(relay.relayKey) === relay &&
       relay.state === "active" &&
       this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
     );
+  }
+
+  private approvalRelayKey(event: GatewayExecApprovalEvent): string {
+    // Approval ids can be reused after settlement; the Gateway instance token
+    // keeps an older ACP prompt from deduping or resolving its replacement.
+    return `${event.approvalId}\u0000${event.instanceId ?? ""}`;
   }
 
   private findUniquePendingBySessionKey(sessionKey: string): AcpPendingPrompt | undefined {

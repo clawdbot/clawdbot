@@ -127,6 +127,7 @@ export function listVisiblePendingApprovalRequests<TPayload>(params: {
 }): Array<{
   approvalKind?: ChannelApprovalKind;
   id: string;
+  instanceId: string;
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
@@ -140,8 +141,8 @@ export function listVisiblePendingApprovalRequests<TPayload>(params: {
         ...(params.cfg ? { cfg: params.cfg } : {}),
       }),
     )
-    .map(({ id, request, createdAtMs, expiresAtMs }) => {
-      const approval = { id, request, createdAtMs, expiresAtMs };
+    .map(({ id, instanceId, request, createdAtMs, expiresAtMs }) => {
+      const approval = { id, instanceId, request, createdAtMs, expiresAtMs };
       return params.approvalKind
         ? Object.assign(approval, { approvalKind: params.approvalKind })
         : approval;

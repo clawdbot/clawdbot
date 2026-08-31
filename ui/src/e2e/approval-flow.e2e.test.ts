@@ -22,9 +22,16 @@ beforeEach(() => {
   }
 });
 
-function approval(id: string, command: string, createdAtMs: number, sessionKey = activeSessionKey) {
+function approval(
+  id: string,
+  command: string,
+  createdAtMs: number,
+  sessionKey = activeSessionKey,
+  instanceId = `${id}:${createdAtMs}`,
+) {
   return {
     id,
+    instanceId,
     createdAtMs,
     expiresAtMs: Date.now() + 60_000,
     request: { command, agentId: "main", sessionKey },
@@ -97,6 +104,58 @@ suite.define(() => {
       .toContain("echo newer");
     await expect.poll(() => newerRow.locator('[role="alert"]').count()).toBe(0);
     await expect.poll(() => newerRow.getByRole("button", { name: /Deny/ }).isEnabled()).toBe(true);
+  });
+
+  it("keeps a reused-id replacement actionable after the older decision fails", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, { sessionKey: activeSessionKey });
+
+    await currentPage.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", activeSessionKey));
+    await gateway.waitForRequest("sessions.list");
+    await gateway.deferNext("exec.approval.resolve");
+    await gateway.emitGatewayEvent(
+      "exec.approval.requested",
+      approval("approval-reused", "echo original approval", 1_000),
+    );
+    await currentPage.getByText("echo original approval", { exact: true }).waitFor();
+    await currentPage.getByRole("button", { name: "Allow once" }).click();
+
+    // The Gateway broadcasts the old resolution before replying to the decision.
+    await gateway.emitGatewayEvent("exec.approval.resolved", {
+      decision: "allow-once",
+      id: "approval-reused",
+    });
+    await expect
+      .poll(() => currentPage.getByText("echo original approval", { exact: true }).count())
+      .toBe(0);
+    await gateway.emitGatewayEvent(
+      "exec.approval.requested",
+      approval(
+        "approval-reused",
+        "echo replacement approval",
+        1_000,
+        activeSessionKey,
+        "replacement-instance",
+      ),
+    );
+    const replacement = currentPage.getByText("echo replacement approval", { exact: true });
+    await replacement.waitFor();
+
+    await gateway.rejectDeferred("exec.approval.resolve", {
+      code: "UNAVAILABLE",
+      message: "gateway unavailable",
+    });
+    await expect.poll(() => replacement.isVisible()).toBe(true);
+    await expect.poll(() => currentPage.locator(".exec-approval-error").count()).toBe(0);
+    const denyButton = currentPage.getByRole("button", { name: "Deny" });
+    await expect.poll(() => denyButton.isEnabled()).toBe(true);
+    await denyButton.click();
+    await expect
+      .poll(async () => (await gateway.getRequests("exec.approval.resolve")).length)
+      .toBe(2);
+    await expect.poll(() => replacement.count()).toBe(0);
   });
 
   it("keeps approvals passive until the Inbox opens the full queue", async () => {

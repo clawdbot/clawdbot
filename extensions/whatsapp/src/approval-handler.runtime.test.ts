@@ -1,8 +1,14 @@
 // Whatsapp tests cover approval handler plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import {
+  clearWhatsAppApprovalReactionTargetsForTest,
+  resolveWhatsAppApprovalReactionTargetWithPersistence,
+} from "./approval-reactions.js";
 
 describe("whatsappApprovalNativeRuntime", () => {
+  beforeEach(() => clearWhatsAppApprovalReactionTargetsForTest());
+
   it("renders allowed thumbs-only reactions in pending exec approvals", async () => {
     const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
@@ -182,5 +188,40 @@ describe("whatsappApprovalNativeRuntime", () => {
         accountId: "work",
       },
     });
+  });
+
+  it("binds same-id native prompts to their lifecycle instances", async () => {
+    for (const [messageId, instanceId] of [
+      ["old-message", "old-instance"],
+      ["current-message", "current-instance"],
+    ] as const) {
+      await expect(
+        whatsappApprovalNativeRuntime.interactions!.bindPending!({
+          entry: {
+            accountId: "default",
+            to: "+15551230000",
+            remoteJid: "15551230000@s.whatsapp.net",
+            messageId,
+          },
+          request: { id: "exec-reused", instanceId },
+          view: {
+            approvalKind: "exec",
+            approvalId: "exec-reused",
+            expiresAtMs: Date.now() + 60_000,
+          },
+          pendingPayload: {
+            reactionPayload: { allowedDecisions: ["allow-once"] },
+          },
+        } as never),
+      ).resolves.toBe(true);
+      await expect(
+        resolveWhatsAppApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          remoteJid: "15551230000@s.whatsapp.net",
+          messageId,
+          reactionKey: "👍",
+        }),
+      ).resolves.toMatchObject({ approvalId: "exec-reused", instanceId });
+    }
   });
 });

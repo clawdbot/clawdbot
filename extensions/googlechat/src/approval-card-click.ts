@@ -84,6 +84,7 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     result = await resolveApprovalOverGateway({
       cfg: params.target.config,
       approvalId: consumed.approvalId,
+      ...(consumed.instanceId ? { instanceId: consumed.instanceId } : {}),
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       channel: "googlechat",

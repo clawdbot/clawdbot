@@ -42,6 +42,7 @@ const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
 type SignalApprovalReactionResolution = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
   route: SignalApprovalReactionRoute;
@@ -203,6 +204,9 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
         };
   return {
     approvalId: value.approvalId,
+    ...(typeof value.instanceId === "string" && value.instanceId
+      ? { instanceId: value.instanceId }
+      : {}),
     approvalKind: value.approvalKind,
     allowedDecisions,
     targetAuthorKeys: value.targetAuthorKeys,
@@ -222,6 +226,7 @@ export function registerSignalApprovalReactionTarget(params: {
   conversationKey: string;
   messageId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
@@ -279,6 +284,7 @@ export function registerSignalApprovalReactionTarget(params: {
         } satisfies SignalApprovalReactionRoute);
   const target: SignalApprovalReactionTarget = {
     approvalId,
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     approvalKind: params.approvalKind,
     allowedDecisions,
     targetAuthorKeys,
@@ -420,6 +426,7 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
           conversationKey,
           messageId,
           approvalId: metadata.approvalId,
+          instanceId: metadata.instanceId,
           approvalKind: metadata.approvalKind,
           allowedDecisions: metadata.allowedDecisions,
           targetAuthorKeys,
@@ -468,6 +475,7 @@ function resolveTarget(params: {
   }
   return {
     approvalId: resolved.approvalId,
+    ...(resolved.instanceId ? { instanceId: resolved.instanceId } : {}),
     approvalKind: resolved.approvalKind,
     decision: resolved.decision,
     route: resolved.route,
@@ -562,6 +570,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
+      ...(target.instanceId ? { instanceId: target.instanceId } : {}),
       approvalKind: target.approvalKind,
       decision: target.decision,
       channel: "signal",

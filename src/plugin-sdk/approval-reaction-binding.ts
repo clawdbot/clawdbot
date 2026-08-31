@@ -6,6 +6,7 @@ import type { ReplyPayload } from "./reply-payload.js";
 /** Validated identity and decisions shared by typed approval delivery surfaces. */
 export type ApprovalReactionDeliveryBinding = {
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
   approvalSlug?: string;
@@ -72,6 +73,7 @@ export function readApprovalReactionDeliveryMetadata(
   }
   const approvalId = options.trimApprovalId ? record.approvalId.trim() : record.approvalId;
   const approvalSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
+  const instanceId = typeof record.instanceId === "string" ? record.instanceId : undefined;
   const allowedDecisions = readApprovalReactionDecisionList(record.allowedDecisions);
   if (
     !approvalId ||
@@ -84,6 +86,7 @@ export function readApprovalReactionDeliveryMetadata(
   }
   return {
     approvalId,
+    ...(instanceId ? { instanceId } : {}),
     approvalKind: record.approvalKind,
     allowedDecisions,
     ...(approvalSlug ? { approvalSlug } : {}),
@@ -112,7 +115,9 @@ export function readApprovalReactionPresentationBinding(params: {
     !actions?.length ||
     actions.some(
       (action) =>
-        action.approvalId !== metadata.approvalId || action.approvalKind !== metadata.approvalKind,
+        action.approvalId !== metadata.approvalId ||
+        action.approvalKind !== metadata.approvalKind ||
+        action.instanceId !== metadata.instanceId,
     )
   ) {
     return null;
@@ -141,9 +146,11 @@ export function readApprovalReactionDeliveredBinding(params: {
       ? record.approvalId.trim()
       : record.approvalId;
   const markerSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
+  const markerInstanceId = typeof record.instanceId === "string" ? record.instanceId : undefined;
   const decisions = readApprovalReactionDecisionList(record.allowedDecisions);
   return record.version === 1 &&
     markerId === metadata.approvalId &&
+    markerInstanceId === metadata.instanceId &&
     record.approvalKind === metadata.approvalKind &&
     (!params.requireApprovalSlug || markerSlug === metadata.approvalSlug) &&
     decisions &&

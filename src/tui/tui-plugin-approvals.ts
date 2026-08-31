@@ -167,6 +167,8 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   }
   return {
     id,
+    instanceId:
+      typeof record.instanceId === "string" ? record.instanceId.trim() || undefined : undefined,
     request: {
       title,
       description: typeof request.description === "string" ? request.description : null,
@@ -325,7 +327,11 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
         if (!deps.client.resolvePluginApproval) {
           throw new Error("plugin approval resolution is unavailable");
         }
-        const result = await deps.client.resolvePluginApproval(approval.id, decision);
+        const result = await deps.client.resolvePluginApproval(
+          approval.id,
+          decision,
+          approval.instanceId,
+        );
         if (result?.ok === false) {
           stale = true;
         } else {

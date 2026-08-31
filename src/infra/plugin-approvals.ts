@@ -42,6 +42,7 @@ export type PluginApprovalRequest = {
   /** Descriptive wire metadata; readers derive it from the payload when absent. */
   approvalKind?: "plugin";
   id: string;
+  instanceId?: string;
   request: PluginApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;

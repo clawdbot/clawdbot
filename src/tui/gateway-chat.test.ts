@@ -469,13 +469,14 @@ describe("GatewayChatClient", () => {
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     await expect(client.listPluginApprovals()).resolves.toEqual(pending);
-    await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
-      ok: true,
-    });
+    await expect(
+      client.resolvePluginApproval("plugin:skill-1", "allow-once", "instance:plugin-1"),
+    ).resolves.toEqual({ ok: true });
 
     expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
       id: "plugin:skill-1",
+      instanceId: "instance:plugin-1",
       decision: "allow-once",
     });
   });

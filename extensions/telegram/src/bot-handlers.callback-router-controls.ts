@@ -160,6 +160,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
     (await resolveApproval({
       cfg: runtimeCfg,
       approvalId: approvalCallback.approvalId,
+      instanceId: approvalCallback.instanceId,
       approvalKind: approvalCallback.approvalKind,
       decision: approvalCallback.decision,
       channel: "telegram",

@@ -25,6 +25,7 @@ import {
 describe("plugin-sdk/approval-reaction-runtime", () => {
   const execRequest: ExecApprovalRequest = {
     id: "exec-approval-123",
+    instanceId: "exec-instance-123",
     request: {
       command: "touch /tmp/foo",
       cwd: "/Users/test/project",
@@ -39,6 +40,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
   const pluginRequest: PluginApprovalRequest = {
     id: "plugin:approval-123",
+    instanceId: "plugin-instance-123",
     request: {
       title: "Use 1Password",
       description: "Allow Codex to use 1Password?",
@@ -169,6 +171,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       resolveTypedApprovalReactionTarget({
         target: {
           approvalId: "exec-looking-id",
+          instanceId: "exec-instance-123",
           approvalKind: "plugin",
           allowedDecisions: ["allow-once", "deny"],
           route: { deliveryMode: "session" },
@@ -177,6 +180,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       }),
     ).toEqual({
       approvalId: "exec-looking-id",
+      instanceId: "exec-instance-123",
       approvalKind: "plugin",
       decision: "allow-once",
       normalizedEmoji: "👍",
@@ -245,6 +249,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.presentation).toBeUndefined();
     expect(payload.channelData?.execApproval).toMatchObject({
       approvalId: "exec-approval-123",
+      instanceId: "exec-instance-123",
       approvalKind: "exec",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
       sessionKey: "main:signal:+15555550123",
@@ -319,6 +324,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.presentation).toBeUndefined();
     expect(payload.channelData?.execApproval).toMatchObject({
       approvalId: "plugin:approval-123",
+      instanceId: "plugin-instance-123",
       approvalKind: "plugin",
       allowedDecisions: ["allow-once", "deny"],
     });

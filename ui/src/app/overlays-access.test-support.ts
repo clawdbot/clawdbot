@@ -22,9 +22,10 @@ export function deferred<T = unknown>() {
   return { promise, reject, resolve };
 }
 
-export function approval(id: string, createdAtMs: number) {
+export function approval(id: string, createdAtMs: number, instanceId = `${id}:${createdAtMs}`) {
   return {
     id,
+    instanceId,
     createdAtMs,
     expiresAtMs: Date.now() + 60_000,
     request: { command: `echo ${id}` },
@@ -79,10 +80,10 @@ export function createGatewayHarness(
         listener(frame);
       }
     },
-    emitApproval(id: string, createdAtMs: number) {
+    emitApproval(id: string, createdAtMs: number, instanceId?: string) {
       const event: GatewayEventFrame = {
         event: "exec.approval.requested",
-        payload: approval(id, createdAtMs),
+        payload: approval(id, createdAtMs, instanceId),
         type: "event",
       };
       for (const listener of eventListeners) {
@@ -104,6 +105,7 @@ export function createGatewayHarness(
         event: "openclaw.approval.requested",
         payload: {
           id,
+          instanceId: `${id}:${createdAtMs}`,
           createdAtMs,
           expiresAtMs: Date.now() + 60_000,
           request: {

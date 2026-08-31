@@ -106,6 +106,7 @@ function createContext(params: {
 function registerBinding(params: {
   token: string;
   accountId?: string;
+  instanceId?: string;
   approvalKind?: ChannelApprovalKind;
   decision?: ExecApprovalDecision;
   allowedDecisions?: readonly ExecApprovalDecision[];
@@ -116,6 +117,7 @@ function registerBinding(params: {
     token: params.token,
     accountId: params.accountId ?? "default",
     approvalId: `approval-${params.token}`,
+    instanceId: params.instanceId,
     approvalKind: params.approvalKind ?? "exec",
     decision: params.decision ?? "allow-once",
     allowedDecisions: params.allowedDecisions ?? ["allow-once", "deny"],
@@ -205,7 +207,12 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
 
   it("requires an allowlisted AAD identity and preserves tokens for the authorized approver", async () => {
     const token = "authorization";
-    registerBinding({ token, approvalKind: "plugin", decision: "deny" });
+    registerBinding({
+      token,
+      instanceId: "authorization-instance",
+      approvalKind: "plugin",
+      decision: "deny",
+    });
     const deps = createDeps();
 
     await expect(
@@ -224,6 +231,7 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
       cfg: deps.cfg,
       approvalId: `approval-${token}`,
+      instanceId: "authorization-instance",
       approvalKind: "plugin",
       decision: "deny",
       channel: "msteams",

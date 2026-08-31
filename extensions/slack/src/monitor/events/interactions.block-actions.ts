@@ -663,6 +663,7 @@ async function handleSlackApprovalInteraction(params: {
     const result = await resolveApprovalOverGateway({
       cfg: params.ctx.cfg,
       approvalId: params.approval.approvalId,
+      instanceId: params.approval.instanceId,
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
       channel: "slack",

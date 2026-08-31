@@ -16,6 +16,7 @@ type GoogleChatApprovalCardBinding = {
   token: string;
   accountId: string;
   approvalId: string;
+  instanceId?: string;
   approvalKind: ChannelApprovalKind;
   decision: ExecApprovalDecision;
   allowedDecisions: readonly ExecApprovalDecision[];

@@ -10,6 +10,7 @@ describe("Slack approval actions", () => {
       type: "approval" as const,
       approvalId: "plugin:req/50%/😀",
       approvalKind: "plugin" as const,
+      instanceId: "instance/50%/😀",
       decision: "allow-always" as const,
     };
 
@@ -17,6 +18,27 @@ describe("Slack approval actions", () => {
 
     expect(encoded).not.toContain("/approve ");
     expect(decodeSlackApprovalAction(encoded)).toEqual(action);
+  });
+
+  it("binds compact callbacks to the approval lifecycle", () => {
+    const approvalId = `approval/${"x".repeat(SLACK_BUTTON_VALUE_MAX)}`;
+    const action = {
+      type: "approval" as const,
+      approvalId,
+      approvalKind: "exec" as const,
+      instanceId: `instance/${"y".repeat(SLACK_BUTTON_VALUE_MAX)}`,
+      decision: "deny" as const,
+    };
+
+    expect(decodeSlackApprovalAction(encodeSlackApprovalAction(action))).toEqual({
+      ...action,
+      approvalId: buildApprovalResolutionRef({
+        approvalId,
+        approvalKind: "exec",
+        instanceId: action.instanceId,
+      }),
+      instanceId: undefined,
+    });
   });
 
   it("uses the durable transport reference when a Unicode id exceeds Slack's value limit", () => {

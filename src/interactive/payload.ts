@@ -99,6 +99,7 @@ export type MessagePresentationAction =
       /** Resolve one durable operator approval without exposing transport callback data. */
       type: "approval";
       approvalId: string;
+      instanceId?: string;
       approvalKind: ChannelApprovalKind;
       decision: "allow-once" | "allow-always" | "deny";
     }
@@ -537,17 +538,25 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
       return undefined;
     }
     const approvalId = record.approvalId;
+    const instanceId = record.instanceId;
     const approvalKind = record.approvalKind;
     const decision = record.decision;
     if (
       typeof approvalId !== "string" ||
       !isWellFormedApprovalId(approvalId) ||
+      (instanceId !== undefined && (typeof instanceId !== "string" || !instanceId)) ||
       (approvalKind !== "exec" && approvalKind !== "plugin") ||
       (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny")
     ) {
       return undefined;
     }
-    return { type: "approval", approvalId, approvalKind, decision };
+    return {
+      type: "approval",
+      approvalId,
+      ...(typeof instanceId === "string" ? { instanceId } : {}),
+      approvalKind,
+      decision,
+    };
   }
   if (type === "question") {
     if (record.type !== "question") {

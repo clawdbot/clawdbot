@@ -35,6 +35,7 @@ export type ExecApprovalUnavailableReason =
 
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
+  instanceId?: string;
   approvalSlug: string;
   approvalKind: ChannelApprovalKind;
   agentId?: string;
@@ -60,6 +61,7 @@ export type TypedApprovalActionDescriptor = ExecApprovalActionDescriptor & {
 export type ExecApprovalPendingReplyParams = {
   warningText?: string;
   approvalId: string;
+  instanceId?: string;
   approvalSlug: string;
   approvalCommandId?: string;
   ask?: string | null;
@@ -141,6 +143,7 @@ export function buildExecApprovalCommandText(params: {
 
 type BuildExecApprovalActionDescriptorsParams = {
   approvalCommandId: string;
+  instanceId?: string;
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 };
@@ -222,6 +225,7 @@ export function buildTypedApprovalActionDescriptors(
         action: {
           type: "approval",
           approvalId,
+          ...(params.instanceId ? { instanceId: params.instanceId } : {}),
           approvalKind: params.approvalKind,
           decision: descriptor.decision,
         },
@@ -256,6 +260,7 @@ export function buildApprovalPresentationFromActionDescriptors(
 
 type BuildApprovalPresentationParams = {
   approvalId: string;
+  instanceId?: string;
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 };
@@ -267,6 +272,7 @@ export function buildApprovalButtonPresentation(
   return buildApprovalPresentationFromActionDescriptors(
     buildExecApprovalActionDescriptors({
       approvalCommandId: params.approvalId,
+      instanceId: params.instanceId,
       ask: params.ask,
       allowedDecisions: params.allowedDecisions,
     }),
@@ -280,6 +286,7 @@ export function buildTypedApprovalPresentation(
   return buildApprovalPresentationFromActionDescriptors(
     buildTypedApprovalActionDescriptors({
       approvalCommandId: params.approvalId,
+      instanceId: params.instanceId,
       approvalKind: params.approvalKind,
       ask: params.ask,
       allowedDecisions: params.allowedDecisions,
@@ -303,11 +310,13 @@ export function buildExecApprovalPresentation(params: {
 /** Build an exec-approval presentation with canonical typed decision actions. */
 export function buildTypedExecApprovalPresentation(params: {
   approvalCommandId: string;
+  instanceId?: string;
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): MessagePresentation | undefined {
   return buildTypedApprovalPresentation({
     approvalId: params.approvalCommandId,
+    instanceId: params.instanceId,
     approvalKind: "exec",
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
@@ -376,6 +385,7 @@ export function getExecApprovalReplyMetadata(
     return null;
   }
   const approvalKind = record.approvalKind === "plugin" ? "plugin" : "exec";
+  const instanceId = normalizeOptionalString(record.instanceId);
   const allowedDecisions = Array.isArray(record.allowedDecisions)
     ? record.allowedDecisions.filter(
         (value): value is ExecApprovalReplyDecision =>
@@ -386,6 +396,7 @@ export function getExecApprovalReplyMetadata(
   const sessionKey = normalizeOptionalString(record.sessionKey);
   return {
     approvalId,
+    ...(instanceId ? { instanceId } : {}),
     approvalSlug,
     approvalKind,
     agentId,
@@ -453,6 +464,7 @@ export function buildExecApprovalPendingReplyPayload(
     channelData: {
       execApproval: {
         approvalId: params.approvalId,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         approvalSlug: params.approvalSlug,
         approvalKind: "exec",
         agentId: normalizeOptionalString(params.agentId),
@@ -472,6 +484,7 @@ export function buildTypedExecApprovalPendingReplyPayload(
     ...payload,
     presentation: buildTypedExecApprovalPresentation({
       approvalCommandId: params.approvalId,
+      instanceId: params.instanceId,
       allowedDecisions: resolveAllowedDecisions(params),
     }),
   };

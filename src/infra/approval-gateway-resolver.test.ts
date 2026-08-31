@@ -67,6 +67,7 @@ describe("resolveApprovalOverGateway", () => {
       cfg: { gateway: { auth: { token: "cfg-token" } } } as never,
       approvalId: "approval-1",
       approvalKind: "exec",
+      instanceId: "instance-1",
       decision: "allow-once",
       gatewayUrl: "ws://gateway.example.test",
       clientDisplayName: "QuietChat approval (default)",
@@ -85,6 +86,7 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.clientRequest).toHaveBeenCalledWith("approval.resolve", {
       id: "approval-1",
       kind: "exec",
+      instanceId: "instance-1",
       decision: "allow-once",
     });
     expect(result).toEqual({ applied: true, approval: recordedApproval });

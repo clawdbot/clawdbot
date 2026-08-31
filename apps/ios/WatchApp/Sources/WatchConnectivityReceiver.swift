@@ -225,6 +225,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 
     func sendExecApprovalResolve(
         approvalId: String,
+        approvalInstanceId: String? = nil,
         gatewayStableID: String?,
         attemptID: String,
         decision: WatchExecApprovalDecision) async -> WatchReplySendResult
@@ -239,6 +240,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let payload = Self.encodeExecApprovalResolvePayload(
             WatchExecApprovalResolveMessage(
                 approvalId: approvalId,
+                approvalInstanceId: approvalInstanceId,
                 gatewayStableID: gatewayStableID,
                 decision: decision,
                 replyId: attemptID,
@@ -652,6 +654,9 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         ]
         if let gatewayStableID = WatchGatewayID.exact(message.gatewayStableID) {
             payload["gatewayStableID"] = gatewayStableID
+        }
+        if let approvalInstanceId = message.approvalInstanceId, !approvalInstanceId.isEmpty {
+            payload["approvalInstanceId"] = approvalInstanceId
         }
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs

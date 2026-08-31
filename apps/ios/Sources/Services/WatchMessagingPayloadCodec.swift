@@ -89,6 +89,9 @@ enum WatchMessagingPayloadCodec {
         if let gatewayStableID = GatewayStableIdentifier.exact(item.gatewayStableID) {
             payload["gatewayStableID"] = gatewayStableID
         }
+        if let instanceId = self.exactNonEmpty(item.instanceId) {
+            payload["instanceId"] = instanceId
+        }
         if let commandPreview = nonEmpty(item.commandPreview) {
             payload["commandPreview"] = commandPreview
         }
@@ -353,10 +356,12 @@ enum WatchMessagingPayloadCodec {
         }
         let replyId = self.exactNonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
         let gatewayStableID = GatewayStableIdentifier.exact(payload["gatewayStableID"] as? String)
+        let approvalInstanceId = self.exactNonEmpty(payload["approvalInstanceId"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         return WatchExecApprovalResolveEvent(
             replyId: replyId,
             approvalId: approvalId,
+            approvalInstanceId: approvalInstanceId,
             gatewayStableID: gatewayStableID,
             decision: decision,
             sentAtMs: sentAtMs,

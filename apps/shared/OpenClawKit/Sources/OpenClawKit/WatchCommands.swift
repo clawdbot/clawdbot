@@ -54,6 +54,7 @@ public struct OpenClawWatchAction: Codable, Sendable, Equatable, Identifiable {
 
 public struct OpenClawWatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
     public var id: String
+    public var instanceId: String?
     public var gatewayStableID: String?
     public var commandText: String
     public var commandPreview: String?
@@ -67,6 +68,7 @@ public struct OpenClawWatchExecApprovalItem: Codable, Sendable, Equatable, Ident
 
     public init(
         id: String,
+        instanceId: String? = nil,
         gatewayStableID: String? = nil,
         commandText: String,
         commandPreview: String? = nil,
@@ -79,6 +81,7 @@ public struct OpenClawWatchExecApprovalItem: Codable, Sendable, Equatable, Ident
         risk: OpenClawWatchRisk? = nil)
     {
         self.id = id
+        self.instanceId = instanceId
         self.gatewayStableID = gatewayStableID
         self.commandText = commandText
         self.commandPreview = commandPreview
@@ -113,6 +116,7 @@ public struct OpenClawWatchExecApprovalPromptMessage: Codable, Sendable, Equatab
 public struct OpenClawWatchExecApprovalResolveMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvalId: String
+    public var approvalInstanceId: String?
     public var gatewayStableID: String?
     public var decision: OpenClawWatchExecApprovalDecision
     public var replyId: String
@@ -120,6 +124,7 @@ public struct OpenClawWatchExecApprovalResolveMessage: Codable, Sendable, Equata
 
     public init(
         approvalId: String,
+        approvalInstanceId: String? = nil,
         gatewayStableID: String? = nil,
         decision: OpenClawWatchExecApprovalDecision,
         replyId: String,
@@ -127,6 +132,7 @@ public struct OpenClawWatchExecApprovalResolveMessage: Codable, Sendable, Equata
     {
         self.type = .execApprovalResolve
         self.approvalId = approvalId
+        self.approvalInstanceId = approvalInstanceId
         self.gatewayStableID = gatewayStableID
         self.decision = decision
         self.replyId = replyId

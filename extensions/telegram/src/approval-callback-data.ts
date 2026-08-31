@@ -4,6 +4,7 @@ import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-
 
 export const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
 const TELEGRAM_APPROVAL_CALLBACK_PREFIX = "tga1:";
+const TELEGRAM_BOUND_APPROVAL_CALLBACK_PREFIX = "tga2:";
 
 export type TelegramApprovalCallback = Extract<MessagePresentationAction, { type: "approval" }>;
 
@@ -18,7 +19,10 @@ export function fitsTelegramCallbackData(value: string): boolean {
 
 /** Reserve the Telegram approval namespace even when a callback is malformed. */
 export function hasTelegramApprovalCallbackPrefix(data?: string | null): boolean {
-  return data?.startsWith(TELEGRAM_APPROVAL_CALLBACK_PREFIX) === true;
+  return (
+    data?.startsWith(TELEGRAM_APPROVAL_CALLBACK_PREFIX) === true ||
+    data?.startsWith(TELEGRAM_BOUND_APPROVAL_CALLBACK_PREFIX) === true
+  );
 }
 
 /** Encode a typed approval action into Telegram-private, versioned callback data. */
@@ -41,15 +45,21 @@ export function buildTelegramApprovalCallbackData(
   if (!kind || !decision) {
     return undefined;
   }
-  const encode = (approvalId: string) =>
-    `${TELEGRAM_APPROVAL_CALLBACK_PREFIX}${kind}:${decision}:${approvalId}`;
-  const exact = encode(action.approvalId);
+  const encode = (approvalId: string, instanceId?: string) =>
+    `${instanceId ? TELEGRAM_BOUND_APPROVAL_CALLBACK_PREFIX : TELEGRAM_APPROVAL_CALLBACK_PREFIX}${kind}:${decision}:${instanceId ? encodeURIComponent(approvalId) : approvalId}${instanceId ? `:${encodeURIComponent(instanceId)}` : ""}`;
+  const exact = encode(action.approvalId, action.instanceId);
   if (fitsTelegramCallbackData(exact)) {
     return exact;
   }
   // Telegram caps callback_data at 64 UTF-8 bytes. The full digest is only a
   // durable locator; Gateway authorization still guards the canonical record.
-  return encode(buildApprovalResolutionRef({ approvalId: action.approvalId, approvalKind }));
+  return encode(
+    buildApprovalResolutionRef({
+      approvalId: action.approvalId,
+      approvalKind,
+      instanceId: action.instanceId,
+    }),
+  );
 }
 
 /** Decode only callbacks emitted by buildTelegramApprovalCallbackData. */
@@ -59,7 +69,10 @@ export function parseTelegramApprovalCallbackData(
   if (!hasTelegramApprovalCallbackPrefix(data) || !data || !fitsTelegramCallbackData(data)) {
     return null;
   }
-  const encoded = data.slice(TELEGRAM_APPROVAL_CALLBACK_PREFIX.length);
+  const bound = data.startsWith(TELEGRAM_BOUND_APPROVAL_CALLBACK_PREFIX);
+  const encoded = data.slice(
+    (bound ? TELEGRAM_BOUND_APPROVAL_CALLBACK_PREFIX : TELEGRAM_APPROVAL_CALLBACK_PREFIX).length,
+  );
   if (encoded.length < 5 || encoded[1] !== ":" || encoded[3] !== ":") {
     return null;
   }
@@ -72,11 +85,26 @@ export function parseTelegramApprovalCallbackData(
         : encoded[2] === "d"
           ? "deny"
           : null;
-  const approvalId = encoded.slice(4);
-  if (!approvalKind || !decision || !approvalId) {
+  const payload = encoded.slice(4);
+  const [rawApprovalId, rawInstanceId] = bound ? payload.split(":", 2) : [payload, undefined];
+  let approvalId: string;
+  let instanceId: string | undefined;
+  try {
+    approvalId = bound ? decodeURIComponent(rawApprovalId ?? "") : (rawApprovalId ?? "");
+    instanceId = bound ? decodeURIComponent(rawInstanceId ?? "") : undefined;
+  } catch {
     return null;
   }
-  return { type: "approval", approvalId, approvalKind, decision };
+  if (!approvalKind || !decision || !approvalId || (bound && !instanceId)) {
+    return null;
+  }
+  return {
+    type: "approval",
+    approvalId,
+    ...(instanceId ? { instanceId } : {}),
+    approvalKind,
+    decision,
+  };
 }
 
 export function rewriteTelegramApprovalDecisionAlias(value: string): string {

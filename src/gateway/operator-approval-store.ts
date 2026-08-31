@@ -103,6 +103,7 @@ export type OperatorApprovalRecord = {
 
 type NewOperatorApproval = {
   id: string;
+  resolutionRef?: string;
   kind: OperatorApprovalKind;
   presentation: ApprovalPresentation;
   requester?: Partial<OperatorApprovalRequester>;
@@ -465,7 +466,11 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
   if (
     presentation.kind !== kind ||
     row.resolution_ref !==
-      buildApprovalResolutionRef({ approvalId: row.approval_id, approvalKind: kind }) ||
+      buildApprovalResolutionRef({
+        approvalId: row.approval_id,
+        approvalKind: kind,
+        instanceId: presentation.instanceId,
+      }) ||
     !hasValidLifecycleTuple({ row, status, decision, terminalReason, resolverKind }) ||
     (status === "allowed" &&
       (!decision || !Array.prototype.includes.call(presentation.allowedDecisions, decision)))
@@ -1340,10 +1345,8 @@ export function insertOperatorApproval(params: {
 }): InsertOperatorApprovalResult {
   const input = params.approval;
   const id = requireApprovalId(input.id);
-  const resolutionRef = buildApprovalResolutionRef({
-    approvalId: id,
-    approvalKind: input.kind,
-  });
+  const resolutionRef =
+    input.resolutionRef ?? buildApprovalResolutionRef({ approvalId: id, approvalKind: input.kind });
   const runtimeEpoch = requireString(input.runtimeEpoch, "operator approval runtime epoch");
   if (!isValidTimestamp(input.createdAtMs) || !isValidTimestamp(input.expiresAtMs)) {
     throw new Error("operator approval timestamps must be non-negative safe integers");

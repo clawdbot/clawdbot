@@ -937,6 +937,7 @@ export class ApprovalsNamespace {
     return await this.client.request("exec.approval.resolve", {
       id: approvalId,
       decision: params.decision,
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
     });
   }
 }
