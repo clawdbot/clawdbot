@@ -44,6 +44,27 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
+      - name: Save build-all cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ steps.setup-node-env.outputs.build-all-cache-key }}
+
+      - name: Save dist build cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
+
       - name: Select broad cache seed
         shell: bash
         run: |
@@ -130,27 +151,6 @@ jobs:
         with:
           path: /var/tmp/openclaw-node-compile-cache
           key: ${{ steps.setup-node-env.outputs.node-compile-cache-key }}
-
-      - name: Save build-all cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/build-all-cache
-          key: ${{ steps.setup-node-env.outputs.build-all-cache-key }}
-
-      - name: Save dist build cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            dist/
-            dist-runtime/
-            packages/*/dist/
-            extensions/*/src/host/**/.bundle.hash
-            extensions/*/src/host/**/*.bundle.js
-          key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
 
       - name: Assert cache warming succeeded
         if: ${{ always() }}

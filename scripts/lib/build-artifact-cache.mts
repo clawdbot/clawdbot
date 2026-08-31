@@ -74,7 +74,7 @@ export function portableRelativePath(rootDir: string, filePath: string) {
   return path.relative(rootDir, filePath).split(path.sep).join("/");
 }
 
-export function hashInputFiles(
+function hashInputFiles(
   rootDir: string,
   files: string[],
   fsImpl: typeof fs,
@@ -100,7 +100,7 @@ export function hashInputFiles(
 }
 
 /** Records every successful output byte; a surviving barrel is not a complete generation. */
-export function collectArtifactRecord(
+function collectArtifactRecord(
   rootDir: string,
   signature: string,
   entries: BuildCacheEntry[],
@@ -159,7 +159,7 @@ export function readArtifactRecord(file: string): ArtifactRecord | undefined {
   }
 }
 
-export function artifactRecordMatches(
+function artifactRecordMatches(
   rootDir: string,
   record: ArtifactRecord | undefined,
   signature: string,
@@ -227,7 +227,7 @@ export function publishArtifactFiles(
 }
 
 /** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
-export function resolveTsdownCompilerIdentity() {
+function resolveTsdownCompilerIdentity() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
@@ -447,16 +447,13 @@ export function writeBuildStepCacheStamp(
       cacheState.signature,
       cacheState.relativeOutputFiles,
     );
-    const previous = readArtifactRecord(cacheState.stampPath);
     // Invalidate before the first copied byte; readers and publishers use this
     // same lock, so neither crashes nor overlap can expose a partial snapshot.
     fsImpl.rmSync(cacheState.stampPath, { force: true });
-    publishArtifactFiles(
-      rootDir,
-      cacheState.outputRoot,
-      Object.keys(record.outputs),
-      Object.keys(previous?.outputs ?? {}),
-    );
+    // This cache tree belongs entirely to the step. Replace it even when an old
+    // or missing record cannot enumerate obsolete bytes for pruning.
+    fsImpl.rmSync(cacheState.outputRoot, { force: true, recursive: true });
+    publishArtifactFiles(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
     if (
       !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
     ) {

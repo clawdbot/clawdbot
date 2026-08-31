@@ -1358,6 +1358,32 @@ describe("resolveBuildStepCacheState", () => {
     });
   });
 
+  it.each(["current", "legacy", "missing"])(
+    "replaces obsolete cached outputs with a %s previous stamp",
+    (stampKind) => {
+      withBuildCacheFixture(({ rootDir, inputPath, step }) => {
+        const obsolete = path.join(rootDir, "dist/obsolete.js");
+        fs.writeFileSync(obsolete, "obsolete output");
+        const initial = resolveBuildStepCacheState(step, { rootDir });
+        writeBuildStepCacheStamp(step, initial, { rootDir });
+        if (stampKind === "legacy") {
+          const record = JSON.parse(fs.readFileSync(initial.stampPath!, "utf8"));
+          fs.writeFileSync(initial.stampPath!, JSON.stringify({ ...record, version: 5 }));
+        } else if (stampKind === "missing") {
+          fs.rmSync(initial.stampPath!);
+        }
+        fs.rmSync(obsolete);
+        fs.writeFileSync(inputPath, "changed input");
+
+        const refreshed = resolveBuildStepCacheState(step, { rootDir });
+        writeBuildStepCacheStamp(step, refreshed, { rootDir });
+
+        expect(fs.readdirSync(path.join(refreshed.outputRoot!, "dist"))).toEqual(["output.js"]);
+        expect(resolveBuildStepCacheState(step, { rootDir }).fresh).toBe(true);
+      });
+    },
+  );
+
   it("marks cacheable steps stale when an input changes", () => {
     withBuildCacheFixture(({ rootDir, inputPath, step }) => {
       const cacheState = resolveBuildStepCacheState(step, { rootDir });

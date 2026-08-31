@@ -4534,8 +4534,32 @@ server.listen(0, "127.0.0.1", () => {
     });
     expect(cacheStep.with.key).toContain("build-all-v1-${{ inputs.build-all-cache-scope }}");
     expect(cacheStep.with.key).toContain("${{ runner.os }}-${{ runner.arch }}");
-    expect(cacheStep.with.key).toContain("scripts/lib/optional-bundled-clusters.mjs");
-    expect(cacheStep.with.key).toContain("'src/**', 'packages/**', 'extensions/**'");
+    const renderCacheKey = (template: string, runId: number, runAttempt: number) =>
+      template.replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) =>
+        String(
+          runInNewContext(expression.replace(/inputs\.([a-z-]+)/gu, 'inputs["$1"]'), {
+            github: { repository: "openclaw/openclaw", run_id: runId, run_attempt: runAttempt },
+            inputs: { "build-all-cache-scope": "full", "node-version": "24.x" },
+            runner: { os: "Linux", arch: "X64" },
+            hashFiles: () => "unchanged-source",
+          }),
+        ),
+      );
+    // A new warmer or rerun must publish rebuilt groups even when an outer input
+    // fingerprint would be unchanged; per-group signatures own content validity.
+    const keys = (
+      [
+        [10, 1],
+        [11, 1],
+        [11, 2],
+      ] as const
+    ).map(([runId, runAttempt]) => renderCacheKey(cacheStep.with.key, runId, runAttempt));
+    expect(new Set(keys).size).toBe(3);
+    for (const key of keys) {
+      expect(key.startsWith(renderCacheKey(cacheStep.with["restore-keys"], 11, 2).trim())).toBe(
+        true,
+      );
+    }
     expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
     expect(action.runs.steps.indexOf(installStep)).toBeLessThan(
       action.runs.steps.indexOf(cacheStep),
@@ -5090,21 +5114,31 @@ server.listen(0, "127.0.0.1", () => {
     }
     const saveSteps = warmerSteps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
     expect(saveSteps.map((step) => step.name)).toEqual([
+      "Save build-all cache",
+      "Save dist build cache",
       "Save Node toolchain cache",
       "Save exact dependency cache",
       "Save pnpm store cache",
       "Save Vitest transform cache",
       "Save Node compile cache",
-      "Save build-all cache",
-      "Save dist build cache",
     ]);
     for (const saveStep of saveSteps) {
       expect(saveStep.if, saveStep.name).toContain(
         "steps.setup-node-env.outputs.cache-mode == 'read-write'",
       );
-      expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
-        warmerSteps.indexOf(warmStep),
-      );
+      if (saveStep.name === "Save build-all cache" || saveStep.name === "Save dist build cache") {
+        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
+          warmerSteps.findIndex((step) => step.name === "Warm build cache"),
+        );
+        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
+          warmerSteps.indexOf(seedStep),
+        );
+        expect(saveStep.if).not.toMatch(/always\(|failure\(/u);
+      } else {
+        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
+          warmerSteps.indexOf(warmStep),
+        );
+      }
       expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
         warmerSteps.indexOf(warmAssertionStep),
       );
