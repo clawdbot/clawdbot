@@ -22,8 +22,12 @@ export const chunkMarkdownTextForTests = (text: string, limit: number) => {
   return chunks;
 };
 
-/** Installs the text runtime `renderReplyPayloadsToMessages` reads for chunking. */
-export function installMSTeamsTestRuntime(): void {
+/**
+ * Installs the text runtime `renderReplyPayloadsToMessages` reads for chunking. Distinct
+ * from `monitor-handler.test-helpers.ts`'s installer, which builds the inbound runtime and
+ * has no chunker.
+ */
+export function installMSTeamsRenderTestRuntime(): void {
   setMSTeamsRuntime({
     config: {
       loadConfig: () => ({}),

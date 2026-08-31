@@ -3,7 +3,7 @@ import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { renderReplyPayloadsToMessages } from "./messenger.js";
-import { installMSTeamsTestRuntime } from "./messenger.test-helpers.js";
+import { installMSTeamsRenderTestRuntime } from "./messenger.test-helpers.js";
 import { prepareMSTeamsReplyPayload, readMSTeamsPresentationCard } from "./presentation.js";
 
 const PRESENTATION = {
@@ -27,7 +27,7 @@ const cardOf = readMSTeamsPresentationCard;
 
 describe("msteams reply presentation", () => {
   beforeEach(() => {
-    installMSTeamsTestRuntime();
+    installMSTeamsRenderTestRuntime();
   });
 
   it("carries a reply's buttons into the card the reply path sends", () => {

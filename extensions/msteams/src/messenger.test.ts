@@ -30,7 +30,7 @@ import {
 import {
   buildActivity,
   createMockApp,
-  installMSTeamsTestRuntime,
+  installMSTeamsRenderTestRuntime,
 } from "./messenger.test-helpers.js";
 
 const createRecordedSendActivity = (
@@ -74,7 +74,7 @@ function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
 
 describe("msteams messenger", () => {
   beforeEach(() => {
-    installMSTeamsTestRuntime();
+    installMSTeamsRenderTestRuntime();
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
   });
