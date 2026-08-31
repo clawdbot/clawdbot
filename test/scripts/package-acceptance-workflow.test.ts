@@ -1676,6 +1676,8 @@ function runReleaseChecksSummary(params: {
   currentAttempt: string;
   currentResult: "cancelled" | "failure" | "skipped" | "success";
   discordResult?: "failure" | "skipped" | "success";
+  installSmokeScheduled?: boolean;
+  installerBaselineResult?: "cancelled" | "failure" | "skipped" | "success";
   phase?: "all" | "candidate" | "independent";
   resolveResult?: "failure" | "success";
   resultOverrides?: Record<string, "cancelled" | "failure" | "skipped" | "success">;
@@ -1706,6 +1708,7 @@ function runReleaseChecksSummary(params: {
       DOCKER_E2E_RELEASE_CHECKS_RESULT: "success",
       GITHUB_RUN_ATTEMPT: params.currentAttempt,
       GITHUB_RUN_ID: runId,
+      INSTALL_SMOKE_SCHEDULED: String(params.installSmokeScheduled ?? true),
       INSTALL_SMOKE_RELEASE_CHECKS_RESULT: "success",
       LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: "success",
       MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: "skipped",
@@ -1728,6 +1731,7 @@ function runReleaseChecksSummary(params: {
       RELEASE_CHECK_TARGET_SHA: targetSha,
       RELEASE_PHASE: params.phase ?? "all",
       RESOLVE_ADVISORY_EVIDENCE_OUTCOME: "success",
+      RESOLVE_INSTALLER_SMOKE_BASELINE_RESULT: params.installerBaselineResult ?? "success",
       RESOLVE_TARGET_RESULT: params.resolveResult ?? "success",
       RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
       VALIDATE_ADVISORY_STATUSES_OUTCOME: "success",
@@ -7955,6 +7959,20 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       },
       status: 1,
     },
+    ...(["cancelled", "failure", "skipped"] as const).map((installerBaselineResult) => ({
+      emptyStderr: false,
+      expected: [
+        `::error::resolve_installer_smoke_baseline ended with ${installerBaselineResult} while installer smoke was scheduled`,
+      ],
+      name: `rejects a ${installerBaselineResult} installer baseline resolver when installer smoke is scheduled`,
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped",
+        installerBaselineResult,
+        telegramSelected: false,
+      },
+      status: 1,
+    })),
     {
       emptyStderr: false,
       expected: [
@@ -8005,6 +8023,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       );
     },
   );
+
+  it("does not require the installer baseline resolver when installer smoke is not scheduled", () => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "2",
+      currentResult: "skipped",
+      installSmokeScheduled: false,
+      installerBaselineResult: "skipped",
+      telegramSelected: false,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
 
   it("validates only jobs owned by the selected release-check phase", () => {
     const independent = runReleaseChecksSummary({
@@ -9193,8 +9223,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "installer_smoke_nonroot",
     ]);
     expect(jobNeeds(releaseSummary)).toContain("install_smoke_release_checks");
+    expect(jobNeeds(releaseSummary)).toContain("resolve_installer_smoke_baseline");
     const releaseInstallPath = [
       timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
+      timeoutForProfile(
+        releaseChecks.jobs?.resolve_installer_smoke_baseline?.["timeout-minutes"],
+        "stable",
+      ),
       timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
       Math.max(
         timeoutForProfile(
@@ -9210,9 +9245,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseInstallPath).toEqual([30, 15, 75, 120, 5, 5]);
+    expect(releaseInstallPath).toEqual([30, 15, 15, 75, 120, 5, 5]);
     const releaseInstallNonrootPath = [
       timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
+      timeoutForProfile(
+        releaseChecks.jobs?.resolve_installer_smoke_baseline?.["timeout-minutes"],
+        "stable",
+      ),
       timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
       Math.max(
         timeoutForProfile(
@@ -9228,7 +9267,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseInstallNonrootPath).toEqual([30, 15, 75, 60, 5, 5]);
+    expect(releaseInstallNonrootPath).toEqual([30, 15, 15, 75, 60, 5, 5]);
 
     const releaseQaLive = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks");
     expect(jobNeeds(releaseQaLive)).toEqual(["resolve_target"]);
@@ -9264,8 +9303,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ).toBeGreaterThanOrEqual(60);
     }
     expect(releaseCrossOsPath.reduce((total, timeout) => total + timeout, 0)).toBe(200);
-    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(250);
-    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(190);
+    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(265);
+    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(205);
     expect(releaseQaLivePath.reduce((total, timeout) => total + timeout, 0)).toBe(165);
 
     expect(

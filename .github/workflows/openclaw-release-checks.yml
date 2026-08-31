@@ -2776,6 +2776,7 @@ jobs:
     needs:
       - resolve_target
       - prepare_release_package
+      - resolve_installer_smoke_baseline
       - install_smoke_release_checks
       - cross_os_release_checks
       - live_repo_e2e_release_checks
@@ -2900,6 +2901,8 @@ jobs:
           VALIDATE_ADVISORY_STATUSES_OUTCOME: ${{ steps.validate_advisory_statuses.outcome }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
+          RESOLVE_INSTALLER_SMOKE_BASELINE_RESULT: ${{ needs.resolve_installer_smoke_baseline.result }}
+          INSTALL_SMOKE_SCHEDULED: ${{ needs.resolve_target.outputs.install_smoke_scheduled }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
           LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
@@ -2928,6 +2931,11 @@ jobs:
           failed=0
           release_check_items=("resolve_target=${RESOLVE_TARGET_RESULT}")
           if [[ "$RELEASE_PHASE" != "candidate" ]]; then
+            if [[ "$INSTALL_SMOKE_SCHEDULED" == "true" ]]; then
+              release_check_items+=(
+                "resolve_installer_smoke_baseline=${RESOLVE_INSTALLER_SMOKE_BASELINE_RESULT}"
+              )
+            fi
             release_check_items+=(
               "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
               "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
@@ -3047,6 +3055,11 @@ jobs:
               result="$(release_check_result "$name" "$raw_result")"
             else
               result="$raw_result"
+            fi
+            if [[ "$name" == "resolve_installer_smoke_baseline" && "$result" != "success" ]]; then
+              echo "::error::${name} ended with ${result} while installer smoke was scheduled"
+              failed=1
+              continue
             fi
             if [[ "$name" == "qa_live_telegram_release_checks" ]]; then
               # Only an identified child execution is advisory; dispatch provenance remains a gate.
