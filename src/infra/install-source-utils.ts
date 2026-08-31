@@ -18,6 +18,21 @@ import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
+/** Renders a non-empty cause for npm subprocess failures that captured no output. */
+function formatSpawnFailureReason(res: {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
+}): string {
+  if (res.termination === "timeout" || res.termination === "no-output-timeout") {
+    return "command exceeded its timeout without producing output";
+  }
+  if (res.termination === "signal" || res.signal) {
+    return `command terminated by signal ${res.signal ?? "(unknown)"} without producing output`;
+  }
+  return `command exited with code ${res.code ?? "unknown"} without producing output`;
+}
+
 /** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
   name?: string;
@@ -164,7 +179,15 @@ export async function resolveNpmSpecMetadata(params: {
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
+    // Preserve timeout/signal identity so the failure reason survives
+    // when npm exited with no captured output. A bare `npm view failed: `
+    // would otherwise send operators toward the wrong remediation.
+    const reason = raw || formatSpawnFailureReason(res);
+    return {
+      ok: false,
+      error: `npm view failed: ${reason}`,
+      category: "metadata-env",
+    };
   }
 
   try {
@@ -380,7 +403,8 @@ export async function packNpmSpecToArchive(params: {
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm pack failed: ${raw}` };
+    const reason = raw || formatSpawnFailureReason(res);
+    return { ok: false, error: `npm pack failed: ${reason}` };
   }
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
@@ -447,9 +471,11 @@ export async function resolveNpmPackArchiveMetadata(params: {
     },
   );
   if (res.code !== 0) {
+    const raw = res.stderr.trim() || res.stdout.trim();
+    const reason = raw || formatSpawnFailureReason(res);
     return {
       ok: false,
-      error: `npm pack metadata read failed: ${res.stderr.trim() || res.stdout.trim()}`,
+      error: `npm pack metadata read failed: ${reason}`,
     };
   }
 
