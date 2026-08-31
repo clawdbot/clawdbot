@@ -79,8 +79,8 @@ from the provider guide.
 ## Bake required binaries into the image
 
 Installing binaries inside a running container is a trap: anything installed
-at runtime is lost on restart. Bake every external binary a skill needs into
-the image at build time.
+at runtime is lost when the container is recreated. Bake every external binary
+a skill needs into the image at build time.
 
 The examples below cover three binaries only, alphabetically:
 
@@ -180,18 +180,12 @@ Mount the gateway state **as a directory**, never as a single file. The repo
 # - "./openclaw.json:/home/node/.openclaw/openclaw.json"
 ```
 
-A single-file bind follows the file the host path pointed at when the container
-started, not the path itself. Ordinary OpenClaw config saves publish a
-replacement file rather than editing the existing file in place. Prefix
-recovery can write the canonical path directly. Divergence happens when a host
-tool replaces that source file after the container starts: the container keeps
-reading the file it was bound to, while the host path already points at the
-new one, so later replacement saves look like a no-op inside the container.
-An in-place edit of the same file does not create that divergence.
-
-Nothing reports a stale bind. A replacement save on the host succeeds, and
-`openclaw doctor` checks service and MCP configuration drift, not whether a
-bind-mounted `openclaw.json` still resolves to the file the host is writing.
+A single-file bind remains attached to the mounted file. Normal OpenClaw
+configuration saves replace `openclaw.json`. If a host-side save replaces the
+source of a single-file bind after the container starts, the container can keep
+reading the old file while the host path points to the new one. The host-side
+save can succeed without updating what the container sees. An edit that writes
+to the same file in place does not cause this divergence.
 
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
