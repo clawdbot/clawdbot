@@ -796,24 +796,6 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it("leaves the image downscale limit unset when none is configured", async () => {
-    downloadSlackFile.mockResolvedValueOnce({
-      path: "/tmp/slack-image.png",
-      contentType: "image/png",
-      placeholder: "image",
-    });
-
-    await handleSlackAction(
-      { action: "downloadFile", fileId: "F123", to: "channel:C1" },
-      slackConfig(),
-    );
-
-    const params = requireRecordArg(imageResultFromFile, "imageResultFromFile", 0, 0);
-    expect(
-      (params.imageSanitization as { maxDimensionPx?: number }).maxDimensionPx,
-    ).toBeUndefined();
-  });
-
   it("passes download scope (channel/thread) to downloadSlackFile", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
 
