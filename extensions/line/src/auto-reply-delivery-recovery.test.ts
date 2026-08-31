@@ -7,6 +7,7 @@ import {
   baseDeliveryParams,
   createDeps,
   createFlexMessage,
+  createQuickReply,
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
@@ -274,14 +275,14 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       "line:user:1",
       [
         createFlexMessage("Card", { type: "bubble" }),
-        { type: "text", text: "Choose one", quickReply: { items: ["A"] } },
+        { type: "text", text: "Choose one", quickReply: createQuickReply("A") },
       ],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       2,
       "line:user:1",
-      [{ type: "text", text: "Choose one", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "Choose one", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
@@ -387,7 +388,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       2,
       "line:user:1",
-      [{ type: "text", text: "Options:\n- A", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "Options:\n- A", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
@@ -615,7 +616,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       "line:user:1",
       [
         { type: "text", text: "c5" },
-        { type: "text", text: "c6", quickReply: { items: ["A"] } },
+        { type: "text", text: "c6", quickReply: createQuickReply("A") },
       ],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
@@ -670,7 +671,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       3,
       "line:user:1",
-      [{ type: "text", text: "c6", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "c6", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });

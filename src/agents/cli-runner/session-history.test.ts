@@ -216,6 +216,56 @@ describe("canonical CLI history", () => {
     await expect(loadCliSessionReseedMessages(params)).resolves.toEqual([]);
   });
 
+  it.each(["compaction", "reset"] as const)(
+    "retains real context when a %s cut starts at display-only activity",
+    async (boundary) => {
+      const { params, manager } = await createSession(["summarized"]);
+      const firstKept = manager.appendMessage({
+        role: "custom",
+        customType: "display-test",
+        content: "display only",
+        display: true,
+        excludeFromContext: true,
+        timestamp: 2,
+      });
+      const retained = manager.appendMessage({ role: "user", content: "retained", timestamp: 3 });
+      if (boundary === "compaction") {
+        manager.appendCompaction("summary", firstKept, 1000);
+      } else {
+        manager.appendResetBoundary("reset", firstKept);
+      }
+      manager.appendMessage({ role: "user", content: "tail", timestamp: 4 });
+      const expected = [
+        ...(boundary === "compaction" ? [{ role: "compactionSummary", summary: "summary" }] : []),
+        { role: "user", content: "retained" },
+        { role: "user", content: "tail" },
+      ];
+      const context = await loadCliSessionContextEngineMessages(params);
+      expect(context).toMatchObject(expected);
+      if (boundary === "compaction") {
+        expect(context[0]).toMatchObject({ firstKeptEntryId: retained });
+      }
+      await expect(
+        loadCliSessionReseedMessages({
+          ...params,
+          allowRawTranscriptReseed: true,
+          rawTranscriptReseedReason: "missing-transcript",
+        }),
+      ).resolves.toMatchObject(expected);
+      // Reset's retained history prefix is conversation-only; compaction leaves hook history open.
+      await expect(loadCliSessionHistoryMessages(params)).resolves.toMatchObject([
+        ...(boundary === "compaction"
+          ? [
+              { role: "user", content: "summarized" },
+              { role: "custom", content: "display only", excludeFromContext: true },
+            ]
+          : []),
+        { role: "user", content: "retained" },
+        { role: "user", content: "tail" },
+      ]);
+    },
+  );
+
   it("preserves custom and branch context and compaction metadata", async () => {
     const { params, target } = await createSession(["retained"]);
     await appendTranscriptEvent(target, {

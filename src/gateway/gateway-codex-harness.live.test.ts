@@ -183,6 +183,11 @@ const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = CODEX_HARNESS_RESTART_STRESS ? 3_600_000 : 900_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
+// Request-local tool observation requires a negotiated capability, even for admin clients.
+const CODEX_HARNESS_CLIENT_CAPS = [
+  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+  ...(CODEX_HARNESS_MULTI_SESSION_PROBE ? [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] : []),
+];
 const CODEX_HARNESS_REASONING_EFFORTS = [
   "minimal",
   "low",
@@ -268,11 +273,11 @@ function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarness
   return normalized as CodexHarnessThinkingLevel;
 }
 
-function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | null {
+function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
     const expected = resolveCodexHarnessThinkingLevel(configured);
-    return expected === "off" ? null : expected === "ultra" ? "max" : expected;
+    return expected === "off" ? null : expected;
   }
   const supported = CODEX_HARNESS_SUPPORTED_EFFORTS.get(modelId);
   if (!supported) {
@@ -281,8 +286,8 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
   if (CODEX_HARNESS_THINKING === "off") {
     return null;
   }
-  // Codex preserves Ultra in config but intentionally sends Max to the model.
-  // Compare the request-facing lifecycle event to that wire contract.
+  // The lifecycle event records turn/start effort before Codex maps Ultra to Max
+  // for its downstream model request; Ultra still controls native collaboration.
   const candidates =
     CODEX_HARNESS_THINKING === "ultra"
       ? supported
@@ -297,7 +302,7 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
     ) ??
     candidates.at(-1) ??
     null;
-  return configuredEffort === "ultra" ? "max" : configuredEffort;
+  return configuredEffort;
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -742,7 +747,7 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = resolveCodexHarnessExpectedRequestEffort(expectedModel);
+  const expectedEffort = resolveCodexHarnessExpectedAppServerEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
   expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
   if (CODEX_HARNESS_FULL_CONTEXT) {
@@ -2146,10 +2151,7 @@ describeLive("gateway live (Codex harness)", () => {
           timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
           requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           clientDisplayName: "vitest-codex-harness-live",
-          // Approval events require an explicit renderer capability even for admin clients.
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] }
-            : {}),
+          caps: CODEX_HARNESS_CLIENT_CAPS,
           onEvent: captureGatewayEvent,
         });
         activeApprovalClient = client;
@@ -2465,6 +2467,7 @@ describeLive("gateway live (Codex harness)", () => {
               timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
               requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
               clientDisplayName: `vitest-codex-resume-stress-${restart}`,
+              caps: CODEX_HARNESS_CLIENT_CAPS,
               onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;

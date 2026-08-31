@@ -120,6 +120,7 @@ function buildPreparedCliRunContext(params: {
       bundleMcp: false,
       parseJsonlEvent: params.parseJsonlEvent,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},

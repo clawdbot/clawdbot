@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
   cpSync,
   mkdirSync,
   readFileSync,
@@ -9,21 +10,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { afterAll } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureTemplate: ReturnType<typeof createMainRefreshTemplate> | undefined;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-// Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
-// transport faults, and GitHub responses are synthetic; rg invocation is forbidden.
-export function createMainRefreshFixture(directory: string) {
-  const root = realpathSync(directory);
-  const canonical = join(root, "canonical");
-  const origin = join(root, "origin.git");
-  const worktree = join(canonical, ".worktrees", "pr-42");
-  const bin = join(root, "bin");
+function createFixtureGit(root: string) {
   const home = join(root, "home");
-  mkdirSync(bin);
   mkdirSync(home);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
@@ -43,6 +41,14 @@ export function createMainRefreshFixture(directory: string) {
     }
     return result.stdout.trim();
   }
+  return { env, realGit, git };
+}
+
+function createMainRefreshTemplate(directory: string) {
+  const root = realpathSync(directory);
+  const canonical = join(root, "canonical");
+  const origin = join(root, "origin.git");
+  const { git } = createFixtureGit(root);
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "init", "-b", "main", canonical);
   git(canonical, "config", "user.name", "OpenClaw Test");
@@ -82,15 +88,7 @@ export function createMainRefreshFixture(directory: string) {
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
-  git(canonical, "remote", "add", "origin", origin);
-  git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
-  git(
-    canonical,
-    "config",
-    "--add",
-    `url.${origin}.insteadOf`,
-    "https://github.com/fixture/repo.git",
-  );
+  git(canonical, "remote", "add", "origin", "../origin.git");
   git(canonical, "push", "origin", "main");
   git(canonical, "checkout", "-qb", "topic");
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'reviewed';\n");
@@ -109,6 +107,37 @@ export function createMainRefreshFixture(directory: string) {
   git(canonical, "push", "origin", `${gateMain}:refs/heads/gate-movement`);
   git(canonical, "push", "origin", `${movedMain}:refs/heads/movement`);
   git(canonical, "checkout", "--detach", main);
+  return { canonical, origin, main, head, sameTreeHead, movedMain, gateMain };
+}
+
+// Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
+// transport faults, and GitHub responses are synthetic.
+export function createMainRefreshFixture(directory: string) {
+  const template = (fixtureTemplate ??= createMainRefreshTemplate(
+    templateDirs.make("openclaw-pr-main-refresh-template-"),
+  ));
+  const root = realpathSync(directory);
+  const canonical = join(root, "canonical");
+  const origin = join(root, "origin.git");
+  const worktree = join(canonical, ".worktrees", "pr-42");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const { env, realGit, git } = createFixtureGit(root);
+  const { main, head, sameTreeHead, movedMain, gateMain } = template;
+  // Copy complete object stores (including sameTreeHead), never shared refs or
+  // hardlinks. Create worktrees afterward so their absolute back-links stay local.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.canonical, canonical, copyOptions);
+  cpSync(template.origin, origin, copyOptions);
+  git(canonical, "remote", "set-url", "origin", origin);
+  git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
+  git(
+    canonical,
+    "config",
+    "--add",
+    `url.${origin}.insteadOf`,
+    "https://github.com/fixture/repo.git",
+  );
   git(canonical, "worktree", "add", "--detach", worktree, head);
   symlinkSync(join(process.cwd(), "node_modules"), join(canonical, "node_modules"), "dir");
   const local = join(worktree, ".local");
@@ -187,6 +216,7 @@ export function createMainRefreshFixture(directory: string) {
   const eventsFile = join(root, "events.jsonl");
   const control = {
     metadata,
+    authorPermission: "write",
     failFetch: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
@@ -197,6 +227,18 @@ export function createMainRefreshFixture(directory: string) {
     moveAtCi: false,
     moveSharedAfterFetch: false,
     remoteOnlyBase: "",
+    hostedCi: "scheduled" as
+      | "scheduled"
+      | "release"
+      | "missing"
+      | "stale"
+      | "failed"
+      | "wrong-head"
+      | "unmarked"
+      | "wrong-workflow"
+      | "scheduled-failure"
+      | "api-error",
+    requiredChecks: "pass" as "pass" | "fail" | "pending" | "api-error",
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -318,7 +360,15 @@ if (args[0] === 'pr' && args[1] === 'view') {
     runGit(['-C', origin, 'update-ref', 'refs/heads/main', movedMain]);
   }
   event({ kind: 'required-checks' });
-  value = [{ name: 'synthetic CI', bucket: 'pass', state: 'SUCCESS' }];
+  if (control.requiredChecks === 'api-error') {
+    console.error('GitHub API unavailable');
+    process.exit(1);
+  }
+  value = [{ name: 'openclaw/ci-gate', bucket: 'pass', state: 'SUCCESS' }];
+  if (control.requiredChecks !== 'pass') value.push({
+    name: 'independent required check', bucket: control.requiredChecks,
+    state: control.requiredChecks === 'pending' ? 'IN_PROGRESS' : 'FAILURE',
+  });
 } else if (args[0] === 'repo' && args[1] === 'view') {
   value = { id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo' };
 } else if (args[0] === 'run' && args[1] === 'view') {
@@ -326,7 +376,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
     runGit(['-C', origin, 'update-ref', 'refs/heads/main', movedMain]);
   }
   event({ kind: 'ci-completed' });
-  value = { status: 'completed', conclusion: 'success' };
+  value = control.hostedCi === 'scheduled'
+    ? { status: 'completed', conclusion: 'success' }
+    : { status: 'in_progress', conclusion: null };
+} else if (args[0] === 'run' && args[1] === 'list') {
+  value = [];
 } else if (args[0] === 'api') {
   const endpoint = args.find((arg, index) => index > 0 &&
     (arg === 'graphql' || arg === 'users/fixture' || arg.startsWith('repos/')));
@@ -345,6 +399,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
     }
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
+  } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
+    if (control.authorPermission === 'error') process.exit(1);
+    value = { permission: control.authorPermission };
   } else if (endpoint === 'repos/fixture/repo/issues/42/comments' && args.includes('POST')) {
     value = { html_url: 'https://example.invalid/pr/42#completion' };
   } else if (endpoint === 'repos/fixture/repo/pulls/42') {
@@ -360,12 +417,21 @@ if (args[0] === 'pr' && args[1] === 'view') {
       base: { sha: baseSha },
     };
   } else if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) {
-    value = { workflow_runs: [{ id: 1, conclusion: 'success' }] };
+    event({ kind: 'ci-watched' });
+    value = { workflow_runs: [{ id: 1, conclusion: null }] };
+  } else if (endpoint.includes('/actions/runs/1/attempts/1/jobs?')) {
+    value = { total_count: 2, jobs: ['macos-node', 'macos-swift'].map(name => ({
+      name, run_id: 1, run_attempt: 1, status: 'queued', conclusion: null,
+      runner_id: null, steps: [],
+    })) };
+  } else if (endpoint === 'repos/fixture/repo/actions/runs/1') {
+    value = { run_attempt: 1, status: 'in_progress', conclusion: null };
   } else if (/^repos\\/(fixture\\/repo|openclaw\\/openclaw)\\/actions\\/runs\\?/.test(endpoint)) {
     if (control.moveAtGate) {
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', ${JSON.stringify(gateMain)}]);
     }
     event({ kind: 'hosted-gate' });
+    if (control.hostedCi === 'api-error') throw new Error('Hosted API unavailable');
     const workflows = [
       'CI', 'Blacksmith Testbox', 'Blacksmith ARM Testbox',
       'Blacksmith Build Artifacts Testbox', 'Workflow Sanity',
@@ -383,6 +449,22 @@ if (args[0] === 'pr' && args[1] === 'view') {
         created_at: new Date().toISOString(),
       })),
     };
+    if (control.hostedCi !== 'scheduled') {
+      Object.assign(value.workflow_runs[0], {
+        status: control.hostedCi === 'scheduled-failure' ? 'completed' : 'in_progress',
+        conclusion: control.hostedCi === 'scheduled-failure' ? 'failure' : null,
+      });
+      if (control.hostedCi !== 'missing') value.workflow_runs.push({
+        id: 6, run_number: 6, name: 'CI', event: 'workflow_dispatch',
+        head_sha: control.hostedCi === 'wrong-head' ? ${JSON.stringify(main)} : control.metadata.headRefOid,
+        path: control.hostedCi === 'wrong-workflow' ? '.github/workflows/other.yml' : '.github/workflows/ci.yml',
+        display_title: control.hostedCi === 'unmarked' ? 'CI' : 'CI release gate ' + control.metadata.headRefOid,
+        status: 'completed', conclusion: control.hostedCi === 'failed' ? 'failure' : 'success',
+        updated_at: new Date(Date.now() - (control.hostedCi === 'stale' ? 25 * 3600_000 : 0)).toISOString(),
+        created_at: new Date().toISOString(),
+      });
+      value.total_count = value.workflow_runs.length;
+    }
   } else {
     throw new Error('Unexpected GitHub API endpoint ' + endpoint);
   }
@@ -404,8 +486,7 @@ console.log(JSON.stringify(value));
   writeFileSync(
     join(bin, "rg"),
     `#!/bin/sh
-echo "unexpected rg invocation in main-refresh fixture" >&2
-exit 99
+exec grep "$@"
 `,
   );
   for (const command of ["git", "gh", "rg"]) {
@@ -414,6 +495,23 @@ exit 99
   env.PATH = `${bin}${delimiter}${env.PATH ?? ""}`;
   env.OPENCLAW_GH_BIN = join(bin, "gh");
   env.OPENCLAW_TESTBOX = "1";
+  // Advance only the real watcher's polling clock, so a stuck CI fixture
+  // reaches its normal deadline without an hour-long regression test.
+  const clock = join(root, "watch-clock.mjs");
+  writeFileSync(
+    clock,
+    `
+import { syncBuiltinESMExports } from 'node:module';
+import timers from 'node:timers/promises';
+if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
+  const realNow = Date.now;
+  let waited = 0;
+  Date.now = () => realNow() + waited;
+  timers.setTimeout = async milliseconds => { waited += milliseconds; };
+  syncBuiltinESMExports();
+}
+`,
+  );
   return {
     root,
     canonical,
@@ -430,6 +528,8 @@ exit 99
     metadata,
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
+      if (control.hostedCi === "scheduled") delete env.NODE_OPTIONS;
+      else env.NODE_OPTIONS = `--import=${clock}`;
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

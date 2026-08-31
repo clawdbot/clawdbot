@@ -4,6 +4,10 @@ import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
+  readNestedToolActivity,
+  nestedToolActivityContent,
+} from "../sessions/nested-tool-activity.js";
+import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
@@ -39,16 +43,12 @@ type ChatDisplayProjectionOptions = {
   streamErrorFallbackPending?: boolean;
 };
 
-function projectCurrentUserProfileAvatars(
-  messages: Array<Record<string, unknown>>,
-  resolveDisplay: CurrentUserProfileDisplayResolver | undefined,
-): Array<Record<string, unknown>> {
-  if (!resolveDisplay) {
-    return messages;
-  }
+/** Keep profile display reads local to one history page or event projection operation. */
+export function createCurrentUserProfileMessageProjector(
+  resolveDisplay: CurrentUserProfileDisplayResolver,
+) {
   const displayBySenderId = new Map<string, CurrentUserProfileDisplay>();
-  let changed = false;
-  const projected = messages.map((message) => {
+  return (message: Record<string, unknown>): Record<string, unknown> => {
     if (message.role !== "user") {
       return message;
     }
@@ -75,7 +75,6 @@ function projectCurrentUserProfileAvatars(
     ) {
       return message;
     }
-    changed = true;
     return {
       ...message,
       __openclaw: {
@@ -84,6 +83,22 @@ function projectCurrentUserProfileAvatars(
         senderProfileAvatarUrl: display.avatarUrl,
       },
     };
+  };
+}
+
+function projectCurrentUserProfileAvatars(
+  messages: Array<Record<string, unknown>>,
+  resolveDisplay: CurrentUserProfileDisplayResolver | undefined,
+): Array<Record<string, unknown>> {
+  if (!resolveDisplay) {
+    return messages;
+  }
+  const project = createCurrentUserProfileMessageProjector(resolveDisplay);
+  let changed = false;
+  const projected = messages.map((message) => {
+    const row = project(message);
+    changed ||= row !== message;
+    return row;
   });
   return changed ? projected : messages;
 }
@@ -315,7 +330,26 @@ export function projectChatDisplayMessagesWithState(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
-  const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
+  const projectedActivity = messages.map((message) => {
+    const activity = readNestedToolActivity(message);
+    if (!activity) {
+      return message;
+    }
+    const [call, result] = nestedToolActivityContent(activity);
+    const sanitized = sanitizeChatHistoryMessage(
+      { ...result, role: "toolResult" },
+      options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    ).message;
+    return {
+      ...asOptionalRecord(message),
+      runId: activity.details.runId,
+      content: [call, sanitized],
+    };
+  });
+  const source =
+    options?.stripEnvelope === false
+      ? projectedActivity
+      : stripEnvelopeFromMessages(projectedActivity);
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const repairedStreamErrors = projectRepairedStreamErrorFallbackMessages(
     toProjectedMessages(mirrored),

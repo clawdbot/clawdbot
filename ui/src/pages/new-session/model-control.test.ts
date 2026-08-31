@@ -3,7 +3,7 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   invalidateChatMetadataStore,
-  rememberChatMetadata,
+  beginChatMetadataPublication,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
@@ -555,7 +555,7 @@ describe("new-session model runtime", () => {
     );
     expect(renderControl(control, context).textContent).toContain("No models available");
 
-    rememberChatMetadata(context.gateway.snapshot.client!, "main", {
+    beginChatMetadataPublication(context.gateway.snapshot.client!, { agentId: "main" }).publish({
       commands: [],
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
@@ -606,7 +606,7 @@ describe("new-session model runtime", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("drops the stale auth gate on refresh error and restores selection after recovery", async () => {
+  it("retains the accepted auth gate on refresh error and clears it only after recovery", async () => {
     const coldModels: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -640,7 +640,7 @@ describe("new-session model runtime", () => {
       "GPT-5.6 Luna",
     );
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.modelUnavailableReason(agent)).toBeUndefined();
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });

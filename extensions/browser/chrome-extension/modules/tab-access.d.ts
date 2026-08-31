@@ -12,7 +12,7 @@ export type CreatedTabOperation = {
     tabId: number,
     assertCurrent: () => void,
     creationEpoch?: TabAccessEpoch,
-  ): Promise<{ targetId: string }>;
+  ): Promise<{ targetId: string; assertCurrent(): void }>;
   handoff(result: { tabId: number; targetId: string }): void;
 };
 

@@ -48,7 +48,9 @@ function resolveDoctorSessionIdentityEvidence(params: {
   if (params.requests.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES) {
     throw new Error("Plugin doctor session evidence batch exceeds the maximum size.");
   }
-  const probes: Array<DoctorSessionStoreTarget & { index: number; sessionId: string }> = [];
+  const probes: Array<
+    DoctorSessionStoreTarget & { env: NodeJS.ProcessEnv; index: number; sessionId: string }
+  > = [];
   for (const [index, request] of params.requests.entries()) {
     const agentId = normalizeAgentId(request.agentId);
     let targets = params.targetsByAgent.get(agentId);
@@ -87,32 +89,19 @@ function resolveDoctorSessionIdentityEvidence(params: {
       params.targetsByAgent.set(agentId, targets);
     }
     for (const target of targets ?? []) {
-      probes.push({ ...target, index, sessionId: request.sessionId });
+      probes.push({ ...target, env: params.env, index, sessionId: request.sessionId });
     }
   }
-  const evidence = readSessionIdentityEvidenceBatch(
-    probes.map(({ agentId, sessionId, storePath }) => ({
-      agentId,
-      env: params.env,
-      sessionId,
-      storePath,
-    })),
-  );
-  const observedByRequest = new Map<number, typeof evidence>();
+  const evidence = readSessionIdentityEvidenceBatch(probes);
+  const observedByRequest: (typeof evidence)[] = params.requests.map(() => []);
   for (const [position, observed] of evidence.entries()) {
-    const index = probes[position]!.index;
-    const previous = observedByRequest.get(index);
-    if (previous) {
-      previous.push(observed);
-    } else {
-      observedByRequest.set(index, [observed]);
-    }
+    observedByRequest[probes[position]!.index]!.push(observed);
   }
   return params.requests.map((request, index): SessionEvidenceResult => {
-    const observed = observedByRequest.get(index);
-    const current = observed?.filter((entry) => entry.status === "current") ?? [];
+    const observed = observedByRequest[index]!;
+    const current = observed.filter((entry) => entry.status === "current");
     if (
-      !observed?.length ||
+      !observed.length ||
       observed.some((entry) => entry.status === "unknown") ||
       current.length > 1
     ) {

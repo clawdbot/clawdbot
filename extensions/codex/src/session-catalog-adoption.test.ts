@@ -313,11 +313,12 @@ describe("Codex supervision actions", () => {
     ]);
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: config,
         key: supervisionSessionInputKey("thread-1"),
-        label: "Continue native task",
+        displayName: "Continue native task",
         spawnedCwd: "/workspace/project",
         afterCreate: expect.any(Function),
         initialEntry: {

@@ -20,6 +20,7 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -70,7 +71,7 @@ async function createStore(layout: "shared" | "custom") {
   return { cfg, env, options, scope, sqlitePath, stateDir, storePath };
 }
 
-async function createHistoricalSharedStore(corruptIndex = false) {
+async function createHistoricalSharedStore(corruptIndex = false, schemaVersion: 17 | 18 = 17) {
   const store = await createStore("shared");
   const goalOperation = {
     action: "start",
@@ -102,16 +103,34 @@ async function createHistoricalSharedStore(corruptIndex = false) {
   const database = openNodeSqliteDatabase(store.sqlitePath);
   try {
     const goalState = readStoredGoalState(database, store.scope.sessionKey);
-    // Restore the actual v17 table contract as well as both version markers;
-    // header-only downgrades test refusal, not an ordinary supported upgrade.
-    database.exec("DROP TABLE session_participants;");
-    database.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+    // v17 has legacy participant columns; v18 already has the current table.
+    // v19 changes creator data only, so restore its unqualified historical shape.
+    if (schemaVersion === 17) {
+      database.exec("DROP TABLE session_participants;");
+      database.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+      database
+        .prepare(
+          "INSERT INTO session_participants VALUES (?, 'human', 'person', 'profile', 3, 10, 20)",
+        )
+        .run(store.scope.sessionKey);
+    } else {
+      database
+        .prepare(
+          `INSERT INTO session_participants VALUES (?, '{"type":"profile"}', 'person', 3, 10, 20)`,
+        )
+        .run(store.scope.sessionKey);
+    }
     database
       .prepare(
-        "INSERT INTO session_participants VALUES (?, 'human', 'person', 'profile', 3, 10, 20)",
+        `UPDATE session_nodes SET entry_json = json_set(entry_json,
+          '$.createdVia', 'operator', '$.createdAt', 5,
+          '$.createdActor', json('{"type":"human","id":"person","label":"Original creator"}'))
+         WHERE session_key = ?`,
       )
       .run(store.scope.sessionKey);
-    database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
+    database.exec(
+      `PRAGMA user_version = ${schemaVersion}; UPDATE schema_meta SET schema_version = ${schemaVersion};`,
+    );
     if (corruptIndex) {
       database.exec(`
         INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
@@ -124,10 +143,10 @@ async function createHistoricalSharedStore(corruptIndex = false) {
         UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
           WHERE name = 'idx_agent_cache_expiry';
         PRAGMA writable_schema = OFF;`);
-      const schemaVersion = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
-      database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+      const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+      database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
     }
-    return { ...store, goalOperation, goalReceipt, goalState };
+    return { ...store, goalOperation, goalReceipt, goalState, schemaVersion };
   } finally {
     database.close();
   }
@@ -179,13 +198,20 @@ async function repairHistoricalSharedStore(
 function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistoricalSharedStore>>) {
   const reopened = openOpenClawAgentDatabase(store.options);
   expect(reopened.agentId).toBe("main");
-  expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+  expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+    OPENCLAW_AGENT_SCHEMA_VERSION,
+  );
   expect(reopened.db.prepare("SELECT agent_id, schema_version FROM schema_meta").get()).toEqual({
     agent_id: "main",
-    schema_version: 18,
+    schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
   });
   expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
   expect(loadExactSessionEntry(store.scope)?.entry.goal).toEqual(store.goalReceipt?.goal);
+  expect(loadExactSessionEntry(store.scope)?.entry).toMatchObject({
+    createdAt: 5,
+    createdVia: "operator",
+    createdActor: { type: "human", source: "profile", id: "person", label: "Original creator" },
+  });
   expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
   expect(
     lookupSessionGoalOperation({
@@ -198,8 +224,8 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
     {
       identity: { type: "profile", id: "person" },
       contributionCount: 3,
-      firstPromptedAt: null,
-      lastPromptedAt: null,
+      firstPromptedAt: store.schemaVersion === 17 ? null : 10,
+      lastPromptedAt: store.schemaVersion === 17 ? null : 20,
     },
   ]);
   expect(reopened.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -207,25 +233,63 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
 }
 
 describe("Doctor canonical session SQLite targets", () => {
-  it("upgrades configured shared history using its physical migration owner", async () => {
-    const store = await createHistoricalSharedStore();
-    const configuredAgentDatabaseTargets = resolveConfiguredAgentDatabaseTargets(store.cfg, {
-      env: store.env,
-    });
-    expect(configuredAgentDatabaseTargets).toEqual([{ agentId: "main", path: store.sqlitePath }]);
-    const migrated = await migrateLegacyMediaPersistence({
-      configuredAgentDatabaseTargets,
-      env: store.env,
-    });
-    expect(migrated).toEqual({
-      changes: [`Upgraded agent database schema in ${store.sqlitePath}: v17 -> v18.`],
-      warnings: [],
-    });
-    expect(
-      await migrateLegacyMediaPersistence({ configuredAgentDatabaseTargets, env: store.env }),
-    ).toEqual({ changes: [], warnings: [] });
-    expectUpgradedSharedStore(store);
-  });
+  it.each([17, 18] as const)(
+    "upgrades configured v%s shared history using its physical migration owner",
+    async (schemaVersion) => {
+      const store = await createHistoricalSharedStore(false, schemaVersion);
+      const configuredAgentDatabaseTargets = resolveConfiguredAgentDatabaseTargets(store.cfg, {
+        env: store.env,
+      });
+      expect(configuredAgentDatabaseTargets).toEqual([{ agentId: "main", path: store.sqlitePath }]);
+      const migrated = await migrateLegacyMediaPersistence({
+        configuredAgentDatabaseTargets,
+        env: store.env,
+      });
+      expect(migrated).toEqual({
+        changes: [
+          `Upgraded agent database schema in ${store.sqlitePath}: v${schemaVersion} -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+        ],
+        warnings: [],
+      });
+      expect(
+        await migrateLegacyMediaPersistence({ configuredAgentDatabaseTargets, env: store.env }),
+      ).toEqual({ changes: [], warnings: [] });
+      expectUpgradedSharedStore(store);
+    },
+  );
+
+  it.each([
+    {
+      userVersion: 18,
+      metadataVersion: 17,
+      reason: "metadata schema version 17 does not match 18",
+    },
+    {
+      userVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+      metadataVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+      reason: "uses newer schema version",
+    },
+  ])(
+    "refuses unsupported or mismatched schema markers $userVersion/$metadataVersion without rewriting history",
+    async ({ userVersion, metadataVersion, reason }) => {
+      const store = await createHistoricalSharedStore(false, 18);
+      const database = openNodeSqliteDatabase(store.sqlitePath);
+      database.exec(
+        `PRAGMA user_version = ${userVersion}; UPDATE schema_meta SET schema_version = ${metadataVersion};`,
+      );
+      database.close();
+      const before = fs.readFileSync(store.sqlitePath);
+      const migrated = await migrateLegacyMediaPersistence({
+        configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
+          env: store.env,
+        }),
+        env: store.env,
+      });
+      expect(migrated.changes).toEqual([]);
+      expect(migrated.warnings).toEqual([expect.stringContaining(reason)]);
+      expect(fs.readFileSync(store.sqlitePath)).toEqual(before);
+    },
+  );
 
   it.each(["import-finalize", "recover"] as const)(
     "%s fences live writers before upgrading the physical shared owner",

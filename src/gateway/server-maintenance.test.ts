@@ -7,6 +7,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
@@ -418,7 +419,11 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     await Promise.resolve();
 
-    expect(gc).toHaveBeenCalledWith({ shouldProtectOwner: expect.any(Function), limits: {} });
+    expect(gc).toHaveBeenCalledWith({
+      limits: { maxCount: 30 },
+      shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
+    });
     await stopMaintenanceTimers(timers);
   });
 
@@ -1116,10 +1121,16 @@ describe("startGatewayMaintenanceTimers", () => {
     deps.chatAbortControllers.set(runId, terminalRun);
 
     const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(59_000);
+    const drain = waitForChatAbortControllerRemoval({
+      entries: deps.chatAbortControllers,
+      targets: [{ runId, entry: terminalRun }],
+      timeoutMs: 15_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
 
     expect(terminalRun.controller.signal.aborted).toBe(false);
-    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect([await drain, deps.chatAbortControllers.has(runId)]).toEqual([false, false]);
     expect(deps.restartRecoveryCandidates.get(runId)).toEqual({
       runId,
       lifecycleGeneration: "generation-1",

@@ -6,7 +6,10 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText, shouldHideAssistantChatMessage } from "./chat-history.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";

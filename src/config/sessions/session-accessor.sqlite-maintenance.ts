@@ -393,12 +393,7 @@ export function applySessionEntryMaintenance(
       store,
       baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
     }) ?? new Set<string>();
-  const removedKeys = new Set<string>();
-  const removedEntriesByKey = new Map<string, SessionEntry>();
-  const removalReasonsByKey = new Map<
-    string,
-    NonNullable<SessionEntryMaintenancePlan["entryRemovals"][number]["maintenanceReason"]>
-  >();
+  const removals = new Map<string, SessionEntryMaintenancePlan["entryRemovals"][number]>();
   const removedSessionIds = new Set<string>();
   const rememberRemovedEntry =
     (
@@ -407,9 +402,11 @@ export function applySessionEntryMaintenance(
       >,
     ) =>
     (removed: { key: string; entry: SessionEntry }) => {
-      removedKeys.add(removed.key);
-      removedEntriesByKey.set(removed.key, cloneSessionEntry(removed.entry));
-      removalReasonsByKey.set(removed.key, maintenanceReason);
+      removals.set(removed.key, {
+        expectedEntry: cloneSessionEntry(removed.entry),
+        maintenanceReason,
+        sessionKey: removed.key,
+      });
       for (const sessionId of collectSessionStateIdsForEntry(removed.entry)) {
         removedSessionIds.add(sessionId);
       }
@@ -431,10 +428,18 @@ export function applySessionEntryMaintenance(
     });
     remainingEntryCount -= modelRunPruned;
   }
+  const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
   const archived = archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
     log: false,
     onArchived: ({ key, entry }) => {
       writeSessionEntry(database, key, entry);
+      if (entry.worktree) {
+        archivedWorktrees.push({
+          entry: cloneSessionEntry(entry),
+          sessionKey: key,
+          storePath: params.storePath,
+        });
+      }
     },
     preserveKeys,
   });
@@ -467,12 +472,12 @@ export function applySessionEntryMaintenance(
       preserveRecentMs: maintenance.preserveRecentMs,
     });
   }
-  for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeys)) {
+  for (const sessionId of readSessionGenerationIdsForKeys(database, removals.keys())) {
     removedSessionIds.add(sessionId);
   }
   const referencedSessionIds = collectProjectedReferencedSessionIds({
     database,
-    excludedSessionKeys: removedKeys,
+    excludedSessionKeys: removals.keys(),
     projectedStore: store,
   });
   const deletePlans: SessionStateDeletePlan[] = [];
@@ -489,11 +494,8 @@ export function applySessionEntryMaintenance(
     }
   }
   return {
-    entryRemovals: [...removedEntriesByKey].map(([sessionKey, entry]) => ({
-      expectedEntry: entry,
-      maintenanceReason: removalReasonsByKey.get(sessionKey),
-      sessionKey,
-    })),
+    ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+    entryRemovals: [...removals.values()],
     stateDeletePlans: deletePlans,
     archived,
     modelRunPruned,
@@ -502,34 +504,17 @@ export function applySessionEntryMaintenance(
   };
 }
 
-export async function finalizeSessionEntryMaintenancePlansBestEffort(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
-  plans: readonly SessionEntryMaintenancePlan[],
-): Promise<SessionEntryMaintenanceResult> {
-  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(scope, plans, async (commit) =>
-    commit(),
-  );
-}
-
 /** Finalizes maintenance after its caller releases the per-store writer lane. */
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
 ): Promise<SessionEntryMaintenanceResult> {
-  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(
-    scope,
-    plans,
-    async (commit) => await runExclusiveSqliteSessionWrite(scope, async () => commit()),
-  );
-}
-
-async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
-  plans: readonly SessionEntryMaintenancePlan[],
-  commit: (
-    fn: () => SessionLifecycleArchivedTranscript[],
-  ) => Promise<SessionLifecycleArchivedTranscript[]>,
-): Promise<SessionEntryMaintenanceResult> {
+  const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
+  if (archivedWorktrees.length) {
+    const { cleanUpAutomaticallyArchivedWorktrees } =
+      await import("../../sessions/session-worktree-lifecycle.js");
+    await cleanUpAutomaticallyArchivedWorktrees(scope, archivedWorktrees);
+  }
   const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
   const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);
   const warn = (
@@ -578,7 +563,7 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
           entry ? [{ entry, sessionKey }] : [],
         ),
         async () =>
-          await commit(() => {
+          await runExclusiveSqliteSessionWrite(scope, async () => {
             let committed: SessionLifecycleArchivedTranscript[] = [];
             runOpenClawAgentWriteTransaction((database) => {
               assertPlannedLifecycleArtifactEntriesUnchanged(database, batch.entryRemovals);

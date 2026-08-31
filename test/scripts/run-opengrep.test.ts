@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -19,10 +20,15 @@ function writeFile(filePath: string, content: string): void {
 function copyRunOpengrepFiles(repo: string): void {
   const scriptSource = path.resolve("scripts/run-opengrep.sh");
   const helperSource = path.resolve("scripts/lib/merge-head-diff-base.mjs");
+  const argUtilsSource = path.resolve("scripts/lib/arg-utils.runtime.mjs");
   writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
   writeFile(
     path.join(repo, "scripts/lib/merge-head-diff-base.mjs"),
     fs.readFileSync(helperSource, "utf8"),
+  );
+  writeFile(
+    path.join(repo, "scripts/lib/arg-utils.runtime.mjs"),
+    fs.readFileSync(argUtilsSource, "utf8"),
   );
   fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
 }
@@ -247,4 +253,103 @@ describe("run-opengrep.sh", () => {
     expect(args).toContain("src/pr.ts");
     expect(args).not.toContain("src/main-only.ts");
   });
+});
+
+describe("OpenGrep GitHub SARIF uploads", () => {
+  it.each(["opengrep-precise.yml", "opengrep-precise-full.yml"])(
+    "%s preserves raw evidence and uploads only findings without accepted source suppression",
+    (workflowName) => {
+      const repo = createTempDir("openclaw-opengrep-sarif-");
+      const ignored = [
+        { ruleId: "in-source", suppressions: [{ kind: "inSource" }] },
+        { ruleId: "accepted", suppressions: [{ kind: "inSource", status: "accepted" }] },
+      ];
+      const retained = [
+        { ruleId: "active" },
+        { ruleId: "empty", suppressions: [] },
+        { ruleId: "unknown", suppressions: null },
+        { ruleId: "external", suppressions: [{ kind: "external", status: "accepted" }] },
+        { ruleId: "under-review", suppressions: [{ kind: "inSource", status: "underReview" }] },
+        { ruleId: "rejected", suppressions: [{ kind: "inSource", status: "rejected" }] },
+        { ruleId: "future-status", suppressions: [{ kind: "inSource", status: "unknown" }] },
+        { ruleId: "null-status", suppressions: [{ kind: "inSource", status: null }] },
+        { ruleId: "malformed", suppressions: [null] },
+        {
+          ruleId: "mixed",
+          suppressions: [{ kind: "inSource" }, { kind: "inSource", status: "rejected" }],
+        },
+      ];
+      const tool = { driver: { name: "Opengrep OSS", rules: [{ id: "unchanged-rule" }] } };
+      const report = {
+        version: "2.1.0",
+        runs: [
+          {
+            tool,
+            invocations: [{ executionSuccessful: false }],
+            results: [...ignored, ...retained],
+          },
+          { tool, results: [] },
+          { tool },
+        ],
+      };
+      const raw = `${JSON.stringify(report, null, 2)}\n`;
+      const reportPath = ".opengrep-out/precise.sarif";
+      writeFile(path.join(repo, reportPath), raw);
+      const workflow = parse(fs.readFileSync(`.github/workflows/${workflowName}`, "utf8"));
+      const steps: Array<{
+        name: string;
+        id?: string;
+        run?: string;
+        if?: string;
+        with?: Record<string, string>;
+      }> = workflow.jobs.scan.steps;
+      const prepare = steps.find((step) => step.id === "github-sarif");
+      if (prepare) {
+        writeFile(
+          path.join(repo, "scripts/opengrep-github-sarif.mjs"),
+          fs.readFileSync("scripts/opengrep-github-sarif.mjs", "utf8"),
+        );
+        expect(prepare.if).toBe("always() && hashFiles('.opengrep-out/precise.sarif') != ''");
+        const prepared = spawnSync("bash", ["-euo", "pipefail", "-c", prepare.run!], {
+          cwd: repo,
+          encoding: "utf8",
+        });
+        expect(prepared.status).toBe(0);
+        expect(prepared.stderr).toContain(
+          "Omitted 2 accepted in-source suppression(s); raw audit: .opengrep-out/precise.sarif",
+        );
+      }
+      const upload = steps.find((step) => step.name === "Upload SARIF to GitHub Code Scanning")!;
+      const artifact = steps.find((step) => step.name === "Upload SARIF as workflow artifact")!;
+      const uploadPath = upload.with?.sarif_file;
+      if (!uploadPath) {
+        throw new Error("Workflow must name its SARIF upload payload");
+      }
+      const uploaded = JSON.parse(fs.readFileSync(path.join(repo, uploadPath), "utf8"));
+      expect(uploaded).toEqual({
+        ...report,
+        runs: [{ ...report.runs[0], results: retained }, ...report.runs.slice(1)],
+      });
+      expect(upload.if).toBe("always() && steps.github-sarif.outcome == 'success'");
+      expect(artifact.with?.path).toBe(reportPath);
+      expect(artifact.with?.["if-no-files-found"]).toBe("error");
+      expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
+    },
+  );
+
+  it.each(["{", JSON.stringify({ version: "2.1.0", runs: [{ results: "invalid" }] })])(
+    "fails malformed reports without emitting an upload payload: %s",
+    (raw) => {
+      const repo = createTempDir("openclaw-opengrep-sarif-invalid-");
+      const inputPath = path.join(repo, "raw.sarif");
+      writeFile(inputPath, raw);
+      const result = spawnSync(process.execPath, ["scripts/opengrep-github-sarif.mjs", inputPath], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trimEnd()).toMatch(/\[opengrep-github-sarif\] FAILED \(exit 1\)$/);
+      expect(fs.readFileSync(inputPath, "utf8")).toBe(raw);
+    },
+  );
 });

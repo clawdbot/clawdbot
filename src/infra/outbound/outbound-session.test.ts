@@ -691,7 +691,7 @@ describe("ensureOutboundSessionEntry", () => {
   it.each(["operator", "required-parent", "unstamped-parent"] as const)(
     "carries %s creation policy without requiring current role configuration",
     async (source) => {
-      const actor = { type: "human" as const, id: "outbound-creator" };
+      const actor = { type: "human" as const, source: "profile" as const, id: "outbound-creator" };
       const creation = { via: "operator" as const, actor, sandbox: "required" as const };
       mocks.loadSessionEntryReadOnly.mockImplementation((params) =>
         params.sessionKey === "agent:other:main" && params.storePath === "/stores/other.json"

@@ -16,6 +16,10 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "repair.json",
+  "repair.err",
+  "recovery-update.json",
+  "recovery-update.err",
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
@@ -28,6 +32,34 @@ const logNames = [
   "systemctl-shim-gateway.log.bootstrap.log",
   "gateway-restart.log",
 ];
+// Candidate observations select one declared RPC pair, never an arbitrary private path.
+const rpcLogNames = new Set([
+  "channels-status-before",
+  "wizard-start",
+  "wizard-status",
+  "wizard-next",
+  "wizard-duplicate-start",
+  "wizard-cancel",
+  "wizard-cancelled-status",
+  "wizard-replacement-start",
+  "wizard-replacement-cancel",
+  "wizard-replacement-status",
+  "update-rpc",
+  "update-status.candidate",
+  "target-wizard-status-start",
+  "target-wizard-status",
+  "target-wizard-status-retained",
+  "target-wizard-status-cancel",
+  "target-wizard-status-purged",
+  "target-wizard-active-start",
+  "target-wizard-next",
+  "target-wizard-duplicate-start",
+  "target-wizard-cancel",
+  "target-wizard-replacement-start",
+  "target-wizard-replacement-cancel",
+  "target-wizard-purged-status",
+  "channels-status",
+]);
 const reasons = [
   "missing or unsafe file",
   "input exceeds cap; omitted whole",
@@ -188,6 +220,31 @@ function postCoreResult(value, sanitize = (text) => text) {
   };
 }
 
+export function readPostCoreSnapshot(artifactRoot) {
+  try {
+    ownedPath(artifactRoot, "diagnostics/post-core.json");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  const raw = readOwned(artifactRoot, "diagnostics/post-core.json", "post-core", inputLimit + 1024);
+  if (raw === null) {
+    throw new Error("Post-core snapshot could not be read safely");
+  }
+  const snapshot = JSON.parse(raw);
+  if (
+    snapshot.artifactRoot !== fs.realpathSync(artifactRoot) ||
+    !Number.isInteger(snapshot.childExitCode) ||
+    snapshot.childExitCode < 0 ||
+    snapshot.childExitCode > 255
+  ) {
+    throw new Error("Post-core snapshot does not belong to this update observation");
+  }
+  return { childExitCode: snapshot.childExitCode, result: postCoreResult(snapshot.result) };
+}
+
 function armPostCoreCapture() {
   if (
     !isMainThread ||
@@ -231,7 +288,7 @@ function armPostCoreCapture() {
           artifactRoot,
           path.join(artifactRoot, "diagnostics"),
           "post-core.json",
-          { childExitCode: code, result },
+          { artifactRoot: fs.realpathSync(artifactRoot), childExitCode: code, result },
           inputLimit + 1024,
         );
       } catch {
@@ -484,7 +541,7 @@ function writeReport(artifactRoot, directory, name, report, limit) {
   }
 }
 
-async function capture(artifactRoot, phase, exitStatus, signal = "") {
+async function capture(artifactRoot, phase, exitStatus, signal = "", observationRoot = "") {
   const report = {
     ...phaseResult(phase, Number(exitStatus), signal || null),
     logs: {},
@@ -498,26 +555,33 @@ async function capture(artifactRoot, phase, exitStatus, signal = "") {
         ? readOwned(process.env.OPENCLAW_STATE_DIR, "logs/gateway-restart.log", name)
         : readOwned(artifactRoot, name, name);
   }
+  const rpcName = readOwned(artifactRoot, "diagnostics/last-rpc", "last RPC")?.trim();
+  if (rpcLogNames.has(rpcName)) {
+    report.lastRpc = {
+      name: rpcName,
+      stdout: readOwned(artifactRoot, `${rpcName}.json`, "RPC stdout"),
+      stderr: readOwned(
+        artifactRoot,
+        `${rpcName === "update-status.candidate" ? "update-status" : rpcName}.err`,
+        "RPC stderr",
+      ),
+    };
+  } else if (rpcName) {
+    omissions["last RPC"] = reasons[3];
+  }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.postCore = {
     availability: "unavailable",
     reason: "No complete exit snapshot; original outcome unknown",
   };
-  const postCore = readOwned(
-    artifactRoot,
-    "diagnostics/post-core.json",
-    "post-core",
-    inputLimit + 1024,
-  );
-  if (postCore !== null) {
-    try {
-      const snapshot = JSON.parse(postCore);
-      postCoreResult(snapshot.result);
+  try {
+    const snapshot = readPostCoreSnapshot(observationRoot || artifactRoot);
+    if (snapshot !== null) {
       report.postCore = { availability: "captured", ...snapshot };
-    } catch {
-      omissions["post-core"] = reasons[3];
     }
+  } catch {
+    omissions["post-core"] = reasons[3];
   }
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (stateRoot && configPath) {
@@ -595,6 +659,9 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
   // arbitrary omission text. Redact every permitted free-text field on the host.
   for (const label of [
     ...logNames,
+    "last RPC",
+    "RPC stdout",
+    "RPC stderr",
     "config",
     "service unit",
     "service environment",
@@ -626,6 +693,17 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
   }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
+  }
+  if (snapshot.lastRpc !== undefined) {
+    if (rpcLogNames.has(snapshot.lastRpc?.name)) {
+      report.lastRpc = {
+        name: snapshot.lastRpc.name,
+        stdout: sanitize(snapshot.lastRpc.stdout, "RPC stdout"),
+        stderr: sanitize(snapshot.lastRpc.stderr, "RPC stderr"),
+      };
+    } else {
+      omissions["last RPC"] = reasons[3];
+    }
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);
@@ -723,11 +801,11 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
 
 if (import.meta.main) {
   try {
-    const [mode, artifactRoot, phase, exitStatus, signal] = process.argv.slice(2);
+    const [mode, artifactRoot, phase, exitStatus, signal, observationRoot] = process.argv.slice(2);
     if (mode !== "capture") {
       throw new Error();
     }
-    await capture(artifactRoot, phase, exitStatus, signal);
+    await capture(artifactRoot, phase, exitStatus, signal, observationRoot);
   } catch {
     process.stderr.write("Upgrade survivor diagnostics missing: safe capture failed.\n");
     process.exitCode = 1;

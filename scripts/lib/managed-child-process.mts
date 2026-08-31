@@ -55,6 +55,8 @@ type ManagedCommandOptions = {
 
 type RunManagedCommandOptions = ManagedCommandOptions & {
   timeoutMs?: number;
+  timeoutKillGraceMs?: number;
+  timeoutForceKillOnLeaderExit?: boolean;
   requireProcessTreeExit?: boolean;
   runTaskkill?: TaskkillRunner;
   onReady?: (child: ChildProcess) => void;
@@ -278,6 +280,8 @@ export async function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   timeoutMs,
+  timeoutKillGraceMs,
+  timeoutForceKillOnLeaderExit = false,
   requireProcessTreeExit = false,
   runTaskkill = spawnSync,
   onReady,
@@ -330,6 +334,7 @@ export async function runManagedCommand({
     throw error;
   }
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let finalization: Promise<void> | undefined;
   let cancellation: Promise<ManagedCommandOutcome> | undefined;
   let resolveCancellation!: (outcome: ManagedCommandOutcome) => void;
   const canceled = new Promise<ManagedCommandOutcome>((resolve) => {
@@ -339,16 +344,19 @@ export async function runManagedCommand({
     outcome: ManagedCommandOutcome,
     stopSignal: NodeJS.Signals,
     forceKillDelayMs?: number,
+    forceKillOnLeaderExit = false,
   ) => {
     if (cancellation) {
       return cancellation;
     }
     clearTimeout(timeoutTimer);
-    cancellation = terminateManagedChildAndWait(child, stopSignal, {
+    finalization ??= finalizeManagedChild(child, stopSignal, {
       platform,
       runTaskkill,
       forceKillDelayMs,
-    }).then(
+      forceKillOnLeaderExit,
+    });
+    cancellation = finalization.then(
       () => outcome,
       (error: unknown) => ({ type: "failed" as const, error }),
     );
@@ -369,8 +377,11 @@ export async function runManagedCommand({
         clearTimeout(timeoutTimer);
         resolve({ type: "failed", error });
       });
-      child.once("close", (status, received) => {
-        clearTimeout(timeoutTimer);
+      // The wall deadline includes output drainage, but not group verification after close.
+      child.once("close", () => clearTimeout(timeoutTimer));
+      // Strict owners must start cleanup at exit: descendants can hold output
+      // open indefinitely. Finalization still joins the group and output pipes.
+      child.once(requireProcessTreeExit ? "exit" : "close", (status, received) => {
         resolve({
           type: "completed",
           status: received ? signalExitCode(received) : (status ?? 1),
@@ -379,7 +390,7 @@ export async function runManagedCommand({
     });
     if (timeoutMs !== undefined) {
       timeoutTimer = setTimeout(() => {
-        void stop({ type: "timeout" }, "SIGTERM");
+        void stop({ type: "timeout" }, "SIGTERM", timeoutKillGraceMs, timeoutForceKillOnLeaderExit);
       }, timeoutMs);
     }
     signal?.addEventListener("abort", abort, { once: true });
@@ -410,7 +421,14 @@ export async function runManagedCommand({
       throw error;
     }
     let outcome = await Promise.race([completion, canceled]);
-    // A leader's close can race cleanup of its group or inherited output pipes.
+    if (outcome.type === "completed" && requireProcessTreeExit && !cancellation) {
+      try {
+        await (finalization ??= finalizeManagedChild(child, undefined, { platform, runTaskkill }));
+      } catch (error) {
+        outcome = { type: "failed", error };
+      }
+    }
+    // Cancellation owns the result even when it arrives during normal drainage.
     if (cancellation) {
       outcome = await cancellation;
     }
@@ -426,9 +444,6 @@ export async function runManagedCommand({
     if (outcome.type === "signal") {
       return signalExitCode(outcome.signal);
     }
-    if (requireProcessTreeExit) {
-      await ensureManagedProcessTreeExit(child, platform);
-    }
     return outcome.status;
   } finally {
     clearTimeout(timeoutTimer);
@@ -438,22 +453,29 @@ export async function runManagedCommand({
   }
 }
 
-async function terminateManagedChildAndWait(
+async function finalizeManagedChild(
   child: ChildProcess,
-  signal: NodeJS.Signals,
+  signal: NodeJS.Signals | undefined,
   {
     platform,
     runTaskkill,
     forceKillDelayMs = FORCE_KILL_DELAY_MS,
+    forceKillOnLeaderExit = false,
   }: {
     platform: NodeJS.Platform;
     runTaskkill: TaskkillRunner;
     forceKillDelayMs?: number;
+    forceKillOnLeaderExit?: boolean;
   },
 ) {
   // Nested wrappers own detached groups. Let them forward the signal before
   // killing their leader, then join inherited pipes as well as our own group.
-  const termination = terminateManagedChild(child, signal, { platform, runTaskkill });
+  // Normal exit has no grace period: surviving group members are a failure.
+  const termination =
+    !signal &&
+    inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform }) === "dead"
+      ? { processTreeState: "terminated" }
+      : terminateManagedChild(child, signal ?? "SIGKILL", { platform, runTaskkill });
   if (platform === "win32" && termination?.processTreeState !== "terminated") {
     throw createManagedCommandCleanupError(
       "Windows taskkill could not verify managed process tree exit",
@@ -462,9 +484,9 @@ async function terminateManagedChildAndWait(
       "indeterminate",
     );
   }
-  const forceAt = Date.now() + forceKillDelayMs;
+  const forceAt = Date.now() + (signal ? forceKillDelayMs : 0);
   const deadline = forceAt + PROCESS_GROUP_DRAIN_TIMEOUT_MS;
-  let forced = platform === "win32";
+  let forced = !signal || platform === "win32";
   let groupState: "dead" | "indeterminate" | "live" = "indeterminate";
   while (true) {
     groupState =
@@ -474,10 +496,21 @@ async function terminateManagedChildAndWait(
     const exited = child.exitCode !== null || child.signalCode !== null;
     const pipesClosed = [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed);
     if (groupState === "dead" && exited && pipesClosed) {
+      // A missing group at signal time supersedes the earlier racy liveness probe.
+      if (!signal && termination?.processTreeState !== "terminated") {
+        throw createManagedCommandCleanupError(
+          "Managed command exited while its process group remained active",
+          child,
+          platform,
+          "terminated",
+        );
+      }
       return;
     }
     const now = Date.now();
-    if (!forced && now >= forceAt) {
+    // Bounded timeout callers can retire remaining descendants as soon as the
+    // leader exits. Other owners retain their configured graceful-drain window.
+    if (!forced && (now >= forceAt || (forceKillOnLeaderExit && exited))) {
       forced = true;
       if (groupState !== "dead") {
         terminateManagedChild(child, "SIGKILL", { platform, runTaskkill });
@@ -491,7 +524,7 @@ async function terminateManagedChildAndWait(
     });
   }
   // Stop owning pipe handles only after recording failure; never disguise an
-  // escaped descendant holding stdio as a successfully cleaned timeout.
+  // escaped descendant holding stdio as successful completion or cancellation.
   child.stdout?.destroy();
   child.stderr?.destroy();
   throw createManagedCommandCleanupError(
@@ -522,46 +555,6 @@ function createManagedCommandSetupCleanupError(error: unknown, cleanupError: unk
     [error, cleanupError],
     "Managed command setup failed and its process tree could not be cleaned up",
     { cause: cleanupError },
-  );
-}
-
-async function ensureManagedProcessTreeExit(child: ChildProcess, platform: NodeJS.Platform) {
-  const initialStatus = inspectManagedProcessGroup(child, {
-    errorPolicy: "indeterminate",
-    platform,
-  });
-  if (initialStatus === "dead") {
-    return;
-  }
-  let status: ReturnType<typeof inspectManagedProcessGroup> = initialStatus;
-  // A missing group at signal time supersedes the earlier racy liveness probe.
-  const termination = terminateManagedChild(child, "SIGKILL", { platform });
-  const deadline = Date.now() + PROCESS_GROUP_DRAIN_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, PROCESS_GROUP_POLL_MS);
-    });
-    status = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform });
-    if (status === "dead") {
-      if (termination?.processTreeState !== "terminated") {
-        throw createManagedCommandCleanupError(
-          "Managed command exited while its process group remained active",
-          child,
-          platform,
-          "terminated",
-        );
-      }
-      return;
-    }
-  }
-  const processTreeState = status === "indeterminate" ? "indeterminate" : "live";
-  throw createManagedCommandCleanupError(
-    processTreeState === "indeterminate"
-      ? `Managed process-group state remained indeterminate for ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`
-      : `Managed process group did not exit within ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`,
-    child,
-    platform,
-    processTreeState,
   );
 }
 

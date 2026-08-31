@@ -67,12 +67,18 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 
 type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
+  prepareComputer?: (
+    claim: import("./placement-store.js").WorkerSessionTurnClaim,
+  ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
+  executeComputer?: import("./worker-turn-computer-rpc.js").WorkerComputerExecutor;
+  closeComputers?: () => Promise<void>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   nodePortalCarrier?: WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   stopNodeEnrollmentWaits?: () => void;
+  closeNodeBootstrapArtifacts?: () => Promise<void>;
   stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -296,7 +302,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+    prepareNodeBootstrap: options.prepareNodeBootstrap,
+    projectNamespace: options.projectNamespace,
+    prepareNodeRuntime: options.prepareNodeRuntime,
+    closeNodeRuntime: options.closeNodeRuntime,
     prepareNodeEnrollment: options.prepareNodeEnrollment,
+    closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
@@ -336,6 +347,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     liveEvents: options.liveEvents,
     placementStore: options.placementStore,
     executeSessionTool: options.executeSessionTool,
+    executeComputer: options.executeComputer,
     inference,
     isStopping: () => stopping,
     now,
@@ -472,6 +484,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
     await closeReconcileEnvironmentGuard();
+    await options
+      .closeComputers?.()
+      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
@@ -490,6 +505,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       credentialBroker.clear();
       turnRpc.clear();
       options.liveEvents?.clear();
+      await options.closeNodeBootstrapArtifacts?.();
     }
   };
 
@@ -530,6 +546,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    inventoryVersion: store.inventoryVersion,
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
@@ -541,6 +558,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -549,6 +567,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },
@@ -557,6 +576,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -567,6 +587,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           },
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },
@@ -583,6 +604,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
     executeSessionTool: turnRpc.executeSessionTool,
+    executeComputer: turnRpc.executeComputer,
+    prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,

@@ -145,6 +145,7 @@ test("sessions.recover settles its active placement before archiving a real sess
   const reclaimStarted = createDeferredCore();
   const reclaimGate = createDeferredCore();
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
+    cancelSessionWork: vi.fn(async () => {}),
     placements: {
       get: () => placement,
       waitForTurnClaimRelease: vi.fn(async () => {}),
@@ -209,7 +210,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     expect(committedBeforeReclaim).toBe(false);
     expect(reclaim).toHaveBeenCalledWith(
       { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
-      undefined,
+      expect.any(Function),
       expect.any(Function),
     );
     const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
@@ -312,6 +313,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
       throw new Error("ineligible worker must not be reclaimed");
     });
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         get: () => placement,
         waitForTurnClaimRelease: async () => {
@@ -660,7 +662,7 @@ test.each([false, true])(
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
-      createdActor: { type: "human" as const, id: owner.id },
+      createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       createdAt: 123,
       ...(!required ? { sandbox: "required" as const } : {}),
     };
@@ -719,7 +721,7 @@ test.each([false, true])(
     const successor = loadSessionEntry(scope);
     expect(successor).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: recovering.id },
+      createdActor: { type: "human", source: "profile", id: recovering.id },
       createdAt: expect.any(Number),
     });
     expect(successor?.sandbox).toBe(required ? "required" : undefined);
@@ -751,7 +753,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
       [key]: sessionStoreEntry("role-denied-recovery-session", {
         status: "failed",
         abortedLastRun: true,
-        createdActor: { type: "human", id: profile.id },
+        createdActor: { type: "human", source: "profile", id: profile.id },
         mainRestartRecovery: {
           cycleId: "cycle-role-denied-recovery",
           revision: 1,
@@ -815,7 +817,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
         status: "failed",
         abortedLastRun: true,
         visibility: "read-only",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
         mainRestartRecovery: {
           cycleId: "cycle-recovery-participation-race",
           revision: 1,
@@ -981,8 +983,6 @@ test("sessions.recover rejects continuation launch after runtime authority close
     storePath,
     messages: [{ role: "user", content: "continue after recovery" }],
   });
-  let validations = 0;
-
   const recovered = await directSessionReq<{
     key: string;
     continuation: { status: string; error?: { message?: string } };
@@ -991,7 +991,9 @@ test("sessions.recover rejects continuation launch after runtime authority close
     { agentId: "main", key: sourceKey },
     {
       context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 2,
+        validateAgentRuntimeApprovalAuthority: () =>
+          !loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })
+            ?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
       },
       client: {
         connect: { scopes: ["operator.write"] },
@@ -1015,7 +1017,6 @@ test("sessions.recover rejects continuation launch after runtime authority close
       },
     },
   });
-  expect(validations).toBe(2);
   expect(
     loadSessionEntry({
       agentId: "main",

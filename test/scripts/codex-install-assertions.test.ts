@@ -18,11 +18,13 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
-const CODEX_VERSION = "0.150.1";
+const CODEX_VERSION = "0.151.0";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
   "/tmp/openclaw-codex-agent.json",
+  "/tmp/openclaw-codex-agent-after-uninstall.err",
+  "/tmp/openclaw-codex-agent-after-uninstall.json",
   "/tmp/openclaw-codex-followthrough.err",
   "/tmp/openclaw-codex-followthrough.json",
   "/tmp/openclaw-codex-inspect.json",
@@ -640,6 +642,29 @@ function createCodexInstallFixture(root: string) {
 }
 
 describe("Codex install helpers", () => {
+  it.each([
+    { status: 1, missingRegistration: true, accepted: true },
+    { status: 0, missingRegistration: true, accepted: false },
+    { status: 1, missingRegistration: false, accepted: false },
+  ])("validates the post-uninstall agent failure: %j", (testCase) => {
+    const message = testCase.missingRegistration
+      ? 'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.'
+      : "Provider request failed";
+    writeJson("/tmp/openclaw-codex-agent-after-uninstall.json", {
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    writeFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", message);
+
+    const result = spawnSync(
+      process.execPath,
+      [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-agent-error", String(testCase.status)],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status === 0, result.stderr).toBe(testCase.accepted);
+  });
+
   it("configures the canonical OpenAI model for the Codex runtime by default", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-configure-");
 

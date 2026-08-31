@@ -715,6 +715,7 @@ export function createAgentEventHandler({
     if (isSupersededRestartRecoveryEvent) {
       return;
     }
+    let terminalPersistence: Promise<void> | undefined;
 
     if (
       !replyDispatchOwnsCompletion &&
@@ -788,7 +789,9 @@ export function createAgentEventHandler({
       if (suppressRestartRecoveryProjection && chatLink) {
         chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
       }
-      clearRunContextForEvent(evt);
+      if (!evt.contextClaimId) {
+        clearRunContextForEvent(evt);
+      }
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
     }
@@ -801,6 +804,7 @@ export function createAgentEventHandler({
           agentId: sessionAgentId,
           event: {
             ...evt,
+            ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
             ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
             ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
             ...(evt.mainSessionRestartRecovery === true
@@ -808,6 +812,7 @@ export function createAgentEventHandler({
               : {}),
           },
         });
+        terminalPersistence = persistence;
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
           clientRunId,
@@ -871,6 +876,16 @@ export function createAgentEventHandler({
           sessionKey,
           persisted: false,
         });
+      }
+    }
+    if (!replyDispatchOwnsCompletion && evt.contextClaimId) {
+      // The queued write's commit guard requires this exact claim to stay active.
+      // Abort or replacement can still revoke it before the write settles.
+      if (terminalPersistence) {
+        const clearOwnedRunContext = () => clearRunContextForEvent(evt);
+        void terminalPersistence.then(clearOwnedRunContext, clearOwnedRunContext);
+      } else {
+        clearRunContextForEvent(evt);
       }
     }
   };
@@ -1465,18 +1480,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (
-      recordsInFlightProgress &&
-      !isAborted &&
-      ((isToolEvent && !suppressHeartbeatToolEvents) ||
-        isItemEvent ||
-        evt.stream === "run_status" ||
-        evt.stream === "notice" ||
-        typeof evt.data?.reviewId === "string" ||
-        evt.data?.phase === "started" ||
-        evt.data?.phase === "completed" ||
-        evt.data?.phase === "warning")
-    ) {
+    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.

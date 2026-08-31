@@ -781,6 +781,8 @@ restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
+Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
 ### Authorized prompt enrichment
 
 Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
@@ -996,6 +998,10 @@ approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
 
+Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
+agents are configured. Enqueueing, consumption, and plugin session state stay in
+that agent's store; the owner selector is not part of the persisted injection.
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
@@ -1020,11 +1026,18 @@ message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
 
-Runtime takeovers should forward `ctx.onAgentRunStart` and
-`ctx.userTurnTranscriptRecorder` to their runtime helper. The ACP dispatch
-helper forwards both automatically. Share the recorder so the runtime and
+Runtime takeovers should forward `ctx.onAgentRunStart`,
+`ctx.userTurnTranscriptRecorder`, and optional
+`ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
+helper forwards all three automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
+
+The host-provided preparer records display ownership before the canonical
+assistant append, using original runtime text captured before transcript-only
+hooks. It preserves raw content and IDs and grants no file access or write
+authority. Keep it in process and bound to its owning turn; after that turn
+aborts, is replaced, or completes, it returns the message unchanged.
 
 The optional third `onAgentRunStart` argument can offer
 `completionSource: "reply-dispatch"` with a `getResult()` callback. The host must

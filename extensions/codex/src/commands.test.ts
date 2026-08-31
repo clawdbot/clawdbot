@@ -6453,7 +6453,7 @@ describe("codex command", () => {
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
       initialPermissionMode: "full",
-      expectedText: "Codex permissions set to default.",
+      expectedText: "Codex permissions set to guarded.",
       expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
@@ -6472,6 +6472,7 @@ describe("codex command", () => {
       },
     });
 
+    const before = getSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
     await expect(
       handleCodexCommand(
         createContext(`permissions ${testCase.mode}`, undefined, {
@@ -6483,18 +6484,12 @@ describe("codex command", () => {
         { deps: createDeps() },
       ),
     ).resolves.toEqual({ text: testCase.expectedText });
-    expect(
-      getSessionEntry({
-        sessionKey,
-        storePath,
-        readConsistency: "latest",
-      }),
-    ).toMatchObject({
-      ...(testCase.expectedPermissionMode
-        ? { permissionMode: testCase.expectedPermissionMode }
-        : {}),
-      sessionRoot: tempDir,
-    });
+    const after = getSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+    expect(after?.permissionMode).toBe(testCase.expectedPermissionMode);
+    expect(after?.sessionRoot).toBe(tempDir);
+    if (!testCase.expectedPermissionMode) {
+      expect(after).toEqual(before);
+    }
   });
 
   it("rejects model and binding replacement commands for a locked supervised session", async () => {

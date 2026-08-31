@@ -23,6 +23,8 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
 
 type ModelRef = { provider?: string | null; id?: string | null };
+type LiveModelPolicyRef = ModelRef &
+  Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-5",
@@ -111,17 +113,24 @@ export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return key !== undefined && smallPriorityIndex.has(key);
 }
 
-export function isModernModelRef(ref: ModelRef): boolean {
+export function isModernModelRef(ref: LiveModelPolicyRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const modelId = normalizeLowercaseStringOrEmpty(ref.id);
+  // Live fixtures enable plugins in their scoped config; ambient Vitest defaults disable them.
   return Boolean(
     provider &&
     modelId &&
-    resolveProviderModernModelRef({ provider, context: { provider, modelId } }) === true,
+    resolveProviderModernModelRef({
+      provider,
+      config: ref.config,
+      workspaceDir: ref.workspaceDir,
+      env: ref.env,
+      context: { provider, modelId },
+    }) === true,
   );
 }
 
-export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
+export function isHighSignalLiveModelRef(ref: LiveModelPolicyRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
   const modelName = id.split("/").pop() ?? "";

@@ -4,6 +4,7 @@ import path from "node:path";
 // Covers CLI-backed attempt execution and session-binding persistence.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { persistAcpDispatchTranscript } from "../../auto-reply/reply/dispatch-acp-transcript.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   formatSqliteSessionFileMarker,
@@ -16,6 +17,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -2343,6 +2345,49 @@ describe("CLI attempt execution", () => {
       content: [{ type: "text", text: "runtime answer" }],
     });
   });
+
+  it.each([false, true])(
+    "persists ACP assistant media ownership only when the dispatcher supplies it: %s",
+    async (managed) => {
+      const sessionKey = "agent:main:direct:acp-media-ownership";
+      const sessionEntry = makeSessionEntry("session-acp-media-ownership");
+      await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+      const finalText = "Artifacts ready\nMEDIA:./report.png";
+
+      await persistAcpDispatchTranscript({
+        cfg: { session: { store: storePath } },
+        sessionKey,
+        expectedSessionId: sessionEntry.sessionId,
+        promptText: "Prepare the report",
+        finalText,
+        prepareAssistantTranscriptMessage: managed
+          ? (message, sourceText) => {
+              expect(sourceText).toBe(finalText);
+              return applyAssistantDeliveryDirectives(message, {
+                managedMediaUrls: ["./report.png"],
+              });
+            }
+          : undefined,
+      });
+
+      const messages = await readSessionMessages({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath,
+      });
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: finalText }],
+      });
+      if (managed) {
+        expect(messages[1]).toHaveProperty("openclawDelivery.mediaUrls", ["./report.png"]);
+      } else {
+        expect(messages[1]).not.toHaveProperty("openclawDelivery");
+      }
+    },
+  );
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";

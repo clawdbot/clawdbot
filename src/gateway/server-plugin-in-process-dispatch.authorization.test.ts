@@ -538,7 +538,8 @@ describe("typed in-process agent authorization", () => {
           sessionId: "maintainer-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: "maintainer" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "maintainer" },
         },
       );
 
@@ -725,7 +726,8 @@ describe("typed in-process agent authorization", () => {
           sessionId: "private-draft-session",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
 

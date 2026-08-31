@@ -11,16 +11,15 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawDatabaseSchemas,
-  type IncompatibleOpenClawDatabase,
-  type IndeterminateOpenClawDatabase,
-  type OpenClawDatabaseSchemaPreflight,
-} from "../../state/openclaw-database-preflight.js";
+import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import { createUpdateProgress, printResult } from "./progress.js";
+import {
+  checkTargetDatabaseSchemas,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
 import {
   createGlobalCommandRunner,
   DEFAULT_PACKAGE_NAME,
@@ -122,41 +121,6 @@ type BeforeGitMutation = (target: {
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
 } | void>;
-
-export function formatSchemaRefusalLines(
-  schemas: {
-    incompatible: readonly IncompatibleOpenClawDatabase[];
-    indeterminate: readonly IndeterminateOpenClawDatabase[];
-  },
-  dryRun = false,
-): string[] {
-  const prefix = dryRun ? "Would refuse update" : "Update refused";
-  return [
-    ...schemas.incompatible.map((database) => {
-      const agent = database.agentId ? ` (agent ${database.agentId})` : "";
-      return `${prefix}: ${database.kind} database${agent} ${database.path} has schema ${database.foundVersion}; target supports ${database.supportedVersion}; writer build ${database.writerAppVersion ?? "unknown"}.`;
-    }),
-    ...schemas.indeterminate.map(
-      (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
-    ),
-    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
-  ];
-}
-
-export function checkTargetDatabaseSchemas(
-  supportedVersions: OpenClawSchemaVersions | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawDatabaseSchemaPreflight {
-  return supportedVersions
-    ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
-    : { incompatible: [], indeterminate: [] };
-}
-
-export function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {
-  return schemas.incompatible.length > 0 || schemas.indeterminate.length > 0;
-}
 
 export function createBeforeGitMutation(params: {
   roots: readonly string[];

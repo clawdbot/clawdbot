@@ -8,6 +8,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -389,6 +390,22 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         }
       }
       expect(reopened.getLeafId()).toBe(activeBranch.at(-1)?.id);
+      if (keyed) {
+        const activeKeyedEntry = activeBranch.find(
+          (entry) =>
+            entry.type === "message" &&
+            "idempotencyKey" in entry.message &&
+            entry.message.idempotencyKey === "rewrite-later-user",
+        );
+        if (!activeKeyedEntry || activeKeyedEntry.type !== "message") {
+          throw new Error("expected active keyed replay entry");
+        }
+        const retry = await appendTranscriptMessage(target, { message: activeKeyedEntry.message });
+        expect(retry).toMatchObject({
+          appended: false,
+          messageId: activeKeyedEntry.id,
+        });
+      }
     },
   );
 });

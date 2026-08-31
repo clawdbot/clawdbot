@@ -380,6 +380,23 @@ field; OpenClaw does not infer it from assistant prose. The helper
 intentionally leaves prompt errors, in-flight turns, and intentional silent
 replies such as `NO_REPLY` unclassified.
 
+### Live output-token usage
+
+Call `params.hostCapabilities.reportOutputTokens?.(outputTokens)` once per
+completed model response. Pass that response's output tokens, not a
+thread-lifetime or cumulative attempt total. Deduplicate native response
+notifications before calling it.
+
+The host binds this callback to the admitted run, adds the response to its
+lifecycle-scoped total, and publishes the cumulative `usage` event globally and
+through `params.onAgentEvent`. Do not emit a second usage event. Retries share
+the same run total; run cleanup releases it. A closed or superseded capability
+rejects reporting. Invalid or nonpositive counts do not emit an event.
+
+The capability is optional for compatibility with older hosts; when absent,
+live output-token reporting is unavailable. Keep last-response context
+snapshots and persisted billing usage separate from this live counter.
+
 ### Agent-end side effects
 
 Native harnesses must call `runAgentEndSideEffects(...)` from

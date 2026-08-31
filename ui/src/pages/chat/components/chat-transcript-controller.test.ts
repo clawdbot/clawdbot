@@ -14,11 +14,9 @@ import {
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import { renderChatThread } from "./chat-thread.ts";
-import {
-  ChatTranscriptController,
-  type ChatTranscriptSession,
-} from "./chat-transcript-controller.ts";
+import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,

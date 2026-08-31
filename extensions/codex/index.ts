@@ -33,6 +33,7 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
+import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
@@ -110,6 +111,7 @@ export default definePluginEntry({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       }),
     );
+    api.registerService(createCodexAppServerProcessReaperService());
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({

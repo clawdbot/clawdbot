@@ -1,7 +1,7 @@
 import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureSessionOwnerProof,
@@ -95,7 +95,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
       await selectMenuValue(menu, "grouping:person");

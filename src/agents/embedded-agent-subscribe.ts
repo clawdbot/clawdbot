@@ -3,8 +3,7 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
-import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
+import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
@@ -14,14 +13,15 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runn
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import {
+  createUsageAccumulator,
+  mergeUsageIntoAccumulator,
+  toNormalizedUsage,
+} from "./embedded-agent-runner/usage-accumulator.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import {
-  cleanupRunToolStartData,
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
@@ -29,18 +29,17 @@ import type {
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
+import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
-import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
-import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
+import { hasNonzeroUsage, hasObservedModelUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
 
@@ -57,14 +56,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
-  const usageTotals = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoningTokens: 0,
-    total: 0,
-  };
+  const usageTotals = createUsageAccumulator();
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
@@ -196,7 +188,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     for (const candidate of candidates) {
       const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
-      if (hasNonzeroUsage(usage)) {
+      if (hasObservedModelUsage(usage)) {
         return usage;
       }
     }
@@ -207,17 +199,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!lifecycleGeneration) {
       return;
     }
-    const data = recordAgentRunOutputTokens({
+    const data = emitAgentRunOutputTokens({
       runId: params.runId,
       lifecycleGeneration,
       outputTokens,
-      emit: (usage) =>
-        emitAgentEventIfCurrent({
-          runId: params.runId,
-          lifecycleGeneration,
-          stream: "usage",
-          data: usage,
-        }),
     });
     if (!data || !params.onAgentEvent) {
       return;
@@ -233,20 +218,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     const usage = state.pendingAssistantUsage;
-    usageTotals.input += usage.input ?? 0;
-    usageTotals.output += usage.output ?? 0;
-    usageTotals.cacheRead += usage.cacheRead ?? 0;
-    usageTotals.cacheWrite += usage.cacheWrite ?? 0;
-    usageTotals.reasoningTokens += usage.reasoningTokens ?? 0;
-    const usageTotal =
-      usage.total ??
-      (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-    usageTotals.total += usageTotal;
-    // A terminal abort may report zeros after several completed model calls.
-    // Retain the latest committed nonzero call so context accounting stays exact.
-    lastAssistantUsage = { ...usage };
+    mergeUsageIntoAccumulator(usageTotals, usage);
     state.assistantUsageCommitted = true;
-    emitRunUsage(usage.output ?? 0);
+    // Billing alone cannot replace the latest prompt snapshot or invent output tokens.
+    if (hasNonzeroUsage(usage)) {
+      lastAssistantUsage = { ...usage };
+      emitRunUsage(usage.output ?? 0);
+    }
   };
   const recordAssistantUsage = (usageLike: unknown) => {
     if (state.assistantUsageCommitted) {
@@ -256,30 +234,30 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!usage) {
       return;
     }
-    state.pendingAssistantUsage = usage;
-  };
-  const getUsageTotals = () => {
-    const hasUsage =
-      usageTotals.input > 0 ||
-      usageTotals.output > 0 ||
-      usageTotals.cacheRead > 0 ||
-      usageTotals.cacheWrite > 0 ||
-      usageTotals.reasoningTokens > 0 ||
-      usageTotals.total > 0;
-    if (!hasUsage) {
-      return undefined;
+    const pending = state.pendingAssistantUsage;
+    const cost = usage.cost;
+    const next = pending && !hasNonzeroUsage(usage) ? { ...pending, cost } : usage;
+    // Within one call, billing may arrive separately from token counters and
+    // remains authoritative when a later snapshot carries only a catalog estimate.
+    if (
+      pending?.cost?.totalOrigin === "provider-billed" &&
+      cost?.totalOrigin !== "provider-billed"
+    ) {
+      next.cost = pending.cost;
     }
-    const derivedTotal =
-      usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
-    return {
-      input: usageTotals.input || undefined,
-      output: usageTotals.output || undefined,
-      cacheRead: usageTotals.cacheRead || undefined,
-      cacheWrite: usageTotals.cacheWrite || undefined,
-      ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
-      total: usageTotals.total || derivedTotal || undefined,
-    };
+    state.pendingAssistantUsage = next;
   };
+  const recordModelUsage = (usageLike: UsageLike) => {
+    const usage = resolveAssistantUsage(usageLike);
+    if (!usage) {
+      return;
+    }
+    mergeUsageIntoAccumulator(usageTotals, usage);
+    if (hasNonzeroUsage(usage)) {
+      emitRunUsage(usage.output ?? 0);
+    }
+  };
+  const getUsageTotals = () => toNormalizedUsage(usageTotals);
   const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage);
   const incrementCompactionCount = () => {
     compactionCount += 1;
@@ -437,6 +415,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();
+    state.toolAutoDeliveryMediaUrls.clear();
     state.pendingToolAudioAsVoice = false;
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
@@ -556,6 +535,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
+  setSessionModelUsageSink(params.session.sessionManager, recordModelUsage);
 
   const unsubscribe = () => {
     if (state.unsubscribed) {
@@ -589,6 +569,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
       }
     }
+    setSessionModelUsageSink(params.session.sessionManager, null);
     sessionUnsubscribe();
   };
 
@@ -604,56 +585,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     getLatestMcpConnectAction: () =>
       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
-    runToolLifecycle: async <T>(toolParams: {
-      toolName: string;
-      toolCallId: string;
-      args: unknown;
-      replaySafe?: boolean;
-      hideFromChannelProgress?: boolean;
-      execute: (onImplementationStart: () => void) => Promise<T>;
-    }): Promise<T> => {
-      await handleToolExecutionStart(ctx, {
-        type: "tool_execution_start",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        args: toolParams.args,
-        replaySafe: toolParams.replaySafe,
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        lifecycleProvenance: "nested",
-      } as never);
-      let executionStarted = false;
-      const onImplementationStart = () => {
-        executionStarted = true;
-      };
-      try {
-        const result = await toolParams.execute(onImplementationStart);
-        const terminal = await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: false,
-          executionStarted,
-          result,
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        return registerToolEffectReceipt(result, terminal.effectReceipt);
-      } catch (error) {
-        const trustedNoStart = consumeTrustedToolNoStartError(error);
-        const terminal = await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: true,
-          executionStarted,
-          result: buildToolLifecycleErrorResult(error),
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        const receipt = trustedNoStart
-          ? ({ state: "not_started" } as const)
-          : terminal.effectReceipt;
-        throw registerToolEffectReceipt(error, receipt);
-      }
-    },
+    runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
@@ -695,6 +627,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getToolAutoDeliveryMediaUrls: () => [...state.toolAutoDeliveryMediaUrls],
     hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,

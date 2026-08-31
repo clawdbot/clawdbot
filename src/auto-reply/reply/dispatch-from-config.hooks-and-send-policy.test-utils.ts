@@ -2227,7 +2227,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     // Binding is still tracked (touch runs before the gate)...
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-deny");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-deny",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     // ...but the plugin claim hook MUST NOT be invoked under deny — the
     // plugin can't be trusted to honor suppressDelivery on its outbound path.
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
@@ -2378,7 +2382,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
         ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
-      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+        params.bindingId,
+        undefined,
+        expect.objectContaining(params.conversation),
+      );
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
         "openclaw-codex-app-server",
         expect.objectContaining({

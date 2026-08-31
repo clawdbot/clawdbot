@@ -28,6 +28,7 @@ import {
   type SessionTranscriptRuntimeTarget,
   type TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -204,6 +205,7 @@ type TranscriptUsage = {
 };
 
 type PersistTextTurnTranscriptParams = {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   body: string;
   transcriptBody?: string;
   userMessage?: PersistedUserTurnMessage;
@@ -375,6 +377,7 @@ async function persistTextTurnTranscript(
   }
 
   if (replyText) {
+    const prepareAssistantTranscriptMessage = params.prepareAssistantTranscriptMessage;
     messages.push({
       idempotencyLookup: "scan-assistant" as const,
       message: {
@@ -390,6 +393,16 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
+      ...(prepareAssistantTranscriptMessage
+        ? {
+            prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+              prepareAssistantTranscriptMessage(
+                // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
+                message as Parameters<PrepareAssistantTranscriptMessage>[0],
+                replyText,
+              ),
+          }
+        : {}),
     });
   }
 
@@ -457,6 +470,7 @@ function isClaudeCliProvider(provider: string): boolean {
 }
 
 export async function persistAcpTurnTranscript(params: {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   body: string;
   transcriptBody?: string;
   userInput?: UserTurnInput;
@@ -588,6 +602,7 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onSuccessfulAuthProfile?: (selection: {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
@@ -1318,6 +1333,7 @@ export function runAgentAttempt(params: {
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onCompactionAccounting: params.onCompactionAccounting,
     onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
       ? (successfulProfileId) =>
           params.onSuccessfulAuthProfile?.({

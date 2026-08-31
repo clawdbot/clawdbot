@@ -168,27 +168,25 @@ describe("openshell backend exec workdir validation", () => {
       usePty: false,
     });
 
-    const uploadCalls = cliMocks.runOpenShellCli.mock.calls.filter(
-      ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
-    );
-    expect(uploadCalls).toHaveLength(1);
-    expect(uploadCalls[0]?.[0]).toMatchObject({
-      args: [
-        "sandbox",
-        "upload",
-        "--no-git-ignore",
-        backend.runtimeId,
-        expect.stringMatching(/\/seed\.txt$/),
-        "/sandbox/",
-      ],
-      cwd: workspaceDir,
-    });
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    });
+    try {
+      const uploadCalls = cliMocks.runOpenShellCli.mock.calls.filter(
+        ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
+      );
+      expect(uploadCalls).toHaveLength(1);
+      expect(uploadCalls[0]?.[0]).toMatchObject({
+        args: [
+          "sandbox",
+          "upload",
+          "--no-git-ignore",
+          backend.runtimeId,
+          expect.stringMatching(/\/seed\.txt$/),
+          "/sandbox/",
+        ],
+        cwd: workspaceDir,
+      });
+    } finally {
+      await finalize(backend, execSpec.finalizeToken);
+    }
     const nestedFile = path.join(workspaceDir, "nested", "note.txt");
     const bridge = backend.createFsBridge?.({
       sandbox: createSandboxTestContext({
@@ -783,35 +781,30 @@ describe("openshell backend exec workdir validation", () => {
 
     const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
     const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
-
+    // Observe rejection while the first lease is held; cleanup still awaits and rethrows it.
+    const secondSettled = Promise.allSettled([secondPreparation]);
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+          "get",
+        ]);
+      } finally {
+        await finalize(first, firstExec.finalizeToken);
+      }
+      await secondPreparation;
       expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+        "get",
+        "download",
         "get",
       ]);
     } finally {
-      await first.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: firstExec.finalizeToken,
-      });
+      await secondSettled;
+      const secondExec = await secondPreparation;
+      await finalize(second, secondExec.finalizeToken);
     }
-
-    const secondExec = await secondPreparation;
-    expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
-      "get",
-      "download",
-      "get",
-    ]);
-    await second.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: secondExec.finalizeToken,
-    });
   });
 
   it.each(["exec preparation", "mirror publication", "SSH cleanup"])(
@@ -847,15 +840,8 @@ describe("openshell backend exec workdir validation", () => {
           failure === "SSH cleanup" ? "cleanup failed" : "download failed",
         );
       }
-      let secondExec: Awaited<ReturnType<SandboxBackendHandle["buildExecSpec"]>> | undefined;
-      const secondPreparation = second
-        .buildExecSpec({ command: "second", env: {}, usePty: false })
-        .then((prepared) => {
-          secondExec = prepared;
-          return prepared;
-        });
-      await vi.waitFor(() => expect(secondExec).toBeDefined());
-      await finalize(second, (await secondPreparation).finalizeToken);
+      const secondExec = await second.buildExecSpec({ command: "second", env: {}, usePty: false });
+      await finalize(second, secondExec.finalizeToken);
     },
   );
 
@@ -881,29 +867,19 @@ describe("openshell backend exec workdir validation", () => {
     const second = expectDefined(backends[1], "second OpenShell backend");
     const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
     const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
-    let secondExec: Awaited<typeof secondPreparation> | undefined;
     try {
-      await vi.waitFor(() => {
-        const startedRuntimeIds = cliMocks.runOpenShellCli.mock.calls
-          .filter(([params]) => params.args[1] === "get")
-          .map(([params]) => params.args[2]);
-        expect(startedRuntimeIds).toEqual([first.runtimeId, second.runtimeId]);
-      });
-      secondExec = await secondPreparation;
+      await secondPreparation;
+      const startedRuntimeIds = cliMocks.runOpenShellCli.mock.calls
+        .filter(([params]) => params.args[1] === "get")
+        .map(([params]) => params.args[2]);
+      expect(startedRuntimeIds).toEqual([first.runtimeId, second.runtimeId]);
     } finally {
-      await first.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: firstExec.finalizeToken,
-      });
-      secondExec ??= await secondPreparation;
-      await second.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: secondExec.finalizeToken,
-      });
+      try {
+        await finalize(first, firstExec.finalizeToken);
+      } finally {
+        const secondExec = await secondPreparation;
+        await finalize(second, secondExec.finalizeToken);
+      }
     }
   });
 });

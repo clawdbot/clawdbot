@@ -12,8 +12,8 @@ const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
 const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
 const XAI_OMITTED_BOUNDARY_PATHS = {
-  "openclaw/plugin-sdk/channel-secret-basic-runtime": [
-    "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+  "openclaw/plugin-sdk/browser-maintenance": [
+    "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts",
   ],
   "openclaw/plugin-sdk/channel-secret-owner-runtime": [
     "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts",
@@ -21,11 +21,17 @@ const XAI_OMITTED_BOUNDARY_PATHS = {
   "openclaw/plugin-sdk/channel-secret-tts-runtime": [
     "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts",
   ],
-  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
-  "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
-  "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
-  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
-  "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/matrix/test-api.js": [
+    "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts",
+  ],
+  "@openclaw/discord/api.js": ["../.artifacts/extension-package-boundary/plugins/discord/api.d.ts"],
+  "@openclaw/slack/api.js": ["../.artifacts/extension-package-boundary/plugins/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": [
+    "../.artifacts/extension-package-boundary/plugins/telegram/api.d.ts",
+  ],
+  "@openclaw/whatsapp/api.js": [
+    "../.artifacts/extension-package-boundary/plugins/whatsapp/api.d.ts",
+  ],
 } as const;
 const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
@@ -87,7 +93,9 @@ function readExtensionTsconfig(extensionName: string): TsConfigJson {
 }
 
 function isContainedPackageBoundaryTarget(target: string): boolean {
-  const root = /^\.\.\/(dist|packages|extensions)\//u.exec(target)?.[1];
+  const root = /^\.\.\/(dist|packages|extensions|\.artifacts\/extension-package-boundary)\//u.exec(
+    target,
+  )?.[1];
   return root !== undefined && posix.normalize(target).startsWith(`../${root}/`);
 }
 
@@ -177,7 +185,9 @@ describe("opt-in extension package boundaries", () => {
     if (!paths) {
       throw new Error("Missing shared extension package boundary aliases");
     }
-    expect(paths["openclaw/plugin-sdk/*"]).toEqual(["../dist/plugin-sdk/*.d.ts"]);
+    expect(paths["openclaw/plugin-sdk/*"]).toEqual([
+      "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts",
+    ]);
     for (const [specifier, targets] of Object.entries(XAI_OMITTED_BOUNDARY_PATHS)) {
       expect(paths[specifier], specifier).toEqual(targets);
     }
@@ -197,7 +207,7 @@ describe("opt-in extension package boundaries", () => {
       const subpath = exportKey === "." ? "" : exportKey.slice(2);
       const specifier = subpath ? `@openclaw/acp-core/${subpath}` : "@openclaw/acp-core";
       expect(paths[specifier], specifier).toEqual([
-        `../dist/plugin-sdk/packages/acp-core/src/${subpath || "index"}.d.ts`,
+        `../packages/plugin-sdk/dist/packages/acp-core/src/${subpath || "index"}.d.ts`,
       ]);
     }
     for (const [specifier, targets] of Object.entries(paths)) {
@@ -273,16 +283,12 @@ describe("opt-in extension package boundaries", () => {
         ]),
     );
     Object.assign(expectedPaths, {
-      "openclaw/plugin-sdk/channel-entry-contract": [
-        "../../dist/plugin-sdk/channel-entry-contract.d.ts",
+      "@openclaw/qa-channel/api.js": [
+        "../../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
       ],
-      "openclaw/plugin-sdk/browser-maintenance": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-      ],
-      "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
       "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
       "@openclaw/*": ["../*"],
-      "@openclaw/plugin-sdk/*": ["../../dist/plugin-sdk/*.d.ts"],
+      "@openclaw/plugin-sdk/*": ["../../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
       "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
       "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
       "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
@@ -299,10 +305,12 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../packages/ai/src/**/*.ts",
+      "../../packages/llm-core/src/**/*.ts",
       "../../packages/markdown-core/src/**/*.ts",
       "../../packages/media-core/src/**/*.ts",
       "../../packages/media-generation-core/src/**/*.ts",
       "../../packages/model-catalog-core/src/**/*.ts",
+      "../../packages/memory-host-sdk/src/**/*.ts",
       "../../packages/normalization-core/src/**/*.ts",
       "../../packages/retry/src/**/*.ts",
       "../../packages/acp-core/src/**/*.ts",

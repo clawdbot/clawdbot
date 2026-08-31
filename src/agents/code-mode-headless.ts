@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
-import { boundCodeModeResult, toCodeModeJsonSafe } from "./code-mode-json.js";
+import { CodeModeOutputState, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceDescriptor,
@@ -17,7 +17,6 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  boundOutputToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   readPositiveInteger,
@@ -32,6 +31,7 @@ import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
   createCodeModeBridgeDispatchState,
+  createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -44,7 +44,8 @@ import {
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
 } from "./code-mode-worker.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 function createHeadlessAbortScope(
@@ -80,17 +81,14 @@ function headlessAbortError(
 function headlessFailure(params: {
   code: CodeModeFailureCode | "tool_budget_exceeded";
   error: string;
-  output: unknown[];
+  output: CodeModeOutputState;
   toolCallCount: number;
-  maxOutputBytes: number;
 }): CodeModeHeadlessResult {
-  const bounded = boundCodeModeResult(params);
   return {
     status: "failed",
     code: params.code,
     toolCallCount: params.toolCallCount,
-    error: bounded.error,
-    output: bounded.output,
+    ...params.output.take({ error: params.error }),
   };
 }
 
@@ -219,8 +217,9 @@ export async function runCodeModeScriptHeadless(params: {
     MAX_HEADLESS_TOOL_CALLS,
   );
   const deadline = performance.now() + wallClockMs;
-  const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
-  const output: unknown[] = [];
+  const owner = createCodeModeRunOwner(params.ctx);
+  const abortScope = createHeadlessAbortScope(owner.bindCall(params.signal), wallClockMs);
+  const output = new CodeModeOutputState(config.maxOutputBytes);
   let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
   try {
@@ -267,14 +266,9 @@ export async function runCodeModeScriptHeadless(params: {
     );
 
     while (true) {
-      output.push(...result.output);
-      boundOutputToLimit(output, config);
+      output.append(result.output);
       if (result.status === "completed") {
-        const bounded = boundCodeModeResult({
-          output,
-          value: result.value,
-          maxOutputBytes: config.maxOutputBytes,
-        });
+        const bounded = output.take({ value: result.value });
         return {
           status: "completed",
           value: bounded.value,
@@ -288,7 +282,6 @@ export async function runCodeModeScriptHeadless(params: {
           error: result.error,
           output,
           toolCallCount,
-          maxOutputBytes: config.maxOutputBytes,
         });
       }
 
@@ -311,7 +304,6 @@ export async function runCodeModeScriptHeadless(params: {
           error: `code mode headless tool budget exceeded (${maxToolCalls})`,
           output,
           toolCallCount,
-          maxOutputBytes: config.maxOutputBytes,
         });
       }
 
@@ -340,7 +332,6 @@ export async function runCodeModeScriptHeadless(params: {
           error: "code mode is waiting without pending bridge requests",
           output,
           toolCallCount,
-          maxOutputBytes: config.maxOutputBytes,
         });
       }
       await awaitCodeModeDeadline({
@@ -374,10 +365,10 @@ export async function runCodeModeScriptHeadless(params: {
       error: timedOut || aborted ? error.message : codeModeFailureMessage(error),
       output,
       toolCallCount,
-      maxOutputBytes: config.maxOutputBytes,
     });
   } finally {
     cancelPendingBridgeStates(pending);
     abortScope.cleanup();
+    owner.close();
   }
 }

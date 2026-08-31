@@ -45,6 +45,10 @@ it does not guess one agent workspace.
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
+or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+such as `discord-archive` do not match `discord`.
+
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
@@ -173,8 +177,34 @@ openclaw channels logout --channel whatsapp
 - `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup; with `gateway.mode: "remote"` the gateway error fails the command instead.
 - Logout reports whether the plugin cleared saved auth. If the plugin reports that the account is not logged out, the CLI warns that other credentials may still be active; this is not a claim that provider-side tokens were revoked.
 - Login and logout base config changes on the authored source, not runtime defaults. A logout with no credentials to clear does not rewrite config merely because runtime defaults were materialized; intentional plugin enablement or installation changes can still be saved.
-- After a successful login, the CLI asks a reachable local Gateway to start the account; in remote mode it saves auth locally and notes that the remote runtime was not restarted.
+- After a successful login, the CLI asks a reachable local Gateway to start the account. If that start is skipped or another lifecycle operation owns the account, it reports the reason and a status command; saved auth is retained. In remote mode it saves auth locally and notes that the remote runtime was not restarted.
 - Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
+
+## Per-account recovery (non-destructive)
+
+When one account needs to reconnect while keeping its pairing and credentials, call the `channels.stop` and `channels.start` Gateway RPCs. Both require `operator.admin`. Invoke them through `openclaw gateway call`:
+
+```bash
+# Stop one WhatsApp account without clearing its pairing.
+openclaw gateway call channels.stop --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+# Start the same account again.
+openclaw gateway call channels.start --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+openclaw channels status --channel whatsapp --probe
+```
+
+Use the same `accountId` in both calls. Omit it from both to select the default account.
+
+`channels.stop` returns `{ channel, accountId, stopped }`; `channels.start` returns `{ channel, accountId, started, outcome }`. These booleans reflect the account's runtime snapshot after the operation: `started` is true only when `running` is true, and `stopped` is true when `running` is not true. A `started: false` response does not by itself establish that the account is stopped, and `started: true` does not establish that the provider connection is healthy. Check channel status and logs after recovery.
+
+`outcome` explains the lifecycle owner's decision for the requested account:
+
+- `{ status: "handed-off" }`: startup was handed to the account runtime. Check status for provider connectivity.
+- `{ status: "retry", reason }`: an existing task, start, or stop still owns the account (`task-owned`, `start-in-flight`, or `stop-in-flight`). A running account can return `task-owned` with `started: true`; another start was unnecessary. Wait for an in-flight stop to finish before starting again.
+- `{ status: "skipped", reason }`: startup was skipped, for example because the account is `disabled`, `unconfigured`, or `unlinked`. Repair the named account condition before retrying. Other manager reasons are `unsupported`, `autostart-suppressed`, `ambient-suppressed`, `secret-unavailable`, and `manual-stop`; the manual RPC bypasses automatic-start suppression but does not bypass account configuration or secret checks.
+
+An unavailable configured secret still returns an RPC error instead of starting with another credential.
+
+Unlike this recovery path, `openclaw channels logout` clears the account's credentials and requires login again; `openclaw gateway restart` restarts the whole Gateway. See [Restart recovery](/gateway/restart-recovery) for the crash-loop breaker and its manual `channels.start` override.
 
 ## Troubleshooting
 

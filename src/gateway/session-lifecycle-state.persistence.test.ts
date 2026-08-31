@@ -1,18 +1,53 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
   onAgentEvent,
 } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContextOwnerStatus,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
+import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: routing.loadSessionEntry }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadSessionEntry: routing.loadSessionEntry,
+}));
+
+const persistenceTestWarnings = vi.fn();
+const silentLog: SubsystemLogger = {
+  subsystem: "gateway-lifecycle-persistence-test",
+  isEnabled: () => false,
+  trace: vi.fn(),
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: persistenceTestWarnings,
+  error: vi.fn(),
+  fatal: vi.fn(),
+  raw: vi.fn(),
+  child: () => silentLog,
+};
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const tempDirs = createTempDirTracker();
@@ -98,6 +133,109 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     unsubscribe();
     await persistence;
     clock.mockRestore();
+    routing.loadSessionEntry.mockReset();
+    closeOpenClawAgentDatabasesForTest();
+    tempDirs.cleanup();
+  }
+});
+
+it("keeps an owner claim active until its queued terminal write commits", async () => {
+  const tempDirs = createTempDirTracker();
+  const target = {
+    storePath: path.join(tempDirs.make("openclaw-owner-terminal-"), "sessions.json"),
+    sessionKey: "agent:main:worker-terminal",
+  };
+  const runId = "worker-terminal-run";
+  const sessionId = "worker-terminal-session";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const writerStarted = createDeferred();
+  const releaseWriter = createDeferred();
+  let claimId: string | undefined;
+  let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
+  let heldWriter: Promise<unknown> | undefined;
+  persistenceTestWarnings.mockReset();
+  routing.loadSessionEntry.mockImplementation(() => ({
+    ...target,
+    canonicalKey: target.sessionKey,
+    entry: loadSessionEntry(target),
+  }));
+  try {
+    await replaceSessionEntry(target, {
+      lifecycleRunId: runId,
+      sessionId,
+      startedAt: 1_000,
+      status: "running",
+      updatedAt: 1_000,
+    });
+    heldWriter = patchSessionEntryCore(target, async () => {
+      writerStarted.resolve();
+      await releaseWriter.promise;
+      return null;
+    });
+    await writerStarted.promise;
+    claimId = claimAgentRunContext(
+      runId,
+      { lifecycleGeneration, sessionId, sessionKey: target.sessionKey },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    if (!claimId) {
+      throw new Error("expected worker terminal claim");
+    }
+    const terminalClaimId = claimId;
+    const chatRunState = createChatRunState();
+    const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
+    const agentRunSeq = new Map<string, number>();
+    subscriptions = startGatewayEventSubscriptions({
+      log: silentLog,
+      broadcast: vi.fn(),
+      broadcastToConnIds: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      agentRunSeq,
+      chatRunState,
+      toolEventRecipients: chatRunState.toolEventRecipients,
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      chatAbortControllers: new Map(),
+      restartRecoveryCandidates: new Map(),
+      terminalSessions: { closeTaskSessions: vi.fn() },
+    });
+
+    emitAgentEventForOwner(
+      {
+        runId,
+        sessionId,
+        sessionKey: target.sessionKey,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      },
+      claimId,
+    );
+    await vi.waitFor(
+      () =>
+        expect(
+          markFinal.mock.calls.length + persistenceTestWarnings.mock.calls.length,
+        ).toBeGreaterThan(0),
+      { timeout: 10_000 },
+    );
+    expect(persistenceTestWarnings).not.toHaveBeenCalled();
+    expect(markFinal).toHaveBeenCalledWith(runId);
+
+    expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
+      "active",
+    );
+    releaseWriter.resolve();
+    await heldWriter;
+    await vi.waitFor(() => expect(loadSessionEntry(target)?.status).toBe("done"));
+    await vi.waitFor(() =>
+      expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
+        "clear-requested",
+      ),
+    );
+  } finally {
+    releaseWriter.resolve();
+    await heldWriter;
+    await subscriptions?.agentUnsub();
+    releaseAgentRunContext(runId, claimId);
     routing.loadSessionEntry.mockReset();
     closeOpenClawAgentDatabasesForTest();
     tempDirs.cleanup();

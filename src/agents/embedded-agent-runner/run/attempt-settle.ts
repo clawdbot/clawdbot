@@ -134,8 +134,7 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
-      coreReadAuthorized,
-      getCodeModeReconciliationCandidate,
+      getCodeModeRecoveryCandidate,
       hasDeliveredSourceReply,
       hookRunner,
       setCodeModeReconciliationReadAuthorized,
@@ -162,9 +161,9 @@ export async function runEmbeddedAttemptSettledPhase(
   const { boundaryTimezone, includeBoundaryTimestamp, orphanRepair } = sessionBoundary;
   const { runtimeInfo, systemPromptReport } = systemPrompt;
   const { bootstrapPromptWarning, shouldRecordCompletedBootstrapTurn } = bootstrap;
-  const { effectiveTools, emptyExplicitToolAllowlistError, toolSearch } = toolCatalog;
+  const { effectiveTools, toolSearch } = toolCatalog;
   const { tools, uncompactedEffectiveTools } = bundleTools;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
   const hookAgentId = input.setup.sessionAgentId;
   let yieldAborted = false;
   const preparedStreamRuntime = input.preparedStreamRuntime;
@@ -212,10 +211,6 @@ export async function runEmbeddedAttemptSettledPhase(
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
   };
-  const promptToolPolicyBaseline = {
-    activeToolNames: activeSession.getActiveToolNames(),
-    catalogEntries: [...(toolBase.toolSearchCatalogRef?.current?.entries ?? [])],
-  };
 
   try {
     const { promptStartedAt } = await runEmbeddedAttemptPromptPhase({
@@ -224,7 +219,9 @@ export async function runEmbeddedAttemptSettledPhase(
       sessionManager,
       withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
       getCompactionReserveTokens: () => settingsManager.getCompactionReserveTokens(),
-      ...(emptyExplicitToolAllowlistError ? { emptyExplicitToolAllowlistError } : {}),
+      get emptyExplicitToolAllowlistError() {
+        return toolCatalog.emptyExplicitToolAllowlistError ?? undefined;
+      },
       assembly: {
         hookRunner,
         hookAgentId,
@@ -281,19 +278,7 @@ export async function runEmbeddedAttemptSettledPhase(
         transport: effectiveAgentTransport,
         uncompactedEffectiveTools,
       },
-      toolPolicy: {
-        baseline: promptToolPolicyBaseline,
-        effectiveTools,
-        uncompactedEffectiveTools,
-        tools,
-        codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
-        coreReadAuthorized,
-        toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
-        forceToolNames: [
-          ...(toolBase.forceDirectMessageTool ? ["message"] : []),
-          ...(attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : []),
-        ],
-      },
+      toolPolicy: input.prepared.promptToolPolicy,
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
         compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
@@ -471,7 +456,7 @@ export async function runEmbeddedAttemptSettledPhase(
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          toolSearchTargetTranscriptProjections,
+          nestedToolActivities,
           cache: {
             observabilityEnabled: cacheObservabilityEnabled,
             changesForTurn: promptCacheChangesForTurn,
@@ -552,6 +537,7 @@ export async function runEmbeddedAttemptSettledPhase(
         sessionIdUsed: settledStream.sessionIdUsed,
         sessionFileUsed,
         messagesSnapshot: settledStream.messagesSnapshot,
+        nestedToolActivities,
         prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
         contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
         lastCallUsage: settledStream.lastCallUsage,
@@ -632,7 +618,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
-      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
+      codeModeRecoveryCandidate: getCodeModeRecoveryCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,

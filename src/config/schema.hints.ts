@@ -52,7 +52,7 @@ const GROUP_HINTS = [
 const SECTION_DOCS_URLS = {
   accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
-  tts: "https://docs.openclaw.ai/tts",
+  tts: "https://docs.openclaw.ai/tools/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
   hooks: "https://docs.openclaw.ai/automation/hooks",
   cron: "https://docs.openclaw.ai/automation/cron-jobs",

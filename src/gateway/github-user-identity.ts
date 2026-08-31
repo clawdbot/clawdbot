@@ -210,6 +210,8 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
+  /** Reuse an exact verified Access account/email binding before refreshing GitHub metadata. */
+  preferCachedIdentity?: boolean;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -235,6 +237,15 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
+    if (params.preferCachedIdentity) {
+      const cached = resolveCachedGitHubIdentity({
+        accountId: accessIdentity.accountId,
+        email: access.principal,
+      });
+      if (cached) {
+        return cached;
+      }
+    }
     let response: Response | undefined;
     let payload: unknown;
     try {

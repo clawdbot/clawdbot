@@ -59,6 +59,7 @@ function buildLearnParams(
     },
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
+    agentId: "main",
     sessionKey: "agent:main:webchat:test",
     workspaceDir: "/tmp",
     provider: "openai",
@@ -73,6 +74,67 @@ function buildLearnParams(
 }
 
 describe("learn command", () => {
+  it.each([
+    { agentId: "direct", shouldContinue: true },
+    { agentId: "isolated", shouldContinue: false },
+  ])(
+    "uses $agentId workshop availability in a global session",
+    async ({ agentId, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+      });
+      params.agentId = agentId;
+      params.sessionKey = "global";
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+        expect(params.ctx.BodyForAgent).toBe("/learn");
+      }
+    },
+  );
+
+  it.each([
+    { mode: "off", denyWorkshop: false, shouldContinue: true },
+    { mode: "all", denyWorkshop: false, shouldContinue: false },
+    { mode: "off", denyWorkshop: true, shouldContinue: false },
+  ] as const)(
+    "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
+    async ({ mode, denyWorkshop, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            isolated: {
+              sandbox: { mode },
+              tools: { deny: denyWorkshop ? ["skill_workshop"] : [] },
+            },
+          },
+        },
+      });
+      params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+      }
+    },
+  );
+
   it("rewrites the agent and normalized command bodies and continues", async () => {
     const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
 

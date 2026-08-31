@@ -305,6 +305,21 @@ export interface SessionParticipants {
   session_key: string;
 }
 
+export interface SessionPendingInputs {
+  accepted_at: number;
+  consumed_event_id: string | null;
+  idempotency_key: string;
+  input_id: string;
+  lifecycle_generation: string;
+  message_json: string;
+  request_hash: string;
+  run_id: string;
+  seq: Generated<number>;
+  session_id: string;
+  session_key: string;
+  state: string;
+}
+
 export interface SessionProgressCards {
   created_at: number;
   markdown: string | null;
@@ -329,6 +344,7 @@ export interface SessionSuggestions {
 
 export interface SessionTranscriptActiveEvents {
   active_position: number;
+  context_eligible: number | null;
   event_seq: number;
   message_position: number | null;
   session_id: string;
@@ -530,6 +546,7 @@ export interface DB {
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_participants: SessionParticipants;
+  session_pending_inputs: SessionPendingInputs;
   session_progress_cards: SessionProgressCards;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;

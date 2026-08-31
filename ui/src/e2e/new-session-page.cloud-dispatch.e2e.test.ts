@@ -393,7 +393,7 @@ suite.define(() => {
 
       for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
         const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
-        await page.clock.runFor(delayMs + 1);
+        await page.clock.fastForward(delayMs + 1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
       }
       await page.clock.resume();

@@ -5,14 +5,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { handleBashCommand } from "./commands-bash.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
 const handleBashChatCommandMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "No active bash job" })),
 );
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: resolveSessionAgentIdMock,
-}));
 
 vi.mock("./bash-command.js", () => ({
   handleBashChatCommand: handleBashChatCommandMock,
@@ -43,6 +38,7 @@ function buildBashParams(commandBodyNormalized: string): HandleCommandsParams {
       to: "test-bot",
     },
     sessionKey: "agent:main:whatsapp:direct:test-user",
+    agentId: "main",
     elevated: { enabled: true, allowed: true, failures: [] },
     isGroup: false,
   } as unknown as HandleCommandsParams;
@@ -51,7 +47,6 @@ function buildBashParams(commandBodyNormalized: string): HandleCommandsParams {
 describe("handleBashCommand alias routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveSessionAgentIdMock.mockReturnValue("target");
   });
 
   it("routes !poll and !stop through the bash chat handler", async () => {
@@ -65,7 +60,7 @@ describe("handleBashCommand alias routing", () => {
 
   it("uses the canonical target session agent for /bash routing", async () => {
     const params = buildBashParams("/bash pwd");
-    params.agentId = "main";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:test-user";
 
     const result = await handleBashCommand(params, true);

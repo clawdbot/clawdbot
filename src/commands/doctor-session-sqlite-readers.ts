@@ -5,9 +5,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  classifySessionFileEntry,
   migrateSessionFileEntryToCurrentVersion,
   normalizeLoadedFileEntry,
-  partitionSessionFileEntries,
   type SessionFileEntryMigrationState,
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
@@ -24,6 +24,8 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: string };
 
 export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
@@ -70,7 +72,7 @@ export function countTranscriptEventsForPath(
   let events = 0;
   try {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      if (!parseJsonlLine(line)) {
+      if (!JSON.parse(line)) {
         continue;
       }
       events += 1;
@@ -88,92 +90,67 @@ export function createTranscriptEventReader(
   sourceFingerprint = readTranscriptFingerprint(transcriptPath),
 ): (append: (event: TranscriptEvent) => void) => () => void {
   return (append) => {
-    for (const event of readTranscriptEventsForImport(
+    // Production import owns the process-wide Gateway/SQLite-maintenance lock
+    // through commit and archive. Fingerprints catch non-cooperating external edits.
+    const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    // V1 compactions refer to original row indexes. Stable index-derived IDs let
+    // the second pass resolve those links without retaining the transcript.
+    const idPrefix = createHash("sha256")
+      .update(transcriptPath)
+      .update("\0")
+      .update(sessionId)
+      .digest("hex")
+      .slice(0, 16);
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    const migratedTargetIds = new Map<number, string>();
+    const migrationState: SessionFileEntryMigrationState = {
+      createEntryId: (originalIndex) => `${idPrefix}-${originalIndex.toString(36)}`,
+      previousId: null,
+      resolveOriginalEntryId: (originalIndex) => migratedTargetIds.get(originalIndex),
+      sourceVersion: plan.sourceVersion,
+    };
+    for (const { event: loadedEvent, originalIndex } of iterateTranscriptEvents(
       transcriptPath,
-      sessionId,
       allowMalformedPrefix,
-      sourceFingerprint,
     )) {
+      let event = loadedEvent;
+      if (plan.sourceVersion >= 2) {
+        recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
+      }
+      let recognizedEvent: FileEntry | undefined;
+      if (originalIndex === plan.headerIndex) {
+        const canonicalHeader = {
+          ...event,
+          id: sessionId,
+          type: "session" as const,
+          timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
+          cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
+        };
+        Reflect.deleteProperty(canonicalHeader, "sessionId");
+        event = canonicalHeader;
+        recognizedEvent = event;
+      } else {
+        const classified = classifySessionFileEntry(event, plan.sourceVersion);
+        // Runtime retains normalized opaque rows; import preserves their loaded bytes.
+        recognizedEvent = classified.recognized ? classified.entry : undefined;
+      }
+
+      if (recognizedEvent) {
+        migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
+        if (
+          plan.sourceVersion < 2 &&
+          recognizedEvent.type !== "session" &&
+          plan.compactionTargetIndexes.has(originalIndex)
+        ) {
+          migratedTargetIds.set(originalIndex, recognizedEvent.id);
+        }
+        event = recognizedEvent;
+      }
       append(event as TranscriptEvent);
     }
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
     return () => assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-  };
-}
-
-function readTranscriptEventsForImport(
-  transcriptPath: string,
-  sessionId: string,
-  allowMalformedPrefix: boolean,
-  sourceFingerprint: TranscriptFileFingerprint,
-): Iterable<FileEntry> {
-  // Production import owns the process-wide Gateway/SQLite-maintenance lock
-  // through commit and archive. Fingerprints catch non-cooperating external edits.
-  const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
-  assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-  const classificationHeader = {
-    id: sessionId,
-    type: "session",
-    version: plan.sourceVersion,
-    timestamp: "",
-    cwd: "",
-  } satisfies FileEntry;
-  // V1 compactions refer to original row indexes. Stable index-derived IDs let
-  // the second pass resolve those links without retaining the transcript.
-  const idPrefix = createHash("sha256")
-    .update(transcriptPath)
-    .update("\0")
-    .update(sessionId)
-    .digest("hex")
-    .slice(0, 16);
-
-  return {
-    *[Symbol.iterator]() {
-      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-      const migratedTargetIds = new Map<number, string>();
-      const migrationState: SessionFileEntryMigrationState = {
-        createEntryId: (originalIndex) => `${idPrefix}-${originalIndex.toString(36)}`,
-        previousId: null,
-        resolveOriginalEntryId: (originalIndex) => migratedTargetIds.get(originalIndex),
-        sourceVersion: plan.sourceVersion,
-      };
-      for (const { event: loadedEvent, originalIndex } of iterateTranscriptEvents(
-        transcriptPath,
-        allowMalformedPrefix,
-      )) {
-        let event = loadedEvent;
-        let recognizedEvent: FileEntry | undefined;
-        if (originalIndex === plan.headerIndex) {
-          const canonicalHeader = {
-            ...event,
-            id: sessionId,
-            type: "session" as const,
-            timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
-            cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
-          };
-          Reflect.deleteProperty(canonicalHeader, "sessionId");
-          event = canonicalHeader;
-          recognizedEvent = event;
-        } else {
-          // Reuse the runtime partition contract one row at a time. The
-          // synthetic header carries the source version without being emitted.
-          recognizedEvent = partitionSessionFileEntries([classificationHeader, event])
-            .fileEntriesByOriginalIndex[1];
-        }
-
-        if (recognizedEvent) {
-          migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
-          if (
-            recognizedEvent.type !== "session" &&
-            plan.compactionTargetIndexes.has(originalIndex)
-          ) {
-            migratedTargetIds.set(originalIndex, recognizedEvent.id);
-          }
-          event = recognizedEvent;
-        }
-        yield event;
-      }
-      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-    },
   };
 }
 
@@ -238,26 +215,32 @@ function planTranscriptImport(
     if (plan.headerIndex < 0 && isRecord(event) && event.type === "session") {
       plan.headerIndex = originalIndex;
       plan.sourceVersion = typeof event.version === "number" ? event.version : 1;
-    }
-    if (
-      isRecord(event) &&
-      event.type === "compaction" &&
-      Number.isInteger(event.firstKeptEntryIndex) &&
-      Number(event.firstKeptEntryIndex) >= 0
-    ) {
-      const targetIndex = Number(event.firstKeptEntryIndex);
-      if (
-        !plan.compactionTargetIndexes.has(targetIndex) &&
-        plan.compactionTargetIndexes.size >= MAX_LEGACY_COMPACTION_TARGETS
-      ) {
-        throw new TranscriptImportLimitError(
-          `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
-        );
+      // Only v1 needs future row indexes before migration. Newer files validate
+      // the same target limit while streaming, before any canonical write.
+      if (plan.sourceVersion >= 2) {
+        return plan;
       }
-      plan.compactionTargetIndexes.add(targetIndex);
     }
+    recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
   }
   return plan;
+}
+
+function recordLegacyCompactionTarget(event: FileEntry, targets: Set<number>): void {
+  if (
+    isRecord(event) &&
+    event.type === "compaction" &&
+    Number.isInteger(event.firstKeptEntryIndex) &&
+    Number(event.firstKeptEntryIndex) >= 0
+  ) {
+    const targetIndex = Number(event.firstKeptEntryIndex);
+    if (!targets.has(targetIndex) && targets.size >= MAX_LEGACY_COMPACTION_TARGETS) {
+      throw new TranscriptImportLimitError(
+        `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
+      );
+    }
+    targets.add(targetIndex);
+  }
 }
 
 function* iterateTranscriptEvents(
@@ -267,7 +250,7 @@ function* iterateTranscriptEvents(
   let originalIndex = 0;
   try {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      const parsed = parseJsonlLine(line);
+      const parsed = JSON.parse(line);
       if (!parsed) {
         continue;
       }
@@ -494,17 +477,16 @@ export function resolveTargetSqlitePath(
 }
 
 /**
- * Enumerates existing per-agent session SQLite databases for a Doctor repair.
- * Deduplicates by resolved path (aliases collapse to one target) and skips
- * databases that do not yet exist on disk. Shared by every session-row repair
- * so target enumeration cannot drift between repair surfaces.
+ * Projects each caller's ordered targets onto existing physical databases.
+ * Keep target selection with the caller: canonical repair selects owners,
+ * while ordinary row repairs enumerate candidates. First physical path wins.
  */
-export function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
+export function projectExistingAgentDatabaseTargets(
+  targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
+  return targets.flatMap((target) => {
     const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];
@@ -514,7 +496,17 @@ export function listExistingAgentDatabaseTargets(
   });
 }
 
-function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ExistingAgentDatabaseTarget[] {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
+    env,
+  );
+}
+
+function* iterateJsonlLinesSync(filePath: string): Generator<string> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -527,13 +519,18 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
         break;
       }
       const parts = decoder.decode(buffer.subarray(0, bytesRead), { stream: true }).split("\n");
-      for (let index = 0; index < parts.length - 1; index++) {
-        fragments.push(parts[index]!);
-        lineNumber += 1;
-        const text = fragments.join("").trim();
+      // Only the first complete line can span chunks. Keep unterminated giant
+      // records fragmented until a newline arrives instead of repeatedly joining them.
+      if (parts.length > 1 && fragments.length > 0) {
+        fragments.push(parts[0]!);
+        parts[0] = fragments.join("");
         fragments = [];
+      }
+      for (let index = 0; index < parts.length - 1; index++) {
+        lineNumber += 1;
+        const text = parts[index]!.trim();
         if (text) {
-          yield { lineNumber, text };
+          yield text;
         }
       }
       fragments.push(parts.at(-1)!);
@@ -541,7 +538,7 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
     fragments.push(decoder.decode());
     const text = fragments.join("").trim();
     if (text) {
-      yield { lineNumber: lineNumber + 1, text };
+      yield text;
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -558,8 +555,4 @@ function sqliteNumber(value: unknown): number {
     return Number(value);
   }
   return 0;
-}
-
-function parseJsonlLine(line: { text: string }): unknown {
-  return JSON.parse(line.text);
 }

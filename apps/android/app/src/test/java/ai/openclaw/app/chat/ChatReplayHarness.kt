@@ -344,3 +344,18 @@ internal fun chunkPreservingCodePoints(
   }
   return chunks
 }
+
+internal suspend fun ChatCommandOutbox.recordTranscriptTip(
+  gatewayId: String,
+  scope: ChatOutboxScope,
+  leafEntryId: String,
+  previousState: ChatOutboxBranchState,
+): Boolean =
+  reconcileBranchScope(
+    gatewayId,
+    scope,
+    ChatOutboxBranchEvidence.History(previousState),
+    leafEntryId,
+    setOf(leafEntryId),
+    OUTBOX_BRANCH_CHANGED_ERROR,
+  ) != null

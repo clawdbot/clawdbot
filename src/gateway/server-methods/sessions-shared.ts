@@ -55,6 +55,13 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
+  if (
+    "permissionMode" in params.patch &&
+    placement.executionMode === "worker-turn" &&
+    placement.turnClaim
+  ) {
+    return "This remote worker cannot apply permissions while active. Stop the worker run, then change permissions.";
+  }
   if (params.patch.archived === false) {
     const restoreError = resolveWorkerPlacementArchiveRestoreError({
       context: params.context,

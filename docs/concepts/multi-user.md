@@ -19,7 +19,7 @@ If people must not access each other's sessions, tools, credentials, or files, g
 
 Every session carries up to three layers of attribution:
 
-- **Creator** (immutable): new sessions record a write-once `createdActor` when the creation path can prove who caused it. Authenticated people use their durable Gateway profile id; sessions spawned by an agent record that agent's id. Sessions created without a proven actor remain unattributed. Sharing and visibility authority stays anchored on the creator, even after the owner changes.
+- **Creator** (immutable): new sessions record a write-once `createdActor` when the creation path can prove who caused it. Human creators retain their source: a verified Gateway profile, a channel sender, or unknown historical attribution. Only a profile creator can receive implicit creator access, including through a verified profile merge. Matching channel, agent, or system IDs do not identify that person. Sharing and visibility authority stays anchored on the creator, even after the owner changes.
 - **Owner** (assignable): the person or agent currently responsible for the session, in the style of a GitHub issue assignee. It defaults to the creator and can be reassigned at any time; the assignment records who reassigned it and when. The sidebar avatar, the owner filter, and People sorting all follow the current owner.
 - **Participants** (history): authenticated people, channel senders, and requesting agents whose accepted input targets the session. The session's own agent and passive viewers are never recorded. New-identity admission is bounded at 32 records per session; repair can preserve larger existing histories. Participation is recorded best-effort in the background, so it never delays a turn.
 
@@ -38,6 +38,8 @@ Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). As
 
 Reassigning the owner changes responsibility and display only. It does not transfer sharing authority (which stays with the creator) and does not grant or remove any access.
 
+Creator source follows scheduled jobs and inherited creation policies; a required sandbox is a restriction, not evidence of profile identity. Historical automations that lost their creator source retain their attribution and content, but do not receive a guessed profile grant. An administrator can manage their sharing or create a new, explicitly attributed session. Assigning an owner does not repair creator authority. See [Creator namespace migration](/reference/database-schemas#creator-namespace-migration) before upgrading.
+
 ## Finding sessions by owner
 
 The sidebar's session filter menu gains an **Owners** section when ownership is visible:
@@ -54,7 +56,7 @@ The Control UI keeps ownership and presence visually distinct:
 
 - A solid owner avatar on a session row is permanent for the lifetime of that session and always shows the current owner. It dims slightly while the owner is not connected.
 - When other people or agents have prompted the session, the row avatar becomes a **pair-stack**: the owner stays in front, and either the single other participant peeks out behind, or a **+N** count summarizes several. The chat header shows the owner chip plus a participant facepile of up to four avatars. The owner is excluded from the participant display.
-- Ringed or translucent presence avatars show people who are currently connected or watching; they come from live presence, not ownership, and disappear when those viewers leave.
+- Ringed or translucent presence avatars show people who are currently connected or watching; they come from live presence, not ownership, and disappear when those viewers leave. A person already shown by an owner or participant avatar is not repeated in that surface's live viewers. Participants summarized by a **+N** count can still appear individually as live viewers.
 
 When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into the indicator bubble as they type; other typists show a three-dot bubble. Drafts are ephemeral presence: they are never persisted, never enter the session transcript or the model's context, and fade a moment after the typist pauses or sends.
 
@@ -87,6 +89,8 @@ This state improves continuity; it is not an authorization or isolation boundary
 ## Drafts
 
 Start a session as a draft to keep work in progress out of teammates' sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
+
+Catalog listings and progress updates recheck current session visibility for each recipient. Cached provider results do not preserve access to a session that has become draft or incognito. An adopted thread remains bound to its original session instance and plugin ownership; deleting and recreating a session key does not transfer the old thread to the new creator. Catalog reads and mutations also recheck the stored session after provider enumeration.
 
 ## Turn attribution
 

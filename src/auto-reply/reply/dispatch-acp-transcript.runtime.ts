@@ -4,6 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -18,6 +19,7 @@ export async function persistAcpDispatchTranscript(params: {
   meta?: SessionAcpMeta;
   threadId?: string | number;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   assistantIdempotencyKey?: string;
 }): Promise<ReplyDispatchAssistantTranscript | undefined> {
   const promptText = params.promptText.trim();
@@ -60,6 +62,7 @@ export async function persistAcpDispatchTranscript(params: {
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
     config: params.cfg,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     assistantIdempotencyKey: params.assistantIdempotencyKey,
   });
   if (result.kind === "session-rebound") {

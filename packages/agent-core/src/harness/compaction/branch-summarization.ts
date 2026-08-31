@@ -235,6 +235,8 @@ export async function generateBranchSummary(
   const response = options.streamFn
     ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions))
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  options.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),

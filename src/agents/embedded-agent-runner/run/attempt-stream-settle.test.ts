@@ -76,7 +76,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
-    toolSearchTargetTranscriptProjections: [],
+    nestedToolActivities: [],
     cache: {
       observabilityEnabled: false,
       changesForTurn: null,

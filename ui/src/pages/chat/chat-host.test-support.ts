@@ -148,7 +148,6 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
     refreshSessionsAfterChat: new Map(),

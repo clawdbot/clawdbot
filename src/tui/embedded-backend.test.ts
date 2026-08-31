@@ -104,6 +104,9 @@ vi.mock("../agents/agent-command.js", () => ({
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   queueEmbeddedAgentMessageWithOutcomeAsync: (...args: unknown[]) =>
     queueEmbeddedAgentMessageWithOutcomeAsyncMock(...args),
+}));
+
+vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     resolveActiveEmbeddedRunSessionIdMock(...args),
 }));
@@ -1467,7 +1470,15 @@ describe("EmbeddedTuiBackend", () => {
       message: "/btw detached",
       runId: "run-global-work-btw",
     });
-    await flushMicrotasks();
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({
+        event: "chat.side_result",
+        payload: expect.objectContaining({ text: "side done", agentId: "work" }),
+      }),
+    );
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+    );
 
     expect(
       events.filter((event) => ["chat", "agent", "chat.side_result"].includes(event.event)),

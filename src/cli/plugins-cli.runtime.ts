@@ -220,7 +220,7 @@ async function runPluginsEnableCommandUnlocked(
     );
     return defaultRuntime.exit(1);
   }
-  if (!plugin.enabled) {
+  if (!plugin.enabled || opts.acceptCapabilities) {
     const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
     const { ManagedPluginLifecycleError } =
       await import("../plugins/management-lifecycle-error.js");
@@ -429,10 +429,12 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
   const hasInstallTreeIssues =
     [errors, diags, shadowed].some(({ length }) => length > 0) ||
     compatibility.some(({ severity }) => severity === "warn");
+  const doctorOk = !hasInstallTreeIssues && pluginConfigWarnings.size === 0;
+  process.exitCode = doctorOk ? 0 : 1;
 
   if (opts.json) {
     defaultRuntime.writeJson({
-      ok: !hasInstallTreeIssues && pluginConfigWarnings.size === 0,
+      ok: doctorOk,
       pluginErrors: errors.map((entry) => ({
         id: entry.id,
         ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),

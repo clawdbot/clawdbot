@@ -10,13 +10,18 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
+import {
+  ensureStagedInputDirectory,
+  stagedInputDirectory,
+  stagedInputFileName,
+} from "../../media/staged-inputs.js";
 import { getMediaDir } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -43,6 +48,7 @@ export async function stageSandboxMedia(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
@@ -62,6 +68,7 @@ export async function stageSandboxMedia(params: {
     ? null
     : await ensureSandboxWorkspaceForSession({
         config: cfg,
+        agentId: params.agentId,
         sessionKey,
         workspaceDir,
       });
@@ -85,10 +92,8 @@ export async function stageSandboxMedia(params: {
   const usedNames = new Set<string>();
   const staged = new Map<number, string>();
   const stagedUrlAliases = new Set<number>();
-  const hostWorkspaceStagingDir =
-    !sandbox && !ctx.MediaRemoteHost
-      ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
-      : undefined;
+  const inputDirectory = stagedInputDirectory(crypto.randomUUID());
+  let stagingReady = false;
 
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
@@ -104,17 +109,15 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const fileName = allocateStagedFileName(source.pathForFileName, usedNames);
-    if (!fileName) {
-      continue;
-    }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest =
-      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-        : fileName;
+    const relativeDest = path.join(inputDirectory, fileName);
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
+      if (!stagingReady) {
+        await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory);
+        stagingReady = true;
+      }
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
@@ -169,6 +172,7 @@ export async function stageSandboxMedia(params: {
         path: stagedPath,
         ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
         workspaceDir: effectiveWorkspaceDir,
+        staged: true,
       };
     }
   }
@@ -258,9 +262,11 @@ async function stageLocalFileIntoRoot(params: {
   maxBytes?: number;
 }): Promise<void> {
   const root = await fsRoot(params.rootDir);
-  await root.copyIn(params.relativeDestPath, params.sourcePath, {
+  const source = await readLocalFileSafely({
+    filePath: params.sourcePath,
     maxBytes: params.maxBytes,
   });
+  await root.create(params.relativeDestPath, source.buffer);
 }
 
 async function stageRemoteFileIntoRoot(params: {
@@ -351,11 +357,8 @@ async function isAllowedSourcePath(params: {
   }
 }
 
-function allocateStagedFileName(source: string, usedNames: Set<string>): string | null {
-  const baseName = path.basename(source);
-  if (!baseName) {
-    return null;
-  }
+function allocateStagedFileName(source: string, usedNames: Set<string>): string {
+  const baseName = stagedInputFileName(path.basename(source));
   const parsed = path.parse(baseName);
   let fileName = baseName;
   let suffix = 1;

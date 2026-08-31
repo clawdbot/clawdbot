@@ -21,10 +21,11 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
-  input: EmbeddedAttemptExecutionPhaseInput,
+  input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
   const { sessionRuntime, systemPrompt, toolBase, toolCatalog } = input.prepared;
@@ -58,10 +59,11 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
-  activeSession[agentSessionSetContextReplacementHook](() =>
-    toolBase.skillInstructionDeliveryCache.clear(),
-  );
+  const { nestedToolActivities } = toolBase;
+  activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    toolBase.skillInstructionDeliveryCache.clear();
+    attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
+  });
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
@@ -188,6 +190,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
     abortRun,
@@ -208,7 +211,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     hookAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
     clientToolCallSlots,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     hasDeliveredSourceReply,
     markSourceReplyDelivered,

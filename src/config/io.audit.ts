@@ -658,6 +658,21 @@ function openConfigAuditStore(env: NodeJS.ProcessEnv) {
   });
 }
 
+/** Reads a bounded newest-first audit window for Doctor provenance checks. */
+export function readRecentConfigAuditRecords(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  limit: number;
+}): ConfigAuditRecord[] {
+  try {
+    return openConfigAuditStore(resolveConfigAuditStoreEnv(params))
+      .latest({ limit: params.limit })
+      .map(({ value }) => value);
+  } catch {
+    return [];
+  }
+}
+
 function configAuditEntryKey(record: ConfigAuditRecord): string {
   return `${record.ts}:${record.event}:${randomUUID()}`;
 }

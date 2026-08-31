@@ -2511,7 +2511,7 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(respond)[0]).toBe(true);
       expect(ensureSessionEntryCall()?.creation).toEqual({
         via: "operator",
-        actor: { type: "human", id: profile.id },
+        actor: { type: "human", source: "profile", id: profile.id },
         sandbox: "required",
       });
     });

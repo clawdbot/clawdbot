@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
@@ -29,6 +30,13 @@ const ISOLATED_TEST_CREDENTIAL_ENV_KEYS = [
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
   "GITHUB_TOKEN",
+] as const;
+const ISOLATED_TEST_SERVICE_ENV_KEYS = [
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "OPENCLAW_WRAPPER",
+  "OPENCLAW_GATEWAY_SERVICE_PID",
+  "OPENCLAW_SERVICE_MANAGED_ENV_KEYS",
+  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
 ] as const;
 const HERMETIC_TEST_ENV_KEYS = [
   ...LIVE_TEST_TRIGGER_ENV_KEYS,
@@ -210,6 +218,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
+    { key: "COREPACK_HOME", value: process.env.COREPACK_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
@@ -219,12 +228,26 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
+    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
 
 function initializeIsolatedTestEnv(tempHome: string): void {
+  // Corepack's installed toolchain is independent of application state. Bind its
+  // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
+  setTestEnvValue(
+    "COREPACK_HOME",
+    process.env.COREPACK_HOME ??
+      path.join(
+        process.env.XDG_CACHE_HOME ??
+          process.env.LOCALAPPDATA ??
+          path.join(os.homedir(), process.platform === "win32" ? "AppData/Local" : ".cache"),
+        "node/corepack",
+      ),
+  );
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);
@@ -239,7 +262,9 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   // Derive all state, including SQLite, from this unique HOME so cleanup owns it.
   // Leave the override unset so nested HOME scopes also isolate their state.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  // Model status still honors the shipped legacy selector; isolate both agent-dir keys.
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+  deleteTestEnvValue("PI_CODING_AGENT_DIR");
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");
@@ -248,6 +273,11 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // A test worker is not the parent Gateway's service. Retaining its identity
+  // selects in-band lifecycle guards and detached restart handoffs in fixtures.
+  for (const key of ISOLATED_TEST_SERVICE_ENV_KEYS) {
     deleteTestEnvValue(key);
   }
   // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
@@ -383,10 +413,6 @@ function sanitizeLiveConfig(raw: string): string {
 }
 
 function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
-  const agentsDir = path.join(realStateDir, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    return;
-  }
   const liveAuthStageScript = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "helpers",

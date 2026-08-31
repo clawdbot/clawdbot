@@ -29,6 +29,7 @@ type SubagentRunReadSqliteRow = Pick<
 > & {
   model: string | null;
   run_timeout_seconds: number | null;
+  execution_status: SubagentRunRecord["execution"]["status"];
   started_at: number | null;
   session_started_at: number | null;
   accumulated_runtime_ms: number | null;
@@ -132,6 +133,20 @@ export function upsertSubagentRunRowInDatabase(
         conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
       ),
   );
+}
+
+export function readSubagentRun(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const row = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("run_id", "=", runId),
+  ).rows[0];
+  return row ? rowToSubagentRunRecord(row) : null;
 }
 
 function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
@@ -238,6 +253,9 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "created_at",
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
         subagentPayloadJsonValue<number | null>("$.runTimeoutSeconds").as("run_timeout_seconds"),
+        subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
+          "execution_status",
+        ),
         subagentPayloadJsonValue<number | null>("$.execution.startedAt").as("started_at"),
         subagentPayloadJsonValue<number | null>("$.sessionStartedAt").as("session_started_at"),
         subagentPayloadJsonValue<number | null>("$.accumulatedRuntimeMs").as(
@@ -292,6 +310,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
       execution: {
+        status: row.execution_status,
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(endedAt !== undefined ? { endedAt } : {}),
         ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),

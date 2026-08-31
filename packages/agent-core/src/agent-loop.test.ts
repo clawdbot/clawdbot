@@ -7,9 +7,13 @@ import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
+  acknowledgeInternalToolResult,
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
+  attachInternalToolResultAcknowledgement,
+  attachInternalToolResultProvenance,
+  getInternalToolResultProvenance,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -2591,6 +2595,70 @@ describe("agentLoop tool termination", () => {
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
     },
   );
+
+  it.each([
+    { name: "attached", failAttachment: false, expectedAcknowledgements: 1 },
+    { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },
+  ])("acknowledges an internal tool result only after it is $name", async (testCase) => {
+    const acknowledge = vi.fn();
+    const provenance = { source: "test-tool-result-provenance" };
+    const tool: AgentTool = {
+      ...makeTool("commit_probe", []),
+      execute: async () =>
+        attachInternalToolResultProvenance(
+          attachInternalToolResultAcknowledgement(
+            { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
+            acknowledge,
+          ),
+          provenance,
+        ),
+    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "commit-probe", name: tool.name, arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
+    const run = runAgentLoop(
+      [{ role: "user", content: "commit", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [tool] },
+      {
+        ...config,
+        afterToolCall: async () => ({ details: { phase: "after-call" } }),
+        afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
+      },
+      async (event) => {
+        if (event.type === "tool_execution_end") {
+          expect(event.result).toBeTypeOf("object");
+          if (typeof event.result === "object" && event.result !== null) {
+            expect(getInternalToolResultProvenance(event.result)).toBe(provenance);
+          }
+        }
+        if (
+          !testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          expect(getInternalToolResultProvenance(event.message)).toBe(provenance);
+          acknowledgeInternalToolResult(event.message);
+        }
+        if (
+          testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          throw new Error("attachment failed");
+        }
+      },
+      undefined,
+      streamFn,
+    );
+
+    if (testCase.failAttachment) {
+      await expect(run).rejects.toThrow("attachment failed");
+    } else {
+      await run;
+    }
+    expect(acknowledge).toHaveBeenCalledTimes(testCase.expectedAcknowledgements);
+  });
 
   it.each([
     ["sequential", "invalid arguments"],

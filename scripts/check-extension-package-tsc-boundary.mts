@@ -3,28 +3,27 @@
 // Verifies extension packages compile through their package-local TypeScript boundary.
 import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import path, { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import {
+  portableRelativePath,
+  readArtifactRecord,
+  writeArtifactRecord,
+} from "./lib/build-artifact-cache.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
 import {
   runManagedCommand,
   signalExitCode,
@@ -48,11 +47,6 @@ type BoundarySummaryParams = {
   canaryElapsedMs?: number;
   elapsedMs?: number;
 };
-type CompileFreshnessParams = {
-  rootDir?: string;
-  extensionNewestInputMtimeMs?: number;
-  sharedNewestInputMtimeMs?: number;
-};
 type StepFailureParams = {
   stdout?: string;
   stderr?: string;
@@ -73,7 +67,6 @@ type BoundaryStep = {
   onSuccess?: (result: StepResult) => void;
 };
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
-
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
 const tscBin = require.resolve("typescript/bin/tsc");
@@ -91,7 +84,6 @@ const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.js
 const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
-const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
   "../../src/plugins/contracts/rootdir-boundary-canary.ts";
 const ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT = "src/plugins/contracts/rootdir-boundary-canary.ts";
@@ -317,106 +309,13 @@ function collectCanaryExtensionIds(extensionIds: string[]) {
   ];
 }
 
-function isRelevantCompileInput(filePath: string) {
-  const basename = path.basename(filePath);
-  if (
-    basename === "__rootdir_boundary_canary__.ts" ||
-    basename === "tsconfig.rootdir-canary.json"
-  ) {
-    return false;
-  }
-  if (basename.endsWith(".tsbuildinfo")) {
-    return false;
-  }
-  return COMPILE_INPUT_EXTENSIONS.has(path.extname(filePath));
-}
-
-function collectNewestMtime(
-  entryPath: string,
-  params: { includeFile?: (filePath: string) => boolean; skipDistDirectories?: boolean } = {},
-) {
-  const includeFile = params.includeFile ?? (() => true);
-  const skipDistDirectories = params.skipDistDirectories ?? true;
-  let newestMtimeMs = 0;
-
-  function visit(currentPath: string) {
-    if (!existsSync(currentPath)) {
-      return;
-    }
-    const stats = statSync(currentPath);
-    if (stats.isDirectory()) {
-      const basename = path.basename(currentPath);
-      if ((skipDistDirectories && basename === "dist") || basename === "node_modules") {
-        return;
-      }
-      for (const child of readdirSync(currentPath)) {
-        visit(path.join(currentPath, child));
-      }
-      return;
-    }
-    if (!includeFile(currentPath)) {
-      return;
-    }
-    newestMtimeMs = Math.max(newestMtimeMs, stats.mtimeMs);
-  }
-
-  visit(entryPath);
-  return newestMtimeMs;
-}
-
-function collectOldestMtime(paths: string[]) {
-  let oldestMtimeMs = Number.POSITIVE_INFINITY;
-
-  for (const entryPath of paths) {
-    if (!existsSync(entryPath)) {
-      return null;
-    }
-    oldestMtimeMs = Math.min(oldestMtimeMs, statSync(entryPath).mtimeMs);
-  }
-
-  return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
-}
-
-/**
- * Checks whether an extension boundary compile canary is still fresh.
- */
-export function isBoundaryCompileFresh(extensionId: string, params: CompileFreshnessParams = {}) {
-  const rootDir = params.rootDir ?? repoRoot;
-  const extensionRoot = resolve(rootDir, "extensions", extensionId);
-  const extensionNewestInputMtimeMs =
-    params.extensionNewestInputMtimeMs ??
-    collectNewestMtime(extensionRoot, { includeFile: isRelevantCompileInput });
-  const sharedNewestInputMtimeMs =
-    params.sharedNewestInputMtimeMs ??
-    Math.max(
-      collectNewestMtime(resolve(rootDir, "dist/plugin-sdk"), {
-        skipDistDirectories: false,
-      }),
-      collectNewestMtime(resolve(rootDir, "packages/plugin-sdk/dist"), {
-        skipDistDirectories: false,
-      }),
-    );
-  const newestInputMtimeMs = Math.max(extensionNewestInputMtimeMs, sharedNewestInputMtimeMs);
-  const oldestOutputMtimeMs = collectOldestMtime([
-    resolveBoundaryTsStampPath(extensionId, rootDir),
-  ]);
-  return oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs;
-}
-
-function writeStampFile(filePath: string) {
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
-}
-
+/** One lifecycle adapter for preparation, compilers, and the negative canary. */
 function abortSiblingSteps(abortController?: AbortController) {
   if (abortController && !abortController.signal.aborted) {
     abortController.abort();
   }
 }
 
-/**
- * Runs one node-based boundary check step with timeout and output capture.
- */
 export async function runNodeStepAsync(
   label: string,
   args: string[],
@@ -475,7 +374,8 @@ export async function runNodeStepAsync(
       elapsedMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const original = toErrorObject(error, "Boundary step failed");
+    const code = "code" in original ? original.code : undefined;
     const kind =
       code === "ETIMEDOUT"
         ? "timeout"
@@ -483,7 +383,11 @@ export async function runNodeStepAsync(
           ? "canceled"
           : code === "NONZERO_EXIT"
             ? "nonzero-exit"
-            : "spawn-error";
+            : code === "EPROCESSGROUP_CLEANUP_FAILED"
+              ? "cleanup-error"
+              : receivedSignal
+                ? "signal"
+                : "spawn-error";
     const detail = {
       stdout: formatCapturedStepOutput(stdout),
       stderr: formatCapturedStepOutput(stderr),
@@ -496,11 +400,9 @@ export async function runNodeStepAsync(
             ? error.message
             : String(error),
     };
-    const failure = attachStepFailureMetadata(
-      new Error(formatStepFailure(label, detail), { cause: error }),
-      label,
-      detail,
-    );
+    // Preserve cleanup identity and cause for the checkout ownership boundary.
+    original.message = formatStepFailure(label, detail);
+    const failure = attachStepFailureMetadata(original, label, detail);
     params.onFailure?.(failure);
     abortSiblingSteps(params.abortController);
     throw failure;
@@ -597,13 +499,11 @@ export function installCanaryArtifactCleanup(
 }
 
 function resolveBoundaryTsBuildInfoPath(extensionId: string) {
-  return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
+  return resolve(repoRoot, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.tsbuildinfo`);
 }
-
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
-  return resolve(rootDir, "extensions", extensionId, "dist", ".boundary-tsc.stamp");
+  return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-
 async function runCompileCheck(extensionIds: string[]) {
   const prepStartedAt = Date.now();
   process.stdout.write(
@@ -613,33 +513,38 @@ async function runCompileCheck(extensionIds: string[]) {
   const prepElapsedMs = Date.now() - prepStartedAt;
   const concurrency = resolveCompileConcurrency();
   const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
-  const sharedNewestInputMtimeMs = Math.max(
-    collectNewestMtime(resolve(repoRoot, "dist/plugin-sdk"), {
-      skipDistDirectories: false,
-    }),
-    collectNewestMtime(resolve(repoRoot, "packages/plugin-sdk/dist"), {
-      skipDistDirectories: false,
-    }),
-  );
+  const before = new BoundaryInputSnapshot(repoRoot);
   process.stdout.write(`compile concurrency ${concurrency}\n`);
   const compileStartedAt = Date.now();
   let skippedCompileCount = 0;
   const compileTimings: CompileTiming[] = [];
+  const completed: {
+    recordPath: string;
+    config: string;
+    args: string[];
+    startedAt: number;
+    tsBuildInfoPath: string;
+  }[] = [];
   const steps = extensionIds
     .map((extensionId, index) => {
       const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
-      const extensionNewestInputMtimeMs = collectNewestMtime(
-        resolve(repoRoot, "extensions", extensionId),
-        {
-          includeFile: isRelevantCompileInput,
-        },
-      );
+      const config = `extensions/${extensionId}/tsconfig.json`;
+      const args = [
+        tsgoBin,
+        "-p",
+        resolve(repoRoot, config),
+        "--noEmit",
+        "--incremental",
+        "--tsBuildInfoFile",
+        tsBuildInfoPath,
+      ];
+      before.signature(config, args, []);
+      const recordPath = resolveBoundaryTsStampPath(extensionId);
       mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
       if (
-        isBoundaryCompileFresh(extensionId, {
-          extensionNewestInputMtimeMs,
-          sharedNewestInputMtimeMs,
-        })
+        before.matches(readArtifactRecord(recordPath), config, args, [
+          portableRelativePath(repoRoot, tsBuildInfoPath),
+        ])
       ) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {
@@ -649,27 +554,23 @@ async function runCompileCheck(extensionIds: string[]) {
         }
         return null;
       }
+      rmSync(recordPath, { force: true });
+      rmSync(tsBuildInfoPath, { force: true });
+      let startedAt = 0;
       return {
         label: extensionId,
         onStart() {
+          startedAt = Date.now();
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
-          writeStampFile(resolveBoundaryTsStampPath(extensionId));
+          completed.push({ recordPath, config, args, startedAt, tsBuildInfoPath });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
           });
         },
-        args: [
-          tsgoBin,
-          "-p",
-          resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
-          "--noEmit",
-          "--incremental",
-          "--tsBuildInfoFile",
-          tsBuildInfoPath,
-        ],
+        args,
         timeoutMs: 120_000,
       } satisfies BoundaryStep;
     })
@@ -684,6 +585,22 @@ async function runCompileCheck(extensionIds: string[]) {
   }
   if (steps.length > 0) {
     await runNodeStepsWithConcurrency(steps, concurrency);
+    const after = new BoundaryInputSnapshot(repoRoot);
+    const records = completed.map((unit) =>
+      Object.assign(unit, {
+        record: after.record(
+          unit.config,
+          unit.args,
+          unit.tsBuildInfoPath,
+          [portableRelativePath(repoRoot, unit.tsBuildInfoPath)],
+          before,
+          unit.startedAt,
+        ),
+      }),
+    );
+    for (const unit of records) {
+      writeArtifactRecord(unit.recordPath, unit.record);
+    }
   }
   return {
     prepElapsedMs,
@@ -741,12 +658,9 @@ async function runCanaryCheck(extensionIds: string[]) {
             ? error.fullOutput
             : String(error);
         if (
-          !(
-            error &&
-            typeof error === "object" &&
-            "kind" in error &&
-            error.kind === "nonzero-exit"
-          ) ||
+          !(error instanceof Error) ||
+          !("kind" in error) ||
+          error.kind !== "nonzero-exit" ||
           !output.includes("TS6059") ||
           !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)
         ) {
@@ -760,7 +674,7 @@ async function runCanaryCheck(extensionIds: string[]) {
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
-  if (failures.length > 0) {
+  if (failures.length) {
     throw new AggregateError(failures, "extension boundary canary failed");
   }
   return {
@@ -822,6 +736,6 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   return withDistArtifactOwnership(repoRoot, () => runBoundaryCheck(argv));
 }
 
-if (import.meta.main) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

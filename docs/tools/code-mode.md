@@ -277,11 +277,24 @@ ordinary recovery from a failed `exec`; discovery does not count as a mutation.
 OpenClaw does not automatically replay a failed program. If earlier calls
 may have changed state or a failed call may have partially applied, OpenClaw
 deliberately permits one temporary read-only recovery attempt to inspect the
-current state. The internal instruction identifies OpenClaw as its source. It does
-not expose writes, sends, shell commands, or other mutations during that
-reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
-restrictions, approval requirements, and tool-policy denials retain their
-existing behavior.
+current state. The internal instruction identifies OpenClaw as its source. It
+does not expose writes, sends, shell commands, or other mutations during that
+inspection.
+
+If inspection finds unfinished work, the model can request one bounded recovery.
+Code Mode stays disabled, and OpenClaw restores the normal direct-tool or Tool
+Search surface with its real tool names and argument schemas. Host-recorded
+nested-call facts block an exact repeat whose earlier effect was committed or
+uncertain. The recovery permits one mutation attempt; reads and schema discovery
+remain available afterward, but a later mutation does not run blindly when the
+first attempt fails. If no work remains, the inspection report ends the run
+without another model turn. Cancellation, explicitly terminal tool outcomes,
+sandbox restrictions, approval requirements, and tool-policy denials retain
+their existing behavior.
+
+Computer observations, including window and cursor queries, cropped screenshots,
+browser state, and dialog inspection, do not spend that mutation attempt. Browser
+preparation, input, and dialog acceptance or dismissal still count as mutations.
 
 ### Verify the active surface
 
@@ -662,10 +675,17 @@ QuickJS-WASI snapshot/restore is the resume mechanism:
 Snapshots are runtime state, not user artifacts: they live only in an
 in-process map (no database or disk write), are size-limited, expire, and are
 scoped to the run and session that created them.
-Canceling the owning run or tool call, or closing its tool catalog at attempt
-teardown, immediately releases parked snapshots and cancels their pending host
-work, even if no `wait` call follows. Catalog description refreshes and client
-tool additions do not close the owner.
+One cell owner spans initial execution, suspension, and every resume. Canceling
+the owning run or current tool call, or closing its tool catalog at attempt
+teardown, cancels active workers and pending host work and releases parked
+snapshots, even if no `wait` call follows. Catalog description refreshes and
+client tool additions do not close the owner. An external operation that ignores
+cancellation may still finish, but cannot resume the closed guest, emit later
+guest output, or start another guest tool call.
+
+The process-wide limit of 64 slots applies to suspended cells and their reserved
+resume slots. A resume keeps its slot until it completes or parks again; an
+initial execution that completes without suspending does not consume a slot.
 
 `wait` fails (as a `failed` result) when:
 
@@ -673,7 +693,7 @@ tool additions do not close the owner.
 - the caller is not in the same run/session scope as the suspended run.
 - a `wait` is already in flight for that `runId`.
 - QuickJS-WASI restore fails.
-- resuming would exceed `maxOutputBytes` or `maxSnapshotBytes`.
+- resuming would exceed `maxSnapshotBytes`. Ordinary oversized successful output is truncated and remains successful.
 
 ## Guest runtime API
 
@@ -1002,9 +1022,9 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Rules: output order matches guest calls. Nested tool results, cumulative guest
-output, and the final value or failure diagnostic share the `maxOutputBytes`
-serialized UTF-8 budget. Oversized errors retain their leading cause and end
+Output order matches guest calls. Each nested tool result is bounded separately
+by `maxOutputBytes`. Cumulative guest output and the final value or failure
+diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
 with `[error truncated]`; truncation does not turn a failure into success.
 Catalog search rejects when its callable-name array cannot fit this budget;
 narrow the query or lower `limit` and retry. For other successful results that
@@ -1015,6 +1035,30 @@ reduce the search scope, paginate, select fewer files, or return a smaller
 projection. Non-serializable values are converted to plain strings or errors;
 binary values are not supported. Images and files travel through ordinary
 OpenClaw tools, not through the code-mode bridge.
+
+Marker prefixes and omitted-byte counts describe the original compact JSON after
+normalization, including array brackets, separators, and JSON escaping. Ordinary
+output is delivered incrementally. An unchanged cumulative summary is not repeated;
+new output or a changed final-value/error reservation can produce a replacement
+summary of that same original output.
+
+Model-facing `exec` and `wait` results also fit the effective model's per-result
+context and persistence limits. OpenClaw reserves the complete result envelope,
+including status, continuation, diagnostics, telemetry, and JSON formatting,
+before projecting output from its retained original source. Network-derived
+results retain the untrusted-content wrapper and its smaller content limit.
+These limits do not reduce the nested tool's byte allowance. Headless execution
+and low-level controls without model context retain their byte-only allowance
+(with the existing security wrapper limit for network-derived control output).
+
+This protects fresh results; it is not an archival JSON guarantee. Later
+aggregate reduction, cache-TTL pruning, and replay into a smaller model may
+still shorten or replace historical tool text. Already-sent results stay
+unchanged during ordinary continuation. Conventional tools keep their own text
+and image formats: a declared output schema describes `details`, not model-visible
+text. The file-read producer reserves its exact paging footer within the same
+model limits, and oversized skill instructions are refused rather than silently
+served in part.
 
 ## Tool catalog
 
@@ -1095,9 +1139,11 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
-Nested calls project into the transcript as real tool calls so support
-bundles show what happened, with the projection identifying the parent
-code-mode tool call and the nested tool id.
+Completed nested calls persist as bounded, redacted display-only activity, retaining
+their original parent and invocation ids across history reloads. Provider replay
+contains only the actual model calls; child activity adds no synthetic model turns.
+Starts and partial updates remain transient. Older missing child history cannot be
+reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
@@ -1106,10 +1152,10 @@ allow ordinary model recovery, including when `wait` resumes a suspended cell.
 This proof covers the cell's entire execution, not just the latest resume.
 Failed waits without that host proof remain terminal; serialized result fields
 cannot grant recovery. Possible nested side effects in a failed `exec` require
-authorized read-only reconciliation before any further action. Network-controlled
-tool output and errors retain their existing untrusted-content wrapping and
-sanitization; recovering from a failure does not grant new permissions or replay
-completed side effects.
+the [read-only inspection and bounded recovery](#recover-from-tool-errors) flow
+before any further action. Network-controlled tool output and errors retain
+their existing untrusted-content wrapping and sanitization; recovering from a
+failure does not grant new permissions or replay completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 

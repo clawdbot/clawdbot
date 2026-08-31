@@ -53,6 +53,7 @@ import {
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type {
+  ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "./server-channel-runtime.types.js";
@@ -245,22 +246,6 @@ type ChannelAccountStopState =
   | { status: "stopping"; attempt: Promise<ChannelAccountStopOutcome> }
   | Extract<ChannelAccountStopOutcome, { status: "rejected" }>;
 
-export type ChannelAccountStartOutcome =
-  | { status: "handed-off" }
-  | { status: "retry"; reason: "stop-in-flight" | "task-owned" | "start-in-flight" }
-  | {
-      status: "skipped";
-      reason:
-        | "unsupported"
-        | "autostart-suppressed"
-        | "ambient-suppressed"
-        | "disabled"
-        | "unconfigured"
-        | "secret-unavailable"
-        | "unlinked"
-        | "manual-stop";
-    };
-
 async function waitForDeferredAccountStart(
   deferred: Promise<void>,
   abortSignal: AbortSignal,
@@ -284,7 +269,7 @@ export type ChannelManager = {
     channel: ChannelId,
     accountId?: string,
     opts?: StartChannelOptions,
-  ) => Promise<void>;
+  ) => Promise<ReadonlyMap<string, ChannelAccountStartOutcome>>;
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
@@ -302,11 +287,6 @@ export type ChannelManager = {
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager & {
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelId>) => void;
   resolveRuntimeAccountId: (channelId: ChannelId, accountId: string) => string | undefined;
-  startChannelAccountForRecovery: (
-    channelId: ChannelId,
-    accountId: string,
-    opts?: StartChannelOptions,
-  ) => Promise<ChannelAccountStartOutcome>;
 } {
   const {
     getRuntimeConfig,
@@ -1142,23 +1122,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = (...args: Parameters<typeof startChannelProcessOwned>) =>
     runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(...args));
 
-  const startChannel = async (
-    channelId: ChannelId,
-    accountId?: string,
-    optsValue: StartChannelOptions = {},
-  ) => {
-    await startChannelInternal(channelId, accountId, optsValue);
-  };
-
-  const startChannelAccountForRecovery = async (
-    channelId: ChannelId,
-    accountId: string,
-    optsValue: StartChannelOptions = {},
-  ): Promise<ChannelAccountStartOutcome> => {
-    const outcomes = await startChannelInternal(channelId, accountId, optsValue);
-    return outcomes.get(accountId) ?? { status: "skipped", reason: "unsupported" };
-  };
-
   const stopChannel = async (
     channelId: ChannelId,
     accountId?: string,
@@ -1487,8 +1450,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     getRuntimeSnapshot,
     getPluginCommandCatalogAccounts,
     startChannels,
-    startChannel,
-    startChannelAccountForRecovery,
+    startChannel: startChannelInternal,
     stopChannel,
     pruneInactiveChannelAccountState,
     setAutostartSuppression: (suppression) => {

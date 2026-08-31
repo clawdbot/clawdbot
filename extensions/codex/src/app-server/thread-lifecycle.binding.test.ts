@@ -425,7 +425,7 @@ async function createManualResumeFixture(
       close: () => harness.close(),
     });
   }
-  const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(client);
+  const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   try {
     await getLeasedSharedCodexAppServerClient({
       startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },
@@ -540,7 +540,7 @@ async function createLeasedLifecycleWireClient(
     return count;
   });
   vi.spyOn(wire.client, "initialize").mockResolvedValue(undefined);
-  const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(wire.client);
+  const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(wire.client);
   try {
     await getLeasedSharedCodexAppServerClient({
       startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },

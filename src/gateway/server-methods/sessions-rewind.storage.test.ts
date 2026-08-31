@@ -73,7 +73,7 @@ async function seedMessageCutSource(incognito = false) {
       lifecycleRevision: "message-fork-source-lifecycle",
       updatedAt: Date.now(),
       visibility: "read-only",
-      createdActor: { type: "human", id: "owner" },
+      createdActor: { type: "human", source: "profile", id: "owner" },
       ...(incognito ? { incognito: true as const } : {}),
     },
   }));

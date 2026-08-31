@@ -1,9 +1,6 @@
 import { prepareAgentRuntimeAuth } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -82,7 +79,7 @@ async function prepareControlAuth(
     };
   }
   const config = options.config;
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     config,
     sessionKey: options.sessionKey,
     agentId: options.agentId,

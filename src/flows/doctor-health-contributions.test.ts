@@ -37,7 +37,18 @@ const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
-  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue(undefined),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
+    changes: [],
+    configOwnerMigrationApplied: false,
+    warnings: [],
+  }),
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map<string, string>()),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
   maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
     detected: 0,
     migrated: 0,
@@ -96,6 +107,7 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
+  repairObsoleteGeneratedExecApprovals: vi.fn(() => 0),
   collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
   legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
     (migration: { pluginId: string }) => ({
@@ -269,7 +281,9 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
 }));
 
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: mocks.collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
 }));
 
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
@@ -321,9 +335,13 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
 }));
 
-vi.mock("../commands/doctor-state-migrations.js", () => ({
+vi.mock("../infra/state-migrations.doctor.js", () => ({
   detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
   runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
+vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
+  repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
 vi.mock("../commands/doctor-plugin-manifests.js", () => ({
@@ -661,7 +679,18 @@ describe("doctor health contributions", () => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue(undefined);
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue({
+      detected: [],
+      changes: [],
+      configOwnerMigrationApplied: false,
+      warnings: [],
+    });
+    mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReset().mockReturnValue(new Map());
+    mocks.maybeRepairOpenAICodexAuthConfig.mockReset().mockImplementation((cfg: unknown) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     mocks.maybeMigrateLegacyPluginModelCatalogs.mockClear().mockResolvedValue({
       detected: 0,
       migrated: 0,
@@ -733,6 +762,7 @@ describe("doctor health contributions", () => {
       .mockReset()
       .mockResolvedValue({ preview: [], warnings: [], notices: [] });
     mocks.runLegacyStateMigrations.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairObsoleteGeneratedExecApprovals.mockReset().mockReturnValue(0);
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset().mockReturnValue(null);
     mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset().mockResolvedValue({
       changes: [],
@@ -2173,6 +2203,30 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("renews exec approvals when an unrelated legacy migration is declined", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.detectLegacyStateMigrations.mockResolvedValue({
+      preview: ["legacy sessions"],
+      warnings: [],
+      notices: [],
+    });
+    mocks.repairObsoleteGeneratedExecApprovals.mockReturnValue(1);
+    const ctx = createDoctorContext({
+      shouldRepair: true,
+      options: { repair: true },
+      prompter: buildDoctorPrompter(false),
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
+    expect(mocks.repairObsoleteGeneratedExecApprovals).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("removed 1 older generated approval"),
+      "Doctor changes",
+    );
+  });
+
   it("prints legacy state migration notices during manual doctor runs", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
     const detected = { preview: ["legacy sessions"], warnings: [], notices: [] };
@@ -2244,6 +2298,8 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
+      openAICodexAuthProfileIdMap:
+        mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,

@@ -864,9 +864,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           }).entry?.createdActor
         : undefined);
     const actorId = normalizeOptionalString(actor?.id);
-    const createdActor = actor
-      ? { type: actor.type, ...(actorId ? { id: actorId } : {}) }
-      : undefined;
+    const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
       captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);

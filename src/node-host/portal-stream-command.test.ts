@@ -18,7 +18,9 @@ async function listenGateway(
   });
   wss.on("connection", onConnection);
   await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+    // Reserve both families so this HTTP peer cannot take the IPv6 target's
+    // numeric port on IPv4 and win localhost connection selection.
+    server.listen({ port: 0, host: "::", ipv6Only: false }, resolve);
   });
   const address = server.address();
   if (!address || typeof address === "string") {

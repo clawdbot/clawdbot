@@ -1,5 +1,6 @@
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
+  isGatewayRestartDraining,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
@@ -36,6 +37,7 @@ export type PendingInvoke = {
   nextInputSeq: number;
   removeAbortListener?: () => void;
   admissionContinuation?: GatewayRootWorkAdmissionContinuationScope;
+  isCompletionAuthorized?: () => boolean;
 };
 
 export type NodeInvokeProgressParams = {
@@ -119,19 +121,8 @@ export class NodeInvokeStreamController {
   }
 
   handleResult(params: NodeInvokeResultParams): boolean {
-    const pending = this.options.pendingInvokes.get(params.id);
-    if (
-      !pending ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !this.options.isConnectionActive(pending)
-    ) {
-      return false;
-    }
-    if (this.settleIfExpired(params.id, pending)) {
-      return false;
-    }
-    if (!this.takePending(params.id, pending)) {
+    const pending = this.getPending(params.id, params.nodeId, params.connId);
+    if (!pending || !this.takePending(params.id, pending)) {
       return false;
     }
     if (!params.ok) {
@@ -203,17 +194,8 @@ export class NodeInvokeStreamController {
   }
 
   handleProgress(params: NodeInvokeProgressParams): boolean {
-    const pending = this.options.pendingInvokes.get(params.invokeId);
-    if (
-      !pending ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !this.options.isConnectionActive(pending) ||
-      params.seq < pending.nextProgressSeq
-    ) {
-      return false;
-    }
-    if (this.settleIfExpired(params.invokeId, pending)) {
+    const pending = this.getPending(params.invokeId, params.nodeId, params.connId);
+    if (!pending || params.seq < pending.nextProgressSeq) {
       return false;
     }
     // Receipt proves execution even without a stream consumer. Keep ignored
@@ -243,7 +225,7 @@ export class NodeInvokeStreamController {
       if (chunk === undefined) {
         break;
       }
-      if (this.settleIfExpired(params.invokeId, pending)) {
+      if (!this.getPending(params.invokeId, params.nodeId, params.connId)) {
         break;
       }
       pending.progressChunks.delete(pending.nextProgressSeq);
@@ -263,12 +245,50 @@ export class NodeInvokeStreamController {
         pending.progressChunks.clear();
         break;
       }
-      if (this.settleIfExpired(params.invokeId, pending)) {
+      if (!this.getPending(params.invokeId, params.nodeId, params.connId)) {
         break;
       }
       this.resetIdleTimer(params.invokeId, pending);
     }
     return true;
+  }
+
+  runPendingContinuation<T>(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> | null {
+    const pending = this.getPending(params.invokeId, params.nodeId, params.connId);
+    if (!pending) {
+      return null;
+    }
+    if (pending.admissionContinuation) {
+      return pending.admissionContinuation.run(params.run);
+    }
+    // Shutdown cleanup has no request root. Its live private owner grants only
+    // settlement; do not mint admission or revive a released captured root.
+    return isGatewayRestartDraining() && pending.isCompletionAuthorized ? params.run() : null;
+  }
+
+  private getPending(id: string, nodeId: string, connId: string | undefined) {
+    const pending = this.options.pendingInvokes.get(id);
+    if (
+      !pending ||
+      pending.nodeId !== nodeId ||
+      pending.connId !== connId ||
+      !this.options.isConnectionActive(pending) ||
+      this.settleIfExpired(id, pending)
+    ) {
+      return undefined;
+    }
+    // Recheck at settlement as handler loading may await after router admission.
+    // Some lifecycle owners assert by throwing; either form must fail closed.
+    try {
+      return pending.isCompletionAuthorized?.() === false ? undefined : pending;
+    } catch {
+      return undefined;
+    }
   }
 
   clearTimers(pending: PendingInvoke): void {

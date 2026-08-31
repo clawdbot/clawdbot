@@ -276,7 +276,18 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
+export type SessionWriterDeliveryAuthority = {
+  agentId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  expectedWriterRunId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
 export type ReplyPayloadMetadata = {
+  /** The model failed after a committed recovery compaction in the same turn. */
+  postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;
@@ -292,8 +303,12 @@ export type ReplyPayloadMetadata = {
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
+  /** The command owner produced this terminal reply without starting an agent run. */
+  commandReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
+  /** Original session-writer claim that must still hold at final delivery. */
+  sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
@@ -364,6 +379,31 @@ export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata |
   return replyPayloadMetadata.get(payload);
 }
 
+/** Revalidates an authority-bearing payload against a freshly loaded session row. */
+export function isReplyPayloadSessionWriterDeliveryAuthorized(
+  payload: object,
+  entry:
+    | {
+        activeWriterRunId?: string;
+        lifecycleRevision?: string;
+        sessionId?: string;
+      }
+    | undefined,
+): boolean {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!authority) {
+    return true;
+  }
+  return Boolean(
+    entry &&
+    entry.sessionId === authority.expectedSessionId &&
+    (authority.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === authority.expectedLifecycleRevision) &&
+    (authority.expectedWriterRunId === undefined ||
+      entry.activeWriterRunId === authority.expectedWriterRunId),
+  );
+}
+
 /** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
@@ -385,13 +425,28 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
 export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
+  const markPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+      commandReply: true,
+    });
   if (!reply) {
     return reply;
   }
   if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+    return reply.map(markPayload);
   }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
+  return markPayload(reply);
+}
+
+/** Returns true only when a command owner produced every payload in a non-empty reply. */
+export function isCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): boolean {
+  const payloads = Array.isArray(reply) ? reply : reply ? [reply] : [];
+  return (
+    payloads.length > 0 &&
+    payloads.every((payload) => getReplyPayloadMetadata(payload)?.commandReply === true)
+  );
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */

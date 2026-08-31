@@ -14,6 +14,7 @@ import type {
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
@@ -38,6 +39,7 @@ import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
+  ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
@@ -47,7 +49,10 @@ import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
-import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogSnapshot,
+  PreparedGatewayModelCatalog,
+} from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
@@ -166,6 +171,8 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Live reload owner, including same-config restart work and shutdown. */
+  isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
@@ -175,11 +182,16 @@ type GatewayKernelContext = {
   execApprovalManager?: ExecApprovalManager;
   questionManager?: QuestionManager;
   scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
-  /** Cancels durable approvals owned by one actively aborted run. */
-  cancelRunBoundApprovals?: (runId: string) => number;
+  /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
+  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  approvalWebPushDelivery?: {
+    handleRequested: <TPayload>(record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
+    handleResolved: (resolved: { id: string }) => Promise<void>;
+    handleExpired: (request: { id: string }) => Promise<void>;
+  };
   pluginApprovalIosPushDelivery?: {
     handleRequested?: (
       request: PluginApprovalRequest,
@@ -209,7 +221,7 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
-  }) => Promise<ModelCatalogEntry[] | undefined>;
+  }) => Promise<PreparedGatewayModelCatalog | undefined>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
@@ -346,7 +358,7 @@ type GatewayResidentBridgeContext = {
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
     opts?: StartChannelOptions,
-  ) => Promise<void>;
+  ) => Promise<ReadonlyMap<string, ChannelAccountStartOutcome>>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,

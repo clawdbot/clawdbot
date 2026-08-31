@@ -21,10 +21,8 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-} from "../agents/embedded-agent-runner/runs.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -837,7 +835,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       operatorRoleActor: { kind: "system" },
       ...opts,
-      creation: { via: "operator", actor: { type: "human" } },
+      creation: { via: "operator", actor: { type: "human", source: "unknown" } },
       armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
@@ -881,6 +879,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
+      agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
       provider: resolvedModel.provider,
       model: resolvedModel.model,

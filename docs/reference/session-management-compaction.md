@@ -54,7 +54,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid      |
 
-Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
+Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
 `maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total.
 
@@ -85,23 +85,27 @@ transaction, so a superseded run cannot write to the transcript.
 
 ### Downgrading After The SQLite Flip
 
-Restore archived legacy transcript artifacts before running an older
-file-backed OpenClaw version:
+Stop the Gateway and back up its state. Using the current SQLite-capable OpenClaw
+version, restore archived legacy session stores and transcript artifacts before
+starting an older file-backed version:
 
 ```bash
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
-The migration leaves legacy `sessions.json` files in place for support and
-rollback, but hot transcript JSONL files that were imported into SQLite are
-renamed into `session-sqlite-import-archive/`. Older file-backed runtimes follow
-the `sessionFile` paths in `sessions.json`, so they need those artifacts restored
-before startup. Restore uses migration manifests, moves only recorded archived
-artifacts whose original paths are missing, and leaves the SQLite database in
-place for forward recovery.
+The migration archives imported hot transcript JSONL files and verified, fully
+covered legacy `sessions.json` stores in `session-sqlite-import-archive/`.
+Legacy stores with incomplete coverage or blocking migration issues remain in
+place. Older file-backed runtimes need both `sessions.json` and the artifacts
+referenced by its `sessionFile` paths at their original locations before startup.
 
-Sessions created after the SQLite flip are SQLite-only and will not appear to an
-older file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
+Restore uses migration manifests, moves only recorded archived artifacts whose
+original paths are missing, reports conflicts rather than overwriting existing
+files, and leaves the SQLite database in place for forward recovery.
+
+Restore does not export changes made only in SQLite after migration. Sessions
+created after the SQLite flip are SQLite-only and will not appear to an older
+file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
 inspection and validation sequence again so OpenClaw can verify restored legacy
 artifacts before importing.
 
@@ -120,7 +124,7 @@ A `sessionKey` identifies which conversation bucket you are in (routing + isolat
 
 | Pattern                      | Example                                                     |
 | ---------------------------- | ----------------------------------------------------------- |
-| Main/direct chat (per agent) | `agent:<agentId>:<mainKey>` (default `main`)                |
+| Main/direct chat (per agent) | `agent:<agentId>:main`                                      |
 | Group                        | `agent:<agentId>:<channel>:group:<id>`                      |
 | Room/channel (Discord/Slack) | `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>` |
 | Cron                         | `cron:<job.id>`                                             |
@@ -130,7 +134,7 @@ A `sessionKey` identifies which conversation bucket you are in (routing + isolat
 
 Each `sessionKey` points at a current `sessionId` (the SQLite transcript identity that continues the conversation). Decision logic lives in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
-- **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
+- **Gateway reset** (`/new`, `/reset`) records a reset boundary in an existing persisted session and keeps its `sessionId`. A session that does not exist yet receives a new id.
 - **No automatic reset** is the default. The current `sessionId` continues while compaction keeps the active model context bounded.
 - **Daily reset** (`session.reset.mode: "daily"`) creates a new `sessionId` on the next message after the configured local-hour boundary (`session.reset.atHour`, default `4`).
 - **Idle expiry** (`session.reset.mode: "idle"` with `session.reset.idleMinutes`, or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. If daily and idle are both configured, whichever expires first wins.
@@ -181,7 +185,12 @@ Notable entry types:
 - `custom_message`: extension-injected message that _does_ enter model context (rendered in the TUI when `display: true`, hidden entirely when `display: false`)
 - `custom`: extension state that does _not_ enter model context (for persisting extension state across reloads)
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
+- `reset`: a fresh history window, optionally retaining messages from `firstKeptEntryId`
 - `branch_summary`: persisted summary when navigating a tree branch
+
+History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
+
+Model-only callers can use `SessionManager.openModelContext()` to create a detached, non-persisting view. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
 
 OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 
@@ -191,6 +200,8 @@ Two different concepts:
 
 1. **Model context window**: hard cap per model (tokens visible to the model). Comes from the model catalog and can be overridden via config.
 2. **Session store counters**: rolling stats written into the session row (used for `/status` and dashboards). `contextTokens` is a runtime estimate/reporting value - do not treat it as a strict guarantee.
+
+Completed turns update session counters even when no compaction occurred. An ordered context replacement takes precedence over earlier model usage; if its size is unknown, the counters are marked stale instead of borrowing an older request's total. A superseded run cannot overwrite the current writer's counters.
 
 More on limits: [/reference/token-use](/reference/token-use).
 
@@ -259,7 +270,7 @@ Plugins register a compaction provider via `registerCompactionProvider()` on the
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
 - Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
-- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Provider-local failures, including timeouts, stay in that guarded fallback and use the built-in quality audit when enabled. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 

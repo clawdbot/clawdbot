@@ -1087,8 +1087,9 @@ private func assertConfigLookupCannotRecreateRoute(
         try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
+        // Profiles and their reserved ports live for the process; a temporary
+        // profile here would permanently change later tests' ownership checks.
         return try await TestIsolation.withEnvValues([
-            "OPENCLAW_PROFILE": "autoqa-185-tests",
             "OPENCLAW_CONFIG_PATH": configURL.path,
             "OPENCLAW_STATE_DIR": isolatedState.path,
         ]) {
@@ -1245,6 +1246,7 @@ private func assertConfigLookupCannotRecreateRoute(
                     routeAuthority: nil,
                     deviceAuthGatewayID: route.owner)
             },
+            supportsSharedEndpointRecovery: false,
             activationBindingKeyProvider: { nil },
             sessionBox: WebSocketSessionBox(session: session))
         _ = try await connection.request(

@@ -36,7 +36,7 @@ export {
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 
-/** Coarse session category used by session list/status tools. */
+/** Coarse session kind used by session list/status tools. */
 export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
 type SessionKind = (typeof SESSION_LIST_KINDS)[number];
 
@@ -122,7 +122,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
-  category?: string;
+  group?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -165,7 +165,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
-/** Projects the Gateway's authoritative classification into the tool's coarse categories. */
+/** Projects the Gateway's authoritative classification into the tool's coarse kinds. */
 export function classifySessionListKind(params: {
   classification: NonNullable<GatewaySessionListRow["classification"]>;
   peerKind?: GatewaySessionListRow["peerKind"];

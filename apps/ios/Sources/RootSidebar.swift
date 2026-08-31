@@ -474,6 +474,9 @@ struct RootSidebar: View {
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
         .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: mainSession?.color)
+        }
         .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
@@ -668,6 +671,9 @@ struct RootSidebar: View {
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+        }
         .commandSessionActions(
             session: session,
             categories: self.sessionCategories,
@@ -681,6 +687,7 @@ struct RootSidebar: View {
             actions: CommandSessionActions(
                 rename: { self.patchSession(session, label: .some($0)) },
                 moveToGroup: { self.patchSession(session, category: .some($0)) },
+                setColor: { self.patchSession(session, color: .some($0)) },
                 togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
                 toggleUnread: { self.patchSession(session, unread: session.unread != true) },
                 fork: { self.forkSession(session) },
@@ -804,6 +811,7 @@ struct RootSidebar: View {
         _ session: OpenClawChatSessionEntry,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
@@ -815,6 +823,7 @@ struct RootSidebar: View {
                     expectedSessionID: archived == nil ? nil : session.sessionId,
                     label: label,
                     category: category,
+                    color: color,
                     pinned: pinned,
                     archived: archived,
                     unread: unread)

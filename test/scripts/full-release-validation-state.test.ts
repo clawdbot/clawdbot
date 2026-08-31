@@ -3,9 +3,11 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -17,14 +19,20 @@ import {
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
   readChild,
+  releaseGhRetryDelayMs,
   releaseStateChildEvidence,
+  serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateChildBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseStateArtifact,
   verifyReleaseStateArtifacts,
+  updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
-import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import {
+  fullReleaseCandidateBindingFixture,
+  fullReleaseCandidateManifestFixture,
+} from "../helpers/full-release-candidate.js";
 import { waitForChildClose, waitForFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -240,6 +248,100 @@ function runPlanSubprocess(overrides: Record<string, unknown>) {
 }
 
 describe("full release execution plan", () => {
+  it("omits only the owner-waived Telegram child from stable package validation", () => {
+    const input = {
+      releaseProfile: "stable",
+      releasePackageSpec: "openclaw@2026.8.1",
+      targetVersion: "2026.8.1",
+      telegramWaiver: "2026.8.1-owner-approved",
+      children: {},
+    };
+    const ordinary = plan({ ...input, telegramWaiver: "" });
+    const waived = plan(input);
+    expect(waived.children.filter((child) => child.required).map((child) => child.key)).toEqual(
+      ordinary.children
+        .filter((child) => child.required && child.key !== "npmTelegram")
+        .map((child) => child.key),
+    );
+    expect(waived.gates).toEqual(ordinary.gates);
+    expect(waived.children.find((child) => child.key === "npmTelegram")).toMatchObject({
+      required: false,
+      selected: false,
+      result: "skipped",
+      runId: "",
+    });
+  });
+
+  it.each([
+    { telegramWaiver: "unknown" },
+    { targetVersion: "2026.8.2" },
+    { targetVersion: "2026.8.1-beta.3" },
+    { releaseProfile: "beta" },
+    { rerunGroup: "npm-telegram" },
+    { liveSuiteFilter: "qa-live-matrix,qa-live-telegram" },
+    { liveSuiteFilter: "TELEGRAM" },
+    { liveSuiteFilter: "qa-live" },
+    { liveSuiteFilter: "qa-live-all" },
+    { liveSuiteFilter: "qa-all" },
+    { liveSuiteFilter: "qa-live-non-slack" },
+    { liveSuiteFilter: "qa-non-slack" },
+    { liveSuiteFilter: "non-slack" },
+    { liveSuiteFilter: "no-slack" },
+    { liveSuiteFilter: "without-slack" },
+    { releasePackageSpec: "openclaw@2026.8.2" },
+    { packageAcceptancePackageSpec: "openclaw@latest" },
+    { npmTelegramPackageSpec: "openclaw@2026.8.1-beta.3" },
+  ])("rejects a Telegram waiver outside its owner-approved scope: %j", (override) => {
+    expect(() =>
+      plan({
+        telegramWaiver: "2026.8.1-owner-approved",
+        targetVersion: "2026.8.1",
+        releaseProfile: "stable",
+        ...override,
+      }),
+    ).toThrow(/Telegram waiver/u);
+  });
+
+  it("seals the Telegram waiver and exact version into the immutable plan", () => {
+    const waiver = { telegramWaiver: "2026.8.1-owner-approved", targetVersion: "2026.8.1" };
+    const artifact = executionPlan({ ...waiver, releaseProfile: "stable", children: {} }, waiver);
+    expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject(waiver);
+    const changed = { ...artifact, targetVersion: "2026.8.2" };
+    expect(() => validateReleaseExecutionPlanArtifact(changed)).toThrow(/digest/u);
+    expect(() =>
+      validateReleaseExecutionPlanArtifact({
+        ...changed,
+        sha256: releaseExecutionPlanSha256(changed),
+      }),
+    ).toThrow(/Telegram waiver/u);
+    expect(() => validateReleaseExecutionPlanArtifact(artifact, { telegramWaiver: "" })).toThrow(
+      /Telegram waiver/u,
+    );
+    const candidate = candidateBinding();
+    expect(() =>
+      executionPlan(
+        { ...waiver, releaseProfile: "stable", children: {} },
+        { ...waiver, attemptEvidenceVersion: 2, candidate, candidateRequest: candidate.request },
+      ),
+    ).toThrow("Telegram waiver target version differs from the release candidate");
+    const manifest = fullReleaseCandidateManifestFixture(candidateRequestInput());
+    manifest.package.version = "2026.8.1";
+    const matchingCandidate = buildFullReleaseCandidateBinding({
+      manifest,
+      artifact: candidate.evidenceArtifact,
+    });
+    const sealedCandidatePlan = executionPlan(
+      { ...waiver, releaseProfile: "stable", children: {} },
+      {
+        ...waiver,
+        attemptEvidenceVersion: 2,
+        candidate: matchingCandidate,
+        candidateRequest: matchingCandidate.request,
+      },
+    );
+    expect(validateReleaseExecutionPlanArtifact(sealedCandidatePlan)).toMatchObject(waiver);
+  });
+
   it("seals complete candidate producer evidence into attempt-aware plans", () => {
     const candidate = candidateBinding();
     const artifact = executionPlan(
@@ -374,7 +476,9 @@ describe("full release execution plan", () => {
     ["getaddrinfo EAI_AGAIN api.github.com", "transient"],
     ["unexpected EOF", "transient"],
     ["HTTP 401: Bad credentials", "hard"],
-    ["HTTP 403: secondary rate limit", "hard"],
+    ["HTTP 403: secondary rate limit", "transient"],
+    ["HTTP 403: Resource not accessible by integration", "hard"],
+    ["HTTP 403: permission denied", "hard"],
     ["HTTP 404: workflow not found", "hard"],
     ["HTTP 410: artifact expired", "hard"],
     ["HTTP 422: invalid workflow input", "hard"],
@@ -730,6 +834,66 @@ describe("release decision policy", () => {
     expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
   });
 
+  it.each(["beta", "stable", "full"])(
+    "keeps Telegram execution failures advisory for %s releases",
+    (releaseProfile) => {
+      const result = classifyReleaseSnapshot({
+        children: [
+          child("releaseChecks", {
+            conclusion: "failure",
+            jobs: [
+              { conclusion: "failure", name: "Run QA Lab live Telegram lane", status: "completed" },
+              {
+                conclusion: "failure",
+                name: "Run package acceptance / Telegram package acceptance / Run Telegram package E2E",
+                status: "completed",
+              },
+              { conclusion: "success", name: "Verify release checks", status: "completed" },
+            ],
+            status: "completed",
+          }),
+          child("npmTelegram", {
+            conclusion: "failure",
+            jobs: [{ conclusion: "failure", name: "Telegram package E2E", status: "completed" }],
+            runId: "202",
+            status: "completed",
+          }),
+        ],
+        releaseProfile,
+        workflowRef: "main",
+      });
+      expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
+    },
+  );
+
+  it("keeps non-Telegram failures and Telegram provenance errors strict", () => {
+    const result = classifyReleaseSnapshot({
+      children: [
+        child("releaseChecks", {
+          conclusion: "failure",
+          jobs: [
+            { conclusion: "failure", name: "Run install smoke", status: "completed" },
+            { conclusion: "success", name: "Verify release checks", status: "completed" },
+          ],
+          status: "completed",
+        }),
+        child("npmTelegram", {
+          conclusion: "failure",
+          errors: [{ kind: "identity_mismatch", message: "wrong workflow SHA", runId: "202" }],
+          runId: "202",
+          status: "completed",
+        }),
+      ],
+      releaseProfile: "stable",
+      workflowRef: "main",
+    });
+    expect(result).toMatchObject({
+      blockers: [expect.objectContaining({ job: "Run install smoke" })],
+      errors: [expect.objectContaining({ kind: "identity_mismatch" })],
+      state: "orchestration_error",
+    });
+  });
+
   it("preserves a blocker and an API error independently", () => {
     const result = classifyReleaseSnapshot({
       children: [
@@ -782,7 +946,12 @@ describe("release decision policy", () => {
     expect(result).toMatchObject({ plannedRunAttempt: 1, runAttempt: 2 });
   });
 
-  it("preserves the last valid snapshot through a transient read and then recovers", async () => {
+  it.each([
+    "HTTP 503: Server Error",
+    "HTTP 429: API rate limit exceeded",
+    "HTTP 403: secondary rate limit",
+    "read ECONNRESET",
+  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
     const planned = child("normalCi");
     const previous = {
       ...planned,
@@ -794,8 +963,8 @@ describe("release decision policy", () => {
     const readRun = async () => {
       if (fail) {
         fail = false;
-        throw Object.assign(new Error("HTTP 503: Server Error"), {
-          stderr: "HTTP 503: Server Error",
+        throw Object.assign(new Error(message), {
+          stderr: message,
         });
       }
       return {
@@ -830,14 +999,12 @@ describe("release decision policy", () => {
     const degraded = await readChild(planned, previous, undefined, {
       readAttemptJobs,
       readRun,
-      transientGracePolls: 2,
     });
     expect(degraded).toMatchObject({
       conclusion: "success",
       errors: [],
       jobs: previous.jobs,
-      status: "read_degraded",
-      transientReadFailures: 1,
+      status: "transport_uncertain",
     });
     expect(
       classifyReleaseSnapshot({
@@ -850,7 +1017,6 @@ describe("release decision policy", () => {
     const recovered = await readChild(planned, degraded, undefined, {
       readAttemptJobs,
       readRun,
-      transientGracePolls: 2,
     });
     expect(recovered).toMatchObject({
       conclusion: "success",
@@ -866,7 +1032,7 @@ describe("release decision policy", () => {
     ).toMatchObject({ errors: [], state: "passed" });
   });
 
-  it("fails closed after the transient read grace boundary", async () => {
+  it("keeps exhausted transient reads uncertain instead of terminal", async () => {
     const planned = child("normalCi");
     const readRun = async () => {
       throw Object.assign(new Error("HTTP 503: Server Error"), {
@@ -875,14 +1041,11 @@ describe("release decision policy", () => {
     };
     let snapshot: Record<string, unknown> = planned;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      snapshot = await readChild(planned, snapshot, undefined, {
-        readRun,
-        transientGracePolls: 2,
-      });
+      snapshot = await readChild(planned, snapshot, undefined, { readRun });
     }
     expect(snapshot).toMatchObject({
-      errors: [expect.objectContaining({ kind: "api_error" })],
-      transientReadFailures: 3,
+      errors: [],
+      status: "transport_uncertain",
     });
     expect(
       classifyReleaseSnapshot({
@@ -891,8 +1054,8 @@ describe("release decision policy", () => {
         workflowRef: "main",
       }),
     ).toMatchObject({
-      errors: [expect.objectContaining({ kind: "api_error" })],
-      state: "orchestration_error",
+      errors: [],
+      state: "qualifying",
     });
   });
 
@@ -902,7 +1065,6 @@ describe("release decision policy", () => {
       readRun: async () => {
         throw Object.assign(new Error("read ECONNRESET"), { stderr: "read ECONNRESET" });
       },
-      transientGracePolls: 2,
     });
     expect(
       classifyReleaseSnapshot({
@@ -950,6 +1112,143 @@ describe("release decision policy", () => {
         workflowRef: "main",
       }),
     ).toMatchObject({ state: "orchestration_error" });
+  });
+
+  it.each(["HTTP 403: Resource not accessible by integration", "HTTP 403: Bad credentials"])(
+    "keeps %s terminal",
+    async (message) => {
+      const planned = child("normalCi");
+      const observed = await readChild(planned, planned, undefined, {
+        readRun: async () => {
+          throw Object.assign(new Error(message), { stderr: message });
+        },
+      });
+      expect(observed).toMatchObject({
+        errors: [expect.objectContaining({ kind: "api_error" })],
+        transportFailure: undefined,
+      });
+    },
+  );
+
+  it("keeps malformed child responses terminal", async () => {
+    const planned = child("normalCi");
+    const observed = await readChild(planned, planned, undefined, {
+      readRun: async () => ({}),
+    });
+    expect(observed.errors).toEqual([expect.objectContaining({ kind: "api_error" })]);
+  });
+
+  it("preserves complete composite evidence when the run read succeeds but jobs fail", async () => {
+    const planned = child("normalCi");
+    const previous = {
+      ...planned,
+      compositeJobsSha256: "f".repeat(64),
+      conclusion: "success",
+      jobs: [{ conclusion: "success", name: "test", status: "completed" }],
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      status: "completed",
+      transportFailure: { errorClass: "transient" },
+    };
+    const observed = await readChild(planned, previous, undefined, {
+      readAttemptJobs: async (_runId, attempt) => {
+        if (attempt === 2) {
+          throw Object.assign(new Error("HTTP 503: Server Error"), {
+            stderr: "HTTP 503: Server Error",
+          });
+        }
+        return previous.jobs;
+      },
+      readRun: async () => ({
+        actor: { login: "github-actions[bot]" },
+        conclusion: "",
+        display_title: planned.displayTitle,
+        event: "workflow_dispatch",
+        head_branch: planned.workflowRef,
+        head_sha: planned.workflowSha,
+        id: 101,
+        path: ".github/workflows/ci.yml",
+        repository: { full_name: "openclaw/openclaw" },
+        run_attempt: 2,
+        status: "in_progress",
+        triggering_actor: { login: "github-actions[bot]" },
+      }),
+    });
+    expect(observed).toMatchObject({
+      compositeJobsSha256: previous.compositeJobsSha256,
+      jobs: previous.jobs,
+      runAttempt: 1,
+      status: "transport_uncertain",
+      transportFailure: { errorClass: "transient" },
+    });
+    expect(
+      await readChild(
+        planned,
+        {
+          ...planned,
+          status: "transport_uncertain",
+          transportFailure: { errorClass: "transient" },
+        },
+        undefined,
+        {
+          readAttemptJobs: async () => [],
+          readRun: async () => ({
+            actor: { login: "github-actions[bot]" },
+            display_title: planned.displayTitle,
+            event: "workflow_dispatch",
+            head_branch: planned.workflowRef,
+            head_sha: planned.workflowSha,
+            id: 101,
+            path: ".github/workflows/ci.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            run_attempt: 1,
+            status: "in_progress",
+            triggering_actor: { login: "github-actions[bot]" },
+          }),
+        },
+      ),
+    ).toMatchObject({
+      status: "in_progress",
+      transportFailure: { errorClass: "transient" },
+    });
+  });
+
+  it("uses one fixed monotonic transport deadline until recovery", () => {
+    const uncertainChild = {
+      ...child("normalCi"),
+      transportFailure: { errorClass: "transient" },
+    };
+    const first = updateReleaseTransportEpisode(undefined, [uncertainChild], {
+      deadline: 900_000,
+      monotonicNow: 100,
+      wallNow: Date.parse("2026-08-29T00:00:00.100Z"),
+    });
+    const repeated = updateReleaseTransportEpisode(first, [uncertainChild], {
+      monotonicNow: 899_999,
+      wallNow: Date.parse("2026-08-29T01:00:00Z"),
+    });
+    const expired = updateReleaseTransportEpisode(first, [uncertainChild], {
+      monotonicNow: 900_100,
+      wallNow: Date.parse("2026-08-29T02:00:00Z"),
+    });
+    expect(repeated).toMatchObject({
+      deadlineAt: first.deadlineAt,
+      startedAt: "2026-08-29T00:00:00.000Z",
+      status: "uncertain",
+    });
+    expect(expired).toMatchObject({
+      deadlineAt: first.deadlineAt,
+      error: { kind: "transport_deadline_exceeded" },
+      status: "expired",
+    });
+    expect(
+      updateReleaseTransportEpisode(first, [{ ...uncertainChild, transportFailure: undefined }]),
+    ).toEqual({ status: "certain" });
+  });
+
+  it("caps GitHub retry sleep at the remaining transport deadline", () => {
+    expect(releaseGhRetryDelayMs(6, 105_000, 100_000)).toBe(5_000);
+    expect(releaseGhRetryDelayMs(6, 100_000, 100_000)).toBe(0);
   });
 
   it("cancels only exact active affected children", () => {
@@ -1018,6 +1317,7 @@ describe("release state artifacts", () => {
       mode,
       releaseProfile: "stable",
       rerunGroup: "ci",
+      transport: options.transport,
     });
   }
 
@@ -1139,6 +1439,153 @@ describe("release state artifacts", () => {
         { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+  });
+
+  it("records a blocker while transport is simultaneously uncertain", () => {
+    const transport = updateReleaseTransportEpisode(undefined, [
+      {
+        ...child("normalCi"),
+        transportFailure: { errorClass: "transient" },
+      },
+    ]);
+    const payload = artifact(
+      "decision",
+      2,
+      executionPlan({ rerunGroup: "ci" }),
+      { conclusion: "", jobs: [FAILED_JOB], status: "in_progress" },
+      { transport },
+    );
+    expect(payload).toMatchObject({
+      blockerCount: 1,
+      state: "blocked_diagnostics_running",
+      transport: { status: "uncertain" },
+    });
+  });
+
+  it("records expired transport without serializing collector internals", () => {
+    const transport = updateReleaseTransportEpisode(
+      undefined,
+      [{ ...child("normalCi"), transportFailure: { errorClass: "transient" } }],
+      {
+        deadline: 900_000,
+        monotonicNow: 0,
+        wallNow: Date.parse("2026-08-29T00:00:00Z"),
+      },
+    );
+    const expired = updateReleaseTransportEpisode(
+      transport,
+      [{ ...child("normalCi"), transportFailure: { errorClass: "transient" } }],
+      { monotonicNow: 900_000, wallNow: Date.parse("2026-08-29T00:15:00Z") },
+    );
+    const payload = artifact(
+      "decision",
+      2,
+      executionPlan({ rerunGroup: "ci" }),
+      {},
+      {
+        extraErrors: [expired.error],
+        transport: expired,
+      },
+    );
+    expect(payload.errors).toContainEqual(
+      expect.objectContaining({ kind: "transport_deadline_exceeded" }),
+    );
+    expect(payload.transport).not.toHaveProperty("deadlineMonotonicMs");
+    expect(payload.transport).not.toHaveProperty("error");
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("does not create fail-fast cancellation targets from uncertainty alone", () => {
+    const snapshots = [
+      {
+        ...child("normalCi"),
+        status: "transport_uncertain",
+        transportFailure: { errorClass: "transient" },
+      },
+    ];
+    const decision = classifyReleaseSnapshot({
+      children: snapshots,
+      releaseProfile: "stable",
+      workflowRef: "main",
+    });
+    expect(decision).toMatchObject({ blockers: [], state: "qualifying" });
+    expect(affectedActiveRunIds(snapshots, decision.blockers)).toEqual([]);
+  });
+
+  it("keeps a complete deterministic 31-entry blocker index", () => {
+    const jobs = Array.from({ length: 31 }, (_, index) => ({
+      ...FAILED_JOB,
+      completed_at: `2026-08-29T00:00:${String(index).padStart(2, "0")}Z`,
+      name: `failed-${String(index).padStart(2, "0")}`,
+    }));
+    const payload = artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      conclusion: "failure",
+      jobs,
+    });
+    expect(payload.blockers).toHaveLength(25);
+    expect(payload.blockerIndex).toHaveLength(31);
+    expect(payload).toMatchObject({
+      blockerCount: 31,
+      firstPrimaryFailure: { job: "failed-00", kind: "job_failure" },
+    });
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("keeps a maximal paginated retry blocker index within the artifact budget", () => {
+    const attempts = Array.from({ length: 5 }, (_unused, attempt) => ({
+      jobs: Array.from({ length: 100 }, (_, offset) => {
+        const index = attempt * 100 + offset;
+        return {
+          ...FAILED_JOB,
+          name: `failed-${String(index).padStart(3, "0")}`,
+          url: `https://example.invalid/jobs/${"x".repeat(960)}-${index}`,
+        };
+      }),
+      runAttempt: attempt + 1,
+    }));
+    const composite = composeReleaseAttemptJobs(attempts, {
+      effectiveRunAttempt: 5,
+      plannedRunAttempt: 1,
+    });
+    const payload = artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      compositeJobsSha256: composite.sha256,
+      conclusion: "failure",
+      jobs: composite.jobs,
+      observedRunAttempts: attempts.map(({ runAttempt }) => runAttempt),
+      plannedRunAttempt: 1,
+      runAttempt: 5,
+    });
+    const bytes = Buffer.byteLength(serializeReleaseArtifact(payload), "utf8");
+    expect(payload.blockerIndex).toHaveLength(500);
+    expect(bytes).toBeLessThanOrEqual(MAX_RELEASE_ARTIFACT_BYTES);
+  });
+
+  it("reads legacy v2 evidence without claiming blocked-list completeness", () => {
+    const passed = structuredClone(artifact("decision"));
+    const blocked = structuredClone(stateArtifact("decision", "blocked_complete"));
+    for (const payload of [passed, blocked]) {
+      delete payload.blockerCount;
+      delete payload.blockerIndex;
+      delete payload.firstPrimaryFailure;
+      delete payload.transport;
+    }
+    expect(validateReleaseStateArtifact(passed, stateExpected(), "decision")).toMatchObject({
+      blockerCount: null,
+      transport: { status: "certain" },
+    });
+    expect(validateReleaseStateArtifact(blocked, stateExpected(), "decision")).toMatchObject({
+      blockerCount: null,
+      state: "blocked_complete",
+      transport: null,
+    });
+  });
+
+  it("rejects malformed complete blocker evidence", () => {
+    const payload = structuredClone(stateArtifact("decision", "blocked_complete"));
+    payload.blockerCount = Number(payload.blockerCount) + 1;
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).toThrow(
+      "release state machine evidence is invalid",
+    );
   });
 
   it("round-trips mixed-case composite jobs through state validation", () => {
@@ -2011,15 +2458,54 @@ console.log(JSON.stringify({
     expect(JSON.parse(readFileSync(validatorArgs, "utf8"))).toContain("--expected-selected-run-id");
   });
 
-  it("blocks Decision when canonical evidence manifest changes after planning", () => {
-    const root = mkdtempSync(join(tmpdir(), "frv-reuse-manifest-mismatch-"));
+  it.each([
+    { name: "unchanged evidence", waived: false, mutation: "none", blocker: "" },
+    { name: "owner-waived evidence", waived: true, mutation: "none", blocker: "" },
+    {
+      name: "changed source manifest",
+      waived: false,
+      mutation: "sha",
+      blocker: "provenance_mismatch",
+    },
+    {
+      name: "missing source waiver",
+      waived: true,
+      mutation: "waiver",
+      blocker: "reused_evidence_invalid",
+    },
+    {
+      name: "wrong source version",
+      waived: true,
+      mutation: "version",
+      blocker: "reused_evidence_invalid",
+    },
+  ])("revalidates $name at the Decision boundary", ({ waived, mutation, blocker }) => {
+    const root = tempDirs.make("frv-reuse-decision-");
     const output = join(root, "decision.json");
     const executionPlanPath = join(root, "plan.json");
     const gh = join(root, "gh");
     const validator = join(root, "validator.mjs");
+    const waiver = waived
+      ? { telegramWaiver: "2026.8.1-owner-approved", targetVersion: "2026.8.1" }
+      : {};
+    const sourceManifest = { ...evidenceManifest(), validationInputs: waiver };
+    const revalidatedManifest = structuredClone(sourceManifest);
+    if (mutation === "sha") {
+      revalidatedManifest.targetSha = "c".repeat(40);
+    } else if (mutation === "waiver") {
+      revalidatedManifest.validationInputs = {};
+    } else if (mutation === "version") {
+      revalidatedManifest.validationInputs.targetVersion = "2026.8.2";
+    }
     const sealedPlan = executionPlan(
-      { rerunGroup: "ci" },
       {
+        rerunGroup: "ci",
+        releaseProfile: "stable",
+        children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
+        ...waiver,
+      },
+      {
+        ...waiver,
         evidenceReuse: {
           changedPaths: [],
           evidenceSha: TARGET_SHA,
@@ -2028,7 +2514,7 @@ console.log(JSON.stringify({
           rootRunId: "99",
           runUrl: "https://example.invalid/runs/99",
           selectedRunId: "99",
-          sourceManifest: evidenceManifest(),
+          sourceManifest,
         },
       },
     );
@@ -2050,7 +2536,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       validator,
       `console.log(JSON.stringify({
   children: ${JSON.stringify(reusedEvidenceChildren())},
-  manifest: {runAttempt: 1, runId: "99", targetSha: "${"c".repeat(40)}"},
+  manifest: ${JSON.stringify(revalidatedManifest)},
   releaseProfile: "stable",
   rerunGroup: "ci"
 }));\n`,
@@ -2075,13 +2561,15 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       },
       timeout: 10_000,
     });
-    expect(result.status, result.stderr).toBe(1);
-    expect(JSON.parse(readFileSync(output, "utf8")).blockers).toContainEqual(
-      expect.objectContaining({
-        kind: "provenance_mismatch",
-        message: "revalidated evidence source manifest differs from the immutable plan",
-      }),
-    );
+    expect(result.status, result.stderr).not.toBe(2);
+    const decision = JSON.parse(readFileSync(output, "utf8"));
+    expect(result.status, JSON.stringify(decision.blockers)).toBe(blocker ? 1 : 0);
+    expect(decision.state).toBe(blocker ? "blocked_complete" : "passed");
+    if (blocker) {
+      expect(decision.blockers).toContainEqual(expect.objectContaining({ kind: blocker }));
+    } else {
+      expect(decision.blockers).toEqual([]);
+    }
   });
 
   it("validates a generated manifest against its immutable execution plan", () => {
@@ -2482,8 +2970,8 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       "releaseChecksIndependent",
       "releaseChecksCandidate",
     ]);
-    expect(restored.children.filter((child) => phasedKeys.has(child.key))).toEqual(
-      sealed.children.filter((child) => phasedKeys.has(child.key)),
+    expect(restored.children.filter((entry) => phasedKeys.has(entry.key))).toEqual(
+      sealed.children.filter((entry) => phasedKeys.has(entry.key)),
     );
     expect(readFileSync(githubOutput, "utf8")).toContain("source_parent_attempt=1\n");
   });

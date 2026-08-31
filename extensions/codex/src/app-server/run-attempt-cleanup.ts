@@ -3,10 +3,8 @@ import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
-  CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -14,6 +12,7 @@ import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-co
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
@@ -81,7 +80,9 @@ export async function cleanupCodexAttempt(
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
-      terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
+      (terminalState.turnSucceeded ||
+        (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
+      isIncognitoSessionKey(params.sessionKey);
     // Native-preserved and supervision threads have separate ownership and can
     // never enter the ordinary persistent warm-thread cache.
     const retainedPersistentThread =
@@ -103,26 +104,14 @@ export async function cleanupCodexAttempt(
             ) {
               return false;
             }
-            return await retainCodexAppServerLiveThread(
+            return await retainCodexAppServerBindingSubscription(
               resourceState.client,
               resourceState.thread.threadId,
-              resourceState.thread.liveThreadOwnership?.release ??
-                (async (threadId, assertCurrent) => {
-                  const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-                    threadId,
-                    timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-                    assertCurrent,
-                  });
-                  if (!released) {
-                    assertCurrent?.();
-                    await closeCodexStartupClientBestEffort(resourceState.client);
-                    throw new CodexAppServerUnsafeSubscriptionError(
-                      `Codex retained thread subscription could not be released: ${threadId}`,
-                    );
-                  }
-                }),
-              resourceState.thread.liveThreadConfigFingerprint,
-              connection.mutable.pluginAppServer.serviceTier,
+              {
+                release: resourceState.thread.liveThreadOwnership?.release,
+                configFingerprint: resourceState.thread.liveThreadConfigFingerprint,
+                serviceTier: connection.mutable.pluginAppServer.serviceTier,
+              },
             );
           }))
         : false;

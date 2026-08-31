@@ -8,15 +8,11 @@ import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
   projectOnlinePresenceViewers,
+  projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import "./viewer-facepile.ts";
-
-type ViewerAvatarElement = HTMLElement & {
-  user: PresenceViewer | null;
-  updateComplete: Promise<boolean>;
-};
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -31,7 +27,7 @@ it("uses the same user initials and identity hue in the roster and attributed ch
     email: "riley@example.test",
     watchedSessions: [],
   };
-  const viewerAvatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  const viewerAvatar = document.createElement("openclaw-viewer-avatar");
   viewerAvatar.user = user;
   document.body.append(viewerAvatar);
 
@@ -60,7 +56,7 @@ it("uses the same user initials and identity hue in the roster and attributed ch
 });
 
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
-  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  const avatar = document.createElement("openclaw-viewer-avatar");
   avatar.user = {
     id: "profile-mallory",
     name: "Mallory",
@@ -77,7 +73,7 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
 });
 
 it("renders trusted presence avatar routes directly", async () => {
-  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  const avatar = document.createElement("openclaw-viewer-avatar");
   avatar.user = {
     id: "profile-ada",
     name: "Ada Lovelace",
@@ -185,7 +181,7 @@ it("shares an authenticated avatar blob between the same user in the roster and 
     watchedSessions: [],
   };
   const avatars = Array.from({ length: 2 }, () => {
-    const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+    const avatar = document.createElement("openclaw-viewer-avatar");
     avatar.user = user;
     document.body.append(avatar);
     return avatar;
@@ -210,12 +206,25 @@ it("shares an authenticated avatar blob between the same user in the roster and 
   }
 });
 
-type ViewerFacepileElement = HTMLElementTagNameMap["openclaw-viewer-facepile"];
+it.each(["staticParticipants", "staticUsers"] as const)(
+  "renders an empty %s list without invalidating cached live presence",
+  async (source) => {
+    const payload = { presence: [{ user: { id: "live-viewer" } }] };
+    const projection = projectPresencePayload(payload);
+    const facepile = document.createElement("openclaw-viewer-facepile");
+    facepile[source] = [];
+    document.body.append(facepile);
+    await facepile.updateComplete;
+
+    expect(facepile.querySelector(".viewer-facepile")).toBeNull();
+    expect(projectPresencePayload(payload)).toBe(projection);
+  },
+);
 
 it.each(["first", "second"])(
   "merges device presence into one non-interactive face watching %s",
   async (session) => {
-    const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+    const facepile = document.createElement("openclaw-viewer-facepile");
     facepile.sessionKey = `agent:main:${session}`;
     facepile.presencePayload = {
       presence: [
@@ -243,8 +252,7 @@ it.each(["first", "second"])(
 );
 
 it("renders ordered static participant actors without presence filtering", async () => {
-  // SAFETY: the registered custom element exposes the tested reactive properties.
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  const facepile = document.createElement("openclaw-viewer-facepile");
   facepile.maxVisible = 2;
   facepile.staticParticipants = [
     { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
@@ -264,13 +272,16 @@ it("renders ordered static participant actors without presence filtering", async
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
 
-it("excludes the session owner before choosing visible avatars and overflow", async () => {
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+it("excludes displayed owners and participants before choosing visible avatars and overflow", async () => {
+  const facepile = document.createElement("openclaw-viewer-facepile");
   facepile.sessionKey = "agent:main:active";
-  facepile.excludeIdentity = { type: "profile", id: "owner" };
+  facepile.excludeIdentities = [
+    { type: "profile", id: "owner" },
+    { type: "profile", id: "participant" },
+  ];
   facepile.maxVisible = 2;
   facepile.presencePayload = {
-    presence: ["owner", "alice", "bob", "carol"].map((id) => ({
+    presence: ["owner", "participant", "alice", "bob", "carol"].map((id) => ({
       instanceId: `${id}-instance`,
       user: { id, identity: { type: "profile", id }, name: id },
       watchedSessions: ["agent:main:active"],
@@ -349,7 +360,7 @@ it.each([
     ],
   },
 ])("excludes authenticated self from session facepiles when $name", async (fixture) => {
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  const facepile = document.createElement("openclaw-viewer-facepile");
   facepile.selfUser = { id: "self" };
   facepile.selfInstanceId = fixture.selfInstanceId;
   facepile.sessionKey = "agent:main:active";
@@ -392,11 +403,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
     { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
   ];
   const mount = async (personActivity?: { basePath: string; navigate: (id: string) => void }) => {
-    const facepile = document.createElement("openclaw-viewer-facepile") as HTMLElement & {
-      staticParticipants: readonly SessionParticipant[];
-      personActivity?: { basePath: string; navigate: (id: string) => void };
-      updateComplete: Promise<boolean>;
-    };
+    const facepile = document.createElement("openclaw-viewer-facepile");
     facepile.staticParticipants = users;
     if (personActivity) {
       facepile.personActivity = personActivity;

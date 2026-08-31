@@ -252,6 +252,7 @@ export function loadPluginManifest(
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
     doctorContract,
+    doctorHealthChecks: raw.doctorHealthChecks === true ? true : undefined,
     sessionRouteStateOwners:
       raw.sessionRouteStateOwners === undefined
         ? undefined

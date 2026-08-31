@@ -758,6 +758,22 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
+  it("preserves a selected-profile error code in the auth failover lane", () => {
+    const err = coerceToFailoverError(
+      Object.assign(new Error("selected profile missing"), {
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      }),
+      { provider: "openai", model: "gpt-5.6-sol" },
+    );
+
+    expect(err).toMatchObject({
+      reason: "auth",
+      status: 401,
+      code: "selected_auth_profile_unavailable",
+    });
+  });
+
   it("permission_error with organization denial stays auth_permanent", () => {
     const err = coerceToFailoverError(
       "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
@@ -794,6 +810,7 @@ describe("failover-error", () => {
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
+      code: "selected_auth_profile_unavailable",
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
@@ -806,6 +823,7 @@ describe("failover-error", () => {
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
     expect(description.status).toBe(429);
+    expect(description.code).toBe("selected_auth_profile_unavailable");
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
@@ -1011,13 +1029,17 @@ describe("hasProviderRequestSizeCeiling", () => {
     expect(hasProviderRequestSizeCeiling(new Error(GROQ_REQUEST_CEILING_413))).toBe(true);
   });
 
-  it("finds the fact through a wrapping error", () => {
-    const wrapped = new Error("agent run failed", {
-      cause: new FailoverError("Context overflow: prompt too large for the model.", {
-        reason: "context_overflow",
-        rawError: GROQ_REQUEST_CEILING_413,
-      }),
+  it.each(["error", "cause", "aggregate"])("finds the fact through a %s wrapper", (kind) => {
+    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
     });
+    const wrapped =
+      kind === "aggregate"
+        ? new AggregateError([new Error("unrelated"), { cause: ceiling }], "agent run failed")
+        : kind === "cause"
+          ? new Error("agent run failed", { cause: ceiling })
+          : { error: ceiling };
     expect(hasProviderRequestSizeCeiling(wrapped)).toBe(true);
   });
 

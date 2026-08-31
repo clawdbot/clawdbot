@@ -22,6 +22,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -32,6 +33,7 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   forgetNodeRunnerInventory,
+  invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
   reconcileNodeRunnerAvailability,
@@ -1122,6 +1124,13 @@ export class NodeRegistry {
     return await invokePublicNodeRegistry(this, params);
   }
 
+  /** Internal cleanup retains its owner through replies without admitting new root work. */
+  invokeLifecycle(
+    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+  ): Promise<NodeInvokeResult> {
+    return invokeLifecycleNodeRegistry(this, params);
+  }
+
   /** Send one ordered input frame to a pending streaming invoke. */
   sendInvokeInput(invokeId: string, payload: unknown): void {
     this.invokeStreams.sendInput(invokeId, payload);
@@ -1131,27 +1140,14 @@ export class NodeRegistry {
     return this.invokeStreams.handleProgress(params);
   }
 
-  /** Re-enters only the root that owns this exact live node invocation. */
+  /** Continues only the exact live owner of a pending node invocation. */
   runPendingInvokeContinuation<T>(params: {
     invokeId: string;
     nodeId: string;
     connId: string | undefined;
     run: () => Promise<T>;
   }): Promise<T> | null {
-    const pending = this.pendingInvokes.get(params.invokeId);
-    if (
-      !pending?.admissionContinuation ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !isNodeRegistryPendingInvokeConnectionActive({
-        registry: this,
-        pending,
-        currentNode: this.nodesById.get(params.nodeId),
-      })
-    ) {
-      return null;
-    }
-    return pending.admissionContinuation.run(params.run);
+    return this.invokeStreams.runPendingContinuation(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -1422,13 +1418,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      node.client.socket.send(
-        JSON.stringify({
-          type: "event",
-          event,
-          payload,
-        }),
-      );
+      node.client.socket.send(serializeNodeEvent(event, payload));
       return true;
     } catch {
       return false;
