@@ -103,11 +103,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
       closeOpenClawStateDatabaseForTest();
       execApprovalsStoreTesting.reset();
 
-      const findings = await collectSecurityWarnings({});
+      const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
 
       expect(findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "doctor.exec_approvals_migration_pending" }),
+          expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
         ]),
       );
     });

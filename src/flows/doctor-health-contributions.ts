@@ -293,25 +293,24 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
             message: "Migrate detected legacy state now?",
             initialValue: true,
           });
-    if (!migrate) {
-      return;
-    }
-    const migrated = await runLegacyStateMigrations({
-      detected: legacyState,
-      config: ctx.cfg,
-      ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-      recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
-      legacySessionSurfaces,
-    });
-    if (migrated.changes.length > 0) {
-      note(migrated.changes.join("\n"), "Doctor changes");
-    }
-    const notices = migrated.notices ?? [];
-    if (notices.length > 0) {
-      note(notices.join("\n"), "Doctor notices");
-    }
-    if (migrated.warnings.length > 0) {
-      note(migrated.warnings.join("\n"), "Doctor warnings");
+    if (migrate) {
+      const migrated = await runLegacyStateMigrations({
+        detected: legacyState,
+        config: ctx.cfg,
+        ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+        legacySessionSurfaces,
+      });
+      if (migrated.changes.length > 0) {
+        note(migrated.changes.join("\n"), "Doctor changes");
+      }
+      const notices = migrated.notices ?? [];
+      if (notices.length > 0) {
+        note(notices.join("\n"), "Doctor notices");
+      }
+      if (migrated.warnings.length > 0) {
+        note(migrated.warnings.join("\n"), "Doctor warnings");
+      }
     }
   }
   if (!doctorOnlyStateMigrations) {

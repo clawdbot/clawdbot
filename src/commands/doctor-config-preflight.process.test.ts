@@ -181,7 +181,20 @@ describe("doctor invalid config process exit", () => {
         version: 1,
         agents: {
           jup: {
-            allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null, lastUsedCommand: null }],
+            allowlist: [
+              {
+                pattern: "/usr/bin/rg",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+              {
+                pattern: "=command:durable",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+            ],
           },
         },
       }),
@@ -209,6 +222,7 @@ describe("doctor invalid config process exit", () => {
     expect(result.status, output).toBe(0);
     expect(result.signal, output).toBeNull();
     expect(output).toContain("Imported legacy exec approvals into shared SQLite state.");
+    expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
     expect(output).toContain("Doctor complete.");
 
     expect(fs.existsSync(approvalsPath)).toBe(false);
@@ -219,7 +233,8 @@ describe("doctor invalid config process exit", () => {
       const row = database
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
         .get() as { raw_json?: string } | undefined;
-      expect(row?.raw_json).toContain('"pattern": "/usr/bin/rg"');
+      expect(row?.raw_json).not.toContain('"pattern": "/usr/bin/rg"');
+      expect(row?.raw_json).toContain('"pattern": "=command:durable"');
       expect(row?.raw_json).not.toContain("lastUsedAt");
       expect(row?.raw_json).not.toContain("lastUsedCommand");
     } finally {
@@ -280,120 +295,6 @@ describe("doctor invalid config process exit", () => {
     expect(result.signal, output).toBeNull();
     expect(output).toContain("Config invalid; doctor will run with best-effort config.");
     expect(output).toContain("Doctor complete.");
-  }, 75_000);
-});
-
-describe("doctor legacy exec approvals process repair", () => {
-  it("imports legacy approvals before renewing obsolete generated grants", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-exec-approvals-order-"));
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const sourcePath = path.join(stateDir, "exec-approvals.json");
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_TEST_FAST: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
-    delete env.NODE_OPTIONS;
-    delete env.OPENCLAW_GATEWAY_PASSWORD;
-    delete env.OPENCLAW_GATEWAY_TOKEN;
-    delete env.OPENCLAW_GATEWAY_URL;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
-
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
-    );
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              { pattern: "/usr/bin/rg", source: "allow-always" },
-              { pattern: "=command:durable", source: "allow-always" },
-            ],
-          },
-        },
-      }),
-    );
-    const preflightUrl = new URL("./doctor-config-preflight.ts", import.meta.url).href;
-    await runIsolatedModuleScript(
-      env,
-      `
-        const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
-        await runDoctorConfigPreflight({
-          migrateLegacyConfig: false,
-          invalidConfigNote: false,
-          observe: false,
-          requireStartupMigrationCheckpoint: true,
-          beforeStateMigrations: async () => true,
-        });
-      `,
-    );
-    expect(fs.existsSync(sourcePath)).toBe(true);
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.resolve("src/entry.ts"),
-        "doctor",
-        "--fix",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env,
-        timeout: 60_000,
-      },
-    );
-    const output = `${result.stderr}\n${result.stdout}`;
-
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(0);
-    expect(result.signal, output).toBeNull();
-    expect(output).toContain("Doctor complete.");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const row = database
-        .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
-        .get() as { raw_json: string } | undefined;
-      const approvals = JSON.parse(row?.raw_json ?? "null") as {
-        agents?: { main?: { allowlist?: Array<{ pattern?: string }> } };
-      } | null;
-      expect(approvals?.agents?.main?.allowlist).toEqual([
-        expect.objectContaining({ pattern: "=command:durable" }),
-      ]);
-      expect(
-        database
-          .prepare(
-            "SELECT status, removed_source FROM migration_sources WHERE migration_kind = 'legacy-exec-approvals-json'",
-          )
-          .get(),
-      ).toMatchObject({ status: "completed", removed_source: 1 });
-    } finally {
-      database.close();
-    }
   }, 75_000);
 });
 

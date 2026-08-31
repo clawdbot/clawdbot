@@ -198,11 +198,7 @@ function collectExecPolicyConflictWarnings(
   return findings;
 }
 
-function collectDurableExecApprovalWarnings(
-  cfg: OpenClawConfig,
-  approvals: ExecApprovalsFile,
-): SecurityAuditFinding[] {
-  void cfg;
+function collectDurableExecApprovalWarnings(approvals: ExecApprovalsFile): SecurityAuditFinding[] {
   const count = countObsoleteGeneratedExecApprovals(approvals);
   if (count === 0) {
     return [];
@@ -317,16 +313,8 @@ export async function collectSecurityWarnings(
     if (!(error instanceof ExecApprovalsMigrationRequiredError)) {
       throw error;
     }
-    // Doctor owns this migration later in the same repair flow. Security
-    // diagnostics must not invoke the runtime gate first and make
-    // `doctor --fix` abort with an instruction to run itself.
-    findings.push({
-      checkId: "doctor.exec_approvals_migration_pending",
-      severity: "warn",
-      title: "Exec approvals migration pending",
-      detail: error.message,
-      remediation: "Continue this Doctor repair to migrate the retired approvals store.",
-    });
+    // Preflight already reported why it preserved the legacy source.
+    // Skip only approval-dependent checks so the rest of Doctor can continue.
   }
   if (approvals) {
     findings.push(...collectExecPolicyConflictWarnings(cfg, approvals));
@@ -334,7 +322,7 @@ export async function collectSecurityWarnings(
   findings.push(...collectExecFilesystemPolicyWarnings(cfg));
   findings.push(...collectPlaintextConfigSecretWarnings(cfg));
   if (approvals) {
-    findings.push(...collectDurableExecApprovalWarnings(cfg, approvals));
+    findings.push(...collectDurableExecApprovalWarnings(approvals));
   }
 
   // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
