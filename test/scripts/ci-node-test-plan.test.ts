@@ -965,6 +965,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
+      "src/gateway/gateway-cron-process-identity.windows.test.ts",
     ];
     for (const shards of [
       createNodeTestShards(),
@@ -1691,6 +1692,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
+          "src/gateway/gateway-cron-process-identity.windows.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,

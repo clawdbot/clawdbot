@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
-import { aroundEach, expect, type TestContext } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
@@ -21,26 +21,17 @@ export const preparationClient = `
   finally {process.disconnect();}
 `;
 
-export function createWorkerArtifactFixtures() {
+function createWorkerArtifactFixtures({
+  signal,
+  onTestFinished,
+}: Pick<TestContext, "signal" | "onTestFinished">) {
   const fixtureLifetime = createFixtureLifetime();
-  // Each suite owns its inputs and late child work. Concurrent files must never
-  // drain or delete another suite's fixtures after a failed assertion.
-  aroundEach(async (runTest) => {
-    try {
-      await runTest();
-    } finally {
-      await fixtureLifetime.cleanup();
-    }
-  });
   function fixtureDirectory() {
     fs.mkdirSync(artifacts, { recursive: true });
     return fixtureLifetime.createTempDir("worker proof-", artifacts);
   }
 
-  function createFixtureCommands({
-    signal,
-    onTestFinished,
-  }: Pick<TestContext, "signal" | "onTestFinished">) {
+  function createFixtureCommands() {
     const finished = new AbortController();
     const commandSignal = AbortSignal.any([signal, finished.signal]);
     const commands: Promise<unknown>[] = [];
@@ -145,6 +136,28 @@ export function createWorkerArtifactFixtures() {
   }
 
   return { fixtureLifetime, fixtureDirectory, createFixtureCommands };
+}
+
+export function createWorkerArtifactTest() {
+  const test = it.extend<{ workerArtifacts: ReturnType<typeof createWorkerArtifactFixtures> }>({
+    workerArtifacts: async ({ signal, onTestFinished }, use) => {
+      await use(createWorkerArtifactFixtures({ signal, onTestFinished }));
+    },
+  });
+  // Resolve the case's lifetime before runTest so cleanup follows onTestFinished.
+  // Ordinary fixture teardown runs earlier and can wait on children not yet aborted.
+  test.aroundEach(async (runTest, { workerArtifacts }) => {
+    try {
+      await runTest();
+    } finally {
+      await workerArtifacts.fixtureLifetime.cleanup();
+    }
+  });
+  test.beforeAll(() => {
+    vi.setConfig({ maxConcurrency: 2 });
+    return () => vi.resetConfig();
+  });
+  return test;
 }
 
 export function writeFixture(directory: string, name: string, source: string) {

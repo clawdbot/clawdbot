@@ -1,11 +1,8 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-} from "../../src/gateway/test-helpers.e2e.js";
-import { createOpenClawTestInstance } from "../helpers/openclaw-test-instance.js";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 describe.skipIf(process.platform !== "win32")("Windows cron process identity", () => {
   it(

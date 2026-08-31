@@ -36,18 +36,16 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "src/gateway/gateway-active-memory.test.ts",
+  ...[
+    "src/gateway/gateway-active-memory.test.ts",
+    "src/gateway/gateway-concurrent-streams.test.ts",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/gateway",
-  },
-  {
-    file: "src/gateway/gateway-concurrent-streams.test.ts",
-    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
-    mode: "runtime",
-    dir: "src/gateway",
-  },
+  })),
 ] as const;
 
 function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {
