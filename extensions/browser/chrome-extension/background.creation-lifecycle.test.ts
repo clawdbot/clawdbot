@@ -263,3 +263,55 @@ describe("physical tab creation authority", () => {
     },
   );
 });
+
+describe("tabs sync snapshot coherence", () => {
+  it("republishes a handed-off creation over a stale accessible-tabs snapshot", async () => {
+    const harness = await loadBackground({
+      storedConfig: config("selected"),
+      initialTabs: [{ id: 100, url: "https://example.com/unrelated", groupId: 7 }],
+    });
+    const socket = harness.relaySockets[0];
+    assert(socket);
+    await harness.authenticate(socket);
+    const frames = () =>
+      socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as Record<string, unknown>);
+
+    // Chrome resolves tabs.query snapshots in the browser process and may
+    // deliver a creation's tab/group events only after the createTab command
+    // already replied; park one sync's pre-creation snapshot across the handoff.
+    const staleSnapshot = createDeferred<void>();
+    releases.push(() => staleSnapshot.resolve());
+    const liveQuery = harness.tabsQuery.getMockImplementation()!;
+    let snapshotHeld = false;
+    harness.tabsQuery.mockImplementationOnce(async () => {
+      const snapshot = await liveQuery();
+      snapshotHeld = true;
+      await staleSnapshot.promise;
+      return snapshot;
+    });
+    harness.updateTab(100, { title: "poke" });
+    await vi.waitFor(() => expect(snapshotHeld).toBe(true));
+
+    socket.receive({ type: "createTab", url: "about:blank", background: true, seq: 1 });
+    await vi.waitFor(() =>
+      expect(frames().find((frame) => frame.seq === 1)).toMatchObject({
+        type: "result",
+        result: { tabId: 101 },
+      }),
+    );
+    const handoffFrameCount = frames().length;
+    staleSnapshot.resolve();
+
+    // The relay bridge deletes tabs missing from a sync and revokes their CDP
+    // sessions; a list computed before the creation must not publish past its
+    // handoff, or the client that just received the target loses it mid-action.
+    const tabsFramesAfterHandoff = () =>
+      frames()
+        .slice(handoffFrameCount)
+        .filter((frame) => frame.type === "tabs");
+    await vi.waitFor(() => expect(tabsFramesAfterHandoff().length).toBeGreaterThan(0));
+    for (const frame of tabsFramesAfterHandoff()) {
+      expect((frame.tabs as Array<{ tabId: number }>).map((tab) => tab.tabId)).toContain(101);
+    }
+  });
+});

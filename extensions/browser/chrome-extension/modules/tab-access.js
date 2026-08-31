@@ -322,6 +322,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       created.assertCurrent();
       handoff({ tabId: tab.id, targetId: attached.targetId });
       created.handedOff = true;
+      // Handoff flips canPublishTab with no epoch change. Retire in-flight
+      // accessible-list snapshots, or a query that predates this creation can
+      // publish a tabs sync omitting the tab and the bridge revokes its sessions.
+      discoveryRevision += 1;
     } catch (error) {
       // Rollback belongs to the creator, before any id is handed to the relay.
       // Never use ordinary close as a privileged bypass or close a user-revoked tab.
