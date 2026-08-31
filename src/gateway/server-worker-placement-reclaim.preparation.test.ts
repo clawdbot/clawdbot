@@ -871,14 +871,21 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
   },
 );
 
-it.each(["cleanup", "completed", "replacement"] as const)(
-  "Stop retains captured Move completion across cancellation loading (%s)",
-  async (advance) => {
+it.each([
+  { advance: "cleanup", targetKind: "gateway" },
+  { advance: "completed", targetKind: "gateway" },
+  { advance: "replacement", targetKind: "gateway" },
+  { advance: "cleanup", targetKind: "profile" },
+  { advance: "cleanup", targetKind: "device" },
+] as const)(
+  "Stop retains captured Move completion across cancellation loading ($advance, $targetKind)",
+  async ({ advance, targetKind }) => {
     const reconciling = createDeferredCore();
     const reconciled = createDeferredCore();
     const cleaning = createDeferredCore();
     const cleaned = createDeferredCore();
     const f = await cancellationLoadFixture({
+      runMoveBarrier: async (request) => await barrier(request),
       afterReconcile: async () => {
         reconciling.resolve();
         await reconciled.promise;
@@ -887,6 +894,11 @@ it.each(["cleanup", "completed", "replacement"] as const)(
         cleaning.resolve();
         await cleaned.promise;
       },
+    });
+    const barrier = createGatewayWorkerPlacementMoveBarrier({
+      placements: f.placements,
+      loadSessionRuntime: async () => f.runtime,
+      revokeSessionAuthority: vi.fn(),
     });
     const active = await f.coordinated.dispatch(REQUEST);
     // Move validates the durable environment owner as well as the provider projection.
@@ -903,21 +915,30 @@ it.each(["cleanup", "completed", "replacement"] as const)(
         active.activeOwnerEpoch,
         JSON.stringify([active.sessionId]),
       );
-    const transitions: string[] = [];
-    const moving = f.coordinated.move(
-      {
-        ...REQUEST,
-        source: {
-          generation: active.generation,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
+    const localGenerations = new Set<number>();
+    const moving = f.coordinated
+      .move(
+        {
+          ...REQUEST,
+          source: {
+            generation: active.generation,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+          target:
+            targetKind === "profile"
+              ? { kind: "profile", profileId: "destination-profile" }
+              : targetKind === "device"
+                ? { kind: "device", deviceId: "destination-device" }
+                : { kind: "gateway" },
         },
-        target: { kind: "gateway" },
-      },
-      (placement) => {
-        transitions.push(placement.state);
-      },
-    );
+        (placement) => {
+          if (placement.state === "local") {
+            localGenerations.add(placement.generation);
+          }
+        },
+      )
+      .catch((error: unknown) => error);
     await Promise.race([
       reconciling.promise,
       moving.then(() => {
@@ -955,7 +976,7 @@ it.each(["cleanup", "completed", "replacement"] as const)(
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("local");
       if (advance !== "cleanup") {
         cleaned.resolve();
-        expect(await moving).toMatchObject({ state: "local" });
+        expect.soft(await moving).toMatchObject({ state: "local" });
       }
       if (advance === "replacement") {
         f.placements.startDispatch(REQUEST);
@@ -975,11 +996,15 @@ it.each(["cleanup", "completed", "replacement"] as const)(
         expect(f.cancellationStarted).not.toHaveBeenCalled();
         expect(f.placements.get(REQUEST.sessionId)?.state).toBe("requested");
       } else {
-        expect(result).toMatchObject({ state: "local" });
-        expect(await moving).toMatchObject({ state: "local" });
-        expect(transitions.filter((state) => state === "local")).toHaveLength(1);
+        expect.soft(result).toMatchObject({ state: "local" });
+        expect.soft(await moving).toMatchObject({ state: "local" });
+        expect(localGenerations.size).toBe(1);
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-        expect(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+        expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(f.harness.environments.create).toHaveBeenCalledOnce();
+        expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {
       reconciled.resolve();

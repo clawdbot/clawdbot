@@ -73,6 +73,202 @@ describe("dispatch Stop before provider allocation", () => {
     });
   });
 
+  it.each([
+    { targetKind: "profile", outcome: "cancel" },
+    { targetKind: "device", outcome: "cancel" },
+    { targetKind: "profile", outcome: "preflight-error" },
+    { targetKind: "profile", outcome: "canceled-preflight-error" },
+    { targetKind: "profile", outcome: "replacement" },
+    { targetKind: "profile", outcome: "incarnation" },
+    { targetKind: "profile", outcome: "published" },
+  ] as const)(
+    "Stop settles Move at destination admission ($targetKind, $outcome)",
+    async ({ targetKind, outcome }) => {
+      const actual = await vi.importActual<
+        typeof import("./worker-environments/placement-dispatch.js")
+      >("./worker-environments/placement-dispatch.js");
+      const targetOwner = await vi.importActual<
+        typeof import("./server-worker-placement-session-target.js")
+      >("./server-worker-placement-session-target.js");
+      moveDestinationMocks.resolveSessionTarget.mockImplementation(
+        targetOwner.resolveWorkerPlacementSessionTarget,
+      );
+      runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
+        actual.createWorkerPlacementDispatchService({
+          ...options,
+          resolveMoveDestination: async (_identity, target) =>
+            target.kind === "gateway"
+              ? undefined
+              : {
+                  profileId:
+                    target.kind === "profile" ? target.profileId : `device:${target.deviceId}`,
+                  executionMode: "remote-exec",
+                  ...(target.kind === "device" ? { deviceId: target.deviceId } : {}),
+                },
+        }),
+      );
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const interrupted = createDeferredCore();
+      let destinationSignal: AbortSignal | undefined;
+      workspace.preflight.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
+        if (outcome === "published") {
+          return;
+        }
+        destinationSignal = signal;
+        entered.resolve();
+        await release.promise;
+        if (outcome === "preflight-error" || outcome === "canceled-preflight-error") {
+          throw new Error("destination preflight rejected");
+        }
+        signal?.throwIfAborted();
+      });
+      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const harness = createHarness(placements, { workspacePath: support.testState.root });
+      const active = harness.placements.seedActive(2, "remote-exec");
+      if (active.state !== "active") {
+        throw new Error("Move fixture requires an active source");
+      }
+      harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      support.testState.stateDb.db
+        .prepare(`INSERT INTO worker_environments (
+        environment_id, provider_id, profile_id, profile_snapshot_json,
+        provision_operation_id, lease_id, state, owner_epoch,
+        attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+      ) VALUES (?, 'test', ?, '{}', ?, 'lease-move', 'attached', ?, ?, 1000, 1000, 1000)`)
+        .run(
+          active.environmentId,
+          REQUEST.profileId,
+          `provision:${active.environmentId}`,
+          active.activeOwnerEpoch,
+          JSON.stringify([active.sessionId]),
+        );
+      if (outcome === "published") {
+        vi.mocked(harness.environments.create).mockImplementation(
+          async (_profile, _key, _machine, _mode, _path, signal) => {
+            destinationSignal = signal;
+            entered.resolve();
+            await release.promise;
+            signal?.throwIfAborted();
+            throw new Error("published destination must be canceled");
+          },
+        );
+      }
+      const environments = {
+        ...support.createService(support.createProvider()),
+        ...harness.environments,
+      };
+      const runtime = createGatewayWorkerPlacementRuntime({
+        placements,
+        environments,
+        gatewayNamespace: "gateway-test",
+        warn: vi.fn(),
+        cancelSessionWork: async (request) => {
+          request.assertCurrent();
+          request.onCancellationStarted?.();
+          interrupted.resolve();
+        },
+        revokeSessionAuthority: vi.fn(),
+      });
+      const sessionTarget = moveDestinationMocks.resolveGatewaySessionTarget();
+      const sourceEntry = moveDestinationMocks.resolveCanonicalSession();
+      const transitions: Array<{ state: string; generation: number }> = [];
+      const moving = runtime.dispatchService
+        .move(
+          {
+            ...REQUEST,
+            source: {
+              generation: active.generation,
+              environmentId: active.environmentId,
+              ownerEpoch: active.activeOwnerEpoch,
+            },
+            target:
+              targetKind === "profile"
+                ? { kind: "profile", profileId: "development" }
+                : { kind: "device", deviceId: "destination-device" },
+          },
+          (placement) =>
+            transitions.push({ state: placement.state, generation: placement.generation }),
+        )
+        .catch((error: unknown) => error);
+      let stopping: Promise<unknown> = Promise.resolve();
+      try {
+        await Promise.race([
+          entered.promise,
+          moving.then((result) => {
+            throw result;
+          }),
+        ]);
+        const local = transitions.find((placement) => placement.state === "local");
+        expect(local).toBeDefined();
+        expect(placements.get(REQUEST.sessionId)?.state).toBe(
+          outcome === "published" ? "provisioning" : "local",
+        );
+        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+        if (outcome !== "preflight-error") {
+          stopping = runtime.dispatchService.reclaim(REQUEST).catch((error: unknown) => error);
+          await Promise.race([
+            interrupted.promise,
+            stopping.then((result) => {
+              throw result;
+            }),
+          ]);
+          expect(destinationSignal?.aborted).toBe(true);
+          if (outcome === "replacement") {
+            placements.startDispatch(REQUEST);
+          } else if (outcome === "incarnation") {
+            sourceEntry.sessionId = "replacement-session";
+          }
+        }
+        release.resolve();
+        const moved = await moving;
+        const stopped = await stopping;
+        if (outcome === "cancel" || outcome === "incarnation") {
+          expect.soft(moved).toMatchObject({ state: "local", generation: local?.generation });
+          expect.soft(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+          if (outcome === "incarnation") {
+            // Move reports the old source's committed cleanup; Stop cannot use that
+            // completion as authority over the replacement session incarnation.
+            expect(stopped).toMatchObject({ code: "invalid_state" });
+            expect(sourceEntry.sessionId).toBe("replacement-session");
+            expect(placements.get("replacement-session")).toBeUndefined();
+          } else {
+            expect.soft(stopped).toMatchObject({ state: "local", generation: local?.generation });
+          }
+        } else {
+          expect(moved).toBeInstanceOf(Error);
+          if (outcome === "preflight-error" || outcome === "canceled-preflight-error") {
+            expect(moved).toMatchObject({ message: "destination preflight rejected" });
+            expect(placements.getPlacementMove(REQUEST.sessionId)?.lastError).toBe(
+              "destination preflight rejected",
+            );
+            if (outcome === "canceled-preflight-error") {
+              expect(stopped).toBeInstanceOf(Error);
+              expect(moved).not.toBe(destinationSignal?.reason);
+            }
+          } else if (outcome === "published") {
+            expect(stopped).toMatchObject({ state: "local" });
+            expect(placements.get(REQUEST.sessionId)!.generation).toBeGreaterThan(
+              local!.generation,
+            );
+          } else {
+            expect(stopped).toBeInstanceOf(Error);
+          }
+        }
+        expect(harness.environments.create).toHaveBeenCalledTimes(outcome === "published" ? 1 : 0);
+        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([moving, stopping]);
+        await runExclusiveSessionLifecycleMutation({
+          scope: sessionTarget.storePath,
+          identities: [REQUEST.sessionKey, REQUEST.sessionId],
+          run: async () => {},
+        });
+      }
+    },
+  );
+
   it("cancels the exact preflight owner without admitting a later provider", async () => {
     const entered = createDeferredCore();
     const settled = createDeferredCore();

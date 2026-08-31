@@ -8,7 +8,10 @@ import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
-import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerReclaimPlacement,
+} from "./placement-reclaim-contract.js";
 import {
   isCurrentPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
@@ -83,37 +86,6 @@ export function createWorkerPlacementMoveService(options: {
     });
   };
 
-  const finishWorkerDestination = async (params: {
-    identity: MoveSessionIdentity;
-    intent: WorkerPlacementMoveIntent;
-    destination: NonNullable<WorkerPlacementMoveDestination>;
-    onTransition?: (placement: WorkerDispatchPlacement) => void;
-    authorize?: WorkerPlacementAuthorization;
-    signal?: AbortSignal;
-  }): Promise<WorkerActiveDispatchPlacement> => {
-    const active = await options.dispatch(
-      {
-        ...params.identity,
-        ...params.destination,
-        idempotencyKey: `session-move:${params.intent.operationId}:dispatch`,
-      },
-      params.onTransition,
-      params.authorize,
-      params.signal,
-    );
-    const completed = options.placements.completePlacementMoveToWorker({
-      operationId: params.intent.operationId,
-      sessionId: params.identity.sessionId,
-      expectedGeneration: active.generation,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
-    if (completed.state !== "active") {
-      throw new Error(`Session ${params.identity.sessionKey} move did not finish active`);
-    }
-    return completed;
-  };
-
   const move = async (
     request: WorkerPlacementMoveRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
@@ -127,6 +99,7 @@ export function createWorkerPlacementMoveService(options: {
         }
       : authorize;
     let intent: WorkerPlacementMoveIntent | undefined;
+    let local: WorkerReclaimPlacement | undefined;
     try {
       signal?.throwIfAborted();
       if (request.abandonSource && request.target.kind !== "gateway") {
@@ -181,7 +154,7 @@ export function createWorkerPlacementMoveService(options: {
         },
       });
       intent = begun.intent;
-      const local = request.abandonSource
+      local = request.abandonSource
         ? await options.abandonSource(request, intent, assertCurrent)
         : await options.reclaimSource(request, intent, assertCurrent, onTransition);
       if (request.abandonSource) {
@@ -190,21 +163,48 @@ export function createWorkerPlacementMoveService(options: {
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
       }
-      if (request.target.kind === "gateway") {
+      if (!destination) {
         return local;
       }
-      if (!destination) {
-        throw new Error(`Session ${request.sessionKey} worker move target is unavailable`);
-      }
-      return await finishWorkerDestination({
-        identity: request,
-        intent,
-        destination,
-        ...(onTransition ? { onTransition } : {}),
-        authorize: assertCurrent,
+      const active = await options.dispatch(
+        {
+          sessionId: request.sessionId,
+          sessionKey: request.sessionKey,
+          agentId: request.agentId,
+          ...destination,
+          idempotencyKey: `session-move:${intent.operationId}:dispatch`,
+        },
+        onTransition,
+        assertCurrent,
         signal,
+      );
+      const completed = options.placements.completePlacementMoveToWorker({
+        operationId: intent.operationId,
+        sessionId: request.sessionId,
+        expectedGeneration: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
       });
+      if (completed.state !== "active") {
+        throw new Error(`Session ${request.sessionKey} move did not finish active`);
+      }
+      return completed;
     } catch (error) {
+      // Source cleanup is settled. A canceled, unpublished destination leaves this
+      // exact local completion for Stop; unrelated errors or replacements still fail.
+      if (
+        intent &&
+        local?.state === "local" &&
+        signal?.aborted &&
+        error === signal.reason &&
+        matchesWorkerPlacementTarget(options.placements.get(request.sessionId), local)
+      ) {
+        options.placements.cancelPlacementMove({
+          operationId: intent.operationId,
+          sessionId: request.sessionId,
+        });
+        return local;
+      }
       const durableIntent = intent ?? options.placements.getPlacementMove(request.sessionId);
       if (durableIntent) {
         recordError(durableIntent, error);
