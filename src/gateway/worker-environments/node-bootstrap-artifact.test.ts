@@ -51,8 +51,9 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     },
   };
   await write(packageRoot, "package.json", sourcePackage);
-  await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o755);
+  await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
+    mode: 0o755,
+  });
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
   await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
@@ -147,7 +148,14 @@ describe("node bootstrap distribution", () => {
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
-      const [artifact, concurrent] = await Promise.all([provider.prepare(), provider.prepare()]);
+      // Node's getter temporarily changes the process mask and races parallel file creation.
+      const readUmask = vi.spyOn(process, "umask").mockImplementation(() => {
+        throw new Error("Artifact preparation must not read or mutate the process umask");
+      });
+      const [artifact, concurrent] = await Promise.all([
+        provider.prepare(),
+        provider.prepare(),
+      ]).finally(() => readUmask.mockRestore());
       expect(concurrent).toBe(artifact);
       expect(artifact).toMatchObject({
         buildId,
@@ -176,8 +184,13 @@ describe("node bootstrap distribution", () => {
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
       if (process.platform !== "win32") {
-        expect(modes.get("package/openclaw.mjs")).toBe(0o755 & ~process.umask());
-        expect(modes.get("package/dist/shared.js")).toBe(0o644 & ~process.umask());
+        for (const [relative, requestedMode] of [
+          ["openclaw.mjs", 0o755],
+          ["dist/shared.js", 0o644],
+        ] as const) {
+          const sourceMode = (await fs.stat(path.join(packageRoot, relative))).mode;
+          expect(modes.get(`package/${relative}`)).toBe(sourceMode & requestedMode);
+        }
       }
       if (mode === "external-plugin") {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
