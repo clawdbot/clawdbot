@@ -756,6 +756,28 @@ describe("runDoctorHealthFlow", () => {
     });
   });
 
+  it("fails repair when a startup-blocking legacy session store remains", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = await state.writeText(
+        "agents/main/sessions/sessions.json",
+        '{"agent:main:legacy":',
+      );
+      const before = fs.readFileSync(storePath);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await runCommandWithRuntime(runtime, () =>
+        runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+      );
+
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Legacy session store requires migration"),
+      );
+      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+      expect(fs.readFileSync(storePath)).toEqual(before);
+    });
+  });
+
   it.each(["configured", "sandbox"] as const)(
     "refuses incomplete %s workspace cleanup with current SQLite schemas, then completes on retry",
     async (kind) => {
