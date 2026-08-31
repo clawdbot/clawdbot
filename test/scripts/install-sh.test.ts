@@ -1104,9 +1104,9 @@ mkdir -p "$NPM_FAKE_ROOT/openclaw/dist"
 printf '%s\n' '#!/usr/bin/env node' 'process.stdout.write("npm-version\\n")' > "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
 chmod +x "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
 if [[ "$NPM_FAKE_MODE" == guard-failure ]]; then
-  : > "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+  : > "$NPM_FAKE_ROOT/openclaw/.openclaw-lifecycle-pending"
 else
-  rm -f "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+  rm -f "$NPM_FAKE_ROOT/openclaw/.openclaw-lifecycle-pending"
 fi
 EOF
         chmod +x "$fake_npm"

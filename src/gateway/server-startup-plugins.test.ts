@@ -127,6 +127,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
+vi.mock("../agents/workspace-state-dirs.js", () => ({
+  assertConfiguredWorkspaceStateReady: () => {},
+}));
+
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
 }));

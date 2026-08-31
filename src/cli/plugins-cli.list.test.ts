@@ -913,6 +913,13 @@ describe("plugins cli list", () => {
     inspectPluginRegistryMock.mockResolvedValue({
       state: "stale",
       refreshReasons: ["stale-manifest"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
       persisted: {
         plugins: [{ pluginId: "demo", enabled: true }],
       },
@@ -931,6 +938,9 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("State:");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
+      "demo: persisted /plugins/demo/index.js; derived /plugins/demo/dist/index.js",
+    );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
   });
 
@@ -941,6 +951,13 @@ describe("plugins cli list", () => {
         { pluginId: "off", enabled: false },
       ],
     });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "fresh",
+      refreshReasons: [],
+      differences: [],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
@@ -948,7 +965,62 @@ describe("plugins cli list", () => {
       config: {},
       reason: "manual",
     });
-    expect(inspectPluginRegistryMock).not.toHaveBeenCalled();
+    expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
+  });
+
+  it("fails a registry refresh when the persisted replacement stays stale", async () => {
+    refreshPluginRegistryMock.mockResolvedValue({ plugins: [] });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await expect(runPluginsCommand(["plugins", "registry", "--refresh"])).rejects.toThrow(
+      /demo: persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
+    );
+  });
+
+  it("returns registry differences when a JSON refresh stays stale", async () => {
+    refreshPluginRegistryMock.mockResolvedValue({ plugins: [] });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "registry", "--refresh", "--json"]),
+    ).rejects.toThrow();
+    expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
+      ok: false,
+      refreshed: false,
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+    });
   });
 });

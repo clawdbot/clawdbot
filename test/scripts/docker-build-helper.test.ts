@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -2846,8 +2847,11 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.lastIndexOf("assert_prepublish_fixture_idle")).toBeLessThan(
       publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
     );
-    expect(publishedRunner.lastIndexOf("restore_prepublish_authored_config")).toBeLessThan(
-      publishedRunner.lastIndexOf("write_update_restart_service_env"),
+    expect(publishedRunner.lastIndexOf("write_update_restart_service_env")).toBeLessThan(
+      publishedRunner.lastIndexOf("install_update_restart_probe_gateway"),
+    );
+    expect(publishedRunner.lastIndexOf("install_update_restart_probe_gateway")).toBeLessThan(
+      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
     );
     for (const script of [runner, updateRestartAuth]) {
       expect(script).not.toContain("assert-no-requests");
@@ -3358,9 +3362,6 @@ fi
       'budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"',
     );
     expect(publishedRunner).toContain(
-      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN',
-    );
-    expect(publishedRunner).toContain(
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version',
     );
     expect(publishedRunner).toContain(
@@ -3383,10 +3384,6 @@ fi
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status',
     );
     expect(publishedRunner).toContain('openclaw gateway --port "$port" --bind loopback');
-    expect(publishedRunner).toContain("start_gateway legacy-ready-log-ok");
-    expect(publishedRunner).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"',
-    );
 
     expect(updateRestartAuth).toContain(
       'command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
@@ -3394,10 +3391,193 @@ fi
     expect(updateRestartAuth).toContain(
       'openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN',
     );
-    expect(updateRestartAuth).toContain('openclaw gateway --port "$port" --bind loopback');
-    expect(updateRestartAuth).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
+  });
+
+  it.skipIf(process.platform !== "linux").each(["published", "current"])(
+    "starts the %s auth probe under the manager that owns its restart and stop",
+    async (lane) => {
+      const workDir = tempDirs.make("survivor-managed-probe-");
+      const artifacts = join(workDir, "artifacts");
+      const stateDir = join(workDir, "state");
+      mkdirSync(artifacts);
+      mkdirSync(stateDir);
+      const configPath = join(stateDir, "openclaw.json");
+      const authored = '{"gateway":{"mode":"local","port":18789},"channels":{"whatsapp":{}}}\n';
+      writeFileSync(configPath, authored);
+      const childPath = join(workDir, "listener.mjs");
+      const startsPath = join(workDir, "starts.jsonl");
+      const portPath = join(workDir, "port");
+      writeFileSync(
+        childPath,
+        `import fs from "node:fs";
+import http from "node:http";
+const identity = { pid: process.pid, managed: process.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway.service" };
+const server = http.createServer((_req, res) => res.end(JSON.stringify(identity)));
+const port = fs.existsSync(process.env.PORT_FILE) ? Number(fs.readFileSync(process.env.PORT_FILE, "utf8")) : 0;
+server.listen(port, "127.0.0.1", () => {
+  fs.writeFileSync(process.env.PORT_FILE, String(server.address().port));
+  fs.appendFileSync(process.env.STARTS_FILE, JSON.stringify(identity) + "\\n");
+  console.log("[gateway] ready on 127.0.0.1:" + server.address().port);
+});
+`,
+      );
+      const executable = join(workDir, "bin", "openclaw");
+      const stagedUnit = join(workDir, "staged.service");
+      writeFileSync(
+        stagedUnit,
+        buildSystemdUnit({
+          programArguments: [process.execPath, executable, "gateway"],
+          environment: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+        }),
+      );
+      writeExecutables(join(workDir, "bin"), {
+        openclaw: `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path"), { spawn, spawnSync } = require("node:child_process");
+if (process.argv[2] === "doctor") process.exit(0);
+if (process.argv[3] === "install") {
+  const unit = path.join(process.env.HOME, ".config/systemd/user/openclaw-gateway.service");
+  fs.mkdirSync(path.dirname(unit), { recursive: true });
+  fs.copyFileSync(process.env.STAGED_UNIT, unit);
+  for (const args of [["daemon-reload"], ["enable", "openclaw-gateway.service"], ["restart", "openclaw-gateway.service"]]) {
+    const result = spawnSync("systemctl", ["--user", ...args], { stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  }
+  process.exit(0);
+}
+const child = spawn(process.execPath, [process.env.LISTENER_SCRIPT], { stdio: "inherit" });
+child.once("exit", () => process.exit(0));
+// A wrapper exit must not strand the listening child outside its service owner.
+process.on("SIGTERM", () => {
+  if (!process.env.OPENCLAW_SYSTEMD_UNIT) process.exit(0);
+});
+`,
+      });
+      const env = {
+        ...process.env,
+        HOME: workDir,
+        PATH: `${join(workDir, "bin")}:${process.env.PATH}`,
+        npm_config_prefix: workDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.3.13",
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(artifacts, "summary.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(artifacts, "systemctl-shim.pid"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: join(
+          artifacts,
+          "systemctl-shim-gateway.log",
+        ),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON: join(artifacts, "install.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR: join(artifacts, "install.err"),
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: join(workDir, "registry"),
+        GATEWAY_AUTH_TOKEN_REF: "survivor-fixture-token",
+        STAGED_UNIT: stagedUnit,
+        LISTENER_SCRIPT: childPath,
+        STARTS_FILE: startsPath,
+        PORT_FILE: portPath,
+      };
+      const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+      const setup =
+        lane === "published"
+          ? source.slice(0, source.indexOf("phase storage-preflight"))
+          : `source ${shellQuote(OPENCLAW_E2E_INSTANCE_HELPER_PATH)}\nsource ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}`;
+      const script = `${setup}
+trap - EXIT ERR INT TERM
+seed_update_restart_probe_device_auth() { :; }
+assert_prepublish_fixture_idle() { :; }
+assert_baseline_state() { :; }
+# This fixture chooses an ephemeral port; retain the actual readiness implementation.
+eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
+openclaw_e2e_wait_gateway_ready() {
+  for _ in {1..200}; do [ -s "$PORT_FILE" ] && break; sleep 0.01; done
+  fixture_wait_gateway_ready "$1" "$2" 20 "$(cat "$PORT_FILE")" "\${5:-strict}"
+}
+${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restart_probe_current_install 18789 "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"'}
+`;
+      const systemctlPath = join(
+        lane === "published" ? join(artifacts, "npm-prefix") : workDir,
+        "bin",
+        "systemctl",
+      );
+      const systemctl = (...args: string[]) =>
+        spawnSync(systemctlPath, ["--user", ...args], {
+          env,
+          encoding: "utf8",
+          timeout: 40_000,
+        });
+      const records = (): Array<{ pid: number; managed: boolean }> =>
+        existsSync(startsPath)
+          ? readFileSync(startsPath, "utf8")
+              .split("\n")
+              .slice(0, -1)
+              .filter(Boolean)
+              .map((line) => JSON.parse(line))
+          : [];
+      try {
+        const result = spawnSync("bash", ["-c", script], {
+          env,
+          encoding: "utf8",
+          timeout: 45_000,
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(readFileSync(configPath, "utf8")).toBe(authored);
+        const url = `http://127.0.0.1:${readFileSync(portPath, "utf8")}/readyz`;
+        const initial = (await (
+          await fetch(url, { signal: AbortSignal.timeout(1_000) })
+        ).json()) as { pid: number; managed: boolean };
+        expect(initial.managed).toBe(true);
+        expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
+        for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
+        expect(records()).toHaveLength(2);
+        const replacement = (await (
+          await fetch(url, { signal: AbortSignal.timeout(1_000) })
+        ).json()) as { pid: number; managed: boolean };
+        expect(replacement.managed).toBe(true);
+        expect(replacement.pid).not.toBe(initial.pid);
+        expect(isProcessRunning(initial.pid)).toBe(false);
+        expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
+        await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+      } finally {
+        systemctl("stop", "openclaw-gateway.service");
+        for (const { pid } of records()) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+    },
+    60_000,
+  );
+
+  it("returns the gateway readiness failure when startup is called conditionally", () => {
+    const workDir = tempDirs.make("survivor-start-failure-");
+    writeExecutables(join(workDir, "bin"), { openclaw: "#!/bin/sh\nexit 17\n" });
+    const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const start = source.slice(
+      source.indexOf("start_gateway() {"),
+      source.indexOf("\nensure_gateway_started()"),
     );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
+GATEWAY_LOG="$TMPDIR/gateway.log"
+UPDATE_RESTART_MODE=manual
+${start}
+trap 'kill "$gateway_pid" 2>/dev/null || true; wait "$gateway_pid" 2>/dev/null || true' EXIT
+start_status=0
+start_gateway || start_status=$?
+exit "$start_status"
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(1);
   });
 
   it("scopes candidate device identity doctor markers to the doctor process", () => {
@@ -3488,6 +3668,8 @@ if [ "\${1:-}" = doctor ]; then
 fi
 if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
   [ "$FAILURE_STAGE" != install ] || exit 44
+  sleep 30 >/dev/null 2>&1 &
+  printf '%s\\n' "$!" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
   exit 0
 fi
 exec sleep 30
@@ -3502,12 +3684,14 @@ export OPENCLAW_STATE_DIR="$TMPDIR/state"
 export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$TMPDIR/gateway.pid"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$TMPDIR/service.log"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$TMPDIR/install.json"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$TMPDIR/install.err"
 export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
 mkdir -p "$OPENCLAW_STATE_DIR"
 authored_config='{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}'
 printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -4611,6 +4795,109 @@ exit ${exitCode}
   );
 
   it.each([
+    ["target overlap", "busy", 0],
+    ["target settlement", "busy", 0],
+    ["target overlap", "legacy", 1],
+    ["target settlement", "other-detail", 1],
+    ["target overlap", "not-retryable", 1],
+    ["target overlap", "wrong-type", 1],
+    ["target overlap", "success", 1],
+    ["source overlap", "legacy", 0],
+    ["source overlap", "legacy-stderr", 0],
+  ] as const)(
+    "checks self-upgrade %s against its package contract: %s",
+    (phase, fixture, exitCode) => {
+      const workDir = tempDirs.make("openclaw-self-upgrade-wizard-");
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+        "utf8",
+      );
+      const assertions = source.slice(
+        source.indexOf("assert_gateway_call_error_message() {"),
+        source.indexOf("\ngateway_call channels.status"),
+      );
+      const targetStart = source.indexOf("CURRENT_PHASE=target-wizard");
+      const waitStart = source.indexOf("wait_for_target_wizard_start() {", targetStart);
+      const waitEnd = source.indexOf("\n}\n", waitStart) + 3;
+      const overlapStart = source.indexOf(
+        "if gateway_call wizard.start",
+        phase === "source overlap" ? 0 : waitEnd,
+      );
+      const overlapEnd = source.indexOf("\ngateway_call wizard.cancel", overlapStart);
+      const invocation =
+        phase === "target settlement"
+          ? 'wait_for_target_wizard_start "$OUTPUT" "$ERROR_OUTPUT" "target settlement"'
+          : source.slice(overlapStart, overlapEnd);
+      const error = fixture.startsWith("legacy")
+        ? { type: "gateway_request_error", code: "UNAVAILABLE", message: "wizard already running" }
+        : {
+            type: fixture === "wrong-type" ? "transport_error" : "gateway_request_error",
+            code: "UNAVAILABLE",
+            message: "Setup admission is busy.",
+            details: {
+              code: fixture === "other-detail" ? "OTHER_FAILURE" : "SETUP_ADMISSION_BUSY",
+            },
+            retryable: fixture !== "not-retryable",
+          };
+      writeFileSync(
+        join(workDir, "response.json"),
+        JSON.stringify({ ok: fixture === "success", error }),
+      );
+      writeFileSync(join(workDir, "calls"), "");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+${assertions}
+${source.slice(targetStart, waitEnd)}
+openclaw_e2e_print_log() { cat "$1"; }
+gateway_call() {
+  printf '%s\\n' "$1" >>"$PROBE_CALLS"
+  : >"$4"
+  if [ "$(wc -l <"$PROBE_CALLS")" -eq 1 ]; then
+    if [ "$PROBE_FIXTURE" = legacy-stderr ]; then
+      : >"$3"
+      printf 'wizard already running\\n' >"$4"
+    else
+      cat "$PROBE_RESPONSE" >"$3"
+    fi
+    [ "$PROBE_FIXTURE" = success ]
+  else
+    printf '{"sessionId":"replacement","done":false,"status":"running","step":{"id":"ready"}}\\n' >"$3"
+  fi
+}
+${invocation}
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PROBE_CALLS: join(workDir, "calls"),
+            PROBE_RESPONSE: join(workDir, "response.json"),
+            PROBE_FIXTURE: fixture,
+            OUTPUT: join(workDir, "output.json"),
+            ERROR_OUTPUT: join(workDir, "error.txt"),
+            TARGET_WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            TARGET_WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+            WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      const expectedCalls = phase === "target settlement" && exitCode === 0 ? 2 : 1;
+      expect(readFileSync(join(workDir, "calls"), "utf8").trim().split("\n")).toEqual(
+        Array(expectedCalls).fill("wizard.start"),
+      );
+      if (phase === "target settlement" && exitCode === 0) {
+        expect(result.stdout).toMatch(/replacement\t2\s*$/u);
+      }
+    },
+  );
+
+  it.each([
     ["direct failure", 42, false],
     ["substitution failure", 42, false],
     ["assertion after success", 43, false],
@@ -5156,6 +5443,7 @@ if (starts === 1) {
   it("bounds upgrade survivor failure log diagnostics", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
     expectTextToIncludeInOrder(runner, [
       "update_status=$?",
@@ -5225,8 +5513,8 @@ if (starts === 1) {
 
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_ERR"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_JSON"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$install_err"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$install_json"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_err"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_json"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$DOCTOR_LOG"');
@@ -5236,8 +5524,8 @@ if (starts === 1) {
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$log_file"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(publishedRunner).not.toContain('cat "$BASELINE_SERVICE_INSTALL_ERR"');
-    expect(publishedRunner).not.toContain('cat "$BASELINE_SERVICE_INSTALL_JSON"');
+    expect(updateRestartAuth).not.toContain('cat "$install_err"');
+    expect(updateRestartAuth).not.toContain('cat "$install_json"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_ERR"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_JSON"');
     expect(publishedRunner).not.toContain('cat "$DOCTOR_LOG"');

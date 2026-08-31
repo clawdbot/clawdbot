@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
@@ -592,6 +593,22 @@ export function isDirectPostinstallInvocation(params = {}) {
   }
 }
 
+export function completePackageLifecycle(params = {}, reportError = console.error) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const removePath = params.rmSync ?? rmSync;
+  const markerPath = join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+  try {
+    removePath(markerPath, { force: true });
+    return true;
+  } catch (error) {
+    reportError(`[postinstall] could not complete package lifecycle: ${String(error)}`);
+    return false;
+  }
+}
+
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
+  if (!completePackageLifecycle()) {
+    process.exitCode = 1;
+  }
 }

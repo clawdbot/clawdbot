@@ -282,6 +282,11 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     const log = readFileSync(tools.hdiutilLog, "utf8");
     expectPrivateDmgMount(log);
     expect(log).toContain("convert ");
+    // hdiutil sizes -srcfolder images with filesystem overhead; an explicit
+    // byte estimate underallocates bundles containing many small files.
+    const create = log.split("\n").find((line) => line.startsWith("create "));
+    expect(create).toContain("-srcfolder ");
+    expect(create).not.toMatch(/\s-(?:size|megabytes|sectors)\s/);
     expect(log).toContain("final.dmg");
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
     expect(log).not.toContain(sibling);
