@@ -71,10 +71,6 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.token",
 ]);
 const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
-// These Windows service environment names only exist on Windows; on other
-// hosts they are absent and evaluating them for passEnv yields nothing but
-// false-positive security warnings.
-const WINDOWS_ONLY_PASS_ENV_KEYS = new Set(["SYSTEMROOT", "WINDIR"]);
 
 function configContainsSecretRef(config: OpenClawConfig | undefined): boolean {
   if (!config) {
@@ -341,7 +337,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
   configContainsSecretRef: boolean;
   authStore?: AuthProfileStore;
   durableEnvironment: Record<string, string | undefined>;
-  platform: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
   if (!params.config) {
@@ -421,13 +416,8 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         );
         continue;
       }
-      // Windows-only service environment names are inert on non-Windows hosts
-      // when absent; a populated value still goes through the security policy.
-      if (
-        params.platform !== "win32" &&
-        WINDOWS_ONLY_PASS_ENV_KEYS.has(key.toUpperCase()) &&
-        !params.env[key]?.trim()
-      ) {
+      const value = Object.hasOwn(params.env, key) ? params.env[key]?.trim() : undefined;
+      if (!value) {
         continue;
       }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
@@ -438,10 +428,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       if (Object.hasOwn(params.durableEnvironment, key)) {
-        continue;
-      }
-      const value = params.env[key]?.trim();
-      if (!value) {
         continue;
       }
       entries[key] = value;
@@ -723,7 +709,6 @@ async function buildGatewayInstallEnvironment(params: {
     configContainsSecretRef: containsConfigSecretRef,
     authStore,
     durableEnvironment,
-    platform: params.platform,
     warn: params.warn,
   });
   const authProfileEnvironment = collectAuthProfileServiceEnvVars({
