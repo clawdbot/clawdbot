@@ -1465,7 +1465,9 @@ ${channelPluginSource({
         source: expect.any(String),
       },
     ]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) => diag.code === "hook-registration-blocked");
+    const blockedDiagnostics = registry.diagnostics.filter(
+      (diag) => diag.code === "hook-registration-blocked",
+    );
     expect(blockedDiagnostics).toHaveLength(1);
     // Deliberate configuration is not an error.
     expect(blockedDiagnostics[0]?.level).toBe("warn");
