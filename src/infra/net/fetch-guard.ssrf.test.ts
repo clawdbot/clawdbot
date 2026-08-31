@@ -2287,6 +2287,21 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects an asynchronous final dispatch callback before sending the request", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeRequest: (() => Promise.resolve()) as never,
+      }),
+    ).rejects.toThrow("beforeRequest must be synchronous");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {
     // Reproduces #61906: Telegram media downloads fail because the SSRF guard
     // checks the proxy hostname (localhost) against a target-scoped allowlist

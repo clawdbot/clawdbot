@@ -398,7 +398,9 @@ async function requestTwilioApi(params: {
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
-    beforeRequest: () => assertSmsCredentialOwnerAvailable(params.account),
+    beforeRequest: () => {
+      assertSmsCredentialOwnerAvailable(params.account);
+    },
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,

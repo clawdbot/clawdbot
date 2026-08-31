@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { isLoopbackHost, isPrivateOrLoopbackHost } from "./ssrf-runtime.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { fetchWithSsrFGuard, isLoopbackHost, isPrivateOrLoopbackHost } from "./ssrf-runtime.js";
+
+it("requires synchronous final dispatch callbacks", () => {
+  type BeforeRequest = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["beforeRequest"]>;
+  type AcceptsAsync = (() => Promise<void>) extends BeforeRequest ? true : false;
+  expectTypeOf<AcceptsAsync>().toEqualTypeOf<false>();
+});
 
 describe("isLoopbackHost", () => {
   it.each([

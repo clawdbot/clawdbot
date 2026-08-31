@@ -82,7 +82,7 @@ type FetchMediaOptions = {
    * Final synchronous dispatch check. Runs for every redirect hop and again
    * for every media retry; throwing prevents that request.
    */
-  beforeRequest?: () => void;
+  beforeRequest?: () => undefined;
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;

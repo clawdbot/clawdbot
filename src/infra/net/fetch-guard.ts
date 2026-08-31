@@ -1,5 +1,6 @@
 // Guarded fetch runtime enforces SSRF checks, DNS pinning, redirect policy, and
 // trusted proxy modes around provider/network requests.
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
@@ -71,7 +72,7 @@ export type GuardedFetchOptions = {
    * physical request, including redirects. Throwing prevents that dispatch and
    * propagates the same error.
    */
-  beforeRequest?: () => void;
+  beforeRequest?: () => undefined;
   init?: RequestInit;
   capture?:
     | false
@@ -675,7 +676,11 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      params.beforeRequest?.();
+      const beforeRequestResult: unknown = params.beforeRequest?.();
+      if (isPromiseLike(beforeRequestResult)) {
+        void Promise.resolve(beforeRequestResult).catch(() => undefined);
+        throw new TypeError("beforeRequest must be synchronous.");
+      }
       response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
