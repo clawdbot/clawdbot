@@ -300,6 +300,55 @@ describe("A2A HTTP authentication and request limits", () => {
       error: expect.stringContaining("1 MiB"),
     });
   });
+
+  it("rejects oversized batches with one bounded error", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.post(Array.from({ length: 1_000 }, () => null));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("batch") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("charges schema-invalid requests to the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 1 } });
+
+    const invalid = await harness.post({ jsonrpc: "2.0", id: "invalid" });
+    await expect(invalid.json()).resolves.toMatchObject({ error: { code: -32600 } });
+
+    const limited = await harness.post({
+      jsonrpc: "2.0",
+      id: "limited",
+      method: "GetTask",
+      params: { id: "missing" },
+    });
+    await expect(limited.json()).resolves.toMatchObject({
+      id: "limited",
+      error: { code: -32000, message: expect.stringContaining("rate limited") },
+    });
+  });
+
+  it("replaces oversized RPC results with a bounded error", async () => {
+    const harness = await startHttpHarness();
+    const task = harness.taskStore.create("ctx-large", "alpha");
+    harness.taskStore.completeNext(task.contextId, "x".repeat(1024 * 1024), "alpha");
+
+    const response = await harness.post({
+      jsonrpc: "2.0",
+      id: "large-result",
+      method: "GetTask",
+      params: { id: task.id },
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: "large-result",
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
 });
 
 describe("A2A JSON-RPC protocol boundary", () => {
