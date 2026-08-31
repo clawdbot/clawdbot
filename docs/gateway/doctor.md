@@ -348,12 +348,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
 
     <Note>
-      The `plugins.entries.voice-call.config.*` rows above are normalized by
-      the Voice Call plugin itself on every config load, not by `openclaw
-      doctor`. The plugin also logs a startup warning pointing at `openclaw
-      doctor --fix`, but doctor does not currently rewrite
-      `openclaw.json` for these keys; the plugin's own normalization is what
-      applies the change at runtime.
+      The Voice Call plugin supplies the migration for its legacy config keys.
+      `openclaw doctor --fix` invokes it and persists the canonical shape in
+      `openclaw.json`; runtime config parsing accepts only current keys.
+      Existing canonical settings win over legacy values, including streaming
+      provider credentials, models, and timing. Doctor reports retained
+      destinations instead of claiming those legacy values were moved.
     </Note>
 
     Account-default guidance for multi-account channels:
