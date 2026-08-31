@@ -82,6 +82,8 @@ describe("enqueueSessionStateNotice", () => {
     });
 
     const contextKey = vi.mocked(enqueueSystemEvent).mock.calls[0]?.[1]?.contextKey;
+    const noticeText = vi.mocked(enqueueSystemEvent).mock.calls[0]?.[0];
+    expect(noticeText).toContain('session_status sessionKey "agent:ops:global" changesSince 7');
     expect(contextKey).toEqual(expect.stringMatching(/^session-state:/));
     expect(decodeSessionStateNoticeTarget(contextKey!)).toEqual({
       agentId: "ops",
