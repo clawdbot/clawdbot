@@ -12,7 +12,11 @@ import {
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
-import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
+import {
+  copyAttemptDeliveryState,
+  createTerminalToolPresentationTracker,
+  resolveEmbeddedRunTerminal,
+} from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 vi.mock("./auth-profile-success.js", () => ({
