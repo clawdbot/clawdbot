@@ -90,6 +90,11 @@ function resolvePluginToolPolicy(params: {
     return {
       ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
       ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profilePolicy,
+        profile: params.config.tools?.profile,
+        globalPolicy,
+      }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true })),
     };
   }
   const effective = resolveEffectiveToolPolicy({

@@ -140,6 +140,46 @@ describe("plugin tools MCP server", () => {
     ).toThrow("must be a canonical agent session key");
   });
 
+  it("intersects agentless manifest profile grants with the global allowlist", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          contracts: { tools: ["profile_plugin_tool", "benign_plugin_tool"] },
+          toolMetadata: {
+            profile_plugin_tool: { profiles: ["coding"] },
+            benign_plugin_tool: { profiles: ["coding"] },
+          },
+        },
+      ],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "profile_plugin_tool",
+        description: "Profile tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      tools: { profile: "coding", allow: ["benign_plugin_tool"] },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({ config });
+
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolAllowlist).toContain("profile_plugin_tool");
+    expect(loadPolicy.toolAllowlist).toContain("benign_plugin_tool");
+    expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+  });
+
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);
