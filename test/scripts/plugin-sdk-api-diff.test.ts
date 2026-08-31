@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -29,6 +29,8 @@ describe("Plugin SDK API diff CLI", () => {
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
+    const runnerMetadata = join(runnerTemp, "runner-metadata.json");
+    writeFileSync(runnerMetadata, '{"fixture":"runner-owned"}\n');
 
     git(repo, ["init", "--quiet", "--initial-branch=main"]);
     writeFileSync(join(repo, "README.md"), "fixture\n");
@@ -50,7 +52,7 @@ describe("Plugin SDK API diff CLI", () => {
     const fakePnpm = join(binDir, "pnpm");
     writeFileSync(
       fakePnpm,
-      "#!/bin/sh\n: > \"$PNPM_MARKER\"\ntrap 'exit 143' INT TERM\nwhile :; do sleep 1; done\n",
+      "#!/bin/sh\npwd > \"$PNPM_MARKER\"\ntrap 'exit 143' INT TERM\nwhile :; do sleep 1; done\n",
     );
     chmodSync(fakePnpm, 0o755);
 
@@ -92,9 +94,14 @@ describe("Plugin SDK API diff CLI", () => {
       });
     });
     try {
-      await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
+      await waitFor(
+        () => (existsSync(pnpmMarker) && readFileSync(pnpmMarker, "utf8").trim() !== "") || closed,
+        10_000,
+      );
       expect(closed, stderr).toBe(false);
       expect(git(repo, ["worktree", "list"])).toContain(runnerTemp);
+      const temporaryRoot = dirname(readFileSync(pnpmMarker, "utf8").trim());
+      expect(existsSync(temporaryRoot)).toBe(true);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
       const exitCode = await Promise.race([
@@ -107,7 +114,8 @@ describe("Plugin SDK API diff CLI", () => {
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
-      expect(readdirSync(runnerTemp)).toEqual([]);
+      expect(existsSync(temporaryRoot)).toBe(false);
+      expect(readFileSync(runnerMetadata, "utf8")).toBe('{"fixture":"runner-owned"}\n');
     } finally {
       if (!closed) {
         child.kill("SIGKILL");
