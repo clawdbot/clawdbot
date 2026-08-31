@@ -1908,9 +1908,13 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   logCodexLiveStep("native-subagent-bridge-probe:wave-2-delivered", {
     taskId: waveTwoTask.taskId,
   });
-  expect(waveTwoTask.createdAt).toBeGreaterThanOrEqual(
-    waveOneTask.endedAt ?? waveOneTask.createdAt,
-  );
+  const waveOneEnd = waveOneTask.endedAt ?? waveOneTask.createdAt;
+  expect(waveOneEnd).toBeTypeOf("number");
+  expect(waveTwoTask.createdAt).toBeTypeOf("number");
+  if (typeof waveOneEnd !== "number" || typeof waveTwoTask.createdAt !== "number") {
+    throw new Error("Codex native task timestamps must be numeric");
+  }
+  expect(waveTwoTask.createdAt).toBeGreaterThanOrEqual(waveOneEnd);
 
   const finalText = await waitForAssistantText({
     client: params.client,
