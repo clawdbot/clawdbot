@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -72,7 +73,8 @@ export class LazyCustomElementRequestController {
   constructor(
     private readonly host: UpdatingHost,
     private readonly onClose?: () => void,
-    private readonly retryStale = retryStaleChunkReloadWhenReachable,
+    private readonly retryStale = (canReload: () => boolean) =>
+      retryStaleChunkReloadWhenReachable({ canReload }),
   ) {}
 
   get visibleState(): LazyCustomElementRequestState | undefined {
@@ -142,7 +144,8 @@ export class LazyCustomElementRequestController {
     } satisfies LazyCustomElementRequest;
     this.current = retryRequest;
     this.host.requestUpdate();
-    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+    const canReload = () => this.current === retryRequest;
+    void (request.stale ? this.retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
       if (!reloading && this.current === retryRequest) {
         this.load(retryRequest);
       }
@@ -244,6 +247,20 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
+const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
+
+export const MACOS_TITLEBAR_ELEMENT = {
+  tagName: MACOS_TITLEBAR_TAG,
+  label: MACOS_TITLEBAR_TAG,
+  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+} satisfies OptionalCustomElement;
+
+export const SIDEBAR_ATTENTION_ELEMENT = {
+  tagName: "openclaw-sidebar-attention",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/sidebar-attention.ts"),
+} satisfies OptionalCustomElement;
+
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",
@@ -280,6 +297,14 @@ export const APPROVAL_PAGE_ELEMENT = {
   tagName: "openclaw-approval-page",
   label: "approval page",
   loadModule: () => import("../pages/approval/approval-page-registration.ts"),
+} satisfies OptionalCustomElement;
+
+const QUESTION_PAGE_TAG = "openclaw-question-page";
+
+export const QUESTION_PAGE_ELEMENT = {
+  tagName: QUESTION_PAGE_TAG,
+  label: QUESTION_PAGE_TAG,
+  loadModule: () => import("../pages/question/question-page-registration.ts"),
 } satisfies OptionalCustomElement;
 
 // The card is in the chat graph, but modal-only queue controls stay off the

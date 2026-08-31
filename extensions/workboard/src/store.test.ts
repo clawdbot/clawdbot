@@ -1746,6 +1746,14 @@ describe("WorkboardStore", () => {
         token: "token-1",
       });
 
+      await expect(
+        store.complete(claimed.card.id, {
+          ownerId: "main",
+          token: "token-1",
+          proofId: pending.metadata?.proof?.[0]?.id,
+        }),
+      ).rejects.toThrow("proof is required to resolve a pending proof.");
+
       vi.setSystemTime(6_000);
       const completed = await store.complete(claimed.card.id, {
         ownerId: "main",
@@ -2161,7 +2169,7 @@ describe("WorkboardStore", () => {
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");
-    expect(claimed.card.agentId).toBe("main");
+    expect(claimed.card.agentId).toBeUndefined();
     expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
 
     await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);

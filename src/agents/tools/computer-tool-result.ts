@@ -16,10 +16,7 @@ type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> 
   truncatedElements?: number;
 };
 
-export function computerActResultText(
-  action: ComputerToolAction,
-  result: ComputerActResult,
-): string {
+function projectComputerActResultMetadata(result: ComputerActResult) {
   let observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
@@ -40,12 +37,18 @@ export function computerActResultText(
     details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
     details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
   }
-  return JSON.stringify({
-    action,
+  return {
     ...result,
     ...(observation ? { observation } : {}),
     ...(details ? { details } : {}),
-  });
+  };
+}
+
+export function computerActResultText(
+  action: ComputerToolAction,
+  result: ComputerActResult,
+): string {
+  return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
 }
 
 function computerFrameImageIdentity(
@@ -205,9 +208,13 @@ export async function projectComputerActResult(params: {
   modelHasVision?: boolean;
 }): Promise<AgentToolResult<unknown>> {
   const observation = params.result.observation;
+  // Pixels belong only in image content; diagnostic copies exceed transcript
+  // control budgets and can expose images even when model vision is disabled.
+  const result = projectComputerActResultMetadata(params.result);
   const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: computerActResultText(params.action, params.result) },
+    { type: "text", text: JSON.stringify({ action: params.action, ...result }) },
   ];
+  // Observation images have no context-presence tracking, so they must never be deduplicated.
   if (observation?.base64 && params.modelHasVision !== false) {
     content.push({
       type: "image",
@@ -222,7 +229,7 @@ export async function projectComputerActResult(params: {
         node: params.target.nodeId,
         action: params.action,
         screenIndex: params.target.screenIndex,
-        result: params.result,
+        result,
         media: { outbound: false },
       },
     },

@@ -77,8 +77,8 @@ export function createQaChildOutputTail(maxBytes = QA_CHILD_STDERR_TAIL_BYTES) {
 export function appendQaChildOutputTail(tail: QaChildOutputTail, chunk: unknown) {
   const buffer = toBuffer(chunk);
   if (buffer.byteLength >= tail.maxBytes) {
+    tail.truncated ||= tail.buffer.byteLength > 0 || buffer.byteLength > tail.maxBytes;
     tail.buffer = Buffer.from(buffer.subarray(buffer.byteLength - tail.maxBytes));
-    tail.truncated = true;
     return;
   }
   const next = Buffer.concat([tail.buffer, buffer], tail.buffer.byteLength + buffer.byteLength);
@@ -90,8 +90,12 @@ export function appendQaChildOutputTail(tail: QaChildOutputTail, chunk: unknown)
   tail.truncated = true;
 }
 
+export function readQaChildOutputTail(tail: QaChildOutputTail) {
+  return decodeUtf8Tail(tail.buffer, tail.truncated);
+}
+
 export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) {
-  const text = decodeUtf8Tail(tail.buffer, tail.truncated).trim();
+  const text = readQaChildOutputTail(tail).trim();
   if (!text) {
     return "";
   }

@@ -41,6 +41,7 @@ import {
   select,
   text,
 } from "./configure.shared.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 import {
@@ -88,6 +89,7 @@ async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
+  daemonSetupOutcome?: DaemonSetupOutcome;
 }): Promise<GatewayHealthCheckOutcome> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
@@ -159,9 +161,12 @@ async function runGatewayHealthCheck(params: {
   try {
     const gatewayProbe = await waitForGatewayReachable({
       url: wsUrl,
+      ...(probeMode === "remote" ? { config: params.cfg, originScopedDeviceAuth: true } : {}),
       token,
       password,
-      deadlineMs: 15_000,
+      ...(params.daemonSetupOutcome === "succeeded"
+        ? resolveGatewayStartupTiming()
+        : { deadlineMs: 15_000 }),
     });
     if (!gatewayProbe.ok) {
       throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
@@ -514,7 +519,8 @@ export async function runConfigureWizard(
             });
             return probeGatewayReachable({
               url: remoteUrl,
-              ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
+              config: baseConfig,
+              originScopedDeviceAuth: true,
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
@@ -790,6 +796,7 @@ export async function runConfigureWizard(
           cfg: nextConfig,
           runtime,
           port: gatewayPort,
+          daemonSetupOutcome,
         });
       },
     } satisfies Record<WizardSection, () => Promise<void>>;
@@ -905,9 +912,14 @@ export async function runConfigureWizard(
       mode: "local",
       localPrecedence: "env-first",
     });
+    // Service activation can precede the listener; only a successful daemon action
+    // earns the startup grace period, not failed/skipped or config-only work.
+    const probe =
+      daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
       ? { ok: false, detail: "auth unavailable; probe skipped" }
-      : await probeGatewayReachable({
+      : await probe({
+          ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
           token: probeAuth.auth.token,
           password: probeAuth.auth.password,

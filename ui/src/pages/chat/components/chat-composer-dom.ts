@@ -137,6 +137,17 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
 }
 
 export function adjustTextareaHeight(el: HTMLTextAreaElement) {
+  // A surface that declares the compact shape is a fixed CSS box: it holds one
+  // line whatever the draft is, so an inline height left by an earlier measured
+  // pass would silently outrank the stylesheet. Which shape a composer is in is
+  // declared in its markup, never inferred here from how much text it holds.
+  if (el.closest('[data-composer-layout="single-line"]')) {
+    el.style.height = "";
+    el.style.overflowY = "";
+    el.removeAttribute("data-scroll-fade-top");
+    el.removeAttribute("data-scroll-fade-bottom");
+    return;
+  }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
   const preserveBottomAnchor = thread
     ? captureChatSessionScrollPosition(thread).anchorToEnd
@@ -224,10 +235,7 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   }
   if (event.type === "pointerdown") {
     // Cancel only pointer focus; click and popover-owned focus still run.
-    if (
-      event.button === 0 &&
-      target.closest("summary, wa-dropdown>[slot='trigger'], .agent-chat__session-overrides-open")
-    ) {
+    if (event.button === 0 && target.closest("summary, wa-dropdown>[slot='trigger']")) {
       event.preventDefault();
     }
     return;
@@ -252,11 +260,7 @@ export function preserveComposerFocusOnPrimaryAction(
   textarea: HTMLTextAreaElement | null,
 ): void {
   const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
-  if (
-    document.activeElement === textarea &&
-    composerShell &&
-    Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
-  ) {
+  if (document.activeElement === textarea && composerShell) {
     event.preventDefault();
   }
 }
@@ -295,6 +299,22 @@ export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
       scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
     }
   });
+}
+
+export function syncComposerMenuScroll(element: Element | undefined): void {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  const sync = () => {
+    const scrollable = element.scrollHeight > element.clientHeight + 1;
+    element.dataset.scrollable = String(scrollable);
+    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
+    element.dataset.atEnd = String(
+      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+    );
+  };
+  sync();
+  requestAnimationFrame(sync);
 }
 
 export function paneDomId(paneId: string, suffix: string): string {

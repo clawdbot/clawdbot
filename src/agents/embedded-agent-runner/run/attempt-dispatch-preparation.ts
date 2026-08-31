@@ -5,6 +5,7 @@ import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
+import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { createEmbeddedRunReplayState } from "../replay-state.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -44,6 +45,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
+  permissionChange?: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["permissionChange"];
 }) {
   const {
     runInput,
@@ -54,9 +56,15 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = input.terminalRetryState.forceCodeModeReconciliationTools
-    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
-    : runInput.runParams;
+  const codeModeRecovery = terminalRetryState.codeModeRecovery;
+  const params =
+    codeModeRecovery.kind === "resume"
+      ? {
+          ...runInput.runParams,
+          codeModeOverride: false,
+          forceCodeModeTools: false,
+        }
+      : runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
@@ -140,6 +148,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           ...sessionPromptState.sessionWriterFence,
         }
       : undefined;
+  await sessionPromptState.settleOwnedTranscriptProjection(
+    resolvedSessionTarget,
+    params.abortSignal,
+  );
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
@@ -203,8 +215,27 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
     startupStagesEmitted = true;
   }
+  const fallbackReason = input.resolveRuntimeFallbackReason();
+  recordAdmittedModelRoutingDecision({
+    admittedRunContext: params.admittedRunContext,
+    abortSignal: params.abortSignal,
+    requestedProvider: params.modelRoutingProvenance?.requestedProvider ?? runInput.provider,
+    requestedModel:
+      params.modelRoutingProvenance?.requestedModel ?? requestedModelId ?? runInput.modelId,
+    selectedProvider: provider,
+    selectedModel: modelId,
+    selectionMode:
+      runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "explicit" : "automatic",
+    credentialProfileId: runtime.lastProfileId,
+    fallbackSelected:
+      params.modelRoutingProvenance?.stage === "fallback" || Boolean(fallbackReason),
+    fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+  });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    codeModeRecovery: codeModeRecovery.kind === "idle" ? undefined : codeModeRecovery,
+    permissionChange: input.permissionChange,
+    runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
@@ -227,8 +258,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       provider,
       modelId,
       requestedModelId,
-      fallbackActive: modelId !== requestedModelId || Boolean(input.resolveRuntimeFallbackReason()),
-      fallbackReason: input.resolveRuntimeFallbackReason(),
+      fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
+      fallbackReason,
       agentHarnessId: runtime.agentHarness.id,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,

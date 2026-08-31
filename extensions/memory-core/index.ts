@@ -1,8 +1,8 @@
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
-  resolveSessionAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -108,7 +108,7 @@ function createLazyStandingIntentTool(
     reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
     sessionKey: ctx.sessionKey,
     config: cfg,
     agentId: ctx.agentId,
@@ -131,7 +131,7 @@ function createLazyStandingIntentTool(
     label: "Standing Intent",
     name: "intent",
     description:
-      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use cron or scheduled tasks for time-based reminders.",
+      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use scheduled tasks for time-based reminders.",
     parameters: {
       type: "object",
       properties: {
@@ -295,7 +295,7 @@ export default definePluginEntry({
           return undefined;
         }
         const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIds({
+        const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
           sessionKey: ctx.sessionKey,
           config,
           agentId: ctx.agentId,
@@ -331,7 +331,7 @@ export default definePluginEntry({
         try {
           const module = await loadStandingIntentsModule();
           const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const { sessionAgentId: agentId } = resolveSessionAgentIds({
+          const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
             sessionKey: ctx.sessionKey,
             config,
             agentId: ctx.agentId,

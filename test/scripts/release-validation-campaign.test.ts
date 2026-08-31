@@ -126,9 +126,13 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
           }
           return { data: current };
         },
-        get: async ({ issue_number }: { issue_number: number }) => ({
-          data: issues.get(issue_number),
-        }),
+        get: async ({ issue_number }: { issue_number: number }) => {
+          const current = issues.get(issue_number);
+          if (!current) {
+            throw new Error("missing issue");
+          }
+          return { data: current };
+        },
       },
     },
   };

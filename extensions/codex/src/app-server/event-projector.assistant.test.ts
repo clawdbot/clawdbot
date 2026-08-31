@@ -384,6 +384,23 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
   });
 
+  it("omits a silent completed answer from the steering transcript boundary", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "silent-before-steer",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+
+    expect(projector.buildSteeringTranscriptPrefix()).toEqual([]);
+  });
+
   it("drops a pre-sleep final after a later sleep handoff", async () => {
     const projector = await createProjector(await createParams());
     const sleepItem = { type: "sleep", id: "sleep-1", durationMs: 250 };

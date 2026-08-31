@@ -54,7 +54,10 @@ function createShowWidgetToolSchema(
   );
   return Type.Object({
     title: Type.String(),
-    widget_code: Type.String(),
+    widget_code: Type.String({
+      description:
+        "For HTML, fit the iframe width at every viewport: avoid fixed page or card widths; use fluid sizing and wrap or stack multi-column layouts when narrow. Use horizontal scrolling only when exact geometry must remain.",
+    }),
     kind: optionalStringEnum(kinds, {
       description: `Widget source kind: ${kinds.join(", ")}`,
     }),

@@ -51,6 +51,7 @@ type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
   source: TSource;
   snippet: string;
   textScore: number;
+  hasBodyMatch?: boolean;
   importance?: number;
   triggers?: string;
   projectKey?: string;
@@ -113,6 +114,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       rankingScore: number;
       pathScore: number;
       exactPathSpecificity: ExactPathSpecificity;
+      hasBodyMatch: boolean;
       hasVector: boolean;
       hasKeyword: boolean;
       importance?: number;
@@ -135,6 +137,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       rankingScore: 0,
       pathScore: 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
+      hasBodyMatch: false,
       hasVector: true,
       hasKeyword: false,
       importance: r.importance,
@@ -149,6 +152,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     const existing = byId.get(r.id);
     if (existing) {
       existing.textScore = r.textScore;
+      existing.hasBodyMatch = r.hasBodyMatch ?? r.textScore > 0;
       existing.rankingScore = r.rankingScore ?? r.textScore;
       existing.pathScore = r.pathScore ?? 0;
       existing.exactPathSpecificity = Math.max(
@@ -178,6 +182,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
         rankingScore: r.rankingScore ?? r.textScore,
         pathScore: r.pathScore ?? 0,
         exactPathSpecificity,
+        hasBodyMatch: r.hasBodyMatch ?? r.textScore > 0,
         hasVector: false,
         hasKeyword: true,
         importance: r.importance,
@@ -207,6 +212,9 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       ? entry.vectorScore
       : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
     const hasWeightedContentRelevance = contentScore > 0;
+    // LIKE recall has no weighted BM25 score. Its lexical score only breaks
+    // ties between otherwise equal results.
+    const lexicalRank = entry.hasBodyMatch && entry.textScore === 0 ? entry.rankingScore : 0;
     // With decay enabled, reserve the lower half of an exact tier for path
     // identity and the upper half for content relevance. This lets recency beat
     // a stale cap-selected content hit. Otherwise retain the established score.
@@ -227,6 +235,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       textScore: entry.textScore,
       exactPathSpecificity: entry.exactPathSpecificity,
       hasWeightedContentRelevance,
+      lexicalRank,
       snippet: entry.snippet,
       source: entry.source,
       importance: entry.importance,
@@ -267,6 +276,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     .toSorted(
       (a, b) =>
         b.score - a.score ||
+        b.lexicalRank - a.lexicalRank ||
         a.path.localeCompare(b.path) ||
         a.startLine - b.startLine ||
         a.endLine - b.endLine,
@@ -289,6 +299,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   };
   const compareExactTieScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.exactPathTieScore - a.exactPathTieScore ||
+    b.lexicalRank - a.lexicalRank ||
     a.path.localeCompare(b.path) ||
     a.startLine - b.startLine ||
     a.endLine - b.endLine;
@@ -299,8 +310,12 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     if (temporalDecayConfig.enabled) {
       return rerankExactGroup(tier);
     }
-    const contentBacked = tier.filter((entry) => entry.hasWeightedContentRelevance);
-    const pathOnly = tier.filter((entry) => !entry.hasWeightedContentRelevance);
+    const contentBacked = tier.filter(
+      (entry) => entry.hasWeightedContentRelevance || entry.lexicalRank > 0,
+    );
+    const pathOnly = tier.filter(
+      (entry) => !entry.hasWeightedContentRelevance && entry.lexicalRank === 0,
+    );
     return rerankExactGroup(contentBacked).concat(rerankExactGroup(pathOnly));
   });
   const ranked = [
@@ -313,6 +328,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       exactPathSpecificity: _exactPathSpecificity,
       exactPathTieScore: _exactPathTieScore,
       hasWeightedContentRelevance: _hasWeightedContentRelevance,
+      lexicalRank: _lexicalRank,
       ...entry
     }) => entry,
   );

@@ -275,7 +275,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const sidebarUpdate = sidebar.locator(
       'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
     );
-    await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
+    await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
     await sidebar.locator(".sidebar-issues-button").click();
     await expect.poll(() => sidebarUpdate.count()).toBe(1);
     await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);

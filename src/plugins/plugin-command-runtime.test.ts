@@ -1,12 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+const getCurrentPluginConversationBinding = vi.hoisted(() => vi.fn(async () => null));
 const cleanupReplacedPluginHostRegistry = vi.hoisted(() =>
   vi.fn(async () => ({ cleanupCount: 0, failures: [] })),
 );
 
 vi.mock("./host-hook-cleanup.js", () => ({ cleanupReplacedPluginHostRegistry }));
+vi.mock("./conversation-binding.js", () => ({
+  getCurrentPluginConversationBinding,
+  requestPluginConversationBinding: vi.fn(),
+  detachPluginConversationBinding: vi.fn(),
+}));
 
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
+import { createPluginRecord } from "./loader-records.js";
 import { withPluginCommandAccountStartScope } from "./plugin-command-account-start-scope.js";
 import {
   createPluginCommandRuntime,
@@ -70,10 +78,63 @@ function requirePluginDispatch(
 
 afterEach(() => {
   cleanupReplacedPluginHostRegistry.mockClear();
+  getCurrentPluginConversationBinding.mockClear();
   resetPluginRuntimeStateForTest();
 });
 
 describe("plugin command runtime", () => {
+  it("keeps failed command diagnostics scoped, authorized, redacted, and bounded", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      ...createPluginRecord({
+        id: "recovery",
+        source: "/plugins/recovery/index.js",
+        origin: "config",
+        enabled: true,
+        configSchema: true,
+      }),
+      status: "error",
+      failurePhase: "validation",
+      error: `missing payload token=fixture-secret-value private-detail ${"x".repeat(400)}\n    at loader`,
+      commandAliases: [{ name: "recover", kind: "runtime-slash" }],
+    });
+    setActivePluginRegistry(registry);
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+      expect(
+        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+          channel: "telegram",
+        }),
+      ).toBeNull();
+    });
+    const disabled = createEmptyPluginRegistry();
+    disabled.plugins.push({ ...registry.plugins[0]!, enabled: false });
+    withPluginRuntimeRegistryScope(disabled, () => {
+      expect(
+        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+          channel: "telegram",
+        }),
+      ).toBeNull();
+    });
+    const match = matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+      channel: "telegram",
+    });
+    expect(match).not.toBeNull();
+    if (!match) {
+      throw new Error("expected failed command diagnostic");
+    }
+    await expect(
+      match.dispatch.execute({ ...executionContext, isAuthorizedSender: false }),
+    ).resolves.toEqual({ text: "⚠️ This command requires authorization." });
+    const reply = await match.dispatch.execute({
+      ...executionContext,
+      config: { logging: { redactPatterns: ["private-detail"] } },
+    });
+    expect(reply.text).toContain("missing payload");
+    expect(reply.text).toContain("openclaw doctor");
+    expect(reply.text).not.toMatch(/fixture-secret-value|private-detail|at loader/);
+    expect(reply.text!.length).toBeLessThan(400);
+  });
+
   it("prepares plugin host cleanup before gateway shutdown", async () => {
     await prepareActivePluginRegistryShutdown();
     const registry = createEmptyPluginRegistry();
@@ -130,6 +191,63 @@ describe("plugin command runtime", () => {
     expect(scopedHandler).toHaveBeenCalledOnce();
     expect(ambientHandler).not.toHaveBeenCalled();
   });
+
+  it.each(["provider", "fallback"])(
+    "resolves %s conversation bindings through the command's selected registry",
+    async (resolution) => {
+      const createRegistry = (owner: string) =>
+        createTestRegistry([
+          {
+            pluginId: "room-chat",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "room-chat",
+                config: { defaultAccountId: () => `${owner}-account` },
+              }),
+              bindings: {
+                resolveCommandConversation: () =>
+                  resolution === "provider" ? { conversationId: `${owner}-room` } : null,
+              },
+              messaging: { normalizeTarget: () => `channel:${owner}-room` },
+            },
+          },
+        ]);
+      const ambient = createRegistry("ambient");
+      const scoped = createRegistry("scoped");
+      expect(
+        registerPluginCommandInRegistry(
+          scoped,
+          "demo",
+          {
+            name: "demo",
+            description: "Inspect this conversation",
+            handler: async (ctx) => {
+              await ctx.getCurrentConversationBinding();
+              return { text: ctx.accountId };
+            },
+          },
+          { pluginRoot: "/plugins/demo" },
+        ),
+      ).toEqual({ ok: true });
+      setActivePluginRegistry(ambient);
+
+      const dispatch = withPluginRuntimeRegistryScope(scoped, () =>
+        requirePluginDispatch(createPluginCommandRuntime().listNativeCandidates("room-chat")[0]!),
+      );
+      await expect(
+        dispatch.execute({ ...executionContext, channel: "room-chat", to: "room-chat:opaque" }),
+      ).resolves.toEqual({ text: "scoped-account" });
+      expect(getCurrentPluginConversationBinding).toHaveBeenCalledWith({
+        pluginRoot: "/plugins/demo",
+        conversation: {
+          channel: "room-chat",
+          accountId: "scoped-account",
+          conversationId: "scoped-room",
+        },
+      });
+    },
+  );
 
   it("rejects forged, cross-runtime, wrong-channel, and retired selections", async () => {
     const registry = createEmptyPluginRegistry();

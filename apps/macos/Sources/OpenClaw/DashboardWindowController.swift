@@ -112,17 +112,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     init(
         url: URL,
         auth: DashboardWindowAuth,
+        websiteDataStore: WKWebsiteDataStore,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
         windowTitle: String = "OpenClaw",
-        windowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName,
+        windowAutosaveName: String,
         reusingWindow: NSWindow? = nil,
         requestBrowserProfileImportOffer:
-        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
-            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
-        })
+        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool)
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
@@ -134,9 +133,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.updateBridgeEnabled = shouldEnableUpdateBridge
         self.requestBrowserProfileImportOffer = requestBrowserProfileImportOffer
 
-        let dataStore = WKWebsiteDataStore.default()
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = dataStore
+        config.websiteDataStore = websiteDataStore
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.tabFocusesLinks = true
@@ -170,7 +168,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // carries in-app navigation; the web titlebar buttons use this list.
         self.webView.allowsBackForwardNavigationGestures = true
 
-        let linkBrowser = DashboardLinkBrowserView(websiteDataStore: dataStore)
+        let linkBrowser = DashboardLinkBrowserView(websiteDataStore: websiteDataStore)
         let linkBrowserSplitView = DashboardLinkSplitView()
         let splitViewController = NSSplitViewController()
         splitViewController.splitView = linkBrowserSplitView
@@ -647,7 +645,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     static func isTrustedLinkSource(_ sourceURL: URL?, dashboardURL: URL) -> Bool {
         guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
         let allowedPath = Self.allowedPath(for: dashboardURL)
-        return allowedPath == "/" || sourceURL.path.hasPrefix(allowedPath)
+        return allowedPath == "/" || sourceURL.path(percentEncoded: true).hasPrefix(allowedPath)
     }
 
     static func shouldAllowEditorURLLaunch(
@@ -896,7 +894,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     static func allowedPath(for url: URL) -> String {
-        let path = url.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Match location.pathname; URL.path decodes escapes and removes the mount's trailing slash.
+        let path = url.path(percentEncoded: true).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return "/" }
         return path.hasSuffix("/") ? path : path + "/"
     }
@@ -938,9 +937,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return false
         }
         let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return components.count == 4 &&
+        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
             components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread")
+            (components[1] == "channel" || components[1] == "thread"))
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {

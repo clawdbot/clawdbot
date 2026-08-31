@@ -153,19 +153,23 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 }
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const { selectionDocsPrefix, ...displayMeta } = meta;
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix =
+    selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
-    ...meta,
+    ...displayMeta,
     id: safeId,
     label: safeLabel,
     selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
@@ -180,11 +184,12 @@ function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): strin
 }
 
 function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
-  return formatSetupDisplayMeta({
+  const formatted = formatSetupDisplayMeta({
     ...meta,
     blurb: formatChannelPrimerBlurb(meta),
-    selectionDocsPrefix: meta.selectionDocsPrefix ?? t("common.docs"),
   });
+  formatted.selectionDocsPrefix ??= t("common.docs");
+  return formatted;
 }
 
 function localizeChannelStatusLabel(label: string): string {

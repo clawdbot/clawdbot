@@ -203,7 +203,20 @@ suite.define(() => {
       expect(commandPaletteBox).not.toBeNull();
       expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
-      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(
+        await page
+          .locator(".new-session-page__composer")
+          .getByRole("switch", { name: "Incognito" })
+          .count(),
+      ).toBe(0);
+      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      expect(await fastMode.count()).toBe(1);
+      expect(await fastMode.getAttribute("aria-checked")).toBe("false");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-toggle"),
+        ),
+      ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
       await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
@@ -277,6 +290,71 @@ suite.define(() => {
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
       await captureProjectUiProof(page, "new-session-control-layout.png");
+
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const mobilePermission = page.locator(
+        '.new-session-page__composer [data-chat-permission-select="true"]',
+      );
+      const mobilePermissionIcon = mobilePermission.locator(".chat-controls__permission-icon svg");
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          mobilePermission.boundingBox(),
+          mobilePermissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await captureProjectUiProof(page, "mobile-new-session-idle.png");
+      await mobilePermission.click();
+      await page.locator('[data-chat-permission-option="workspace"]').click();
+      await expect
+        .poll(() => mobilePermission.getAttribute("data-chat-select-value"))
+        .toBe("workspace");
+      await mobilePermission.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-permissions-open.png");
+      await page.keyboard.press("Escape");
+      await mobileModelSettings.click();
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-model-open.png");
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();

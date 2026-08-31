@@ -97,7 +97,10 @@ export type ChannelHandler = {
   }) => { threadId: string | number } | null | undefined;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
-  resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
+  resolveEffectiveTextChunkLimit?: (params: {
+    fallbackLimit?: number;
+    formatting?: OutboundDeliveryFormattingOptions;
+  }) => number | undefined;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: OutboundMessageSendOverrides,
@@ -151,6 +154,8 @@ export type ChannelHandlerParams = {
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   onDirectAdapterHandoff?: () => Promise<void>;
+  /** @internal Synchronously fence authority at the final adapter invocation. */
+  assertDirectAdapterHandoff?: () => void;
   onPlatformSendDispatch?: () => Promise<void>;
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -215,6 +220,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   requireUnknownSendReconciliation?: boolean;
   /** @internal Revalidate caller authority before direct adapter code can run. */
   onDirectAdapterHandoff?: () => Promise<void>;
+  /** @internal Synchronously fence authority at the final adapter invocation. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */

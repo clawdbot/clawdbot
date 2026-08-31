@@ -40,4 +40,19 @@ describe("panel refresh status", () => {
       stale: false,
     });
   });
+
+  it("disables retry when the owner cannot refresh", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderPanelRefreshStatus({
+        status: failPanelRefresh(createPanelRefreshStatus(), "request failed"),
+        onRetry: vi.fn(),
+        retryDisabled: true,
+      }),
+      container,
+    );
+
+    expect(container.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
+  });
 });

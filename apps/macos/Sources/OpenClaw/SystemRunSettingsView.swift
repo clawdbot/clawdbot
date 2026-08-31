@@ -900,9 +900,6 @@ final class ExecApprovalsSettingsModel {
         case .success:
             applyPersisted()
             self.mutationErrorMessage = nil
-            if self.isDefaultsScope {
-                AppStateStore.shared.retryExecApprovalModeRead()
-            }
             self.startSettingsRead(for: self.selectedAgentId, showLoading: showLoading)
             return true
         case let .failure(error):

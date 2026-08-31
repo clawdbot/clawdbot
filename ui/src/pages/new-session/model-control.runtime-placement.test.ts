@@ -14,7 +14,6 @@ describe("new-session model runtime placement", () => {
         cloudPlacementExecutionMode: "remote-exec" as const,
         source: "model" as const,
       },
-      executionMode: "worker-turn" as const,
       executionModes: ["worker-turn"] as const,
       expected:
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
@@ -27,7 +26,6 @@ describe("new-session model runtime placement", () => {
         cloudPlacementExecutionMode: "worker-turn" as const,
         source: "model" as const,
       },
-      executionMode: "worker-turn" as const,
       executionModes: ["worker-turn"] as const,
       expected: undefined,
     },
@@ -39,19 +37,17 @@ describe("new-session model runtime placement", () => {
         cloudPlacementExecutionMode: "worker-turn" as const,
         source: "model" as const,
       },
-      executionMode: "worker-turn" as const,
       executionModes: ["worker-turn", "remote-exec"] as const,
       expected: undefined,
     },
     {
-      name: "accepts a remote-exec runtime on the same worker-turn-primary profile",
+      name: "accepts a remote-exec runtime on the same dual-mode profile",
       runtime: {
         id: "codex",
         cloudPlacementSupported: true,
         cloudPlacementExecutionMode: "remote-exec" as const,
         source: "model" as const,
       },
-      executionMode: "worker-turn" as const,
       executionModes: ["worker-turn", "remote-exec"] as const,
       expected: undefined,
     },
@@ -63,20 +59,18 @@ describe("new-session model runtime placement", () => {
         cloudPlacementExecutionMode: "remote-exec" as const,
         source: "model" as const,
       },
-      executionMode: "worker-turn" as const,
       executionModes: ["worker-turn"] as const,
       expected:
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     },
     {
-      name: "does not fall back to the primary mode when an explicit mode set is empty",
+      name: "rejects an empty placement mode set",
       runtime: {
         id: "codex",
         cloudPlacementSupported: true,
         cloudPlacementExecutionMode: "remote-exec" as const,
         source: "model" as const,
       },
-      executionMode: "remote-exec" as const,
       executionModes: [] as const,
       expected:
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
@@ -89,21 +83,18 @@ describe("new-session model runtime placement", () => {
         cloudPlacementExecutionMode: "remote-exec" as const,
         source: "model" as const,
       },
-      executionMode: undefined,
       expected:
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     },
     {
       name: "retains the existing whole-runtime rejection",
       runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
-      executionMode: "worker-turn" as const,
       expected: "The acpx runtime does not support cloud workers.",
     },
-  ])("$name", ({ runtime, executionMode, executionModes, expected }) => {
+  ])("$name", ({ runtime, executionModes, expected }) => {
     const profile: DraftCloudProfile = {
       id: "aws",
       providerId: "crabbox",
-      ...(executionMode ? { executionMode } : {}),
       ...(executionModes === undefined ? {} : { executionModes }),
     };
     const control = new NewSessionModelControl(() => undefined);

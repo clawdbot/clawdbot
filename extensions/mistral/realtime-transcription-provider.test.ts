@@ -13,6 +13,7 @@ async function createRealtimeServer(
   onRequest: (url: URL) => void,
   transcriptionEvents: readonly Record<string, unknown>[] = [],
   eventsByConnection?: readonly (readonly Record<string, unknown>[])[],
+  onConnection?: (socket: WebSocket) => void,
 ) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -23,6 +24,7 @@ async function createRealtimeServer(
     wss.handleUpgrade(request, socket, head, (ws) => {
       const connectionIndex = connectionCount++;
       clients.add(ws);
+      onConnection?.(ws);
       ws.on("close", () => {
         clients.delete(ws);
       });
@@ -36,9 +38,6 @@ async function createRealtimeServer(
         if (message.type === "session.update") {
           for (const event of eventsByConnection?.[connectionIndex] ?? transcriptionEvents) {
             ws.send(JSON.stringify(event));
-          }
-          if (eventsByConnection && connectionIndex === 0) {
-            setTimeout(() => ws.terminate(), 10);
           }
         }
       });
@@ -70,6 +69,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   afterEach(async () => {
     await cleanup?.();
     cleanup = undefined;
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -349,6 +349,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       name: "preserves the replacement session's terminal-only speech",
       firstEvents: [{ type: "transcription.segment", text: "earlier turn" }],
       secondEvents: [{ type: "transcription.done", text: "replacement final" }],
+      firstPartials: [],
       partials: [],
     },
     {
@@ -361,43 +362,68 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
         { type: "transcription.text.delta", text: "new fragment" },
         { type: "transcription.done", text: "replacement final" },
       ],
+      firstPartials: ["old fragment "],
       partials: ["old fragment ", "new fragment"],
     },
-  ])("$name after a real provider reconnect", async ({ firstEvents, secondEvents, partials }) => {
-    const requests: URL[] = [];
-    const baseUrl = await createRealtimeServer(
-      (url) => requests.push(url),
-      [],
-      [firstEvents, secondEvents],
-    );
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const onError = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onPartial,
-      onTranscript,
-      onError,
-    });
+  ])(
+    "$name after a real provider reconnect",
+    async ({ firstEvents, secondEvents, firstPartials, partials }) => {
+      const requests: URL[] = [];
+      let firstSocket: WebSocket | undefined;
+      const baseUrl = await createRealtimeServer(
+        (url) => requests.push(url),
+        [],
+        [firstEvents, secondEvents],
+        (socket) => {
+          firstSocket ??= socket;
+        },
+      );
+      const onPartial = vi.fn();
+      const onTranscript = vi.fn();
+      const onError = vi.fn();
+      const session = buildMistralRealtimeTranscriptionProvider().createSession({
+        providerConfig: { apiKey: "fixture-value", baseUrl },
+        onPartial,
+        onTranscript,
+        onError,
+      });
 
-    await session.connect();
-    // Wait on the delivered transcripts, not just the socket close: the replacement
-    // connection can close before its `transcription.done` reaches onTranscript.
-    await vi.waitFor(
-      () => {
-        expect(requests).toHaveLength(2);
-        expect(session.isConnected()).toBe(false);
-        expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-          "earlier turn",
-          "replacement final",
-        ]);
-      },
-      { timeout: 3_000 },
-    );
+      try {
+        await session.connect();
+        await vi.waitFor(() => {
+          expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(["earlier turn"]);
+          expect(onPartial.mock.calls.map(([text]) => text)).toEqual(firstPartials);
+        });
+        if (!firstSocket) {
+          throw new Error("Mistral fixture did not establish its first WebSocket");
+        }
+        vi.useFakeTimers();
+        firstSocket.terminate();
+        // The real close must arm the retry before its backoff clock advances.
+        await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+        await vi.advanceTimersByTimeAsync(1_000);
+        // Wait on the delivered transcripts, not just the socket close: the replacement
+        // connection can close before its `transcription.done` reaches onTranscript.
+        await vi.waitFor(
+          () => {
+            expect(requests).toHaveLength(2);
+            expect(session.isConnected()).toBe(false);
+            expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+              "earlier turn",
+              "replacement final",
+            ]);
+          },
+          { timeout: 3_000 },
+        );
 
-    expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
-    expect(onError).not.toHaveBeenCalled();
-  });
+        expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
+        expect(onError).not.toHaveBeenCalled();
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("tracks the in-progress transcript limit as aggregate UTF-8 bytes", async () => {
     const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);

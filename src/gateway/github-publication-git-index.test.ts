@@ -13,8 +13,8 @@ import {
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
 import {
-  assertGitHubPublicationTreeHasNoFilters,
   assertSafeGitPublicationWorkspace,
+  captureGitHubPublicationWorkspaceSnapshot,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
 } from "./github-publication-git-transport.js";
@@ -24,7 +24,10 @@ let directoryIndex = 0;
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 
 beforeEach(async () => {
-  testState = await createOpenClawTestState({ prefix: "openclaw-publication-index-" });
+  testState = await createOpenClawTestState({
+    prefix: "openclaw-publication-index-",
+    env: { XDG_CONFIG_HOME: undefined },
+  });
   directoryIndex = 0;
 });
 
@@ -204,28 +207,14 @@ describe("GitHub publication index update", () => {
   });
 
   it("rejects a filter from Git's default global attributes file", async () => {
-    const cwd = await makeDirectory("attributes");
-    const globalAttributes = path.join(cwd, "global-attributes");
+    const { cwd } = await createFixture();
+    const globalAttributes = path.join(testState.home, ".config", "git", "attributes");
+    await fs.mkdir(path.dirname(globalAttributes), { recursive: true });
     await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
 
-    await expect(
-      assertGitHubPublicationTreeHasNoFilters(cwd, "a".repeat(40), async (argv) => {
-        const command = argv.join(" ");
-        if (command === "git var GIT_ATTR_GLOBAL") {
-          return { code: 0, stdout: Buffer.from(globalAttributes) };
-        }
-        if (command === "git var GIT_ATTR_SYSTEM") {
-          return { code: 0, stdout: Buffer.from(path.join(cwd, "missing-system-attributes")) };
-        }
-        if (argv.includes("ls-tree")) {
-          return { code: 0, stdout: Buffer.alloc(0) };
-        }
-        if (command === "git rev-parse --git-path info/attributes") {
-          return { code: 0, stdout: Buffer.from(path.join(cwd, "missing-info-attributes")) };
-        }
-        throw new Error(`unexpected command: ${command}`);
-      }),
-    ).rejects.toThrow("unsupported Git clean filter");
+    await expect(captureGitHubPublicationWorkspaceSnapshot({ cwd })).rejects.toThrow(
+      "unsupported Git clean filter",
+    );
   });
 
   it("moves the branch and index together without changing accepted worktree content", async () => {

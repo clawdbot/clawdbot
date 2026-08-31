@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { markAuthProfileSuccess } from "../auth-profiles.js";
+import {
+  clearAllRuntimeAuthMaterializations,
+  getPreparedRuntimeAuthMaterializations,
+  registerRuntimeAuthMaterializationMutationListener,
+} from "../auth-profiles/runtime-materializations.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -48,6 +53,102 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
       },
     },
   };
+
+  afterEach(() => {
+    clearAllRuntimeAuthMaterializations();
+  });
+
+  it("publishes an identical prepared API-key success only once", () => {
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
+    const agentDir = "/tmp/openclaw-auth-success-dedup";
+    const input = {
+      profileId: "openai:work",
+      profileStore,
+      apiKeyInfo: {
+        apiKey: "resolved-key",
+        source: "profile:openai:work",
+        mode: "api-key" as const,
+        profileId: "openai:work",
+      },
+      attempt: {} as EmbeddedRunAttemptResult,
+      provider: "openai",
+      agentDir,
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "none" as const,
+      agentHarnessId: "codex",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+    };
+
+    try {
+      reportEmbeddedRunSuccessfulAuthBinding(input);
+      reportEmbeddedRunSuccessfulAuthBinding(input);
+
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+        expect.objectContaining({
+          authMode: "api-key",
+          authProfileId: "openai:work",
+          runtimeOwnerId: "codex",
+        }),
+      ]);
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unregister();
+    }
+  });
+
+  it.each([
+    {
+      name: "non-profile provenance",
+      apiKeyInfo: {
+        apiKey: "resolved-key",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key" as const,
+        profileId: "openai:work",
+      },
+    },
+    {
+      name: "different profile provenance",
+      apiKeyInfo: {
+        apiKey: "resolved-key",
+        source: "profile:openai:other",
+        mode: "api-key" as const,
+        profileId: "openai:other",
+      },
+    },
+    {
+      name: "non-API-key mode",
+      apiKeyInfo: {
+        apiKey: "resolved-key",
+        source: "profile:openai:work",
+        mode: "token" as const,
+        profileId: "openai:work",
+      },
+    },
+  ])("rejects prepared auth with $name", ({ apiKeyInfo }) => {
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileId: "openai:work",
+      profileStore,
+      apiKeyInfo,
+      attempt: {} as EmbeddedRunAttemptResult,
+      provider: "openai",
+      agentDir: "/tmp/openclaw-auth-success-negative",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "none",
+      agentHarnessId: "codex",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+    });
+
+    expect(getPreparedRuntimeAuthMaterializations("/tmp/openclaw-auth-success-negative")).toEqual(
+      [],
+    );
+  });
 
   it("uses a harness-owned SecretRef fingerprint when the harness resolves it", () => {
     const onSuccessfulAuthBinding = vi.fn();

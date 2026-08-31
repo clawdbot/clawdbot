@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import androidx.exifinterface.media.ExifInterface
+import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -21,6 +22,15 @@ internal data class JpegSizeLimiterResult(
  * Utility that searches quality/scale combinations until a JPEG fits a byte budget.
  */
 internal object JpegSizeLimiter {
+  fun readOrientation(open: () -> InputStream?): Int =
+    try {
+      open()?.use { stream ->
+        ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+      } ?: ExifInterface.ORIENTATION_NORMAL
+    } catch (_: Exception) {
+      ExifInterface.ORIENTATION_NORMAL
+    }
+
   /** Applies camera/gallery orientation before resize, display, or metadata-stripping JPEG encoding. */
   fun normalizeOrientation(
     bitmap: Bitmap,

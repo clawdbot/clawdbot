@@ -27,7 +27,7 @@ export async function waitForControlUiGatewayReconnecting(page: Page): Promise<v
       { timeout: controlUiE2eWaitTimeoutMs },
     ),
     page
-      .locator(".sidebar-identity-card__status", { hasText: "Reconnecting…" })
+      .locator(".sidebar-footer-bar__status", { hasText: "Reconnecting…" })
       .waitFor({ state: "visible", timeout: controlUiE2eWaitTimeoutMs }),
   ]);
 }

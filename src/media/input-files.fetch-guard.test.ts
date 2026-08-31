@@ -368,6 +368,30 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("guarded input file URL fetches", () => {
+  it.each([
+    'text/plain; charset="windows-1252"',
+    'text/plain; note="a;charset=utf-8;b"; charset=windows-1252',
+  ])("decodes fetched bytes using response metadata %s", async (fetchedContentType) => {
+    const source = {
+      type: "url" as const,
+      url: "https://example.com/notes.txt",
+      mediaType: "text/plain; charset=utf-8",
+    };
+    const release = mockUrlFetchResponse({
+      source,
+      fetchedContentType,
+      fetchedBody: Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0x80]),
+    });
+
+    await expect(
+      extractFileContentFromSource({
+        source,
+        limits: createFileSourceLimits(["text/plain"], true),
+      }),
+    ).resolves.toEqual({ filename: "file", text: "café €" });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -518,6 +542,23 @@ describe("guarded input file URL fetches", () => {
 });
 
 describe("input file MIME sniffing", () => {
+  it.each(['image/apng; charset="utf-8"', "not-a-mime; charset=windows-1252"])(
+    "keeps sniffed URL image admission with %s metadata",
+    async (fetchedContentType) => {
+      const source = { type: "url" as const, url: "https://example.com/image" };
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=",
+        "base64",
+      );
+      const release = mockUrlFetchResponse({ source, fetchedContentType, fetchedBody: bytes });
+
+      await expect(
+        extractImageContentFromSource(source, createImageSourceLimits(["image/png"], true)),
+      ).resolves.toEqual({ type: "image", data: bytes.toString("base64"), mimeType: "image/png" });
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("infers printable URL file bytes as text when Content-Type is absent", async () => {
     const body = "headerless printable text";
     mockUrlFetchResponse({
@@ -537,7 +578,7 @@ describe("input file MIME sniffing", () => {
     const body = Buffer.from("headerless printable text");
     mockUrlFetchResponse({
       source: { type: "url", url: "https://example.com/notes" },
-      fetchedContentType: "application/octet-stream",
+      fetchedContentType: 'application/octet-stream; charset="windows-1252"',
       fetchedBody: body,
     });
 

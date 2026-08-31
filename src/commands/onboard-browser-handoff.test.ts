@@ -247,42 +247,93 @@ describe("runBrowserHatchHandoff", () => {
     expect(displayed).not.toContain("#bootstrapToken=");
   });
 
-  it("attempts a forwarded-display SSH browser open and uses the GUI timeout on failure", async () => {
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "xdg-open" });
+  it("prints an HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
     const prompter = createWizardPrompter();
-    const openBrowser = vi.fn(async () => false);
-    const pollForClient = vi.fn(async () => ({
-      connected: false as const,
-      reason: "timeout" as const,
-    }));
-    const env = {
-      DISPLAY: "localhost:10.0",
-      SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
+    const config = {
+      gateway: {
+        port: 18789,
+        bind: "loopback" as const,
+        controlUi: { basePath: "/control" },
+        tls: { enabled: true },
+      },
     };
 
-    const result = await runBrowserHatchHandoff(
-      { config: {}, prompter },
+    await runBrowserHatchHandoff(
+      { config, prompter },
       {
-        env,
+        env: {},
         platform: "linux",
-        openBrowser,
-        resolveTarget: async () => target,
+        waitForDocument: async () => ({ ready: true }),
+        verifyLoopbackAlias: async () => true,
         probePresence: async () => ({ reachable: true, clientKeys: [] }),
-        pollForClient,
+        pollForClient: async () => ({ connected: false, reason: "timeout" }),
       },
     );
 
-    expect(result).toEqual({ handedOff: false, reason: "timeout" });
-    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
-      expect.objectContaining({ env, platform: "linux" }),
-    );
-    expect(openBrowser).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
-    );
-    expect(pollForClient).toHaveBeenCalledWith(
-      expect.objectContaining({ target, timeoutMs: 60_000 }),
-    );
+    const displayed = vi
+      .mocked(prompter.note)
+      .mock.calls.map(([message]) => message)
+      .join("\n");
+    expect(displayed).toContain("https://localhost:18789/control/");
+    expect(displayed).not.toContain("http://localhost:18789/control/");
   });
+
+  it.each([
+    {
+      openerOutcome: "returns false",
+      openBrowser: vi.fn(async () => false),
+    },
+    {
+      openerOutcome: "rejects",
+      openBrowser: vi.fn(async () => {
+        throw new Error("browser command failed");
+      }),
+    },
+  ])(
+    "falls back to the SSH hint and manual timeout when the browser opener $openerOutcome",
+    async ({ openBrowser }) => {
+      sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({
+        ok: true,
+        command: "xdg-open",
+      });
+      const prompter = createWizardPrompter();
+      const pollForClient = vi.fn(async () => ({
+        connected: false as const,
+        reason: "timeout" as const,
+      }));
+      const env = {
+        DISPLAY: "localhost:10.0",
+        SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
+      };
+
+      const result = await runBrowserHatchHandoff(
+        { config: {}, prompter },
+        {
+          env,
+          platform: "linux",
+          openBrowser,
+          resolveTarget: async () => target,
+          probePresence: async () => ({ reachable: true, clientKeys: [] }),
+          pollForClient,
+        },
+      );
+
+      expect(result).toEqual({ handedOff: false, reason: "timeout" });
+      expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ env, platform: "linux" }),
+      );
+      expect(openBrowser).toHaveBeenCalledWith(
+        "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
+      );
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(target.sshHint),
+        "Continue in your browser",
+      );
+      expect(pollForClient).toHaveBeenCalledWith(
+        expect.objectContaining({ target, timeoutMs: 300_000 }),
+      );
+    },
+  );
 
   it("prints the URL when browser launch fails", async () => {
     sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });

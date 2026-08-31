@@ -1,6 +1,6 @@
 # OpenClaw for Linux
 
-The Linux companion is a Tauri v2 desktop shell for OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when needed, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
+The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 ## Linux prerequisites
 
@@ -47,7 +47,48 @@ The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/b
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
 
-On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens Model Setup, automatically checks existing credentials, and verifies a real model response before continuing. A working existing model opens the normal dashboard; newly configured AI access continues into guided onboarding. If no existing credentials work, choose a provider, sign in, or enter an API key in Model Setup. In-progress model setup and guided onboarding survive Gateway restarts. After setup, reconnects and later app launches use the normal dashboard URL.
+## First-run setup
+
+The welcome screen explains what OpenClaw can do and asks where your assistant
+should live:
+
+- **On this computer** installs the CLI and managed Node runtime when needed,
+  then starts the Gateway as a systemd user service. Release builds install the
+  stable channel automatically; development builds ask for a release channel
+  and preselect Development.
+- **On another computer** connects to an existing Gateway without installing or
+  starting a local Gateway service. Select a nearby discovered Gateway, enter a
+  Gateway URL directly, or choose **SSH tunnel** and enter `user@gateway-host`.
+  Expand **Gateway authentication** to provide either the Gateway token or its
+  password when the remote host requires one.
+
+Public direct connections must use HTTPS or secure WebSockets. Plain HTTP or
+WebSockets are appropriate only for loopback, trusted private networks, or a
+Tailnet. If the Gateway configuration specifies a TLS certificate fingerprint,
+choose **SSH tunnel**: the embedded browser cannot enforce certificate pins, so
+the app safely refuses direct connections instead of exposing your credentials.
+Saved remote credentials support literal values and environment- or
+file-backed secret references; exec and shared-store references must be
+resolved on their owning Gateway host. SSH connections use your existing
+OpenSSH configuration and host-key verification; keep the remote Gateway bound
+to loopback when possible. See the
+[remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
+authentication and network requirements.
+
+After connecting, Model Setup checks existing credentials and verifies a real
+model response before continuing. If no existing credentials work, choose a
+provider and either sign in or enter an API key. The selected Gateway owns the
+provider credentials and model configuration. A working existing model opens
+the normal dashboard; newly configured AI access continues into guided
+onboarding. In-progress model setup and guided onboarding survive Gateway
+restarts. If the app closes while model activation is in progress, reopening it
+resumes the same Gateway, agent, and model without activating the provider
+twice.
+
+For OpenAI, **ChatGPT Login** uses a ChatGPT or Codex subscription, while
+**OpenAI API Key** uses API billing. When the Gateway runs on another host and
+its browser callback is not reachable, choose **ChatGPT Device Pairing** from
+the additional sign-in options.
 
 ## Updates
 

@@ -1,3 +1,4 @@
+import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
@@ -28,6 +29,7 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
@@ -72,22 +74,8 @@ export type PluginManifestModelSupport = {
 
 export type PluginManifestModelCatalog = ModelCatalog;
 
-export type PluginManifestModelPricingModelIdTransform = "version-dots";
-
-export type PluginManifestModelPricingSource = {
-  provider?: string;
-  passthroughProviderModel?: boolean;
-  modelIdTransforms?: PluginManifestModelPricingModelIdTransform[];
-};
-
-export type PluginManifestModelPricingProvider = {
-  external?: boolean;
-  openRouter?: PluginManifestModelPricingSource | false;
-  liteLLM?: PluginManifestModelPricingSource | false;
-};
-
 export type PluginManifestModelPricing = {
-  providers?: Record<string, PluginManifestModelPricingProvider>;
+  providers?: Record<string, ModelPricingProvider>;
 };
 
 export type PluginManifestModelIdPrefixRule = {
@@ -298,7 +286,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {
@@ -335,9 +323,18 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Declarative backup ownership rooted at host-managed state or each configured agent. */
+export type PluginManifestBackupResource = {
+  disposition: "include" | "regenerable";
+  scope: "state" | "agent";
+  relativePath: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
+  backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
@@ -408,6 +405,8 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Doctor contract surfaces available without loading the plugin artifact. */
   doctorContract?: PluginManifestDoctorContract;
+  /** Whether the plugin public API registers structured health checks. */
+  doctorHealthChecks?: boolean;
   /** Static ownership metadata for doctor session-route state repairs. */
   sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */

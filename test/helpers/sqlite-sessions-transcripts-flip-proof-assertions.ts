@@ -6,9 +6,35 @@ type SqliteFlipProofReport = Awaited<ReturnType<typeof runSqliteSessionsTranscri
 export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   expect(report.failures).toEqual([]);
   expect(report.ok).toBe(true);
+  const seededCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "seeded-legacy-store",
+  );
+  const refusalCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "after-startup-refusal",
+  );
+  expect(report.startupRefusal?.message).toContain('Run "openclaw doctor --fix"');
+  expect(
+    report.startupRefusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/")),
+  ).toEqual(
+    expect.arrayContaining([
+      "agents/main/sessions/sessions.json",
+      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
+      "sessions/sessions.json",
+    ]),
+  );
+  expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
+  expect(refusalCheckpoint?.legacyStateJsonl).toEqual(seededCheckpoint?.legacyStateJsonl);
+  expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
+  expect(refusalCheckpoint?.sqlite.transcriptEvents).toBe(
+    seededCheckpoint?.sqlite.transcriptEvents,
+  );
   expect(
     report.checkpoints
-      .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
+      .filter(
+        (checkpoint) =>
+          checkpoint.label !== "seeded-legacy-store" &&
+          checkpoint.label !== "after-startup-refusal",
+      )
       .every((checkpoint) => checkpoint.activeJsonl.length === 0),
   ).toBe(true);
   expect(
@@ -19,19 +45,19 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   ).toBe(true);
   expect(
     report.checkpoints
-      .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
+      .filter(
+        (checkpoint) =>
+          checkpoint.label !== "seeded-legacy-store" &&
+          checkpoint.label !== "after-startup-refusal",
+      )
       .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
   ).toBe(true);
-  expect(report.checkpoints.some((checkpoint) => checkpoint.label === "after-doctor-fix")).toBe(
-    false,
-  );
   expect(
     report.checkpoints.some(
       (checkpoint) =>
-        checkpoint.label === "after-startup-import" &&
-        checkpoint.gatewayLogTail?.includes(
-          "session: imported legacy session metadata/transcripts into SQLite",
-        ) &&
+        checkpoint.label === "after-doctor-fix" &&
+        checkpoint.doctor?.mode === "fix" &&
+        checkpoint.doctor.code === 0 &&
         report.oldStateSessionKeys.every((key) =>
           checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
         ) &&
@@ -39,11 +65,11 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         checkpoint.sqlite.transcriptEvents >= 13,
     ),
   ).toBe(true);
-  const startupImportCheckpoint = report.checkpoints.find(
-    (checkpoint) => checkpoint.label === "after-startup-import",
+  const doctorImportCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "after-doctor-fix",
   );
   expect(
-    startupImportCheckpoint?.archiveArtifacts.some(
+    doctorImportCheckpoint?.archiveArtifacts.some(
       (artifact) =>
         artifact.path.includes(`${report.legacySessionId}.trajectory.jsonl`) &&
         artifact.textTail?.includes("trajectory") === true,
@@ -117,7 +143,9 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   ).toBe(false);
   expect(report.checkpoints.map((checkpoint) => checkpoint.label)).toEqual([
     "seeded-legacy-store",
-    "after-startup-import",
+    "after-startup-refusal",
+    "after-doctor-fix",
+    "after-gateway-start",
     "after-doctor-inspect",
     "after-doctor-validate",
     "after-rollback-restore",
@@ -137,7 +165,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     "after-final-doctor-inspect",
   ]);
   expect(
-    startupImportCheckpoint?.archiveArtifacts.some(
+    doctorImportCheckpoint?.archiveArtifacts.some(
       (artifact) =>
         artifact.path.includes("old-orphan.deleted.jsonl") &&
         artifact.textTail?.includes("old-orphan") === true,
@@ -166,7 +194,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     seededSessions: 24,
   });
   expect(report.scaleMigration?.importedSessionKeys).toHaveLength(24);
-  expect(report.scaleMigration?.startupImportElapsedMs).toBeGreaterThanOrEqual(0);
+  expect(report.scaleMigration?.doctorImportElapsedMs).toBeGreaterThanOrEqual(0);
   expect(
     report.checkpoints.some(
       (checkpoint) =>

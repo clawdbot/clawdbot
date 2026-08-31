@@ -2,7 +2,11 @@ import fs from "node:fs";
 import * as os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendSessionToolTruncationWarning, shortenPath } from "./render-utils.js";
+import {
+  appendSessionToolTruncationWarning,
+  shortenPath,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
 
 const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -23,6 +27,38 @@ describe("appendSessionToolTruncationWarning", () => {
     ).toBe(
       "output\n<warning>[Truncated: 5 matches limit, 1.0KB limit, some lines truncated]</warning>",
     );
+  });
+});
+
+describe("trimTrailingEmptyLines", () => {
+  it.each([
+    {
+      name: "removes multiple trailing empty lines",
+      lines: ["first", "second", "", ""],
+      expected: ["first", "second"],
+    },
+    { name: "removes all-empty input", lines: ["", ""], expected: [] },
+    {
+      name: "keeps leading and interior empty lines",
+      lines: ["", "first", "", "second", ""],
+      expected: ["", "first", "", "second"],
+    },
+    {
+      name: "keeps whitespace-only trailing lines",
+      lines: ["first", " ", "\t"],
+      expected: ["first", " ", "\t"],
+    },
+  ])("$name", ({ lines, expected }) => {
+    expect(trimTrailingEmptyLines(lines)).toEqual(expected);
+  });
+
+  it("does not mutate the caller-owned lines", () => {
+    const lines = ["first", "", ""];
+    const original = [...lines];
+
+    trimTrailingEmptyLines(lines);
+
+    expect(lines).toEqual(original);
   });
 });
 

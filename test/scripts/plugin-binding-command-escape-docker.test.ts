@@ -86,13 +86,12 @@ function runParser(log: string, options: { maxReadBytes?: number } = {}) {
 }
 
 describe("plugin binding Docker log proof", () => {
-  it("runs the aggregate main suite and both files after the suite split", () => {
+  it("runs the aggregate main suite and dedicated files after the suite split", () => {
     expect(script).toContain(
-      "if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts ]]",
+      "if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts ]]",
     );
-    expect(script).toContain(
-      "src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts",
-    );
+    expect(script).toContain("src/auto-reply/reply/dispatch-from-config.delivery.test.ts");
+    expect(script).toContain("src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts");
     expect(script).toContain("src/auto-reply/reply/dispatch-from-config.test.ts");
     expect(script).toContain('node scripts/run-vitest.mjs "${test_files[@]}"');
   });

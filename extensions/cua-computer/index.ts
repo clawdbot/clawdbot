@@ -1,4 +1,5 @@
 import { registerComputerUseProvider } from "openclaw/plugin-sdk/computer-use";
+import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
 import { registerCuaDriverDoctorChecks } from "./api.js";
@@ -20,20 +21,26 @@ export default definePluginEntry({
   description: "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
   configSchema,
   register(api) {
-    registerCuaDriverDoctorChecks();
     const parsed = CuaComputerConfigSchema.safeParse(api.pluginConfig ?? {});
     if (!parsed.success) {
       throw new Error(
         `Invalid cua-computer plugin config: ${parsed.error.issues[0]?.message ?? "invalid config"}`,
       );
     }
+    api.registerNodeInvokePolicy(createCuaComputerNodeInvokePolicy());
+    // Remote policy must not enable local native control. macOS retains its
+    // app-gated default; Windows/Linux nodes still require plugin enablement.
+    if (
+      process.platform !== "darwin" &&
+      normalizePluginsConfig(api.config.plugins).entries[api.id]?.enabled !== true
+    ) {
+      return;
+    }
+    registerCuaDriverDoctorChecks();
     const artifactVerification = verifyInstalledCuaDriverArtifacts();
     if (!artifactVerification.ok) {
       api.logger?.error(artifactVerification.diagnostic);
     }
     registerComputerUseProvider(api, createCuaComputerProvider());
-    // Dangerous plugin command: excluded from default allowlists, and the
-    // Gateway fails closed when this policy registration is missing.
-    api.registerNodeInvokePolicy(createCuaComputerNodeInvokePolicy());
   },
 });

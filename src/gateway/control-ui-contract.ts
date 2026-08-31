@@ -14,9 +14,22 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
+/**
+ * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
+ * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
+ * yields both the login and the avatar without a per-person API lookup.
+ */
+type ControlUiGitHubPreviewCoAuthor = {
+  login: string;
+  avatarDataUrl?: string;
+};
+
 export type ControlUiGitHubPreview = {
   additions?: number;
   avatarDataUrl?: string;
+  /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
+  coAuthors?: ControlUiGitHubPreviewCoAuthor[];
+  coAuthorCount?: number;
   changedFiles?: number;
   closedAt?: string;
   comments?: number;
@@ -66,6 +79,14 @@ type ControlUiSessionPullRequestChecks = {
 /** One GitHub pull request whose head is the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
+  /**
+   * Author login from the list payload GitHub already returns; no extra call.
+   * Absent for a ghosted or deleted account. Deliberately login-only: the
+   * sibling GitHub-link hovercard inlines avatars server-side rather than
+   * hotlinking them, so a remote <img> here would leak a browser request to
+   * GitHub on every hover.
+   */
+  author?: { login: string };
   owner: string;
   repo: string;
   branch: string;

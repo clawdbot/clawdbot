@@ -49,11 +49,11 @@ export function registerNodesInvokeCommands(nodes: Command) {
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const nodeId = await resolveCliNodeId(opts, nodeQuery);
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.invokeTimeout,
             "--invoke-timeout",
           );
+          const nodeId = await resolveCliNodeId(opts, nodeQuery);
 
           const invokeParams: Record<string, unknown> = {
             nodeId,

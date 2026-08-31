@@ -7,7 +7,8 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { getLoadedChannelThreadingAdapter } from "../../channels/thread-addressing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -20,6 +21,7 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  accounts?: Record<string, ReplyToModeChannelConfig | undefined>;
 };
 
 function normalizeReplyToModeChatType(
@@ -35,6 +37,7 @@ function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
+  accountId?: string | null,
 ): ReplyToMode {
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
@@ -43,14 +46,28 @@ function resolveConfiguredReplyToMode(
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
+  const normalizedAccountId = accountId?.trim();
+  const accountConfig = normalizedAccountId
+    ? resolveNormalizedAccountEntry(
+        channelConfig?.accounts,
+        normalizeAccountId(normalizedAccountId),
+        normalizeAccountId,
+      )
+    : undefined;
   const normalizedChatType = normalizeReplyToModeChatType(chatType);
   if (normalizedChatType) {
+    // Exhaust account policy before channel defaults so a routed account cannot silently inherit.
+    const accountMode =
+      accountConfig?.replyToModeByChatType?.[normalizedChatType] ?? accountConfig?.replyToMode;
+    if (accountMode !== undefined) {
+      return accountMode;
+    }
     const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
       return scopedMode;
     }
   }
-  return channelConfig?.replyToMode ?? "all";
+  return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
 /** Resolve reply-to mode using channel threading adapter override when present. */
@@ -68,7 +85,9 @@ function resolveReplyToModeWithThreading(
     accountId: params.accountId,
     chatType: params.chatType,
   });
-  return resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType);
+  return (
+    resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType, params.accountId)
+  );
 }
 
 /** Resolve effective reply-to mode for a channel/account/chat tuple. */

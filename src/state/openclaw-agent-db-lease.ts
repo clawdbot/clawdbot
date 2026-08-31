@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import {
   executeSqliteQuerySync,
@@ -15,11 +16,37 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.
 import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 type AgentDatabaseLeaseDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "agent_database_leases" | "agent_deletion_journal"
+  "agent_database_leases" | "agent_deletion_journal" | "state_leases"
 >;
+
+export const AGENT_DATABASE_MAINTENANCE_LEASE = {
+  scope: "core:agent-database-maintenance",
+  key: "global",
+} as const;
+
+const maintenanceAuthority = new AsyncLocalStorage<OpenClawStateLeaseContext>();
+
+export function runWithAgentDatabaseMaintenanceAuthority<T>(
+  authority: OpenClawStateLeaseContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return maintenanceAuthority.run(authority, run);
+}
+
+/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
+export function assertAgentDatabaseMaintenanceAuthority(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    throw new Error(
+      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
+    );
+  }
+  authority.assertOwned();
+}
 
 export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;
@@ -37,6 +64,20 @@ export function claimOpenClawAgentDatabaseLease(params: {
     (database) => {
       ensureAgentDatabaseLeaseSchema(database.db);
       const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+      const maintenance = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("state_leases")
+          .select("owner")
+          .where("scope", "=", AGENT_DATABASE_MAINTENANCE_LEASE.scope)
+          .where("lease_key", "=", AGENT_DATABASE_MAINTENANCE_LEASE.key)
+          .where("expires_at", ">", Date.now()),
+      );
+      if (maintenance) {
+        throw new Error(
+          "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
+        );
+      }
       const deletion = executeSqliteQueryTakeFirstSync(
         database.db,
         db.selectFrom("agent_deletion_journal").select("agent_id").where("agent_id", "=", agentId),
@@ -75,21 +116,16 @@ export function releaseOpenClawAgentDatabaseLease(
 }
 
 export function assertNoOpenClawAgentDatabaseLeases(
-  agentIdRaw: string,
+  agentIdRaw: string | OpenClawStateLeaseContext,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  const agentId = normalizeAgentId(agentIdRaw);
-  let rows: Array<{
-    agent_id: string;
-    lease_id: string;
-    owner_pid: number;
-    owner_start_time: number | null;
-    path: string;
-  }> = [];
-  runOpenClawStateWriteTransaction((database) => {
+  const maintenance = typeof agentIdRaw === "string" ? undefined : agentIdRaw;
+  const agentId = typeof agentIdRaw === "string" ? normalizeAgentId(agentIdRaw) : undefined;
+  const rows = runOpenClawStateWriteTransaction((database) => {
+    maintenance?.assertOwnedInTransaction(database.db);
     ensureAgentDatabaseLeaseSchema(database.db);
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-    rows = executeSqliteQuerySync(
+    return executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("agent_database_leases")
@@ -112,6 +148,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
     .map((row) => row.lease_id);
   if (staleLeaseIds.length > 0) {
     runOpenClawStateWriteTransaction((database) => {
+      maintenance?.assertOwnedInTransaction(database.db);
       ensureAgentDatabaseLeaseSchema(database.db);
       const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
       executeSqliteQuerySync(
@@ -125,12 +162,15 @@ export function assertNoOpenClawAgentDatabaseLeases(
     if (staleLeaseIdSet.has(row.lease_id)) {
       continue;
     }
-    const deletionFence = prepareAgentDeletionPathFence(
-      { agentId: row.agent_id, path: row.path, fenceAgentId: agentId },
-      options,
-    );
+    const deletionFence = agentId
+      ? prepareAgentDeletionPathFence(
+          { agentId: row.agent_id, path: row.path, fenceAgentId: agentId },
+          options,
+        )
+      : undefined;
     let leaseStillExists = false;
     runOpenClawStateWriteTransaction((database) => {
+      maintenance?.assertOwnedInTransaction(database.db);
       ensureAgentDatabaseLeaseSchema(database.db);
       const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
       leaseStillExists =
@@ -141,12 +181,15 @@ export function assertNoOpenClawAgentDatabaseLeases(
             .select("lease_id")
             .where("lease_id", "=", row.lease_id),
         ) !== undefined;
-      if (leaseStillExists && row.agent_id !== agentId) {
+      if (leaseStillExists && row.agent_id !== agentId && deletionFence) {
         assertAgentDeletionPathFence(database.db, deletionFence);
       }
     }, options);
-    if (leaseStillExists && row.agent_id === agentId) {
-      throw new Error(`Agent ${agentId} database is still open in another process.`);
+    if (leaseStillExists && (!agentId || row.agent_id === agentId)) {
+      const remediation = agentId ? "." : "; stop that process and rerun openclaw doctor --fix.";
+      throw new Error(
+        `Agent ${row.agent_id} database is still open in another process${remediation}`,
+      );
     }
   }
 }

@@ -1,7 +1,6 @@
 /** Shared media tool routing, auth, path, and reference helpers. */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,7 +22,6 @@ import {
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import type { WebMediaResult } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveUserPath } from "../../utils.js";
@@ -334,9 +332,12 @@ export function resolveCapabilityModelConfigForTool(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
+  modelOverride?: string;
   providers: CapabilityProviderSource;
 }): ToolModelConfig | null {
-  const explicit = coerceToolModelConfig(params.modelConfig);
+  const configured = coerceToolModelConfig(params.modelConfig);
+  const modelOverride = normalizeOptionalString(params.modelOverride);
+  const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
@@ -369,6 +370,10 @@ export function resolveCapabilityModelConfigForTool(params: {
         authStore: params.authStore,
       }),
   });
+}
+
+export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(modelConfig));
 }
 
 /**
@@ -454,16 +459,6 @@ export function resolveGenerateAction(
     default:
       throw new ToolInputError('action must be "generate", "status", or "list"');
   }
-}
-
-/**
- * Reads boolean tool parameters from either canonical or snake_case keys.
- */
-export function readBooleanToolParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  return parseBoolean(readSnakeCaseParamRaw(params, key));
 }
 
 /**
@@ -599,6 +594,22 @@ export async function resolveMediaToolReferenceAccess(params: {
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
 
+export type MediaToolSandbox = Pick<
+  SandboxedBridgeMediaPathConfig,
+  "root" | "bridge" | "stagedMediaPaths"
+>;
+
+export function resolveMediaToolSandboxConfig(
+  sandbox: MediaToolSandbox | null | undefined,
+  workspaceOnly: boolean | undefined,
+): SandboxedBridgeMediaPathConfig | null {
+  if (!sandbox) {
+    return null;
+  }
+  const root = sandbox.root.trim();
+  return root ? { ...sandbox, root, workspaceOnly: workspaceOnly === true } : null;
+}
+
 /** Loads generation references while retaining each tool's distinct transport and sandbox policy. */
 export async function loadMediaToolReferences<T>(params: {
   inputs: string[];
@@ -606,7 +617,7 @@ export async function loadMediaToolReferences<T>(params: {
   expectedKind: "image" | "video" | "audio";
   sandbox: SandboxedBridgeMediaPathConfig | null;
   workspaceDir?: string;
-  maxBytes?: number;
+  maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -651,10 +662,7 @@ export async function loadMediaToolReferences<T>(params: {
     if (reference.isDataUrl) {
       const { decodeDataUrl } = await import("./image-tool.helpers.js");
       params.signal?.throwIfAborted();
-      media = decodeDataUrl(
-        resolvedInput,
-        params.toolName === "image_generate" ? { maxBytes: params.maxBytes } : undefined,
-      );
+      media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
     } else {
       const { loadWebMedia } = await import("../../media/web-media.js");
       params.signal?.throwIfAborted();
@@ -669,7 +677,7 @@ export async function loadMediaToolReferences<T>(params: {
           : undefined;
       try {
         media = await loadWebMedia(resolvedPath ?? resolvedInput, {
-          ...(params.toolName === "music_generate" ? {} : { maxBytes: params.maxBytes }),
+          maxBytes: params.maxBytes,
           ...(params.sandbox
             ? {
                 sandboxValidated: true,

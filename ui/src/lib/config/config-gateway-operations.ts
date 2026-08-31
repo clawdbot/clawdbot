@@ -224,7 +224,7 @@ export async function executeConfigExternalMutation<T>(
 
 export async function loadConfig(
   state: RuntimeConfigState,
-  options: LoadConfigOptions = {},
+  options: LoadConfigOptions & { background?: boolean; beforeApplySnapshot?: () => void } = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
@@ -233,7 +233,9 @@ export async function loadConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
-  state.configLoading = true;
+  if (!options.background) {
+    state.configLoading = true;
+  }
   state.lastError = null;
   state.chatError = null;
   try {
@@ -241,6 +243,8 @@ export async function loadConfig(
     if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
+    // Recovery captures the latest intent before a clean draft is replaced.
+    options.beforeApplySnapshot?.();
     applyConfigSnapshot(state, res, options);
     return true;
   } catch (err) {
@@ -249,7 +253,10 @@ export async function loadConfig(
     }
     return false;
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (
+      !options.background &&
+      isCurrentRequest(state, "config", version, client, connectionEpoch)
+    ) {
       state.configLoading = false;
     }
   }

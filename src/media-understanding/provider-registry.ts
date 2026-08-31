@@ -44,10 +44,7 @@ function hydrateModelBackedMediaProvider(
   };
 }
 
-export {
-  normalizeMediaExecutionProviderId,
-  normalizeMediaProviderId,
-} from "../../packages/media-understanding-common/src/provider-id.js";
+export { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 
 /** Builds the media-understanding provider registry from plugin capabilities and config providers. */
 export function buildMediaUnderstandingRegistry(

@@ -7,11 +7,12 @@ import type {
   ApprovalKind,
   ApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope } from "./approval-scope.js";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
-  resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+} from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
@@ -59,6 +60,7 @@ function buildExecApprovalPresentation(params: {
     typeof request.warningText === "string" && request.warningText.trim()
       ? sanitizeExecApprovalWarningText(request.warningText)
       : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {
     kind: "exec",
     commandText,
@@ -67,6 +69,7 @@ function buildExecApprovalPresentation(params: {
     host: sanitizeOptionalSingleLine(request.host),
     nodeId: sanitizeOptionalSingleLine(request.nodeId),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
   };
 }
@@ -102,6 +105,7 @@ function buildPluginApprovalPresentation(params: {
   const detail = rawDetail
     ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
     : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {
     kind: "plugin",
     title,
@@ -111,6 +115,7 @@ function buildPluginApprovalPresentation(params: {
     pluginId: sanitizeOptionalSingleLine(request.pluginId),
     toolName: sanitizeOptionalSingleLine(request.toolName),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
   };
 }

@@ -1278,7 +1278,7 @@ describe("skill mutations", () => {
     });
   });
 
-  it("allows retrying acknowledgement-required ClawHub skill installs", async () => {
+  it("shows a ClawHub trust error without an acknowledgement retry", async () => {
     const { state, request } = createState();
     const error = new Error("ClawHub requires acknowledgement before installing.") as Error & {
       details?: unknown;
@@ -1288,49 +1288,15 @@ describe("skill mutations", () => {
       version: "1.2.3",
       warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
     };
-    request.mockImplementation(async (method: string) => {
-      if (method === "skills.install" && request.mock.calls.length === 1) {
-        throw error;
-      }
-      if (method === "skills.install") {
-        return { message: "Installed github@1.2.3" };
-      }
-      return {
-        workspaceDir: "/tmp/workspace",
-        managedSkillsDir: "/tmp/skills",
-        skills: [],
-      };
-    });
+    request.mockRejectedValue(error);
 
     await installFromClawHub(state, "github");
 
     expect(state.clawhubInstallMessage).toEqual({
       kind: "error",
       text:
-        "Review the ClawHub warning before installing this skill.\n\n" +
+        "ClawHub requires acknowledgement before installing.\n\n" +
         "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeRef: "github",
-      acknowledgeVersion: "1.2.3",
-      acknowledgeLabel: "Acknowledge risk and install",
-    });
-
-    await installFromClawHub(
-      state,
-      "github",
-      true,
-      state.clawhubInstallMessage!.acknowledgeVersion,
-    );
-
-    expect(request).toHaveBeenNthCalledWith(2, "skills.install", {
-      agentId: "main",
-      source: "clawhub",
-      slug: "github",
-      version: "1.2.3",
-      acknowledgeClawHubRisk: true,
-    });
-    expect(state.clawhubInstallMessage).toEqual({
-      kind: "success",
-      text: "Installed github@1.2.3",
     });
   });
 

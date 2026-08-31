@@ -14,7 +14,8 @@ fs.writeFileSync(
 );
 fixtureState.pluginRoot = externalPluginRoot;
 
-vi.mock("./current-plugin-metadata-snapshot.js", () => ({
+vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({
     manifestRegistry: {
       plugins: [

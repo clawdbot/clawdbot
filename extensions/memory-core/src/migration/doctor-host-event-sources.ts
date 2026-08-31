@@ -49,7 +49,7 @@ export async function collectLegacyMemoryHostEventSources(
   const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
-  for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+  for (const workspaceDir of await resolveConfiguredWorkspaces(config, env)) {
     let canonicalWorkspaceDir = path.resolve(workspaceDir);
     let filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
     try {

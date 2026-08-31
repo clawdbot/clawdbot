@@ -32,6 +32,10 @@ type DoctorSqliteMaintenanceLockDeps = {
   lockOptions?: MaintenanceLockOptions;
 };
 
+export type DoctorSqliteMaintenanceAuthority = {
+  assertCurrent(): void;
+};
+
 export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
   constructor(
     operation: string,
@@ -147,7 +151,7 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     env?: NodeJS.ProcessEnv;
     operation: string;
     protectedPaths?: readonly string[];
-    run: () => Promise<T> | T;
+    run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T;
   },
   deps: DoctorSqliteMaintenanceLockDeps = {},
 ): Promise<T> {
@@ -174,10 +178,18 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     throw new Error(`Cannot run ${params.operation} without exclusive OpenClaw state ownership.`);
   }
 
+  let active = true;
   try {
     assertMaintenancePathsOwnedByStateDir(env, params.operation, params.protectedPaths ?? []);
-    return await params.run();
+    return await params.run({
+      assertCurrent() {
+        if (!active) {
+          throw new Error("Doctor SQLite maintenance authority has expired.");
+        }
+      },
+    });
   } finally {
+    active = false;
     await lock.release();
   }
 }

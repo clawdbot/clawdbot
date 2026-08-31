@@ -56,6 +56,12 @@ describe("config view", () => {
     themeModeOverridden: false,
     themeModeProvenance: "default" as const,
     themeModeResetValue: "system" as ThemeMode,
+    fontUi: undefined,
+    fontChat: undefined,
+    fontUiProvenance: "default" as const,
+    fontChatProvenance: "default" as const,
+    setFontUi: vi.fn(),
+    setFontChat: vi.fn(),
     accent: undefined,
     accentOverridden: false,
     accentProvenance: "default" as const,
@@ -65,7 +71,6 @@ describe("config view", () => {
     localeProvenance: "default" as const,
     localeResetValue: undefined,
     onLocaleChange: vi.fn(),
-    resetLocale: vi.fn(),
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
     setAccent: vi.fn(),
@@ -91,6 +96,8 @@ describe("config view", () => {
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
+    chatCollapseTaskProgress: false,
+    setChatCollapseTaskProgress: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -98,7 +105,6 @@ describe("config view", () => {
     chatSendShortcutProvenance: "default" as const,
     chatSendShortcutResetValue: "enter" as const,
     setChatSendShortcut: vi.fn(),
-    resetChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
     chatFollowUpModeOverridden: false,
     chatFollowUpModeProvenance: "default" as const,
@@ -129,6 +135,80 @@ describe("config view", () => {
     } finally {
       container.remove();
     }
+  });
+
+  it("keeps Setup collapsed on Advanced and edits consent without exposing machine state", () => {
+    const wizard = {
+      accessMode: "full",
+      appRecommendations: true,
+      lastRunAt: "2026-08-30T12:00:00Z",
+      lastRunVersion: "2026.8.30",
+      lastRunCommit: "abc1234",
+      lastRunCommand: "onboard",
+      lastRunMode: "local",
+      localModelLeanAutoModel: "internal/model",
+      securityAcknowledgedAt: "2026-08-29T12:00:00Z",
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        wizard: {
+          type: "object",
+          properties: Object.fromEntries(
+            Object.entries(wizard).map(([key, value]) => [
+              key,
+              key === "accessMode"
+                ? { type: "string", enum: ["full", "guarded"] }
+                : { type: typeof value },
+            ]),
+          ),
+        },
+      },
+    };
+    const onFormPatch = vi.fn();
+    const { container, props } = renderConfigView({
+      schema,
+      formValue: { wizard },
+      forceShowAdvanced: true,
+      settingsLayout: "accordion",
+      onFormPatch,
+    });
+    const setup = queryRequired(container, "#config-section-wizard", HTMLDetailsElement);
+    expect(setup.open).toBe(false);
+    setup.open = true;
+    expect(setup.textContent).toContain(wizard.lastRunVersion);
+    expect(setup.textContent).not.toContain(wizard.localModelLeanAutoModel);
+    expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
+    expect(setup.querySelectorAll("input, textarea, select")).toHaveLength(0);
+    expect(onFormPatch).not.toHaveBeenCalled();
+    const access = setup.querySelector("wa-radio-group") as HTMLElement & { value: string };
+    access.value = setup.querySelector('wa-radio[value="1"]')?.getAttribute("value") ?? "";
+    access.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenCalledWith(["wizard", "accessMode"], "guarded");
+    const toggle = setup.querySelector("wa-switch") as HTMLElement & { checked: boolean };
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenLastCalledWith(["wizard", "appRecommendations"], false);
+    expect(props.formValue).toEqual({ wizard });
+
+    const defaults = renderConfigView({
+      schema,
+      formValue: {},
+      activeSection: "wizard",
+      forceAdvancedSection: "wizard",
+      forceShowAdvanced: true,
+    });
+    expect(
+      queryRequired(defaults.container, "#config-section-wizard", HTMLDetailsElement).open,
+    ).toBe(true);
+    expect(
+      (defaults.container.querySelector("wa-radio-group") as HTMLElement & { value: string }).value,
+    ).toBe("0");
+    expect(
+      (defaults.container.querySelector("wa-switch") as HTMLElement & { checked: boolean }).checked,
+    ).toBe(true);
+    expect(defaults.props.onFormPatch).not.toHaveBeenCalled();
   });
 
   it("renders System language first on Appearance and emits locale overrides", () => {
@@ -223,6 +303,69 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
+  it("names the theme's chat face and maps typography sentinels back to unset overrides", () => {
+    const { container, props } = renderConfigView({
+      theme: "dash",
+      fontUi: "geist",
+      fontChat: "system",
+      fontUiProvenance: "profile",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    const ui = queryRequired(container, "#settings-font-ui", HTMLElement) as HTMLElement & {
+      value: string;
+    };
+    const chat = queryRequired(container, "#settings-font-chat", HTMLElement) as HTMLElement & {
+      value: string;
+    };
+    expect(ui.querySelector('wa-option[value="theme"]')?.textContent).toContain("Dash · DM Sans");
+    expect(chat.querySelector('wa-option[value="theme"]')?.textContent).toContain(
+      "Dash · Fraunces",
+    );
+    expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
+    expect(ui.querySelectorAll("wa-option")).toHaveLength(11);
+    expect(chat.querySelectorAll("wa-option")).toHaveLength(11);
+    Object.defineProperty(ui, "value", { configurable: true, value: "lora" });
+    ui.dispatchEvent(new Event("change"));
+    expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
+    Object.defineProperty(ui, "value", { configurable: true, value: "theme" });
+    ui.dispatchEvent(new Event("change"));
+    expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
+    Object.defineProperty(chat, "value", { configurable: true, value: "theme" });
+    chat.dispatchEvent(new Event("change"));
+    expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("describes the custom accent source and selected state through the native input", () => {
+    const inherited = renderConfigView({
+      accent: undefined,
+      accentProvenance: "default",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    const inheritedInput =
+      inherited.container.querySelector<HTMLInputElement>("[data-accent-custom]");
+    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).toContain(
+      "Using inherited accent",
+    );
+    expect(inheritedInput?.getAttribute("aria-describedby")).toBe("settings-accent-status");
+
+    const custom = renderConfigView({
+      accent: "#c3cfdb",
+      accentProvenance: "device-local",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    expect(custom.container.querySelector("#settings-accent-status")?.textContent).toContain(
+      "Using Custom color",
+    );
+    expect(
+      custom.container
+        .querySelector<HTMLElement>(".settings-accent-swatch--custom")
+        ?.style.getPropertyValue("--settings-accent-swatch-ink"),
+    ).toBe("#000000");
+  });
+
   it("places a Control UI Browser preference in the same settings group before schema rows", () => {
     const { container } = renderConfigView({
       schema: {
@@ -255,7 +398,7 @@ describe("config view", () => {
     ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
   });
 
-  it("routes restore-default actions through config removal", () => {
+  it("routes scalar clears and default selections through config callbacks", () => {
     const onFormPatch = vi.fn();
     const onFormRemove = vi.fn();
     const { container } = renderConfigView({
@@ -290,11 +433,9 @@ describe("config view", () => {
     const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (row) => row.textContent?.includes("Retries"),
     );
-    queryRequired(
-      retriesRow ?? container,
-      "button[aria-label='Reset to default']",
-      HTMLButtonElement,
-    ).click();
+    const retries = queryRequired(retriesRow ?? container, "input", HTMLInputElement);
+    retries.value = "";
+    retries.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
     expect(onFormPatch).not.toHaveBeenCalled();
 
@@ -334,14 +475,19 @@ describe("config view", () => {
       setShowAdvancedSettings,
     });
 
-    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
-    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "1 advanced setting hidden Show advanced",
+    const disclosure = queryRequired(
+      collapsed.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
     );
-    ghost.click();
+    expect(disclosure.open).toBe(false);
+    expect(queryRequired(disclosure, "summary", HTMLElement).textContent?.trim()).toBe(
+      "Advanced settings",
+    );
+    expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
-    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
-    expect(ghost.getAttribute("aria-pressed")).toBe("false");
 
     const global = renderConfigView({
       schema,
@@ -350,13 +496,14 @@ describe("config view", () => {
       activeSection: "gateway",
       showAdvancedSettings: true,
     });
-    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
-    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
-    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
-    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
-    expect(hide.classList.contains("config-show-advanced")).toBe(true);
-    expect(hide.getAttribute("aria-pressed")).toBe("true");
-    hide.click();
+    const expandedDisclosure = queryRequired(
+      global.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
+    );
+    expect(expandedDisclosure.open).toBe(true);
+    expandedDisclosure.open = false;
+    expandedDisclosure.dispatchEvent(new Event("toggle"));
     expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
 
@@ -367,7 +514,10 @@ describe("config view", () => {
       activeSection: "gateway",
       forceAdvancedSection: "gateway",
     });
-    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(searchHit.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(searchHit.container)).toContain("Reload mode");
 
     const nested = document.createElement("div");
@@ -397,7 +547,9 @@ describe("config view", () => {
       }),
       nested,
     );
-    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(nested, "details.config-advanced-disclosure", HTMLDetailsElement).open,
+    ).toBe(true);
     expect(normalizedText(nested)).toContain("Tuning");
 
     const forcedPage = renderConfigView({
@@ -408,7 +560,10 @@ describe("config view", () => {
       forceShowAdvanced: true,
     });
     expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
-    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(forcedPage.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(forcedPage.container)).toContain("Reload mode");
   });
 
@@ -436,7 +591,7 @@ describe("config view", () => {
       activeSection: "diagnostics",
     });
     expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
-    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+    expect(unhinted.container.querySelector("details.config-advanced-disclosure")).not.toBeNull();
 
     // An advanced hint in a different top-level section must not surface a
     // no-op toggle on a fully-common active section.
@@ -450,7 +605,7 @@ describe("config view", () => {
       activeSection: "gateway",
     });
     expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
-    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(offScope.container.querySelector("details.config-advanced-disclosure")).toBeNull();
   });
 
   it("shows the form-unsafe banner only for populated unsupported paths", () => {
@@ -530,19 +685,14 @@ describe("config view", () => {
   }
 
   function sectionTabLabels(container: HTMLElement): Array<string | undefined> {
-    return Array.from(container.querySelectorAll(".config-toolbar wa-radio")).map((tab) =>
+    return Array.from(container.querySelectorAll(".config-toolbar .hub-tab")).map((tab) =>
       tab.textContent?.trim(),
     );
   }
 
   function selectConfigTab(container: HTMLElement, name: string) {
-    const group = queryRequired(
-      container,
-      ".config-toolbar wa-radio-group",
-      HTMLElement,
-    ) as HTMLElement & { value: string };
-    group.value = name;
-    group.dispatchEvent(new Event("change", { bubbles: true }));
+    const tab = queryRequired(container, `#config-sections-tab-${name}`, HTMLElement);
+    tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
   }
 
   function queryRequired<T extends Element>(
@@ -753,19 +903,37 @@ describe("config view", () => {
     );
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    // Segmented pills replaced the old tab strip and the inner panel chrome.
-    expect(container.querySelector("wa-tab-group")).toBeNull();
+    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
+    expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
+    expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
+      "config-sections-tab-root",
+    );
 
     selectConfigTab(container, "gateway");
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .settings-segmented__btn--active");
+    const active = container.querySelector(".config-toolbar .hub-tab[active]");
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
 
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "agents",
+        onSectionChange,
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
     onSectionChange.mockClear();
     selectConfigTab(container, "root");
     expect(onSectionChange).toHaveBeenCalledWith(null);
@@ -829,7 +997,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });
@@ -856,7 +1024,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });
@@ -876,6 +1044,114 @@ describe("config view", () => {
     enableButton.click();
     expect(onWebPushSubscribe).toHaveBeenCalledOnce();
   });
+
+  it.each(["tabs", "accordion"] as const)(
+    "groups channel settings without changing patch paths (%s)",
+    (settingsLayout) => {
+      const { container, props } = renderConfigView({
+        activeSection: "channels",
+        settingsLayout,
+        forceShowAdvanced: true,
+        schema: {
+          type: "object",
+          properties: {
+            channels: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                telegram: {
+                  type: "object",
+                  properties: { username: { type: "string", title: "Bot username" } },
+                },
+                "custom-chat": {
+                  anyOf: [
+                    { type: "object", properties: { room: { type: "string", title: "Room" } } },
+                    { type: "null" },
+                  ],
+                },
+                defaults: {
+                  type: "object",
+                  properties: { groupPolicy: { type: "string", title: "Group policy" } },
+                },
+                modelByChannel: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    additionalProperties: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        uiHints: {
+          "channels.telegram": { label: "Telegram" },
+          "channels.custom-chat": { label: "Custom Chat" },
+          "channels.modelByChannel": { label: "Channel Model Overrides" },
+        },
+        formValue: {
+          channels: {
+            telegram: { username: "test_bot" },
+            "custom-chat": { room: "team" },
+            defaults: { groupPolicy: "allowlist" },
+            modelByChannel: {},
+          },
+        },
+      });
+      document.body.append(container);
+      try {
+        const picker = queryRequired(container, "select", HTMLSelectElement);
+        expect(picker.labels?.[0]?.textContent).toContain("Channel settings");
+        expect(Array.from(picker.options, (option) => option.textContent?.trim())).toEqual([
+          "Custom Chat",
+          "Telegram",
+          "Other",
+        ]);
+        expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
+        const content = () =>
+          normalizedText(queryRequired(container, ".settings-page", HTMLElement));
+        expect(content()).toContain("Group policy");
+        expect(content()).toContain("Channel Model Overrides");
+        expect(content()).not.toContain("Bot username");
+        props.onSubsectionChange = (key) => {
+          props.activeSubsection = key;
+          render(renderConfig(props), container);
+        };
+        render(renderConfig(props), container);
+        const choose = (key: string) => {
+          picker.value = key;
+          picker.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        choose("telegram");
+        expect(content()).toContain("Bot username");
+        expect(content()).not.toContain("Group policy");
+        expect(content()).not.toContain("Room");
+        const username = queryRequired(container, 'input[type="text"]', HTMLInputElement);
+        expect(username.value).toBe("test_bot");
+        username.value = "updated_bot";
+        username.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(props.onFormPatch).toHaveBeenCalledWith(
+          ["channels", "telegram", "username"],
+          "updated_bot",
+        );
+        choose("custom-chat");
+        expect(content()).toContain("Room");
+        expect(content()).not.toContain("Bot username");
+        choose("");
+        const policy = queryRequired(container, 'input[type="text"]', HTMLInputElement);
+        policy.value = "open";
+        policy.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(props.onFormPatch).toHaveBeenCalledWith(
+          ["channels", "defaults", "groupPolicy"],
+          "open",
+        );
+        render(renderConfig({ ...props, formMode: "raw" }), container);
+        expect(container.querySelector("select")).toBeNull();
+      } finally {
+        container.remove();
+      }
+    },
+  );
 
   it("resets config content scroll when switching top-tab sections", async () => {
     const { container } = renderConfigView({
@@ -909,22 +1185,27 @@ describe("config view", () => {
         messages: { inbox: "smart" },
       },
     });
+    document.body.append(container);
 
-    const content = queryRequired(container, ".config-content", HTMLElement);
-    content.scrollTop = 280;
-    content.scrollLeft = 24;
-    content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
-      content.scrollTop = top ?? content.scrollTop;
-      content.scrollLeft = left ?? content.scrollLeft;
-    }) as typeof content.scrollTo;
+    try {
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      content.scrollTop = 280;
+      content.scrollLeft = 24;
+      content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+        content.scrollTop = top ?? content.scrollTop;
+        content.scrollLeft = left ?? content.scrollLeft;
+      }) as typeof content.scrollTo;
 
-    selectConfigTab(container, "messages");
-    await Promise.resolve();
+      selectConfigTab(container, "messages");
+      await Promise.resolve();
 
-    expect(content["scrollTo"]).toHaveBeenCalledOnce();
-    expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
-    expect(content.scrollTop).toBe(0);
-    expect(content.scrollLeft).toBe(0);
+      expect(content["scrollTo"]).toHaveBeenCalledOnce();
+      expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+      expect(content.scrollTop).toBe(0);
+      expect(content.scrollLeft).toBe(0);
+    } finally {
+      container.remove();
+    }
   });
 
   it("resets config content scroll when switching from form to raw mode", async () => {
@@ -974,6 +1255,28 @@ describe("config view", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Channels", "Messages"]);
+  });
+
+  it("hides contextual section help when the page owns its introduction", () => {
+    const { container } = renderConfigView({
+      activeSection: "messages",
+      showRootTab: false,
+      showSectionDocs: false,
+      includeSections: ["messages", "tts"],
+      schema: {
+        type: "object",
+        properties: {
+          messages: { type: "object", properties: {} },
+          tts: { type: "object", properties: {} },
+        },
+      },
+      uiHints: {
+        messages: { docsUrl: "https://docs.openclaw.ai/concepts/messages" },
+        tts: { docsUrl: "https://docs.openclaw.ai/tts" },
+      },
+    });
+
+    expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });
 
   it("does not normalize off-scope schema sections for scoped config tabs", () => {
@@ -1083,9 +1386,11 @@ describe("config view", () => {
     });
 
     expect(
-      [...container.querySelectorAll(".settings-section__heading")].map((title) =>
-        title.textContent?.trim(),
-      ),
+      [
+        ...container.querySelectorAll(
+          ".settings-section > .settings-section__header .settings-section__heading",
+        ),
+      ].map((title) => title.textContent?.trim()),
     ).toEqual(["Authentication", "Gateway"]);
   });
 
@@ -1602,7 +1907,7 @@ describe("config view", () => {
     expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("shows Appearance defaults without reset actions", () => {
+  it("shows Appearance default descriptions", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1635,30 +1940,16 @@ describe("config view", () => {
     expect(
       [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
     ).toBe(true);
-    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 
-  it("keeps direct Appearance defaults while resetting unrelated overrides independently", () => {
-    const resetLocale = vi.fn();
+  it("keeps direct Appearance default selections independent", () => {
     const setTheme = vi.fn();
     const setThemeMode = vi.fn();
     const setAccent = vi.fn();
     const setTextScale = vi.fn();
-    const setSidebarLiveActivity = vi.fn();
-    const setChatMessageMaxWidth = vi.fn();
-    const setChatSendShortcut = vi.fn();
-    const resetChatSendShortcut = vi.fn();
-    const setCatalogOpenTarget = vi.fn();
-    const setComposerHoldToRecord = vi.fn();
-    const setLobsterPetVisits = vi.fn();
-    const setLobsterPetSounds = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      systemLocale: "de",
-      localeOverride: "pt-BR",
-      localeOverridden: true,
-      resetLocale,
       theme: "knot",
       themeOverridden: true,
       setTheme,
@@ -1671,30 +1962,7 @@ describe("config view", () => {
       textScale: 110,
       textScaleOverridden: true,
       setTextScale,
-      sidebarLiveActivity: false,
-      setSidebarLiveActivity,
-      chatMessageMaxWidth: "82%",
-      setChatMessageMaxWidth,
-      chatSendShortcut: "modifier-enter",
-      chatSendShortcutOverridden: true,
-      setChatSendShortcut,
-      resetChatSendShortcut,
-      catalogOpenTarget: "terminal",
-      setCatalogOpenTarget,
-      composerHoldToRecord: false,
-      setComposerHoldToRecord,
-      lobsterPetVisits: false,
-      setLobsterPetVisits,
-      lobsterPetSounds: true,
-      setLobsterPetSounds,
     });
-    const resetIn = (element: Element | null) => {
-      const button = element?.querySelector<HTMLButtonElement>(
-        'button[aria-label="Reset to default"]',
-      );
-      expect(button).not.toBeNull();
-      button?.click();
-    };
     const row = (title: string) =>
       Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
         (candidate) =>
@@ -1715,33 +1983,15 @@ describe("config view", () => {
       .find((button) => button.textContent?.includes("100%"))
       ?.click();
 
-    resetIn(container.querySelector("#settings-language .settings-row"));
-    resetIn(row("Show live agent activity in sidebar"));
-    resetIn(row("Message width"));
-    resetIn(row("Send shortcut"));
-    resetIn(row("Open external sessions in"));
-    resetIn(row("Hold microphone button to dictate"));
-    resetIn(row("Lobster visits"));
-    resetIn(row("Lobster sounds"));
-
-    expect(resetLocale).toHaveBeenCalledOnce();
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
     expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
     expect(setAccent).toHaveBeenCalledWith(undefined);
     expect(setTextScale).toHaveBeenCalledWith(100);
-    expect(setSidebarLiveActivity).toHaveBeenCalledWith(true);
-    expect(setChatMessageMaxWidth).toHaveBeenCalledWith(undefined);
-    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
-    expect(setCatalogOpenTarget).toHaveBeenCalledWith("viewer");
-    expect(setComposerHoldToRecord).toHaveBeenCalledWith(true);
-    expect(setLobsterPetVisits).toHaveBeenCalledWith(true);
-    expect(setLobsterPetSounds).toHaveBeenCalledWith(false);
   });
 
-  it("keeps authored visual defaults direct while preserving chat preference resets", () => {
+  it("keeps authored visual defaults direct", () => {
     const setTheme = vi.fn();
     const setThemeMode = vi.fn();
-    const resetChatSendShortcut = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1756,7 +2006,6 @@ describe("config view", () => {
       chatSendShortcut: "enter",
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
-      resetChatSendShortcut,
     });
     const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
@@ -1769,15 +2018,12 @@ describe("config view", () => {
     expect(shortcutRow?.textContent).toContain("Default: Enter");
     findButtonByText(themeSection, "Claw").click();
     themeSection.querySelector<HTMLElement>('wa-radio[value="system"]')?.click();
-    shortcutRow?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
 
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
     expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
-    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
   });
 
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
-    const resetLocale = vi.fn();
     const setTheme = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
@@ -1786,7 +2032,6 @@ describe("config view", () => {
       localeOverridden: true,
       localeProvenance: "device-local",
       localeResetValue: "de",
-      resetLocale,
       theme: "knot",
       themeOverridden: true,
       themeProvenance: "device-local",
@@ -1818,10 +2063,8 @@ describe("config view", () => {
       themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
     ).toBe("true");
 
-    languageRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
     findButtonByText(themeSection, "Claw").click();
 
-    expect(resetLocale).toHaveBeenCalledOnce();
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
   });
 
@@ -1878,12 +2121,35 @@ describe("config view", () => {
     );
     for (const title of [
       "Message width",
+      "Collapse task progress by default",
       "Open external sessions in",
-      "Hold microphone button to dictate",
+      "Hold microphone button to start dictation",
     ]) {
       expect(row(title)?.textContent).toContain("Stored in this browser only");
       expect(row(title)?.textContent).not.toContain("Synced across your devices");
     }
+  });
+
+  it("renders task progress auto-collapse off by default and enables it from Chat settings", () => {
+    const setChatCollapseTaskProgress = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      chatCollapseTaskProgress: false,
+      setChatCollapseTaskProgress,
+    });
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
+        "Collapse task progress by default",
+    );
+    const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+
+    expect(toggle?.checked).toBe(false);
+    row?.click();
+    expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
+    expect(row?.textContent).toContain("Using default: Disabled");
+    expect(row?.textContent).toContain("Stored in this browser only");
   });
 
   it("shows the tweakcn importer once the custom slot is opened", () => {
@@ -2016,7 +2282,10 @@ describe("config view", () => {
       "System default",
       "Desk Camera",
     ]);
-    expect(container.textContent).toContain("Hold microphone button to dictate");
+    for (const select of [microphoneSelect, cameraSelect]) {
+      expect(select.closest(".settings-row")?.querySelector("button")).toBeNull();
+    }
+    expect(container.textContent).toContain("Hold microphone button to start dictation");
 
     microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));

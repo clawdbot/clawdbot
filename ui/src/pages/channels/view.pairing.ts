@@ -11,6 +11,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { renderChannelRefreshAction } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 function accountName(account: ChannelsPairingAccount): string {
@@ -164,23 +165,11 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
           title: t("channels.pairing.title"),
           description: t("channels.pairing.subtitle"),
           ...(count > 0 ? { count } : {}),
-          actions: html`
-            <span class="settings-row__value">
-              ${props.canManagePairing && props.pairingLastSuccessAt
-                ? t("channels.hub.updatedAgo", {
-                    ago: formatRelativeTimestamp(props.pairingLastSuccessAt),
-                  })
-                : t("common.na")}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${props.pairingLoading || !props.canManagePairing}
-              @click=${props.onPairingRefresh}
-            >
-              ${t("common.refresh")}
-            </button>
-          `,
+          actions: renderChannelRefreshAction({
+            updatedAt: props.canManagePairing ? props.pairingLastSuccessAt : null,
+            disabled: props.pairingLoading || !props.canManagePairing,
+            onRefresh: props.onPairingRefresh,
+          }),
         },
         !props.canManagePairing
           ? html`

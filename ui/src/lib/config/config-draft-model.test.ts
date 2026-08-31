@@ -727,79 +727,95 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it("clears a failure status and error when a mutation reverts the draft clean", async () => {
-    vi.useFakeTimers();
-    let setCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
+  it.each(["form", "raw"] as const)(
+    "clears a failure when %s editing reverts the draft clean",
+    async (mode) => {
+      vi.useFakeTimers();
+      let setCalls = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: { count: 1 },
+            raw: '{\n  "count": 1\n}\n',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        if (method === "config.set") {
+          setCalls += 1;
+          throw new Error("disk full");
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+
+      // Reverting to the original makes the failure moot.
+      if (mode === "raw") {
+        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
+      } else {
+        runtimeConfig.patchForm(["count"], 1);
       }
-      if (method === "config.set") {
-        setCalls += 1;
-        throw new Error("disk full");
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      expect(runtimeConfig.state.lastError).toBeNull();
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      expect(setCalls).toBe(1);
+      runtimeConfig.dispose();
+    },
+  );
+
+  it.each(["form", "raw"] as const)(
+    "keeps conflict status when %s editing reverts the draft clean",
+    async (mode) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: { count: 1 },
+            raw: '{\n  "count": 1\n}\n',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        if (method === "config.set") {
+          throw new Error("config changed since last load; re-run config.get and retry");
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+
+      // The snapshot is known stale; local cleanliness cannot clear that.
+      if (mode === "raw") {
+        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
+      } else {
+        runtimeConfig.patchForm(["count"], 1);
       }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-
-    // Reverting to the original makes the failure moot.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    expect(runtimeConfig.state.lastError).toBeNull();
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-    expect(setCalls).toBe(1);
-    runtimeConfig.dispose();
-  });
-
-  it("keeps the conflict status until reload even when the draft reverts clean", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.set") {
-        throw new Error("config changed since last load; re-run config.get and retry");
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-    // The snapshot is known stale; local cleanliness cannot clear that.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-    await runtimeConfig.refresh({ discardPendingChanges: true });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    runtimeConfig.dispose();
-  });
+      await runtimeConfig.refresh({ discardPendingChanges: true });
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      runtimeConfig.dispose();
+    },
+  );
 
   it("discards offline drafts locally instead of no-op refreshing", async () => {
     vi.useFakeTimers();

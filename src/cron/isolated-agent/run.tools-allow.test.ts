@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
 } from "../../secrets/runtime-web-tools-state.js";
@@ -142,9 +146,9 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       accountId: undefined,
       error: undefined,
     });
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      const result = await runInitialModelFallbackAttempt(params);
+      return { result, provider: params.provider, model: params.model, attempts: [] };
     });
   });
 
@@ -250,6 +254,145 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+    },
+  );
+
+  it(
+    "fails a structured command prompt without shell access before model execution",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["terminal", "node_exec", "node_process"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+        "- workdir: /srv/openclaw",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result).toMatchObject({
+        status: "error",
+        admissionDisposition: "rejected",
+        error: expect.stringContaining(
+          "openclaw automations edit tools-allow --tools exec,process",
+        ),
+        diagnostics: {
+          summary: expect.stringContaining("No command was executed"),
+          entries: [expect.objectContaining({ source: "cron-preflight", severity: "error" })],
+        },
+      });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(resolveConfiguredModelRefMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["a blank tool allowlist entry", [" "]],
+    ["a noncanonical shell pseudo-tool", ["shell"]],
+    ["the patch-only tool", ["apply_patch"]],
+  ])(
+    "does not treat %s as shell access",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async (_label, toolsAllow) => {
+      const params = makeParamsWithToolsAllow(toolsAllow);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("error");
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with explicit shell access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["exec", "read"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+        "- workdir: /srv/openclaw",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["exec", "read"]);
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with process access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["process"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["process"]);
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with grouped shell access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["group:runtime"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+        "- workdir: /srv/openclaw",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["group:runtime"]);
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with wildcard shell access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["exec*"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["exec*"]);
+    },
+  );
+
+  it(
+    "does not reject an explanatory prompt that only mentions a command",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["read", "message"]);
+      (params.job as { payload: { message: string } }).payload.message =
+        "Explain whether the operator should run python3 scripts/check_mail.py.";
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     },
   );
 

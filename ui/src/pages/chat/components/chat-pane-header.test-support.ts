@@ -63,3 +63,25 @@ export function mountChatPaneHeader(
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
 }
+
+export function describeFetchCalls(calls: readonly (readonly unknown[])[]): string {
+  const requests = calls.map(([input]) => {
+    if (typeof input !== "string") {
+      return "non-string";
+    }
+    if (input === "/__openclaw__/workspace-icon/agent%3Amain%3Aone") {
+      return "workspace-one";
+    }
+    if (input === "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering") {
+      return "workspace-recovering";
+    }
+    if (input.startsWith("/__openclaw__/workspace-icon/")) {
+      return "other-workspace";
+    }
+    if (input.startsWith("data:image/svg+xml,")) {
+      return "svg-data";
+    }
+    return "other-string";
+  });
+  return `fetch request categories: ${JSON.stringify(requests)}`;
+}

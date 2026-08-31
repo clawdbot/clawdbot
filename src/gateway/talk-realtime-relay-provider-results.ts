@@ -61,6 +61,25 @@ export function completeAfterToolResultSubmissions(
   return Promise.all(pending).then(complete);
 }
 
+function trackToolResultCompletion(
+  pending: Map<string, Promise<void>>,
+  callId: string,
+  completion: void | Promise<void>,
+): void | Promise<void> {
+  if (!completion) {
+    return;
+  }
+  const tracked = completion.finally(() => {
+    // An older completion can settle after a newer replacement is stored.
+    // Delete only the entry this completion still owns.
+    if (pending.get(callId) === tracked) {
+      pending.delete(callId);
+    }
+  });
+  pending.set(callId, tracked);
+  return tracked;
+}
+
 export function submitFinalProviderToolResult(params: {
   session: RelaySession;
   callId: string;
@@ -132,19 +151,16 @@ export function submitFinalProviderToolResult(params: {
     accept();
     return;
   }
-  const tracked = submission
-    .then((submitted) => {
-      if (submitted !== false) {
-        accept();
-      }
-    })
-    .finally(() => {
-      if (params.session.pendingProviderToolResults.get(params.callId) === tracked) {
-        params.session.pendingProviderToolResults.delete(params.callId);
-      }
-    });
-  params.session.pendingProviderToolResults.set(params.callId, tracked);
-  return tracked;
+  const completion = submission.then((submitted) => {
+    if (submitted !== false) {
+      accept();
+    }
+  });
+  return trackToolResultCompletion(
+    params.session.pendingProviderToolResults,
+    params.callId,
+    completion,
+  );
 }
 
 export function trackAgentFinalToolResult(
@@ -152,16 +168,7 @@ export function trackAgentFinalToolResult(
   callId: string,
   completion: void | Promise<void>,
 ): void | Promise<void> {
-  if (!completion) {
-    return;
-  }
-  const tracked = completion.finally(() => {
-    if (session.pendingFinalToolResults.get(callId) === tracked) {
-      session.pendingFinalToolResults.delete(callId);
-    }
-  });
-  session.pendingFinalToolResults.set(callId, tracked);
-  return tracked;
+  return trackToolResultCompletion(session.pendingFinalToolResults, callId, completion);
 }
 
 export function trackPendingWorkingToolResult(
@@ -169,16 +176,7 @@ export function trackPendingWorkingToolResult(
   callId: string,
   completion: void | Promise<void>,
 ): void | Promise<void> {
-  if (!completion) {
-    return;
-  }
-  const tracked = completion.finally(() => {
-    if (session.pendingWorkingToolResults.get(callId) === tracked) {
-      session.pendingWorkingToolResults.delete(callId);
-    }
-  });
-  session.pendingWorkingToolResults.set(callId, tracked);
-  return tracked;
+  return trackToolResultCompletion(session.pendingWorkingToolResults, callId, completion);
 }
 
 export function clearRelayAgentToolCall(session: RelaySession, callId: string): void {

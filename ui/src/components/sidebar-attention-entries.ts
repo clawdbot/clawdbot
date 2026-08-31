@@ -20,6 +20,7 @@ export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature:
 type SidebarInboxEntryBase<Category extends Exclude<IssueTab, "all">> = {
   category: Category;
   dismissal: SidebarAttentionDismissal | null;
+  requiresAction: boolean;
   severity: "error" | "warning";
 };
 
@@ -68,6 +69,7 @@ export function buildScopeUpgradeInboxEntry(params: {
     type: "scopeUpgrade",
     category: "system",
     dismissal,
+    requiresAction: true,
     severity:
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
     state: params.state,
@@ -78,6 +80,7 @@ export function buildUpdateInboxEntry(params: {
   canDismiss: boolean;
   dismissal: SidebarAttentionDismissal | null;
   forced: boolean;
+  requiresAction: boolean;
   severity: "error" | "warning";
   visible: boolean;
 }): Extract<SidebarInboxEntry, { type: "update" }> | null {
@@ -88,6 +91,7 @@ export function buildUpdateInboxEntry(params: {
     type: "update",
     category: "system",
     dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
+    requiresAction: params.requiresAction,
     severity: params.severity,
   };
 }
@@ -103,6 +107,7 @@ export function buildSidebarInboxEntries(params: {
     approval,
     category: "approvals",
     dismissal: null,
+    requiresAction: true,
     severity: "warning",
   }));
   const errors = params.attention.filter((entry) => entry.severity === "error");
@@ -125,10 +130,11 @@ export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: Issue
 export function sidebarInboxTabCounts(
   entries: readonly SidebarInboxEntry[],
 ): Record<IssueTab, number> {
+  const actionEntries = entries.filter((entry) => entry.requiresAction);
   return {
-    all: entries.length,
-    approvals: entries.filter((entry) => entry.category === "approvals").length,
-    automations: entries.filter((entry) => entry.category === "automations").length,
-    system: entries.filter((entry) => entry.category === "system").length,
+    all: actionEntries.length,
+    approvals: actionEntries.filter((entry) => entry.category === "approvals").length,
+    automations: actionEntries.filter((entry) => entry.category === "automations").length,
+    system: actionEntries.filter((entry) => entry.category === "system").length,
   };
 }

@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,9 +16,9 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   readTranscriptProjectionGeneration,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import {
@@ -42,12 +43,15 @@ export {
 
 export type SessionTranscriptMessageEvent = {
   event: TranscriptEvent;
+  eventSeq: number;
   seq: number;
+  displayPosition?: TranscriptDisplayPosition;
 };
 
 export type SessionTranscriptMessageEventPage = {
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  displaySource?: string;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };
@@ -59,6 +63,9 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 };
 
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  // `events` may remain sparse for salvage callers; this count marks the
+  // authoritative newest suffix before the first byte-budget omission.
+  newestContiguousEventCount: number;
   scannedMessages: number;
   serializedBytes: number;
   snapshot: {
@@ -68,6 +75,7 @@ export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEv
 };
 
 function parseMessageEventRow(row: {
+  event_seq: number;
   event_json: string;
   message_position: number | null;
 }): SessionTranscriptMessageEvent {
@@ -76,6 +84,7 @@ function parseMessageEventRow(row: {
   }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
+    eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
     seq: row.message_position + 1,
@@ -120,7 +129,7 @@ export function readSessionTranscriptActivePathEntryRelation(
   });
 }
 
-/** Reads a bounded tail from the materialized active path, including control events. */
+/** Reads a bounded context tail, preserving control facts but excluding display-only messages. */
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
@@ -142,6 +151,7 @@ export function readRecentSessionTranscriptActiveEvents(
         )
         .select("event.event_json")
         .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.context_eligible", "=", 1)
         .orderBy("active.active_position", "desc")
         .limit(limit),
     )
@@ -260,7 +270,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
           "active.event_seq",
           "active.message_position",
           /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .where("active.message_position", "is not", null)
@@ -446,40 +456,29 @@ export function readSessionTranscriptBoundedMessageTailPage(
     );
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
-    const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
-    if (positions.length === 0 || maxBytes === 0) {
+    const scannedMessages = endExclusive - start;
+    if (scannedMessages === 0 || maxBytes === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
-        scannedMessages: positions.length,
+        newestContiguousEventCount: 0,
+        scannedMessages,
         serializedBytes: 0,
         snapshot,
         totalMessages,
       };
     }
     const db = getActiveTranscriptKysely(projection.database);
-    const metadata = executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select([
-          "active.message_position",
-          /* kysely-allow-raw: byte budget covers the exact newline-terminated JSON event. */
-          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "in", positions)
-        .orderBy("active.message_position", "desc"),
-    ).rows;
+    const metadata = readVisibleMessageMetadata(projection, start, endExclusive).toReversed();
+    if (metadata.length !== scannedMessages) {
+      throw new Error("Active transcript bounded message page is incomplete");
+    }
     const selectedPositions: number[] = [];
+    let newestContiguousEventCount: number | undefined;
     let serializedBytes = 0;
     for (const row of metadata) {
-      if (row.message_position === null || serializedBytes + row.serialized_bytes > maxBytes) {
+      if (serializedBytes + row.serialized_bytes > maxBytes) {
+        newestContiguousEventCount ??= selectedPositions.length;
         continue;
       }
       selectedPositions.push(row.message_position);
@@ -497,7 +496,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
                   .onRef("event.session_id", "=", "active.session_id")
                   .onRef("event.seq", "=", "active.event_seq"),
               )
-              .select(["active.message_position", "event.event_json"])
+              .select(["active.event_seq", "active.message_position", "event.event_json"])
               .where("active.session_id", "=", projection.resolved.sessionId)
               .where("active.message_position", "in", selectedPositions)
               .orderBy("active.message_position", "asc"),
@@ -505,7 +504,8 @@ export function readSessionTranscriptBoundedMessageTailPage(
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events,
-      scannedMessages: positions.length,
+      newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
+      scannedMessages,
       serializedBytes,
       snapshot,
       totalMessages,

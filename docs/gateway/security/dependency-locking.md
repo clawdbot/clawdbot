@@ -11,7 +11,27 @@ OpenClaw uses `pnpm-lock.yaml` as its committed product dependency review bounda
 
 OpenClaw does not commit npm-format locks for product packages or publish them in package tarballs. [npm 12 removed shrinkwrap support](https://github.com/npm/cli/releases/tag/v12.0.0), including the `npm shrinkwrap` command and loading `npm-shrinkwrap.json` from package roots or dependency tarballs.
 
-The trusted ClawHub release toolchain is a separate exception: `.github/release/clawhub-cli/package-lock.json` is a committed npm 12 project lock used by release automation. It is not shipped in an OpenClaw package.
+The trusted ClawHub and Vercel release toolchains are separate exceptions: `.github/release/clawhub-cli/package-lock.json` and `.github/release/vercel-cli/package-lock.json` are committed npm project locks used by release automation. Neither is shipped in an OpenClaw package.
+
+These projects do not inherit root pnpm overrides. The Vercel project uses approved, version-scoped npm overrides for vulnerable upstream pins; remove each override when its owning dependency accepts a fixed version. Lock audits cover resolved package identities, not code already bundled into upstream CLI artifacts.
+
+## Check dependency advisories
+
+The production audit pre-commit hook and ordinary CI's `security-fast` job remain zero-install, npm-only checks of the product production graph. They query npm bulk advisory data, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
+
+`pnpm deps:vuln:gate`, used by release dependency evidence, audits the product pnpm lock and both release-tool locks independently. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
+
+Within each lockfile, known malware and critical advisories block anywhere, and high advisories block in the production/runtime graph. Dev-only high advisories and moderate or lower non-malware advisories are reported without blocking. GitHub's `medium` severity maps to `moderate` in this policy. Upstream findings match the npm package identity and affected-version range against exact locked versions; only matches absent from the npm result for the corresponding lockfile and graph are added. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid expected locks fail the gate.
+
+Release automation reuses its existing standard `GH_TOKEN` only for GitHub API requests, never for npm registry requests. Local runs without that token use anonymous GitHub requests and their rate limits. No new OpenClaw configuration or operator credential setup is required.
+
+### Interpret coverage
+
+Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
+
+The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
+
+Missing or unsupported repository metadata, malformed affected-version ranges, exhausted request or pagination budgets, and request or rate-limit failures produce `partial` upstream coverage, not an unaffected result. Confirmed findings remain in the report and enter the same severity policy. Inspect the coverage issue subjects and reasons before interpreting a zero-finding result.
 
 ## Published package behavior
 

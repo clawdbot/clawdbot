@@ -61,8 +61,11 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
-    await import("../commands/doctor-auth-flat-profiles.js");
+  const {
+    collectOpenAICodexAuthProfileStoreIdMap,
+    maybeMigrateAuthProfileJsonStoresToSqlite,
+    maybeRepairOpenAICodexAuthConfig,
+  } = await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -77,11 +80,23 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  await maybeMigrateAuthProfileJsonStoresToSqlite({
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
     cfg: ctx.cfg,
-    prompter: ctx.prompter,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
+  const authConfigCandidate = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
+    profileIdMap: openAICodexAuthProfileIdMap,
+  }).config;
+  const authProfileMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: authConfigCandidate,
+    prompter: ctx.prompter,
+    openAICodexAuthProfileIdMap,
+    ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  if (authProfileMigration.configOwnerMigrationApplied) {
+    // The candidate is safe only after the migration verifies and archives its source.
+    ctx.cfg = authConfigCandidate;
+  }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
@@ -250,7 +265,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
+    await import("../infra/state-migrations.doctor.js");
   const { note } = await loadNoteModule();
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
@@ -269,36 +284,57 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (legacyState.notices.length > 0) {
     note(legacyState.notices.join("\n"), "Doctor notices");
   }
-  if (legacyState.preview.length === 0) {
+  if (legacyState.preview.length > 0) {
+    note(legacyState.preview.join("\n"), "Legacy state detected");
+    const migrate =
+      ctx.options.nonInteractive === true
+        ? true
+        : await ctx.prompter.confirm({
+            message: "Migrate detected legacy state now?",
+            initialValue: true,
+          });
+    if (migrate) {
+      const migrated = await runLegacyStateMigrations({
+        detected: legacyState,
+        config: ctx.cfg,
+        ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+        legacySessionSurfaces,
+      });
+      if (migrated.changes.length > 0) {
+        note(migrated.changes.join("\n"), "Doctor changes");
+      }
+      const notices = migrated.notices ?? [];
+      if (notices.length > 0) {
+        note(notices.join("\n"), "Doctor notices");
+      }
+      if (migrated.warnings.length > 0) {
+        note(migrated.warnings.join("\n"), "Doctor warnings");
+      }
+    }
+  }
+  if (!doctorOnlyStateMigrations) {
     return;
   }
-  note(legacyState.preview.join("\n"), "Legacy state detected");
-  const migrate =
-    ctx.options.nonInteractive === true
-      ? true
-      : await ctx.prompter.confirm({
-          message: "Migrate detected legacy state now?",
-          initialValue: true,
-        });
-  if (!migrate) {
-    return;
+  const { repairObsoleteGeneratedExecApprovals } =
+    await import("../infra/exec-approvals-generated-migration.js");
+  const { ExecApprovalsMigrationRequiredError } =
+    await import("../infra/exec-approvals-migration-gate.js");
+  let removedExecApprovals: number;
+  try {
+    // The legacy-state owner must import retired JSON before this gated SQLite update.
+    removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      return;
+    }
+    throw error;
   }
-  const migrated = await runLegacyStateMigrations({
-    detected: legacyState,
-    config: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-    recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
-    legacySessionSurfaces,
-  });
-  if (migrated.changes.length > 0) {
-    note(migrated.changes.join("\n"), "Doctor changes");
-  }
-  const notices = migrated.notices ?? [];
-  if (notices.length > 0) {
-    note(notices.join("\n"), "Doctor notices");
-  }
-  if (migrated.warnings.length > 0) {
-    note(migrated.warnings.join("\n"), "Doctor warnings");
+  if (removedExecApprovals > 0) {
+    note(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+      "Doctor changes",
+    );
   }
 }
 

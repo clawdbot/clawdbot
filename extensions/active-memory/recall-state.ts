@@ -43,13 +43,25 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string): void {
+function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
+  const now = Date.now();
+  for (const [entryKey, entry] of timeoutCircuitBreaker) {
+    if (now - entry.lastTimeoutAt >= cooldownMs) {
+      timeoutCircuitBreaker.delete(entryKey);
+    }
+  }
   const entry = timeoutCircuitBreaker.get(key);
-  if (entry) {
-    entry.consecutiveTimeouts++;
-    entry.lastTimeoutAt = Date.now();
-  } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+  // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
+  timeoutCircuitBreaker.delete(key);
+  timeoutCircuitBreaker.set(key, {
+    consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
+    lastTimeoutAt: now,
+  });
+  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
+    const oldestKey = timeoutCircuitBreaker.keys().next().value;
+    if (oldestKey !== undefined) {
+      timeoutCircuitBreaker.delete(oldestKey);
+    }
   }
 }
 

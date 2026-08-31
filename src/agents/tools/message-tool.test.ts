@@ -3954,6 +3954,7 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "discord",
       currentChannelId: "channel:123",
+      currentChatType: "channel",
       currentThreadTs: "thread-456",
       currentMessageId: "msg-789",
       agentAccountId: "ops",
@@ -3968,6 +3969,7 @@ describe("message tool schema scoping", () => {
     }
     expect(context.currentChannelProvider).toBe("discord");
     expect(context.currentChannelId).toBe("channel:123");
+    expect(context.chatType).toBe("channel");
     expect(context.currentThreadTs).toBe("thread-456");
     expect(context.currentMessageId).toBe("msg-789");
     expect(context?.accountId).toBe("ops");
@@ -4189,6 +4191,48 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("Current channel");
     expect(tool.description).not.toContain("Other configured channels");
     expect(tool.description).not.toContain("telegram (");
+  });
+
+  it("keeps cross-channel Telegram reactions available when emoji schema is metadata-only", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send"],
+    });
+    const telegramPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send", "react"],
+      toolSchema: {
+        actions: [],
+        properties: {
+          emoji: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    const properties = getToolProperties(tool);
+    expect(getActionEnum(properties)).toContain("react");
+    expect(properties.emoji).toMatchObject({ type: "string" });
+    expect((properties.emoji as { description?: string }).description).not.toContain(
+      "custom_emoji_id",
+    );
   });
 
   it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {

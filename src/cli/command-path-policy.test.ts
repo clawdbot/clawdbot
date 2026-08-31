@@ -305,6 +305,51 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("loads only sandbox backend owner plugins for runtime commands", () => {
+    const sandboxPolicy = resolveCliCommandPathPolicy(["sandbox"]);
+    expectLoadPluginsResolver(sandboxPolicy);
+    expect(sandboxPolicy.pluginRegistry).toEqual({ scope: "sandbox-backends" });
+
+    for (const commandPath of [["sandbox", "explain"]]) {
+      expect(resolveCliCommandPathPolicy(commandPath).pluginRegistry).toEqual({
+        scope: "sandbox-backends",
+      });
+      expect(
+        sandboxPolicy.loadPlugins({
+          argv: ["node", "openclaw", ...commandPath],
+          commandPath,
+          jsonOutputMode: false,
+        }),
+      ).toBe(true);
+    }
+
+    for (const commandPath of [
+      ["sandbox", "list"],
+      ["sandbox", "recreate"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath).pluginRegistry).toEqual({
+        scope: "sandbox-management",
+      });
+    }
+  });
+
+  it.each([
+    ["list", ["--browser"]],
+    ["recreate", ["--browser", "--all"]],
+    ["recreate", ["--all", "--browser"]],
+  ])("keeps browser-only sandbox %s independent of plugin activation", (subcommand, flags) => {
+    const policy = resolveCliCommandPathPolicy(["sandbox", subcommand]);
+    expectLoadPluginsResolver(policy);
+
+    expect(
+      policy.loadPlugins({
+        argv: ["node", "openclaw", "sandbox", subcommand, ...flags],
+        commandPath: ["sandbox", subcommand],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+  });
+
   it("resolves mixed startup-only rules", () => {
     expectResolvedPolicy(["qa", "suite"], {
       configGuard: "skip",
@@ -408,6 +453,17 @@ describe("command-path-policy", () => {
     ]) {
       expectResolvedPolicy(commandPath, {
         loadPlugins: "never",
+      });
+    }
+    // Authoring commands operate on a target package, not operator config, so
+    // a host config the running CLI predates must not abort them.
+    for (const commandPath of [
+      ["plugins", "build"],
+      ["plugins", "validate"],
+      ["plugins", "init"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
       });
     }
     expectResolvedPolicy(["cron", "list"], {

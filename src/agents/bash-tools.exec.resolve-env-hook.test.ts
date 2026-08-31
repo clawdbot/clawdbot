@@ -235,7 +235,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
   });
 
-  it("forwards filtered plugin env to node host requests", async () => {
+  it("inherits configured node for auto while forwarding filtered plugin env", async () => {
     installResolveExecEnvHook({
       NODE_HOST_SAFE: "yes",
       LD_PRELOAD: "/tmp/preload.dylib",
@@ -252,6 +252,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       },
     });
     await tool.execute("call-node", {
+      host: "auto",
       command: "echo ok",
       env: { REQUEST_SAFE: "request" },
     });
@@ -275,6 +276,8 @@ describe("exec resolve_exec_env hook wiring", () => {
       sender: { id: "ou_node" },
     });
     expect(mocks.nodeHostParams[0]?.env).not.toHaveProperty("LD_PRELOAD");
+    expect(mocks.gatewayParams).toHaveLength(0);
+    expect(mocks.spawnInputs).toHaveLength(0);
   });
 
   it("does not forward configured gateway cwd defaults to node host requests", async () => {
@@ -690,7 +693,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
   });
 
-  it("forwards private env preparation through the lazy exec tool", async () => {
+  it("inherits configured gateway for auto through lazy exec preparation", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
         (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
@@ -719,6 +722,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     await expectDefined(definition, "definition test invariant").execute(
       "call-lazy",
       {
+        host: "auto",
         command: "echo ok",
         env: { REQUEST_SAFE: "request" },
         yieldMs: 120_000,

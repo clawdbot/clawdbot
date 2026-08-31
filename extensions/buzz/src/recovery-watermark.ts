@@ -21,7 +21,7 @@ export function openBuzzRecoveryWatermarkStore(params: {
   });
 }
 
-export async function resolveBuzzColdStartSince(params: {
+export async function resolveBuzzRecoverySince(params: {
   store: BuzzRecoveryWatermarkStore;
   channelIds: readonly string[];
   nowSeconds: number;

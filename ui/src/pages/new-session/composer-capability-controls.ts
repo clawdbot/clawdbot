@@ -53,8 +53,6 @@ export function renderNewSessionPlusMenu(
   attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
 ) {
   const draftEnabled = options.visibility === "draft";
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  const selectedCount = overrideCount + (draftEnabled ? 1 : 0);
   const disabled = options.submitting || options.messageLocked === true;
   const controller = options.textareaController;
   return renderChatComposerPlusMenu({
@@ -77,10 +75,6 @@ export function renderNewSessionPlusMenu(
           },
         ]
       : undefined,
-    selectedLabel:
-      selectedCount > 0
-        ? t("newSession.composerOptionsSelected", { count: String(selectedCount) })
-        : undefined,
     onOpenChange: (open) => {
       controller.capabilityMenuOpen = open;
       if (!open) {
@@ -96,9 +90,8 @@ export function renderNewSessionPlusMenu(
 }
 
 export function renderNewSessionSelectionStatus(options: NewSessionComposerCapabilityOptions) {
-  const draftEnabled = options.visibility === "draft";
   const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  if (!draftEnabled && overrideCount === 0) {
+  if (overrideCount === 0) {
     return nothing;
   }
   const disabled = options.submitting || options.messageLocked === true;
@@ -108,30 +101,16 @@ export function renderNewSessionSelectionStatus(options: NewSessionComposerCapab
     options.requestUpdate();
   };
   return html`
-    ${draftEnabled
-      ? html`<button
-          type="button"
-          class="new-session-page__selection-status"
-          ?disabled=${disabled}
-          @click=${openMenu}
-        >
-          ${icons.pencil}${t("newSession.draft")}
-        </button>`
-      : nothing}
-    ${overrideCount > 0
-      ? html`<button
-          type="button"
-          class="new-session-page__selection-status"
-          ?disabled=${disabled}
-          @click=${openMenu}
-        >
-          ${t(
-            overrideCount === 1
-              ? "chat.composer.overrides.countOne"
-              : "chat.composer.overrides.count",
-            { count: String(overrideCount) },
-          )}
-        </button>`
-      : nothing}
+    <button
+      type="button"
+      class="new-session-page__selection-status"
+      ?disabled=${disabled}
+      @click=${openMenu}
+    >
+      ${t(
+        overrideCount === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count",
+        { count: String(overrideCount) },
+      )}
+    </button>
   `;
 }

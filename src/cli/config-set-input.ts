@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -116,6 +117,7 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
+  let parsed: unknown;
   try {
     // Check raw text nesting depth before parsing
     assertBoundedRawJsonNesting(raw);
@@ -126,6 +128,8 @@ function parseJson5Raw(raw: string, label: string): unknown {
   } catch (err) {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {

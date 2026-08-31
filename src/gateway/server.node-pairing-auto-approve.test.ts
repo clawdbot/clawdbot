@@ -58,6 +58,11 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.role).toBe("node");
         expect(paired?.approvedScopes ?? []).toStrictEqual([]);
+        expect(paired?.approvedVia).toBe("trusted-cidr");
+        // Network origin approves the device only: the capability surface must
+        // stay on the manual operator prompt (#128446 documents the flow).
+        expect(paired?.nodeSurface).toBeUndefined();
+        expect(paired?.pendingNodeSurface).toBeDefined();
       },
     });
   });

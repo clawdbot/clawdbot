@@ -14,6 +14,7 @@ import {
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -31,7 +32,7 @@ import {
   isAcpSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiCanonicalMainSessionKey,
+  readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
@@ -231,6 +232,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      color: normalizeOptionalString(row.color),
       channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,
@@ -242,6 +244,10 @@ export function buildSidebarSessionNavigationState(input: {
       worktreeId: row.worktree?.id,
       execNode: row.execNode,
       placementState: row.placement?.state,
+      placementProviderId:
+        row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
+      placementProfileId:
+        row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:
@@ -514,7 +520,7 @@ export function resolveSidebarMainSessionKey(input: {
   // Global-scope gateways advertise the canonical main session as the
   // literal "global" key; a synthesized agent key would never match it.
   if (isUiGlobalScopeConfigured(host)) {
-    return resolveUiCanonicalMainSessionKey(host);
+    return normalizeOptionalString(readSessionDefaults(host)?.mainSessionKey) ?? "global";
   }
   return buildAgentMainSessionKey({
     agentId: input.agentId,
@@ -533,12 +539,7 @@ export function collectKnownSidebarSessionGroups(
   catalog: readonly string[],
   rows: readonly GatewaySessionRow[],
 ): string[] {
-  const catalogSet = new Set(catalog);
-  const discovered = rows
-    .map((row) => normalizeOptionalString(row.category))
-    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
-    .toSorted((a, b) => a.localeCompare(b));
-  return [...catalog, ...new Set(discovered)];
+  return collectKnownSessionGroups(catalog, rows);
 }
 
 /** Depth-first search across a projected session tree, including descendants.
@@ -606,11 +607,14 @@ export function applySidebarSessionOwnerFilter(input: {
     ownerOptions.length < 2 &&
     someSidebarSessionInTree(input.projected, (row) => (row.participantCount ?? 0) > 0);
   const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
-  const activeOwnerId = ownershipVisible
-    ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)
-      ? input.selectedOwnerId
-      : null
-    : null;
+  // An absent facet is unresolved during hydration. A present facet is the
+  // Gateway's complete owner inventory, even when rows are owner-filtered.
+  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
+  const activeOwnerId =
+    selectedOwnerId &&
+    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
+      ? selectedOwnerId
+      : null;
   if (!activeOwnerId) {
     // Involving-me is evaluated by the Gateway against the complete participant table.
     // The bounded display projection cannot safely repeat that predicate client-side.

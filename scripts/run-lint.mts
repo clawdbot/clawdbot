@@ -56,6 +56,7 @@ if (uiI18nStatus !== 0) {
         path.resolve("scripts", "run-stylelint.mts"),
         "ui/src/**/*.css",
         "ui/src/**/*.ts",
+        "ui/public/themes/*.css",
       ],
       { env: process.env, stdio: "inherit" },
     );

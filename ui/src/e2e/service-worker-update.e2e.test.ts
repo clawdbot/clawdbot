@@ -305,6 +305,13 @@ describe("Control UI service-worker production update E2E", () => {
       },
       terminalEnabled: true,
     });
+    const getCatalogOpens = async () =>
+      (await gateway.getRequests("terminal.open")).filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params !== null &&
+          "catalog" in request.params,
+      );
     let installGate: InstallGate | null = null;
 
     try {
@@ -413,14 +420,7 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
-      const catalogOpensBeforeWorkerActivation = (
-        await gateway.getRequests("terminal.open")
-      ).filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "catalog" in request.params,
-      );
+      const catalogOpensBeforeWorkerActivation = await getCatalogOpens();
       expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
       if (catalogOpensBeforeWorkerActivation.length > 0) {
         const currentConnect = (await gateway.getRequests("connect")).at(-1);
@@ -451,12 +451,13 @@ describe("Control UI service-worker production update E2E", () => {
           }),
         )
         .toEqual({ agentId: "research", available: true, open: true });
-      const catalogOpens = (await gateway.getRequests("terminal.open")).filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "catalog" in request.params,
-      );
+      // Panel visibility precedes asynchronous terminal boot and RPC dispatch.
+      // Observe the request and finish its intent before counting exactly once.
+      await expect.poll(getCatalogOpens).toHaveLength(1);
+      await expect
+        .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
+        .toBeNull();
+      const catalogOpens = await getCatalogOpens();
       expect(catalogOpens).toHaveLength(1);
       const [terminalOpen] = catalogOpens;
       expect(terminalOpen?.params).toMatchObject({

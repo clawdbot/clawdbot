@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listBuzzAccountIds, resolveBuzzAccount } from "./types.js";
+import { listBuzzAccountIds, resolveBuzzAccount, resolveDefaultBuzzAccountId } from "./types.js";
 
 const PRIVATE_KEY = "11".repeat(32);
 const ENV_PRIVATE_KEY = "22".repeat(32);
@@ -24,6 +24,88 @@ describe("listBuzzAccountIds", () => {
 });
 
 describe("resolveBuzzAccount", () => {
+  it("isolates named identities and never fills missing fields from root credentials", () => {
+    vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
+    vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");
+    vi.stubEnv("BUZZ_RELAY_URL", "wss://ambient.example.com");
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://root.example.com",
+          privateKey: PRIVATE_KEY,
+          authTag: "root-auth",
+          name: "Root bot",
+          groupPolicy: "open",
+          groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+          accounts: {
+            ada: { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" },
+            empty: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(listBuzzAccountIds(cfg)).toEqual(["ada", "default", "empty"]);
+    expect(resolveDefaultBuzzAccountId(cfg)).toBe("default");
+    expect(resolveBuzzAccount({ cfg, accountId: "ada" })).toMatchObject({
+      accountId: "ada",
+      name: "Ada",
+      privateKey: "33".repeat(32),
+      authTag: "",
+      relayUrl: "wss://ada.example.com",
+      config: { groupPolicy: "open" },
+    });
+    expect(resolveBuzzAccount({ cfg, accountId: "ada" }).config.groups).toBeUndefined();
+    expect(resolveBuzzAccount({ cfg, accountId: "empty" })).toMatchObject({
+      accountId: "empty",
+      configured: false,
+      privateKey: "",
+      authTag: "",
+      relayUrl: "",
+    });
+    expect(resolveBuzzAccount({ cfg, accountId: "default" }).privateKey).toBe(PRIVATE_KEY);
+  });
+
+  it("treats an explicit default account as a complete identity boundary", () => {
+    vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
+    vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");
+    vi.stubEnv("BUZZ_RELAY_URL", "wss://ambient.example.com");
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://root.example.com",
+          privateKey: PRIVATE_KEY,
+          authTag: "root-auth",
+          accounts: { default: { name: "Explicit default" } },
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveBuzzAccount({ cfg })).toMatchObject({
+      accountId: "default",
+      name: "Explicit default",
+      configured: false,
+      privateKey: "",
+      authTag: "",
+      relayUrl: "",
+    });
+  });
+
+  it("selects a configured default deterministically and applies the global disabled gate", () => {
+    vi.stubEnv("BUZZ_PRIVATE_KEY", "");
+    vi.stubEnv("BUZZ_RELAY_URL", "");
+    const cfg = {
+      channels: {
+        buzz: {
+          enabled: false,
+          defaultAccount: "second",
+          accounts: { first: {}, second: { enabled: true } },
+        },
+      },
+    } as OpenClawConfig;
+    expect(listBuzzAccountIds(cfg)).toEqual(["first", "second"]);
+    expect(resolveDefaultBuzzAccountId(cfg)).toBe("second");
+    expect(resolveBuzzAccount({ cfg })).toMatchObject({ accountId: "second", enabled: false });
+  });
+
   it.each([
     {
       label: "keeps explicit plaintext credentials ahead of ambient credentials",

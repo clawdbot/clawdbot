@@ -102,6 +102,8 @@ export function createMemoryWriteProvenanceObserver(params: {
   mutationRoot: string;
   workspaceDir: string;
   resolveOriginClass: () => "agent" | "untrusted";
+  sessionId?: string;
+  sessionKey?: string;
   now?: () => number;
 }): MemoryWriteProvenanceObserver {
   const now = params.now ?? Date.now;
@@ -121,6 +123,8 @@ export function createMemoryWriteProvenanceObserver(params: {
         contentAfter,
         originClass: params.resolveOriginClass(),
         observedAt: now(),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       });
       try {
         await commit();

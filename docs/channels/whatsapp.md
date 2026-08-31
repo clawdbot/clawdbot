@@ -123,7 +123,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
   </Accordion>
 
   <Accordion title="Personal-number fallback">
-    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. Runtime self-chat protections key off the linked self number plus `allowFrom`.
+    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. See [Personal-number and self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior) for admission and safeguard rules.
   </Accordion>
 </AccordionGroup>
 
@@ -274,7 +274,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
 
     - pairings persist in the channel allow-store and merge with configured `allowFrom`
     - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron/heartbeat recipients
-    - if no allowlist is configured, the linked self number is allowed by default
+    - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`; see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send yourself from the linked device)
 
   </Tab>
@@ -343,7 +343,16 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 
 ## Personal-number and self-chat behavior
 
-When the linked self number is also present in `allowFrom`, self-chat safeguards activate: skip read receipts for self-chat turns, ignore mention-JID auto-trigger behavior that would ping yourself, and default replies to `[{identity.name}]` (or `[openclaw]`) when the channel/account `responsePrefix` is unset.
+`channels.whatsapp.selfChatMode` controls same-number DM admission and self-chat safeguards. Set it at the channel level or override it per account with `channels.whatsapp.accounts.<id>.selfChatMode`.
+
+- **`true` or unset:** DMs from the linked number to itself are admitted as agent input, even when that number is absent from `allowFrom`. `dmPolicy: "disabled"` still blocks all DMs.
+- **`false`:** self-originated DMs are ignored, even when your number is in `allowFrom`. Other inbound DMs and group messages still follow their access policies; this setting does not make the account outbound-only.
+
+The implicit self-number allowance applies only to DMs, not group allowlists.
+
+Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
+
+A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
 ## Message normalization and context
 
@@ -388,7 +397,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     { channels: { whatsapp: { sendReadReceipts: false } } }
     ```
 
-    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat turns skip read receipts even when globally enabled.
+    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
   </Accordion>
 </AccordionGroup>
@@ -398,6 +407,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
+    - Markdown is converted before chunks are sent, preserving styles across message boundaries and counting WhatsApp formatting markers toward the limit
     - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
@@ -410,6 +420,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     - `gifPlayback: true` on video sends enables animated GIF playback
     - `forceDocument`/`asDocument` routes outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp's media compression, preserving the resolved filename and MIME type
     - captions apply to the first media item in a multi-media reply, except PTT voice notes: the audio sends first with no caption, then the caption sends as a separate text message (WhatsApp clients do not render voice-note captions consistently)
+    - when a later captioned reply repeats pending attachments, only attachments accepted by WhatsApp replace their pending copies; unmatched attachments remain queued for delivery
     - media source can be HTTP(S), `file://`, or a local path
 
   </Accordion>
@@ -509,6 +520,9 @@ opt-in status surface described above.
 <AccordionGroup>
   <Accordion title="Account selection and defaults">
     Account ids come from `channels.whatsapp.accounts`. Default account selection is `default` if present, otherwise the first configured account id (alphabetically sorted). Account ids are normalized internally for lookup.
+
+    Named accounts resolve shared settings in this order: the account, `accounts.default`, then the channel root. This includes `dmPolicy` and `groupPolicy`: omission inherits, while an explicit value wins. With no policy configured, DMs use `pairing` and groups use `allowlist`. The default account's `authDir`, `enabled`, `name`, and `selfChatMode` are not shared with named accounts.
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">
@@ -597,7 +611,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

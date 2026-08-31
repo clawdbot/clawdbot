@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
+import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
@@ -14,7 +15,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads-base.js";
-import { formatRunLabel, resolveSubagentLabel, sortSubagentRuns } from "./subagents-utils.js";
+import { formatRunLabel, resolveSubagentLabel } from "./subagents-utils.js";
 
 function createSlackThreadingPlugin(): ChannelPlugin {
   return {

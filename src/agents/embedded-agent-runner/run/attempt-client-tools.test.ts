@@ -1,18 +1,34 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../../../infra/embedded-plugin-approval-broker.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
+import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
 import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
@@ -77,6 +93,7 @@ function prepare(input: {
   effectiveTools?: ReturnType<typeof createStubTool>[];
   uncompactedEffectiveTools?: ReturnType<typeof createStubTool>[];
   clientTools?: ReturnType<typeof clientTool>[];
+  getToolAbortSignal?: () => AbortSignal;
 }) {
   return prepareEmbeddedAttemptClientTools({
     attempt: {
@@ -96,10 +113,81 @@ function prepare(input: {
     toolSearchRuntimeConfig: input.toolSearchRuntimeConfig,
     uncompactedEffectiveTools: input.uncompactedEffectiveTools ?? [],
     clientTools: input.clientTools ?? [clientTool("client_probe")],
+    getToolAbortSignal: input.getToolAbortSignal,
   } as unknown as Parameters<typeof prepareEmbeddedAttemptClientTools>[0]);
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
+  it.each(["execute", "prepare"] as const)(
+    "removes an adapted MCP tool's pending approval when its permission generation ends during %s",
+    async (executionPath) => {
+      const previousMode = isEmbeddedMode();
+      const previousBroker = getEmbeddedPluginApprovalBroker();
+      const previousRegistry = getGlobalPluginRegistry();
+      const broker = new EmbeddedPluginApprovalBroker();
+      const requested = createDeferredCore();
+      broker.subscribe((event) => {
+        if (event.event === "plugin.approval.requested") {
+          requested.resolve();
+        }
+      });
+      setEmbeddedMode(true);
+      setEmbeddedPluginApprovalBroker(broker);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_tool_call",
+            handler: () => ({
+              requireApproval: { title: "MCP write", description: "Approve remote mutation" },
+            }),
+          },
+        ]),
+      );
+      const generation = new AbortController();
+      const execute = vi.fn(async () => jsonResult({ changed: true }));
+      const mcpTool = wrapToolWithAbortSignal(
+        { ...createStubTool("mcp_write"), execute },
+        generation.signal,
+      );
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+        effectiveTools: [mcpTool],
+        uncompactedEffectiveTools: [mcpTool],
+        clientTools: [],
+        getToolAbortSignal: () => generation.signal,
+      });
+      const tool = wrapToolDefinition(prepared.allCustomTools[0]!);
+      const execution =
+        executionPath === "execute"
+          ? tool.execute(`generation-${executionPath}`, {})
+          : getInternalToolExecutionPreparer(tool)!({
+              toolCallId: `generation-${executionPath}`,
+              args: {},
+            });
+      const settled = Promise.allSettled([execution]);
+      try {
+        await requested.promise;
+        expect(broker.listPending()).toHaveLength(1);
+        generation.abort(new Error("Permission change"));
+        expect(broker.listPending()).toHaveLength(0);
+        await settled;
+        expect(execute).not.toHaveBeenCalled();
+      } finally {
+        broker.stop();
+        await settled;
+        setEmbeddedPluginApprovalBroker(previousBroker);
+        setEmbeddedMode(previousMode);
+        resetGlobalHookRunner();
+        if (previousRegistry) {
+          initializeGlobalHookRunner(previousRegistry);
+        }
+      }
+    },
+  );
+
   it("records core read entitlement without plugin or channel shadows", () => {
     const coreRead = createStubTool("read");
     const pluginRead = createStubTool("read");
@@ -122,20 +210,44 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ).toEqual([true, false, false]);
   });
 
-  it("hides client tools behind the code-mode catalog when code mode is engaged", () => {
-    const catalogRef = seedCatalog("code-mode", CODE_MODE_CONFIG);
+  it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const markedExec = markCodeModeControlTool(createStubTool("exec"));
+    const plainExec = createStubTool("exec");
 
-    const result = prepare({
-      codeModeControlsEnabledForRun: true,
-      attemptConfig: CODE_MODE_CONFIG,
-      // Deliberately catalog-disabled: the code-mode branch must not read this.
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-    });
-
-    expect(result.clientToolDefs).toEqual([]);
-    expect(result.allCustomTools).toEqual([]);
+    expect(
+      [markedExec, plainExec].map((tool) =>
+        Array.from(
+          prepare({
+            codeModeControlsEnabledForRun: true,
+            attemptConfig: CATALOGS_DISABLED_CONFIG,
+            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+            catalogRef,
+            effectiveTools: [tool],
+            uncompactedEffectiveTools: [],
+          }).codeModeExecToolNames,
+        ),
+      ),
+    ).toEqual([["exec"], []]);
   });
+
+  it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
+    "hides client tools when the attempt engages code mode",
+    (config) => {
+      const catalogRef = seedCatalog("code-mode", config);
+
+      const result = prepare({
+        codeModeControlsEnabledForRun: true,
+        attemptConfig: config,
+        // Deliberately catalog-disabled: the code-mode branch must not read this.
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef,
+      });
+
+      expect(result.clientToolDefs).toEqual([]);
+      expect(result.allCustomTools).toEqual([]);
+    },
+  );
 
   it("advertises and invokes final callable owners after a normalized client collision", async () => {
     const catalogRef = createToolSearchCatalogRef();

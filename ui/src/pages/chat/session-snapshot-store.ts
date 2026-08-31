@@ -347,6 +347,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.pending.delete(sessionKey);
     this.hydratedSnapshots.delete(sessionKey);
     this.savedAtBySession.delete(sessionKey);
+    this.memoryCache?.delete(sessionKey);
   }
 
   async flush(): Promise<void> {
