@@ -3,11 +3,10 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import {
-  emitAgentActivityEvent,
-  type AgentCommandOutputEventData,
-  type AgentItemEventData,
-  type AgentPatchSummaryEventData,
+import type {
+  AgentCommandOutputEventData,
+  AgentItemEventData,
+  AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -73,6 +72,7 @@ import {
   buildToolItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitMirroredAgentActivity,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -512,13 +512,9 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "approval",
-        data: approvalData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -584,13 +580,9 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "command_output",
-        data: outputData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -611,13 +603,9 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentActivityEvent({
+          emitMirroredAgentActivity(ctx, {
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-            stream: "approval",
-            data: approvalData,
-          });
-          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -658,13 +646,9 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "patch",
-        data: patchData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });

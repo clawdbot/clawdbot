@@ -6,8 +6,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -15,7 +13,6 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
-import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
@@ -983,70 +980,30 @@ describe("subagent registry persistence", () => {
     expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
   });
 
-  it("prefers active runs and can resolve them from persisted registry snapshots", async () => {
-    const childSessionKey = "agent:main:subagent:disk-active";
-    await writePersistedRegistry(
-      {
-        version: 2,
-        runs: {
-          "run-complete": {
-            runId: "run-complete",
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "completed first",
-            cleanup: "keep",
-            createdAt: 200,
-            startedAt: 210,
-            endedAt: 220,
-            outcome: { status: "ok" },
-          },
-          "run-active": {
-            runId: "run-active",
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "still running",
-            cleanup: "keep",
-            createdAt: 100,
-            startedAt: 110,
-          },
-        },
-      },
-      { seedChildSessions: false },
-    );
-
-    resetSubagentRegistryForTests({ persist: false });
-
-    const resolved = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, () =>
-      getSubagentRunByChildSessionKey(childSessionKey),
-    );
-
-    expectFields(resolved, {
-      runId: "run-active",
+  it.each([
+    [
+      "prefers active runs when reading persisted registry snapshots",
+      getSubagentRunByChildSessionKey,
+      "run-stale-active",
+    ],
+    [
+      "resolves the newest row when an older stale row is still active",
+      getLatestSubagentRunByChildSessionKey,
+      "run-current-ended",
+    ],
+  ] as const)("%s", async (_name, lookup, runId) => {
+    const childSessionKey = "agent:main:subagent:persisted-read";
+    const endedRun = createPersistedEndedRun({
+      runId: "run-current-ended",
       childSessionKey,
-    });
-    expect(resolved?.execution.endedAt).toBeUndefined();
-  });
-
-  it("can resolve the newest child-session row even when an older stale row is still active", async () => {
-    const childSessionKey = "agent:main:subagent:disk-latest";
+      task: "completed latest",
+      cleanup: "keep",
+    }).runs["run-current-ended"];
     await writePersistedRegistry(
       {
         version: 2,
         runs: {
-          "run-current-ended": {
-            runId: "run-current-ended",
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "completed latest",
-            cleanup: "keep",
-            createdAt: 200,
-            startedAt: 210,
-            endedAt: 220,
-            outcome: { status: "ok" },
-          },
+          "run-current-ended": { ...endedRun, outcome: { status: "ok" } },
           "run-stale-active": {
             runId: "run-stale-active",
             childSessionKey,
@@ -1061,18 +1018,13 @@ describe("subagent registry persistence", () => {
       },
       { seedChildSessions: false },
     );
-
     resetSubagentRegistryForTests({ persist: false });
-
     const resolved = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, () =>
-      getLatestSubagentRunByChildSessionKey(childSessionKey),
+      lookup(childSessionKey),
     );
-
-    expectFields(resolved, {
-      runId: "run-current-ended",
-      childSessionKey,
-    });
-    expect(resolved?.execution.endedAt).toBe(220);
+    const expectedEndedAt = runId === "run-current-ended" ? endedRun?.endedAt : undefined;
+    expectFields(resolved, { runId, childSessionKey });
+    expect(resolved?.execution.endedAt).toBe(expectedEndedAt);
   });
   it("resume guard prunes orphan runs before announce retry", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));

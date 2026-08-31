@@ -258,13 +258,9 @@ export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentIte
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  emitAgentActivityEvent({
+  emitMirroredAgentActivity(ctx, {
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-    stream: "item",
-    data: itemData,
-  });
-  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
@@ -289,6 +285,17 @@ export function emitAgentEventCallbackBestEffort(
     label: "tool agent event",
     log: ctx.log,
     callback: () => ctx.params.onAgentEvent?.(event),
+  });
+}
+
+export function emitMirroredAgentActivity(
+  ctx: ToolHandlerContext,
+  event: Parameters<typeof emitAgentActivityEvent>[0],
+): void {
+  emitAgentActivityEvent(event);
+  emitAgentEventCallbackBestEffort(ctx, {
+    stream: event.stream,
+    data: event.data,
   });
 }
 

@@ -115,11 +115,10 @@ function resolveRunStartupPhase(
     case "process_spawned":
     case "model_call_started":
       return "starting_model";
-    case "tool_execution_started":
-    case "assistant_output_started":
+    default:
+      // Tool execution and assistant output occur after startup has completed.
       return undefined;
   }
-  return undefined;
 }
 
 async function executeAgentTurnInternalWithRetryState(
@@ -725,18 +724,15 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     retainReplyOperationUntilComplete(params.replyOperation);
   }
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const executionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  const executionParams = { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams);
-    const terminalOutcome =
-      result.outcome.kind === "aborted"
-        ? undefined
-        : result.outcome.kind === "rejected" || result.outcome.status === "failed"
+    if (result.outcome.kind !== "aborted") {
+      executionParams.opts?.onAgentRunTerminalOutcome?.(
+        result.outcome.kind === "rejected" || result.outcome.status === "failed"
           ? "failed"
-          : "completed";
-    if (terminalOutcome) {
-      executionParams.opts?.onAgentRunTerminalOutcome?.(terminalOutcome);
+          : "completed",
+      );
     }
     recordMessageToolOnlyRunOutcome(executionParams, result);
     return result;

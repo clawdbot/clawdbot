@@ -12,7 +12,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { forgetActiveSessionForShutdown } from "../../gateway/active-sessions-shutdown-tracker.js";
 import { createReplyContinuationController } from "./agent-runner-continuation.js";
 import type {
   AgentTurnCompaction,
