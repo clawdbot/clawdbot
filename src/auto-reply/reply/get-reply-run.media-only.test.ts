@@ -585,6 +585,36 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it.each([
+    {
+      label: "agent raw overrides default explain",
+      defaults: "explain",
+      entry: "raw",
+      expected: "raw",
+    },
+    {
+      label: "agent explain overrides default raw",
+      defaults: "raw",
+      entry: "explain",
+      expected: "explain",
+    },
+    { label: "agent without a default", defaults: undefined, entry: "raw", expected: "raw" },
+    { label: "default without an override", defaults: "raw", entry: undefined, expected: "raw" },
+    { label: "unset detail", defaults: undefined, entry: undefined, expected: undefined },
+  ] as const)(
+    "passes $label tool progress detail into reply execution",
+    async ({ defaults, entry, expected }) => {
+      const agentCfg = { toolProgressDetail: defaults };
+      await runPrepared({
+        agentId: "worker",
+        agentCfg,
+        cfg: { agents: { defaults: agentCfg, entries: { worker: { toolProgressDetail: entry } } } },
+      });
+
+      expect(requireRunReplyAgentCall().toolProgressDetail).toBe(expected);
+    },
+  );
+
   it("includes current exec overrides in the queued runner prompt", async () => {
     await runPrepared({
       execOverrides: {

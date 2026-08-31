@@ -1,6 +1,7 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
@@ -708,6 +709,9 @@ describe("doctor gateway runtime checks", () => {
       message: "Gateway status could not be inspected: connect ECONNREFUSED 127.0.0.1:5829",
     },
   ])("reports $label from exactly one sanitized status attempt", async (entry) => {
+    if (entry.error instanceof GatewayClientRequestError) {
+      retainGatewayResponsePayload(entry.error, undefined);
+    }
     mocks.callGateway.mockRejectedValueOnce(entry.error);
     mocks.isGatewayCredentialsRequiredError.mockReturnValueOnce(entry.credentialsRequired);
 

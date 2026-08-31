@@ -1256,6 +1256,7 @@ describe("prepareCliRunContext", () => {
 
     setCliBackendForPrepareTest({
       prepareExecution,
+      authEpochMode: "profile-only",
       autoSelectAuthProfile: testCase.autoSelectAuthProfile,
     });
     const context = await fixture.prepare({

@@ -22,6 +22,7 @@ import {
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -182,6 +183,38 @@ describe("upgrade survivor config recipe command resolution", () => {
     expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
     expect(steps.at(-1)?.id).toBe("validate");
   });
+
+  it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
+    "authors a schema-valid explicit agent roster for baseline %s",
+    (version) => {
+      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+      expect(agents.ownership).toBe("explicit");
+      expect(agents.defaults.heartbeat.every).toBe("0m");
+      expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
+      expect(agents.entries.ops.fastModeDefault).toBe(true);
+    },
+  );
+
+  it.each(["2026.3.13", "2026.4.1", "2026.8.1-beta.1"])(
+    "preserves the legacy agent contract for baseline %s",
+    (version) => {
+      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.entries).toBeUndefined();
+      expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+      expect(agents.list[1].fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    },
+  );
 
   it("bounds baseline config commands and reports spawn errors", () => {
     const calls: unknown[] = [];
