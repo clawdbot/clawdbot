@@ -424,46 +424,67 @@ async function repairMissingPluginInstallsWithLease(
             await validateVersionBoundRuntimeNpmArtifact(artifact);
           }
         };
+      const dependencyRepairTransactions: PluginInstallTransaction[] = [];
+      const updateParams: Parameters<typeof updateNpmInstalledPlugins>[0] = {
+        config: {
+          ...params.cfg,
+          plugins: {
+            ...params.cfg.plugins,
+            installs: repairRecords,
+          },
+        },
+        pluginIds: preparedMissingRecordedPluginIds,
+        skipDisabledPlugins: true,
+        updateChannel,
+        coreVersion: compatibilityHostVersion,
+        specOverrides: versionBoundToCoreSpecOverrides,
+        versionBoundToCorePluginIds: versionBoundRuntimePluginIds,
+        ...(versionBoundRuntimePluginIds.size > 0
+          ? { onBeforeNpmPluginArtifactCommit: validateVersionBoundRuntimeUpdateArtifact }
+          : {}),
+        logger: {
+          terminalLinks: false,
+          warn: (message) => {
+            if (isClawHubReviewNotice(message)) {
+              notices.push(stripAnsi(message));
+              return;
+            }
+            warnings.push(message);
+          },
+          error: (message) => warnings.push(message),
+        },
+        ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      };
       let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
       try {
-        updateResult = await updateNpmInstalledPlugins({
-          config: {
-            ...params.cfg,
-            plugins: {
-              ...params.cfg.plugins,
-              installs: repairRecords,
-            },
-          },
-          pluginIds: preparedMissingRecordedPluginIds,
-          skipDisabledPlugins: true,
-          updateChannel,
-          coreVersion: compatibilityHostVersion,
-          specOverrides: versionBoundToCoreSpecOverrides,
-          versionBoundToCorePluginIds: versionBoundRuntimePluginIds,
-          ...(versionBoundRuntimePluginIds.size > 0
-            ? { onBeforeNpmPluginArtifactCommit: validateVersionBoundRuntimeUpdateArtifact }
-            : {}),
-          logger: {
-            terminalLinks: false,
-            warn: (message) => {
-              if (isClawHubReviewNotice(message)) {
-                notices.push(stripAnsi(message));
-                return;
-              }
-              warnings.push(message);
-            },
-            error: (message) => warnings.push(message),
-          },
-          ...(params.onCapabilityConsent
-            ? { onCapabilityConsent: params.onCapabilityConsent }
-            : {}),
-        });
+        updateResult = await updateNpmInstalledPlugins(
+          versionBoundRuntimePluginIds.size > 0
+            ? requestDeferredPluginInstall(updateParams, dependencyRepairTransactions)
+            : updateParams,
+        );
       } catch (error) {
+        let rollbackFailed = false;
+        let rollbackError: unknown;
+        try {
+          await settlePluginInstallTransactions(dependencyRepairTransactions, "rollback");
+        } catch (caught) {
+          rollbackFailed = true;
+          rollbackError = caught;
+        }
         await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
+        if (rollbackFailed) {
+          const aggregate = new AggregateError(
+            [error, rollbackError],
+            "Plugin dependency repair failed and payload rollback failed",
+          );
+          aggregate.cause = error;
+          throw aggregate;
+        }
         throw error;
       }
 
       const completedDependencyRepairPluginIds = new Set<string>();
+      const rejectedDependencyRepairPluginIds = new Set<string>();
       const acceptedUpdateRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
       for (const outcome of updateResult.outcomes) {
         if (outcome.status === "updated" || outcome.status === "unchanged") {
@@ -478,6 +499,7 @@ async function repairMissingPluginInstallsWithLease(
               ))
           ) {
             recordFailure(outcome.pluginId, [freshGenerationFailure(outcome.pluginId)]);
+            rejectedDependencyRepairPluginIds.add(outcome.pluginId);
             continue;
           }
           if (versionBoundRuntimePluginIds.has(outcome.pluginId)) {
@@ -488,20 +510,12 @@ async function repairMissingPluginInstallsWithLease(
             });
             if ("error" in accepted) {
               recordFailure(outcome.pluginId, [accepted.error]);
+              rejectedDependencyRepairPluginIds.add(outcome.pluginId);
               continue;
             }
             acceptedUpdateRecords[outcome.pluginId] = accepted.record;
           }
           completedDependencyRepairPluginIds.add(outcome.pluginId);
-          repairedPluginIds.add(outcome.pluginId);
-          changes.push(
-            installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
-              ? `Refreshed stale configured plugin "${outcome.pluginId}".`
-              : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId) ||
-                  installedPluginIdsWithMissingRequiredDependencies.has(outcome.pluginId)
-                ? `Repaired broken installed plugin "${outcome.pluginId}".`
-                : `Repaired missing configured plugin "${outcome.pluginId}".`,
-          );
         } else if (
           outcome.status === "error" ||
           isActionableClawHubSkippedOutcome(outcome) ||
@@ -512,6 +526,41 @@ async function repairMissingPluginInstallsWithLease(
           recordFailure(outcome.pluginId, [outcome.message], outcome.code);
         }
       }
+
+      if (rejectedDependencyRepairPluginIds.size > 0) {
+        let rollbackFailed = false;
+        let rollbackError: unknown;
+        try {
+          await settlePluginInstallTransactions(dependencyRepairTransactions, "rollback");
+        } catch (caught) {
+          rollbackFailed = true;
+          rollbackError = caught;
+        }
+        if (rollbackFailed) {
+          await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
+          throw rollbackError;
+        }
+        for (const pluginId of completedDependencyRepairPluginIds) {
+          recordFailure(pluginId, [
+            `Rolled back configured plugin "${pluginId}" because another version-bound dependency repair failed post-install validation. Existing install records were retained.`,
+          ]);
+        }
+        completedDependencyRepairPluginIds.clear();
+      } else {
+        pendingInstallTransactions.push(...dependencyRepairTransactions);
+        for (const pluginId of completedDependencyRepairPluginIds) {
+          repairedPluginIds.add(pluginId);
+          changes.push(
+            installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId)
+              ? `Refreshed stale configured plugin "${pluginId}".`
+              : installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) ||
+                  installedPluginIdsWithMissingRequiredDependencies.has(pluginId)
+                ? `Repaired broken installed plugin "${pluginId}".`
+                : `Repaired missing configured plugin "${pluginId}".`,
+          );
+        }
+      }
+
       await clearDependencyRepairRetention(
         [...retainedDependencyRepairInstallPaths.keys()].filter(
           (pluginId) => !completedDependencyRepairPluginIds.has(pluginId),
