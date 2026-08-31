@@ -32,10 +32,14 @@ it("refreshes skills created beneath an initially missing project skills root", 
   });
   try {
     ensureSkillsWatcher({ workspaceDir });
-    // Missing-path readiness precedes parent registration in Chokidar. Observe
-    // successful real fs.watch registration before creating the absent parents.
-    await vi.waitFor(() => expect(registeredPaths.has(workspaceDir)).toBe(true));
     const existingSkill = path.join(workspaceDir, "skills", "existing", "SKILL.md");
+    // Chokidar readiness can precede missing-parent registration, and parent
+    // registration does not await child watches. Observe both native watches
+    // before writing the positive control or creating the absent parents.
+    await vi.waitFor(() => {
+      expect(registeredPaths.has(workspaceDir)).toBe(true);
+      expect(registeredPaths.has(path.dirname(existingSkill))).toBe(true);
+    });
     await fs.writeFile(existingSkill, "existing skill");
     await vi.waitFor(() => expect(changes).toContain(existingSkill), { timeout: 3_000 });
     const newSkill = path.join(workspaceDir, ".agents", "skills", "new", "SKILL.md");
