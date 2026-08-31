@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../../../src/test-utils/env.js";
 
 const envKeys = [
   "ANTHROPIC_API_KEY",
@@ -37,7 +37,7 @@ afterEach(async () => {
 describe("getEnvApiKey", () => {
   it("returns no env auth in browser contexts without process", async () => {
     vi.resetModules();
-    const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+    const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
     vi.stubGlobal("process", undefined);
 
     expect(findEnvKeys("openai")).toBeUndefined();
@@ -59,7 +59,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+        const { getEnvApiKey } = await import("./env-api-keys.js");
 
         expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
       },
@@ -75,7 +75,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+        const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
 
         expect(findEnvKeys("moonshot")).toEqual(["MOONSHOT_API_KEY", "KIMI_API_KEY"]);
         expect(getEnvApiKey("moonshot")).toBe("moonshot-key");
@@ -90,7 +90,7 @@ describe("getEnvApiKey", () => {
   it("falls back to alternate canonical Kimi env vars", async () => {
     await withEnvAsync({ KIMICODE_API_KEY: "kimicode-key" }, async () => {
       vi.resetModules();
-      const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+      const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
 
       expect(findEnvKeys("kimi")).toEqual(["KIMICODE_API_KEY"]);
       expect(getEnvApiKey("kimi")).toBe("kimicode-key");
@@ -106,7 +106,7 @@ describe("getEnvApiKey", () => {
 
     await withEnvAsync(env, async () => {
       vi.resetModules();
-      const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+      const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
 
       expect(findEnvKeys("anthropic")).toEqual(["ANTHROPIC_API_KEY"]);
       expect(getEnvApiKey("anthropic")).toBe("test-anthropic-key");
@@ -128,7 +128,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+        const { getEnvApiKey } = await import("./env-api-keys.js");
 
         expect(getEnvApiKey("amazon-bedrock")).toBeUndefined();
       },
@@ -138,7 +138,7 @@ describe("getEnvApiKey", () => {
   it("keeps non-blank AWS profile authentication available", async () => {
     await withEnvAsync({ AWS_PROFILE: "  production  " }, async () => {
       vi.resetModules();
-      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+      const { getEnvApiKey } = await import("./env-api-keys.js");
 
       expect(getEnvApiKey("amazon-bedrock")).toBe("<authenticated>");
     });
@@ -157,7 +157,7 @@ describe("getEnvApiKey", () => {
 
     await withEnvAsync(env, async () => {
       vi.resetModules();
-      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+      const { getEnvApiKey } = await import("./env-api-keys.js");
 
       expect(getEnvApiKey("google-vertex")).toBeUndefined();
     });
@@ -175,7 +175,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+        const { getEnvApiKey } = await import("./env-api-keys.js");
 
         expect(getEnvApiKey("google-vertex")).toBeUndefined();
         await writeFile(credentialsPath, "{}", "utf-8");
@@ -197,7 +197,7 @@ describe("getEnvApiKey", () => {
 
     await withEnvAsync(env, async () => {
       vi.resetModules();
-      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+      const { getEnvApiKey } = await import("./env-api-keys.js");
 
       expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
     });

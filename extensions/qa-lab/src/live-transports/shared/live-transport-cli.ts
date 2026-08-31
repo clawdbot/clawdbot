@@ -1,26 +1,18 @@
 // Qa Lab plugin module implements live transport cli behavior.
 import type { Command } from "commander";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type {
+  LiveTransportQaCommandOptions as QaRunnerCommandOptions,
+  QaRunnerCliRegistration,
+} from "openclaw/plugin-sdk/qa-runner-runtime";
+import { parseQaCliPositiveIntegerOption } from "../../cli-options.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
 
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  scenarioIds?: string[];
-  listScenarios?: boolean;
-  sutAccountId?: string;
-  credentialSource?: string;
-  credentialRole?: string;
+export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
+  concurrency?: number;
 };
 
 type LiveTransportQaCommanderOptions = {
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: string;
@@ -74,6 +66,7 @@ function collectStringOption(value: string, previous: string[]) {
 
 function mapCommanderOptions(opts: LiveTransportQaCommanderOptions): LiveTransportQaCommandOptions {
   return {
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -109,6 +102,13 @@ function createSharedLiveTransportQaCliRegistration(
         .option("--scenario <id>", params.scenarioHelp, collectStringOption, [])
         .option("--fast", "Enable provider fast mode where supported");
 
+      if (params.adapterFactory?.isolatesInstances === true) {
+        command.option(
+          "--concurrency <count>",
+          "Scenario worker concurrency (bounded by the transport limit)",
+          (value: string) => parseQaCliPositiveIntegerOption(value, "--concurrency"),
+        );
+      }
       if (params.allowFailuresHelp) {
         command.option("--allow-failures", params.allowFailuresHelp, false);
       }

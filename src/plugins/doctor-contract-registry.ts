@@ -291,7 +291,13 @@ export function collectDoctorConfigRepairPluginIds(
 
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
+  surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
+  const declaration = record.doctorContract;
+  // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
+  if (declaration && declaration[surface] !== true) {
+    return null;
+  }
   const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
   if (!contractSource) {
     return null;
@@ -404,12 +410,7 @@ function loadPluginDoctorContractEntries(params: {
 }): PluginDoctorContractEntry[] {
   const entries: PluginDoctorContractEntry[] = [];
   for (const record of params.records) {
-    const declaration = record.doctorContract;
-    // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
-    if (declaration && declaration[params.surface] !== true) {
-      continue;
-    }
-    const entry = loadPluginDoctorContractEntry(record);
+    const entry = loadPluginDoctorContractEntry(record, params.surface);
     if (entry) {
       entries.push(entry);
     }
@@ -530,7 +531,11 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     // after its operator has disabled the owning plugin or every configured channel.
     if (
       channelOwner &&
-      !shouldIncludeChannelSetupFeatureForConfig({ plugin: record, config: params?.config })
+      !shouldIncludeChannelSetupFeatureForConfig({
+        plugin: record,
+        config: params?.config,
+        normalizedConfig,
+      })
     ) {
       continue;
     }
@@ -543,25 +548,22 @@ export function listPluginDoctorStateMigrationEntries(params?: {
       continue;
     }
 
-    const modernEntries = loadPluginDoctorContractEntries({
-      records: [record],
-      surface: "stateMigrations",
-    }).flatMap((entry) =>
-      entry.stateMigrations.map((migration) => ({
-        pluginId: entry.pluginId,
-        channelIds: record.channels,
-        trustedForDurableStores: isTrustedForDurableStores(record),
-        migration,
-      })),
-    );
-    if (modernEntries.length > 0) {
-      entries.push(...modernEntries);
+    const modern = loadPluginDoctorContractEntry(record, "stateMigrations");
+    if (modern?.stateMigrations.length) {
+      for (const migration of modern.stateMigrations) {
+        entries.push({
+          pluginId: modern.pluginId,
+          channelIds: record.channels,
+          trustedForDurableStores: isTrustedForDurableStores(record),
+          migration,
+        });
+      }
       continue;
     }
     if (record.doctorContract?.stateMigrations === true) {
       continue;
     }
-    if (!channelOwner) {
+    if (!channelOwner || record.origin === "bundled") {
       continue;
     }
 

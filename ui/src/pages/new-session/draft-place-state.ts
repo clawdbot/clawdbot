@@ -391,7 +391,6 @@ export class DraftPlaceState {
   }
 
   clearProjectSelection() {
-    // Catalog refresh errors also call this when the draft has no selected project.
     if (this.browser.projectId || this.browser.remoteProject) {
       this.repositoryState.clearDetails(true);
     }

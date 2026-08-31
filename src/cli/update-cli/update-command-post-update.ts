@@ -91,13 +91,14 @@ export async function finishUpdate(params: {
   invocationCwd?: string;
 }): Promise<void> {
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
+  const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
+    ...result,
+    durationMs: Math.max(0, Date.now() - params.startedAt),
+  });
   const printFinalResult = (result: UpdateRunResult) =>
-    printResult(
-      { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) },
-      { ...params.opts, hideSteps: params.showProgress },
-    );
+    printResult(result, { ...params.opts, hideSteps: params.showProgress });
   const reportResult = async (result: UpdateRunResult, recoverService = false) => {
-    const finalResult = { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) };
+    const finalResult = completedResult(result);
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
       result: finalResult,
@@ -112,7 +113,8 @@ export async function finishUpdate(params: {
         jsonMode: Boolean(params.opts.json),
       });
     }
-    printFinalResult(finalResult);
+    // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
+    printFinalResult(recoverService ? completedResult(result) : finalResult);
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
     try {
@@ -516,11 +518,9 @@ export async function finishUpdate(params: {
       reason: "restart-unhealthy",
       jsonMode: Boolean(params.opts.json),
     });
-    printFinalResult({
-      ...resultWithPostUpdate,
-      status: "error",
-      reason: "restart-unhealthy",
-    });
+    printFinalResult(
+      completedResult({ ...resultWithPostUpdate, status: "error", reason: "restart-unhealthy" }),
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -558,11 +558,13 @@ export async function finishUpdate(params: {
         reason: "wrapper-retirement-failed",
         jsonMode: Boolean(params.opts.json),
       });
-      printFinalResult({
-        ...resultWithPostUpdate,
-        status: "error",
-        reason: "wrapper-retirement-failed",
-      });
+      printFinalResult(
+        completedResult({
+          ...resultWithPostUpdate,
+          status: "error",
+          reason: "wrapper-retirement-failed",
+        }),
+      );
       defaultRuntime.exit(1);
       return;
     }
