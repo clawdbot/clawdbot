@@ -440,6 +440,8 @@ Enterprise Grid organization installation, use the dedicated
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -540,7 +542,7 @@ Enterprise Grid organization installation, use the dedicated
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
+          **Recommended** matches the Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, bookmarks, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, bookmarks, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
         </Note>
 
         After Slack creates the app:
@@ -655,6 +657,8 @@ openclaw gateway
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -766,7 +770,7 @@ openclaw gateway
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the Slack plugin's full feature set; **Minimal** drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
+          **Recommended** matches the Slack plugin's full feature set; **Minimal** drops files, reactions, pins, bookmarks, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
         </Note>
 
         <Info>
@@ -958,6 +962,8 @@ Base manifest (Socket Mode default):
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -1266,10 +1272,11 @@ Available action groups in current Slack tooling:
 | messages   | enabled |
 | reactions  | enabled |
 | pins       | enabled |
+| bookmarks  | enabled |
 | memberInfo | enabled |
 | emojiList  | enabled |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `bookmark`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1290,6 +1297,21 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+Use `bookmark` to manage links on a channel's bookmark bar (the channel header surface, distinct from pinned messages). The `op` selects the operation (`add`, `list`, `edit`, `remove`; defaults to `list`):
+
+```json
+{
+  "action": "bookmark",
+  "channel": "slack",
+  "op": "add",
+  "title": "Runbook",
+  "link": "https://runbook.example",
+  "emoji": "bookmark"
+}
+```
+
+`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface, and the app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`.
 
 ## Access control and routing
 
