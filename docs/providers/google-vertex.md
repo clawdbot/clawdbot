@@ -161,8 +161,8 @@ the ADC path.
 <Note>
   Variables exported only in an interactive shell are not visible to a
   launchd/systemd Gateway daemon unless that environment is explicitly
-  imported. Set them in `~/.openclaw/.env`, the service environment, or via
-  `env.shellEnv`, then restart the gateway. See
+  imported. Set them in the service environment, `~/.openclaw/.env`, or via
+  `env.shellEnv`, in that order of precedence, then restart the gateway. See
   [Environment variables](/help/environment) for the full precedence order.
 </Note>
 
