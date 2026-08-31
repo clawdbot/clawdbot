@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { constants } from "node:fs";
 import { lstat, open, readFile, type FileHandle } from "node:fs/promises";
@@ -134,6 +134,12 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       homePath: string;
       statePath: string;
     };
+    launchAuthority: {
+      gatewayToken: string;
+      phaseSigningKey: string;
+      productTreeSha: string;
+      runtimeArtifactManifestSha256: string;
+    };
     plan: ReturnCovenantPlan;
     runtimeConfig: { gateway?: { port?: number } };
   }) {
@@ -144,7 +150,11 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     this.#gatewayEnvironment = {
       HOME: params.isolation.homePath,
       OPENCLAW_CONFIG_PATH: params.isolation.configPath,
-      OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex"),
+      OPENCLAW_GATEWAY_TOKEN: params.launchAuthority.gatewayToken,
+      OPENCLAW_PRODUCT_TREE_SHA: params.launchAuthority.productTreeSha,
+      OPENCLAW_RETURN_COVENANT_PHASE_KEY: params.launchAuthority.phaseSigningKey,
+      OPENCLAW_RETURN_COVENANT_RUNTIME_ARTIFACT_SHA256:
+        params.launchAuthority.runtimeArtifactManifestSha256,
       OPENCLAW_STATE_DIR: params.isolation.statePath,
     };
     this.#port = params.runtimeConfig.gateway?.port ?? DEFAULT_GATEWAY_PORT;

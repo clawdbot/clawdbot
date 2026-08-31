@@ -45,6 +45,7 @@ type ReturnCovenantLaunchEnvironment = {
   attestationPath?: string;
   candidateSha?: string;
   docsHarnessSha?: string;
+  gatewayToken?: string;
   launchNonce?: string;
   phaseKeyFingerprint?: string;
   phaseSigningKey?: string;
@@ -225,11 +226,13 @@ export async function runReturnCovenantFixtureDriver(
     launchEnvironment: options.launchEnvironment,
     plan,
   });
-  const { attestationPath, launchNonce, phaseKeyFingerprint, phaseSigningKey } =
+  const { attestationPath, gatewayToken, launchNonce, phaseKeyFingerprint, phaseSigningKey } =
     options.launchEnvironment;
   if (
     !launchNonce ||
     launchNonce.length < 24 ||
+    !gatewayToken ||
+    gatewayToken.length < 24 ||
     !phaseSigningKey ||
     phaseSigningKey.length < 32 ||
     phaseKeyFingerprint !== sha256ReturnCovenant(phaseSigningKey) ||
@@ -246,6 +249,12 @@ export async function runReturnCovenantFixtureDriver(
       configPath: runtime.configPath,
       homePath: runtime.homePath,
       statePath: runtime.statePath,
+    },
+    launchAuthority: {
+      gatewayToken,
+      phaseSigningKey,
+      productTreeSha: plan.target.productTreeSha,
+      runtimeArtifactManifestSha256: plan.target.runtimeArtifactManifestSha256,
     },
     plan,
     runtimeConfig: runtime.config,

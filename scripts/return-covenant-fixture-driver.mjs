@@ -15,6 +15,7 @@ try {
         productTreeSha: process.env.OPENCLAW_PRODUCT_TREE_SHA,
         docsHarnessSha: process.env.OPENCLAW_PROOFS_DOCS_REF,
         runtimeArtifactManifestSha256: process.env.OPENCLAW_RETURN_COVENANT_RUNTIME_ARTIFACT_SHA256,
+        gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN,
         launchNonce: process.env.OPENCLAW_RETURN_COVENANT_LAUNCH_NONCE,
         phaseSigningKey: process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY,
         phaseKeyFingerprint: process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY_FINGERPRINT,
