@@ -184,6 +184,38 @@ describe("chat pane retained presentation lifecycle", () => {
     ]);
   });
 
+  it("ignores an open dropdown in an inactive retained pane", () => {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const target = pane.appendChild(document.createElement("main"));
+    target.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+    const retainedPane = document.body.appendChild(document.createElement("div"));
+    retainedPane.inert = true;
+    const retainedDropdown = retainedPane.appendChild(
+      document.createElement("wa-dropdown"),
+    ) as HTMLElement & { open: boolean };
+    retainedDropdown.open = true;
+
+    try {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+      );
+
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      retainedPane.remove();
+    }
+  });
+
   it("retires foreground-only state when a retained pane is hidden", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
