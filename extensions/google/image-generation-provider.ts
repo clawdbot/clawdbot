@@ -24,6 +24,7 @@ import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } fr
 import { toStandardGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
+const GOOGLE_LITE_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const GOOGLE_MAX_IMAGE_RESULTS = 4;
@@ -146,7 +147,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: ["gemini-3.1-flash-lite-image", DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
+    models: [GOOGLE_LITE_IMAGE_MODEL, DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
     capabilities: {
       generate: {
@@ -167,6 +168,9 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         sizes: [...GOOGLE_SUPPORTED_SIZES],
         aspectRatios: [...GOOGLE_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
+        // Lite is a fixed 1K tier; clamp explicit/inferred 2K/4K to 1K so the
+        // runtime never forwards an unsupported imageSize to Google's API.
+        resolutionsByModel: { [GOOGLE_LITE_IMAGE_MODEL]: ["1K"] },
       },
     },
     async generateImage(req) {

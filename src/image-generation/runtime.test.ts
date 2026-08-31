@@ -981,6 +981,70 @@ describe("image-generation runtime", () => {
     });
   });
 
+  it("clamps unsupported resolutions to the model-specific 1K limit for Google Lite", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: "1K" | "2K" | "4K";
+        }
+      | undefined;
+    providers = [
+      {
+        id: "google",
+        capabilities: {
+          generate: {
+            supportsSize: true,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            supportsSize: true,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          // Mirrors the bundled Google provider contract: Lite is a fixed 1K
+          // tier, so resolutionsByModel clamps 2K/4K down to 1K instead of
+          // forwarding an unsupported imageSize to Google's generateContent API.
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
+            aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+            resolutions: ["1K", "2K", "4K"],
+            resolutionsByModel: {
+              "gemini-3.1-flash-lite-image": ["1K"],
+            },
+          },
+        },
+        async generateImage(req) {
+          seenRequest = {
+            size: req.size,
+            aspectRatio: req.aspectRatio,
+            resolution: req.resolution,
+          };
+          return {
+            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-lite-image" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      resolution: "4K",
+    });
+
+    expect(seenRequest?.resolution).toBe("1K");
+    expect(result.normalization?.resolution).toEqual({ requested: "4K", applied: "1K" });
+  });
+
   it("lists runtime image-generation providers through the provider registry", () => {
     const registryProviders: ImageGenerationProvider[] = [
       {
