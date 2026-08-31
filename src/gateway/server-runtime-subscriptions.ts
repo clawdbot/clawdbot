@@ -25,7 +25,11 @@ import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-reg
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  createSessionIdentityMutationFence,
+  onSessionLifecycleEvent,
+  type SessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -50,7 +54,11 @@ import { defaultSessionCompanionContextReader } from "./session-companion-contex
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { createSessionObserver } from "./session-observer.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveSessionEventAgentScope,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
 import { resolveTaskRequesterSessionTarget } from "./task-session-access.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
@@ -529,14 +537,49 @@ export function startGatewayEventSubscriptions(params: {
       params.sessionEventSubscribers.getAll(),
     );
   });
+  const captureLifecycleActiveRunState = (event: SessionLifecycleEvent) => {
+    if (event.reason !== "run-capacity") {
+      return undefined;
+    }
+    const agentScope = resolveSessionEventAgentScope(
+      getRuntimeConfig(),
+      event.sessionKey,
+      event.agentId,
+      true,
+    );
+    const [, routingAgentId, compatibilityOwnerAgentId] = agentScope ?? [];
+    if (!routingAgentId) {
+      return undefined;
+    }
+    const sessionRow = loadGatewaySessionRow(event.sessionKey, { agentId: routingAgentId });
+    return sessionRow
+      ? resolveVisibleActiveSessionRunState({
+          context: params,
+          requestedKey: event.sessionKey,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          agentId: routingAgentId,
+          defaultAgentId: compatibilityOwnerAgentId,
+        })
+      : undefined;
+  };
   const unsubscribeLifecycle = onSessionLifecycleEvent((evt) => {
+    const identityMutationFence = createSessionIdentityMutationFence({
+      sessionKey: evt.sessionKey,
+    });
     void dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
-      event: evt,
+      event: {
+        ...evt,
+        identityMutationFence,
+        ...(evt.reason === "run-capacity"
+          ? { projectedActiveRunState: captureLifecycleActiveRunState(evt) }
+          : {}),
+      },
       log: params.log,
       failureMessage: "Lifecycle event dispatch failed",
       context: { sessionKey: evt.sessionKey },
-    });
+    }).finally(() => identityMutationFence.release());
   });
   const lifecycleUnsub = () => {
     unsubscribeProfileChanges();

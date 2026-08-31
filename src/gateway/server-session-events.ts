@@ -20,6 +20,7 @@ import { isSessionTranscriptProjectionUnavailableError } from "../config/session
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   createSessionIdentityMutationFence,
+  type SessionIdentityMutationFence,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -51,6 +52,12 @@ import { loadGatewaySessionRow, loadGatewaySessionEntryReadOnly } from "./sessio
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+type LifecycleActiveRunState = ReturnType<typeof resolveVisibleActiveSessionRunState>;
+
+export type GatewaySessionLifecycleEvent = SessionLifecycleEvent & {
+  identityMutationFence?: SessionIdentityMutationFence;
+  projectedActiveRunState?: LifecycleActiveRunState;
+};
 
 function readTranscriptUpdateLifecycleOwner(
   update: InternalSessionTranscriptUpdate,
@@ -438,7 +445,7 @@ export function createLifecycleEventBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   loadModelCatalog?: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
 }) {
-  return async (event: SessionLifecycleEvent): Promise<void> => {
+  return async (event: GatewaySessionLifecycleEvent): Promise<void> => {
     const connIds = params.sessionEventSubscribers.getAll();
     if (!hasSessionChangeReceivers(connIds)) {
       return;
@@ -477,10 +484,32 @@ export function createLifecycleEventBroadcastHandler(params: {
       );
       return;
     }
-    const identityMutationFence = createSessionIdentityMutationFence({
-      sessionKey: event.sessionKey,
-    });
+    const ownsIdentityMutationFence = event.identityMutationFence === undefined;
+    const identityMutationFence =
+      event.identityMutationFence ??
+      createSessionIdentityMutationFence({
+        sessionKey: event.sessionKey,
+      });
     try {
+      const projectedActiveRunState =
+        event.projectedActiveRunState ??
+        (event.reason === "run-capacity"
+          ? (() => {
+              const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+                agentId: routingAgentId,
+              });
+              return sessionRow
+                ? resolveVisibleActiveSessionRunState({
+                    context: params,
+                    requestedKey: event.sessionKey,
+                    canonicalKey: sessionRow.key,
+                    sessionId: sessionRow.sessionId,
+                    agentId: routingAgentId,
+                    defaultAgentId: compatibilityOwnerAgentId,
+                  })
+                : undefined;
+            })()
+          : undefined);
       const modelCatalog = await params.loadModelCatalog?.(routingAgentId);
       if (!identityMutationFence.isCurrent()) {
         return;
@@ -490,7 +519,8 @@ export function createLifecycleEventBroadcastHandler(params: {
         ...(modelCatalog !== undefined ? { modelCatalog } : {}),
       });
       const activeRunState =
-        sessionRow && (sessionRow.key !== "global" || routingAgentId)
+        projectedActiveRunState ??
+        (sessionRow && (sessionRow.key !== "global" || routingAgentId)
           ? resolveVisibleActiveSessionRunState({
               context: params,
               requestedKey: event.sessionKey,
@@ -499,7 +529,7 @@ export function createLifecycleEventBroadcastHandler(params: {
               ...(routingAgentId ? { agentId: routingAgentId } : {}),
               defaultAgentId: compatibilityOwnerAgentId,
             })
-          : null;
+          : null);
       params.broadcastToConnIds(
         "sessions.changed",
         {
@@ -530,7 +560,9 @@ export function createLifecycleEventBroadcastHandler(params: {
         { dropIfSlow: true },
       );
     } finally {
-      identityMutationFence.release();
+      if (ownsIdentityMutationFence) {
+        identityMutationFence.release();
+      }
     }
   };
 }

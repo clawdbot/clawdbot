@@ -144,10 +144,16 @@ describe("createLifecycleEventBroadcastHandler", () => {
     }
     const runId = "run-before-finalize";
     registerAgentRunContext(runId, { sessionKey: "global", agentId: "ops" });
-    const unsubscribe = onSessionLifecycleEvent(handler);
+    const lifecycleDispatches: Promise<void>[] = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      const dispatch = handler(event);
+      lifecycleDispatches.push(dispatch);
+      void dispatch.catch(() => {});
+    });
     const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
     try {
       releaseWait?.();
+      await Promise.all(lifecycleDispatches);
       const transitions = broadcastToConnIds.mock.calls.slice(1);
       expect(
         transitions.map(([, event]) => [event.reason, event.status, event.hasActiveRun]),
@@ -157,6 +163,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       ]);
     } finally {
       unsubscribe();
+      await Promise.all(lifecycleDispatches.map((dispatch) => dispatch.catch(() => {})));
       releaseWait?.();
       clearAgentRunContext(runId);
     }

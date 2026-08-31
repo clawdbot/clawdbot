@@ -471,20 +471,11 @@ describe("chat transcript rendering", () => {
         },
       ]),
       showThinking: true,
-      sessions: {
-        ts: 1,
-        path: "/tmp/openclaw",
-        count: 1,
-        totalCount: 1,
-        sessions: [
-          {
-            key: "agent:main:main",
-            kind: "direct" as const,
-            updatedAt: 1_000,
-            effectiveReasoningLevel: "on",
-          },
-        ],
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      selectedSession: {
+        key: "agent:main:main",
+        kind: "direct" as const,
+        updatedAt: 1_000,
+        effectiveReasoningLevel: "on",
       },
     };
 
@@ -514,20 +505,11 @@ describe("chat transcript rendering", () => {
         },
       ]),
       showThinking: true,
-      sessions: {
-        ts: 1,
-        path: "/tmp/openclaw",
-        count: 1,
-        totalCount: 1,
-        sessions: [
-          {
-            key: "agent:main:main",
-            kind: "direct" as const,
-            updatedAt: 1_000,
-            reasoningLevel: "high",
-          },
-        ],
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      selectedSession: {
+        key: "agent:main:main",
+        kind: "direct" as const,
+        updatedAt: 1_000,
+        reasoningLevel: "high",
       },
     };
 
@@ -557,20 +539,11 @@ describe("chat transcript rendering", () => {
         },
       ]),
       showThinking: true,
-      sessions: {
-        ts: 1,
-        path: "/tmp/openclaw",
-        count: 1,
-        totalCount: 1,
-        sessions: [
-          {
-            key: "agent:main:main",
-            kind: "direct" as const,
-            updatedAt: 1_000,
-            effectiveReasoningLevel: "stream",
-          },
-        ],
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      selectedSession: {
+        key: "agent:main:main",
+        kind: "direct" as const,
+        updatedAt: 1_000,
+        effectiveReasoningLevel: "stream",
       },
     };
 
