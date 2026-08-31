@@ -111,7 +111,7 @@ catalog, API-key auth, and dynamic model resolution.
 
     ```typescript index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+    import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 
     export default definePluginEntry({
       id: "acme-ai",
