@@ -44,8 +44,8 @@ import {
 } from "./doctor-startup-migration-refusal.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import {
-  commitStartupConfigRepair,
-  planStartupConfigRepair,
+  commitAutomaticConfigRepair,
+  planAutomaticConfigRepair,
 } from "./doctor/shared/automatic-startup-config-repair.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -325,13 +325,29 @@ export async function runDoctorConfigPreflight(
 
     let snapshot = configSnapshotRead.snapshot;
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
-      if (await recoverConfigFromJsonRootSuffix(snapshot)) {
+      // Migrate readable active bytes before rollback; otherwise one retired key can discard
+      // newer valid settings that the canonical Doctor migration would preserve.
+      const activeConfigRepair =
+        typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
+          ? runWithPluginMetadataSnapshot(
+              { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
+              () => planAutomaticConfigRepair(snapshot),
+            )
+          : null;
+      let configRepaired = false;
+      if (activeConfigRepair) {
+        await commitAutomaticConfigRepair(activeConfigRepair, snapshot);
+        note(
+          `Migrated legacy config keys in the active openclaw.json:\n${activeConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
+          "Doctor changes",
+        );
+        configRepaired = true;
+      } else if (await recoverConfigFromJsonRootSuffix(snapshot)) {
         note(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
-        configSnapshotRead = await readConfigSnapshotForPreflight(false);
-        snapshot = configSnapshotRead.snapshot;
+        configRepaired = true;
       } else if (
         await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
       ) {
@@ -339,6 +355,9 @@ export async function runDoctorConfigPreflight(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
           "Config",
         );
+        configRepaired = true;
+      }
+      if (configRepaired) {
         configSnapshotRead = await readConfigSnapshotForPreflight(false);
         snapshot = configSnapshotRead.snapshot;
       }
@@ -380,7 +399,7 @@ export async function runDoctorConfigPreflight(
       !snapshot.valid &&
       !shouldSkipPluginValidationForDoctorConfigPreflight()
         ? runWithPluginMetadataSnapshot({ config: baseConfig }, () =>
-            planStartupConfigRepair(snapshot),
+            planAutomaticConfigRepair(snapshot),
           )
         : null;
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
@@ -605,7 +624,7 @@ export async function runDoctorConfigPreflight(
       startupMigrationLease.heartbeat();
       await measurePreflightStep("startup-config-repair", () =>
         runWithPluginMetadataSnapshot({ config: automaticStartupRepair.config }, () =>
-          commitStartupConfigRepair(automaticStartupRepair, snapshot),
+          commitAutomaticConfigRepair(automaticStartupRepair, snapshot),
         ),
       );
       note(
