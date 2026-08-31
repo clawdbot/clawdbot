@@ -95,8 +95,8 @@ function writeJson(res: ServerResponse, statusCode: number, value: unknown): voi
 
 async function startDiscordRestLoopback() {
   const requests: DiscordRestRequest[] = [];
-  const server = createServer(async (req, res) => {
-    try {
+  const server = createServer((req, res) => {
+    void (async () => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const method = req.method ?? "GET";
       const payload = await readRequestBody(req);
@@ -110,9 +110,9 @@ async function startDiscordRestLoopback() {
         return;
       }
       writeJson(res, 404, { message: `unexpected Discord REST request: ${method} ${pathname}` });
-    } catch (error) {
+    })().catch((error: unknown) => {
       writeJson(res, 500, { message: error instanceof Error ? error.message : String(error) });
-    }
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -126,9 +126,9 @@ async function startDiscordRestLoopback() {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
     stop: async () =>
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   };
 }
 
