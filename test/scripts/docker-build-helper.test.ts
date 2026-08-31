@@ -7559,9 +7559,13 @@ done
     const runner = readFileSync(AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
       'entry="$(openclaw_e2e_resolve_entrypoint)"',
+      'node "$entry" agents add alpha --workspace "$SHARED_WORKSPACE" --non-interactive',
+      'node "$entry" agents add ops --workspace "$SHARED_WORKSPACE" --non-interactive',
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" 18789 "$gateway_log")"',
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$gateway_log" 300 18789',
       'node "$entry" agents delete ops --force --json > "$output_file"',
+      'node "$entry" agents list --json > "$agents_file"',
+      'node scripts/e2e/lib/fixture.mjs agents-delete-assert "$output_file" "$agents_file"',
       'openclaw_e2e_terminate_gateways "${gateway_pid:-}"',
       'openclaw_e2e_print_log "$gateway_log" >&2',
       "trap cleanup EXIT",
