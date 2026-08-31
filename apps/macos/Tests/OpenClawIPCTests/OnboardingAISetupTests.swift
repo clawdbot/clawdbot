@@ -1582,7 +1582,7 @@ struct OnboardingAISetupTests {
     }
 
     @Test(arguments: ["timeout", "replacement-unavailable", "commit-locked", "commit-locked-after-completion"])
-    func `unresolved provider auth cancellation reports recovery without discarding the session`(
+    func `unresolved provider auth cancellation dismisses locally and still sends exact cancellation`(
         failure: String) async throws
     {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUnresolvedAuthCancellationTests"))
@@ -1676,42 +1676,16 @@ struct OnboardingAISetupTests {
         let sessionID = try #require(model._test_authSessionID)
 
         model.cancelProviderAuth()
-        for _ in 0..<200 where model.authError == nil {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-
-        if failure == "commit-locked-after-completion" {
-            await settleQueuedAISetupTasks()
-            #expect(cancelledSessions.value.count >= 2)
-            #expect(model.connected)
-            #expect(model.authError == nil)
-            #expect(model.activeAuthOption == nil)
-            #expect(model._test_authSessionID == nil)
-            #expect(!model.authBusy)
-            await gateway.shutdown()
-            return
-        }
-
-        #expect(!cancelledSessions.value.isEmpty)
-        #expect(
-            model.authError?.summary.isEmpty == false,
-            "Unconfirmed cancellation must explain how to recover, not silently leave Submit disabled.")
-        #expect(model.authError?.summary.contains("Cancel") == true)
-        #expect(model.authBusy)
-        #expect(model.activeAuthOption == option)
-        #expect(model._test_authSessionID == sessionID)
-        #expect(!model.connected)
-
-        cancellationFails.setValue(false)
-        model.cancelProviderAuth()
-        for _ in 0..<200 where model.activeAuthOption != nil {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-
         #expect(model.activeAuthOption == nil)
         #expect(model.authError == nil)
+        #expect(model._test_authSessionID == nil)
         #expect(!model.authBusy)
-        #expect(cancelledSessions.value.count >= 2)
+        #expect(!model.connected)
+
+        for _ in 0..<200 where cancelledSessions.value.isEmpty {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(!cancelledSessions.value.isEmpty)
         #expect(cancelledSessions.value.allSatisfy { $0 == sessionID })
         #expect(await recorder.snapshot().methods.allSatisfy {
             ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.cancel"].contains($0)

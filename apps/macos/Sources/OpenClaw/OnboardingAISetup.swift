@@ -1290,13 +1290,15 @@ extension OnboardingAISetupModel {
         let token = self.attemptToken
         let activationState = self.lastDetectedActivationState
         self.providerAuthCancellationRequested = true
-        self.authBusy = true
+        self.providerAuthReconciliationPending = false
+        self.dismissProviderAuth()
         Task {
             let cancellation = await self.gateway.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
-            // The wizard may finish while cancellation is in flight; keep its terminal outcome.
-            guard authAttemptID == self.authAttemptID, self.authSessionID == sessionID else { return }
+            // Closing the sheet wins locally. Gateway admission keeps replacement
+            // setup fenced until this exact runner has authoritatively settled.
+            guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
             if self.activationWizardCompletion != nil, cancellation != .unresolved {
                 if cancellation == .absent, self.authRequestID != nil {
                     // A terminal reply can outlive its purged server session. Only
@@ -1317,16 +1319,8 @@ extension OnboardingAISetupModel {
             {
                 return
             }
-            if cancellation == .unresolved {
-                // A late admitted commit still owns a result. Observe it without
-                // answering prompts or overlapping an existing request.
-                if self.authRequestID == nil, self.authStep == nil {
-                    self.advanceProviderAuth(stepID: nil, value: nil)
-                }
-                self.authError = Failure(
-                    summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
-                    detail: nil)
-            } else {
+            guard authAttemptID == self.authAttemptID else { return }
+            if cancellation != .unresolved {
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
             }
@@ -1559,11 +1553,15 @@ extension OnboardingAISetupModel {
     private func clearProviderAuth() {
         // Closing a wizard retires every reply captured by its generation.
         self.authAttemptID = UUID()
+        self.authRequestID = nil
+        self.providerAuthCancellationRequested = false
+        self.dismissProviderAuth()
+    }
+
+    private func dismissProviderAuth() {
         self.activeAuthOption = nil
         self.providerWizardKind = nil
         self.authSessionID = nil
-        self.authRequestID = nil
-        self.providerAuthCancellationRequested = false
         self.authStep = nil
         self.authError = nil
         self.authBusy = false
