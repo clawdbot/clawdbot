@@ -602,7 +602,8 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       if (graceRemainingMs > 0) {
         await waitForChildProcessGroupExit(child, graceRemainingMs);
       }
-      if (isChildProcessGroupAlive(child)) {
+      const requiresForceKill = isChildProcessGroupAlive(child);
+      if (requiresForceKill) {
         signalChildProcess(child, "SIGKILL");
       }
       await waitForChildProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
@@ -615,7 +616,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
           }),
         );
       } else {
-        finish(status);
+        finish(requiresForceKill ? status || 1 : status);
       }
     };
     child.once("error", (error) => {
@@ -629,7 +630,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
           ? 124
           : (status ?? 1);
       if (isChildProcessGroupAlive(child)) {
-        void finishAfterForcedTeardown(exitStatus || 1);
+        void finishAfterForcedTeardown(exitStatus);
         return;
       }
       finish(exitStatus);
