@@ -175,8 +175,7 @@ async function repairMissingPluginInstalls(params: {
         message: "Plugin repair failed and payload rollback failed",
       });
     }
-    // The index already names the active payload. Losing ownership here must
-    // retain its rollback backup rather than settle either side under a stale lease.
+    // A durable index keeps the active payload; a stale owner must leave its rollback backup unsettled.
     lease.assertOwned();
     await settlePluginInstallTransactions(pendingInstallTransactions, "commit").catch(() => {
       const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
