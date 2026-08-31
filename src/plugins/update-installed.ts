@@ -427,7 +427,7 @@ export async function updateNpmInstalledPlugins(params: {
             !npmSpecOverride && !officialNpmSpec
               ? await resolveNewerExactPinnedNpmDefaultLine({
                   currentVersion,
-                  effectiveSpec,
+                  recordedSpec: record.spec,
                   probeNpmVersion: metadataResult.metadata.version,
                   updateChannel,
                   timeoutMs: params.timeoutMs,
@@ -469,10 +469,10 @@ export async function updateNpmInstalledPlugins(params: {
             currentVersion,
             nextVersion: newerExactPinnedDefaultLine?.version ?? metadataResult.metadata.version,
             message:
-              newerExactPinnedDefaultLine && effectiveSpec
+              newerExactPinnedDefaultLine && record.spec
                 ? formatNewerExactPinnedNpmDefaultLineMessage({
                     pluginId,
-                    effectiveSpec,
+                    recordedSpec: record.spec,
                     currentVersion,
                     newer: newerExactPinnedDefaultLine,
                   })

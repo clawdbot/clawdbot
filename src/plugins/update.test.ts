@@ -1481,6 +1481,58 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
+  it.each(
+    [
+      {
+        updateChannel: "beta" as const,
+        coreVersion: "2026.8.1-beta.3",
+        newerVersion: "2026.8.1-beta.4",
+      },
+      {
+        updateChannel: "extended-stable" as const,
+        coreVersion: "2026.7.33",
+        newerVersion: "2026.7.34",
+      },
+    ].flatMap((scenario) => [false, true].map((dryRun) => ({ ...scenario, dryRun }))),
+  )(
+    "reports core-aligned floating $updateChannel updates as current (dryRun=$dryRun)",
+    async ({ updateChannel, coreVersion, newerVersion, dryRun }) => {
+      const { config } = createNpmUpdateFixture({
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        installedVersion: coreVersion,
+        registryVersion: dryRun ? newerVersion : coreVersion,
+        registryIntegrity: "sha512-same",
+        registryShasum: "same",
+        integrity: "sha512-same",
+        shasum: "same",
+        installerVersion: coreVersion,
+        installerResolvedSpec: `@openclaw/acpx@${coreVersion}`,
+      });
+      if (!dryRun) {
+        mockNpmViewMetadata({ name: "@openclaw/acpx", version: newerVersion });
+      }
+
+      const result = await updatePlugin(config, "acpx", {
+        dryRun,
+        officialPluginUpdateChannel: updateChannel,
+        coreVersion,
+      });
+
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "acpx",
+          status: "unchanged",
+          currentVersion: coreVersion,
+          nextVersion: coreVersion,
+          message: `acpx is up to date (${coreVersion}).`,
+        },
+      ]);
+      expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(dryRun ? 0 : 1);
+    },
+  );
+
   it("reports a newer latest release when the beta line for an exact pin is unavailable", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "demo",
