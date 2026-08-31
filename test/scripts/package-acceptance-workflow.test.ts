@@ -3743,7 +3743,7 @@ printf 'core_failed=%s\n' "$failed"
     }
   });
 
-  it("keeps exhaustive update migration as a separate manual package gate", () => {
+  it("defaults update migration to stable with optional historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
@@ -3752,7 +3752,12 @@ printf 'core_failed=%s\n' "$failed"
     expect(workflow).toContain("source: ref");
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain("docker_lanes: update-migration");
-    expect(workflow).toContain("default: all-since-2026.4.23");
+    expect(
+      readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs?.baselines,
+    ).toMatchObject({
+      default: "",
+      required: false,
+    });
     expect(workflow).toContain("default: plugin-deps-cleanup");
     expect(workflow).toContain("telegram_mode: none");
     expect(workflow).toContain("secrets: inherit");
@@ -5755,9 +5760,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
-    expect(workflow).toContain(
-      "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
-    );
+    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBeUndefined();
     expect(workflow).toContain(
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );

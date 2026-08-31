@@ -113,7 +113,7 @@ function updateMigrationLane(name: string, baselineSpec: string): ReturnType<typ
   return {
     command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='plugin-deps-cleanup' ${trustedUpgradeSurvivorCommand(
       "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-      'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
+      'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
     )}`,
     imageKind: "bare",
     live: false,
@@ -258,40 +258,50 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
-  it("preserves expanded survivor env through the trusted harness wrapper", () => {
-    const root = tempDirs.make("openclaw-survivor-wrapper-");
-    const harnessRoot = join(root, ".release-harness");
-    const script = join(harnessRoot, "scripts/e2e/upgrade-survivor-docker.sh");
-    const output = join(root, "survivor-env.txt");
-    mkdirSync(dirname(script), { recursive: true });
-    writeFileSync(
-      script,
-      [
-        "#!/usr/bin/env bash",
-        'printf "%s|%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC" "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO" > "$OPENCLAW_TEST_OUTPUT"',
-      ].join("\n"),
-    );
-    chmodSync(script, 0o755);
+  it.each([
+    { name: "published-upgrade-survivor", baseline: "2026.7.2", scenario: "feishu-channel" },
+    { name: "update-migration", baseline: "2026.4.23", scenario: "plugin-deps-cleanup" },
+    { name: "update-migration", baseline: undefined, scenario: "plugin-deps-cleanup" },
+    { name: "root-managed-vps-upgrade", baseline: undefined, scenario: "base" },
+  ])(
+    "passes the $name baseline through the trusted harness wrapper ($baseline)",
+    ({ name, baseline, scenario }) => {
+      const root = tempDirs.make("openclaw-survivor-wrapper-");
+      const harnessRoot = join(root, ".release-harness");
+      const script = join(harnessRoot, "scripts/e2e/upgrade-survivor-docker.sh");
+      const output = join(root, "survivor-env.txt");
+      mkdirSync(dirname(script), { recursive: true });
+      writeFileSync(
+        script,
+        [
+          "#!/usr/bin/env bash",
+          'printf "%s|%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC" "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO" > "$OPENCLAW_TEST_OUTPUT"',
+        ].join("\n"),
+      );
+      chmodSync(script, 0o755);
 
-    const lane = requireFirstLane(
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.7.2",
-        upgradeSurvivorScenarios: "feishu-channel",
-      }),
-    );
-    execFileSync("/bin/bash", ["-c", lane.command], {
-      cwd: root,
-      env: {
-        ...process.env,
-        OPENCLAW_DOCKER_E2E_REPO_ROOT: root,
-        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: harnessRoot,
-        OPENCLAW_TEST_OUTPUT: output,
-      },
-    });
+      const lane = requireFirstLane(
+        planFor({
+          selectedLaneNames: [name],
+          upgradeSurvivorBaselines: baseline,
+          upgradeSurvivorScenarios: scenario,
+        }),
+      );
+      execFileSync("/bin/bash", ["-c", lane.command], {
+        cwd: root,
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: root,
+          OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: harnessRoot,
+          OPENCLAW_TEST_OUTPUT: output,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+        },
+      });
 
-    expect(readFileSync(output, "utf8")).toBe("openclaw@2026.7.2|feishu-channel\n");
-  });
+      expect(readFileSync(output, "utf8")).toBe(`openclaw@${baseline ?? "latest"}|${scenario}\n`);
+    },
+  );
 
   it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
@@ -663,7 +673,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       {
         command: trustedUpgradeSurvivorCommand(
           "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
         ),
         imageKind: "bare",
         live: false,
