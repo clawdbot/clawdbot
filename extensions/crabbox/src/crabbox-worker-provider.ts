@@ -59,6 +59,7 @@ import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
+  CRABBOX_STOP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
@@ -255,7 +256,6 @@ export function createCrabboxWorkerProvider(
     await stopCrabboxLease({
       ...context,
       runCommand,
-      timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
     });
     await warmImages.release(context);
   };
@@ -343,7 +343,7 @@ export function createCrabboxWorkerProvider(
       // The lifecycle profile omits placement sizing, which may have enabled capture.
       // Reserve its full budget unless the profile explicitly disabled warm images.
       return (
-        resolveCrabboxLifecycleTimeoutMs(parsed.provider) +
+        CRABBOX_STOP_TIMEOUT_MS +
         CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
         (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
       );

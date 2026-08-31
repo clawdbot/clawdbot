@@ -1963,17 +1963,17 @@ describe("Crabbox worker provider", () => {
   });
 
   const provisionTimeoutCases = [
-    { name: "normal without setup", profile: { ...PROFILE }, minutes: 67 },
+    { name: "normal without setup", profile: { ...PROFILE }, minutes: 72 },
     {
       name: "normal with setup",
       profile: { ...PROFILE, setup: "install-node" },
-      minutes: 82,
+      minutes: 87,
     },
-    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 132 },
+    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 137 },
     {
       name: "desktop with setup",
       profile: { ...PROFILE, desktop: true, setup: "install-node" },
-      minutes: 147,
+      minutes: 152,
     },
   ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
   it.each(provisionTimeoutCases)(
@@ -1981,7 +1981,7 @@ describe("Crabbox worker provider", () => {
     ({ profile, minutes }) => {
       const provider = providerWithRunner(async () => commandResult());
 
-      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000);
+      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 30_000);
     },
   );
 
@@ -2078,7 +2078,7 @@ describe("Crabbox worker provider", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(132 * 60_000);
+    ).toBe(137 * 60_000 + 30_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
   });
 
@@ -2325,19 +2325,19 @@ describe("Crabbox worker provider", () => {
       providerId: "aws",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 67 * 60_000,
+      provisionTimeoutMs: 72 * 60_000 + 30_000,
     },
     {
       providerId: "hetzner",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 67 * 60_000,
+      provisionTimeoutMs: 72 * 60_000 + 30_000,
     },
     {
       providerId: "machine0",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 5 * 60_000,
-      provisionTimeoutMs: 80 * 60_000,
+      provisionTimeoutMs: 81 * 60_000 + 30_000,
     },
   ])(
     "runs one fixed $providerId warmup, ignores its output, and inspects only the canonical id",
@@ -2427,7 +2427,7 @@ describe("Crabbox worker provider", () => {
       await expect(provider.destroy(lease)).resolves.toBeUndefined();
       expect(calls.slice(3).map(({ argv, options }) => [argv[1], options.timeoutMs])).toEqual([
         ["inspect", lifecycleTimeoutMs],
-        ["stop", lifecycleTimeoutMs],
+        ["stop", 310_000],
       ]);
     },
   );
@@ -2496,46 +2496,56 @@ describe("Crabbox worker provider", () => {
     }
   });
 
-  it("reserves the full Machine0 cleanup budget after late node enrollment failure", async () => {
-    const profile = { ...PROFILE, provider: "machine0" };
-    let elapsedMs = 0;
-    let cleanupTimeoutMs = 0;
-    const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
-    const provider = providerWithRunner(async (argv, options) => {
-      if (argv[1] === "inspect" || argv[1] === "status") {
-        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-      }
-      if (argv[1] === "stop") {
-        cleanupTimeoutMs = options.timeoutMs;
-        elapsedMs += options.timeoutMs;
-        return commandResult({ code: null, killed: true, termination: "timeout" });
-      }
-      return commandResult();
-    });
+  it.each([
+    { providerId: "aws", enrollmentDeadlineMs: 66 * 60_000 },
+    { providerId: "hetzner", enrollmentDeadlineMs: 66 * 60_000 },
+    { providerId: "machine0", enrollmentDeadlineMs: 75 * 60_000 },
+  ])(
+    "reserves diagnostics and full $providerId cleanup after late node enrollment failure",
+    async ({ providerId, enrollmentDeadlineMs }) => {
+      const profile = { ...PROFILE, provider: providerId };
+      let elapsedMs = 0;
+      let cleanupTimeoutMs = 0;
+      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+      const provider = providerWithRunner(async (argv, options) => {
+        if (argv[1] === "inspect" || argv[1] === "status") {
+          return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+        }
+        if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
+          elapsedMs += options.timeoutMs + 10_000;
+        }
+        if (argv[1] === "stop") {
+          cleanupTimeoutMs = options.timeoutMs;
+          elapsedMs += options.timeoutMs + 10_000;
+          return commandResult({ code: null, killed: true, termination: "timeout" });
+        }
+        return commandResult();
+      });
 
-    try {
-      await expect(
-        provider.provision(profile, OPERATION_ID, {
-          beginNodeEnrollment: async () => ({
-            mode: "resume" as const,
-            deviceId: "device-bound",
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Bound worker",
-            waitForDeviceId: async () => {
-              elapsedMs = 75 * 60_000;
-              throw new Error("node enrollment expired");
-            },
+      try {
+        await expect(
+          provider.provision(profile, OPERATION_ID, {
+            beginNodeEnrollment: async () => ({
+              mode: "resume" as const,
+              deviceId: "device-bound",
+              openclawVersion: "2026.8.1",
+              nodeBootstrap: createNodeBootstrapFixture(),
+              displayName: "Bound worker",
+              waitForDeviceId: async () => {
+                elapsedMs = enrollmentDeadlineMs;
+                throw new Error("node enrollment expired");
+              },
+            }),
           }),
-        }),
-      ).rejects.toMatchObject({ code: "cleanup_indeterminate", leaseId: LEASE_ID });
+        ).rejects.toMatchObject({ code: "cleanup_indeterminate", leaseId: LEASE_ID });
 
-      expect(cleanupTimeoutMs).toBe(5 * 60_000);
-      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(elapsedMs);
-    } finally {
-      now.mockRestore();
-    }
-  });
+        expect(cleanupTimeoutMs).toBe(310_000);
+        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(elapsedMs);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it.each(["standard", undefined])(
     "overrides configured class %s for one provision operation",

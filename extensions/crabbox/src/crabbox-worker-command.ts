@@ -1,6 +1,6 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
 
@@ -78,14 +78,13 @@ export async function stopCrabboxLease(params: {
   id: string;
   provider: string;
   runCommand: CrabboxCommandRunner;
-  timeoutMs?: number;
 }): Promise<void> {
   const result = await runCrabboxCommand({
     action: "stop",
     args: ["stop", "--provider", params.provider, "--id", params.id],
     binary: params.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
     return;
