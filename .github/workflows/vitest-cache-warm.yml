@@ -39,6 +39,30 @@ jobs:
           node-compile-cache-scope: "test"
           vitest-fs-cache: "true"
 
+      # Setup owns the completed toolchain and dependency trees. Publish them
+      # before build and transform warming delay unrelated readers.
+      - name: Save Node toolchain cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node-env.outputs.node-toolchain-populated == 'true' && steps.setup-node-env.outputs.node-toolchain-cache-matched-key != steps.setup-node-env.outputs.node-toolchain-cache-key }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
+          key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
+
+      - name: Save exact dependency cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            ui/node_modules
+            packages/*/node_modules
+            extensions/*/node_modules
+            examples/*/node_modules
+            .cache/openclaw-pnpm-store
+          key: ${{ steps.setup-node-env.outputs.dependency-cache-key }}
+
       - name: Warm build cache
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -73,29 +97,10 @@ jobs:
           # raised ceiling a heavy suite's worker can die under default heap
           # (run 31874567859), skipping every cache save for the day.
           NODE_OPTIONS: --max-old-space-size=8192
+          # Only the publisher prunes restored entries before saving a new seed.
+          OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1"
+          OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
         run: node --import tsx scripts/ci-run-node-test-shard.mts
-
-      - name: Save Node toolchain cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node-env.outputs.node-toolchain-populated == 'true' && steps.setup-node-env.outputs.node-toolchain-cache-matched-key != steps.setup-node-env.outputs.node-toolchain-cache-key }}
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
-          key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
-
-      - name: Save exact dependency cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            node_modules
-            ui/node_modules
-            packages/*/node_modules
-            extensions/*/node_modules
-            examples/*/node_modules
-            .cache/openclaw-pnpm-store
-          key: ${{ steps.setup-node-env.outputs.dependency-cache-key }}
 
       # Prefix restores accumulate old lockfile generations. Keep the trusted
       # writer bounded before publishing the coarser fallback store.

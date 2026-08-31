@@ -123,6 +123,7 @@ function evaluateWorkflowExpression(
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
+    runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     steps?: Record<string, { outputs: Record<string, string> }>;
@@ -172,6 +173,7 @@ function evaluateWorkflowExpression(
       target_context_ref: context.targetContextRef ?? "",
     },
     matrix: context.matrix ?? {},
+    runner: { environment: context.runnerEnvironment ?? "" },
     steps: context.steps ?? {},
     needs: {
       preflight: {
@@ -3870,32 +3872,6 @@ NODE
         `${jobName}: workflow dispatch`,
       ).toBe("ubuntu-24.04");
     }
-
-    for (const jobName of [
-      "check-additional-shard",
-      "check-lint-hosted-core-shard",
-      "check-shard",
-      "checks-ui-e2e",
-      "qa-smoke-ci-profile",
-    ]) {
-      const setup = expectDefined(
-        workflow.jobs[jobName].steps.find(
-          (step: WorkflowStep) => step.name === "Setup Node environment",
-        ),
-        `${jobName} Node setup`,
-      );
-      const context = {
-        ...canonicalPullRequest,
-        matrix:
-          widenedHybridMatrixRows.find((row) => row.jobName === jobName)?.matrix ??
-          canonicalPullRequest.matrix,
-        runnerBackend: "hybrid" as const,
-      };
-      expect(evaluateWorkflowExpression(setup.with?.["dependency-cache"], context), jobName).toBe(
-        "false",
-      );
-      expect(setup.with?.["cache-mode"], jobName).toBe("${{ needs.preflight.outputs.cache_mode }}");
-    }
   });
 
   it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
@@ -4297,19 +4273,69 @@ NODE
       expect(consumer.with?.["cache-mode"], jobName).toBe(
         "${{ needs.preflight.outputs.cache_mode }}",
       );
-      expect(consumer.with?.["dependency-cache"], jobName).toContain(
-        "vars.OPENCLAW_CI_RUNNER_BACKEND",
-      );
-      for (const runnerBackend of ["github", "hybrid"] as const) {
+      const canonical = {
+        eventName: "push",
+        matrix: {
+          group: "extension-package-boundary",
+          node_version: "24.x",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+          task: "lint",
+        },
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      } as const;
+      const scenarios = [
+        { eventName: "push", trusted: true },
+        { eventName: "pull_request", headRepository: "openclaw/openclaw", trusted: true },
+        { eventName: "pull_request", headRepository: "contributor/openclaw", trusted: false },
+        {
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          authorAssociation: "NONE",
+          trusted: false,
+        },
+        { eventName: "workflow_dispatch", trusted: false },
+        { eventName: "push", repository: "contributor/openclaw", trusted: false },
+      ] as const;
+      for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
+        for (const runAttempt of [1, 2]) {
+          for (const { trusted, ...scenario } of scenarios) {
+            const context = { ...canonical, ...scenario, runnerBackend, runAttempt };
+            const runsOn = workflow.jobs[jobName]["runs-on"] as string;
+            const routedRunner = runsOn.startsWith("${{")
+              ? evaluateWorkflowExpression(runsOn, context)
+              : runsOn;
+            const selfHosted = String(routedRunner).startsWith("blacksmith-");
+            expect(
+              evaluateWorkflowExpression(consumer.with?.["dependency-cache"], {
+                ...context,
+                runnerEnvironment: selfHosted ? "self-hosted" : "github-hosted",
+              }),
+              `${jobName} ${JSON.stringify(context)} on ${routedRunner}`,
+            ).toBe(trusted && selfHosted ? "true" : "false");
+          }
+        }
+      }
+      // The actual runner must fence restores even when the configured backend
+      // still names Blacksmith or hybrid (including hosted retry routing).
+      for (const runnerEnvironment of ["", "github-hosted"] as const) {
         expect(
           evaluateWorkflowExpression(consumer.with?.["dependency-cache"], {
-            eventName: "push",
-            matrix: { node_version: "24.x" },
-            repository: "openclaw/openclaw",
-            runnerBackend,
-            runAttempt: 1,
+            ...canonical,
+            runnerBackend: "hybrid",
+            runnerEnvironment,
           }),
-          `${jobName} ${runnerBackend} dependency cache`,
+          `${jobName} actual runner ${runnerEnvironment}`,
+        ).toBe("false");
+      }
+      if (jobName === "checks-node-core-test-nondist-shard") {
+        expect(
+          evaluateWorkflowExpression(consumer.with?.["dependency-cache"], {
+            ...canonical,
+            matrix: { ...canonical.matrix, node_version: "22.x" },
+            runnerBackend: "hybrid",
+            runnerEnvironment: "self-hosted",
+          }),
         ).toBe("false");
       }
     }
@@ -5184,6 +5210,10 @@ server.listen(0, "127.0.0.1", () => {
     expect(seedStep.run).toContain('"OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1"');
     expect(warmStep.id).toBe("warm-caches");
     expect(warmStep["continue-on-error"]).toBe(true);
+    expect(warmStep.env).toMatchObject({
+      OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1",
+      OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1",
+    });
     expect(warmerSetup.with).toMatchObject({
       "build-all-cache-scope": "full",
       "cache-mode": "read-write",
@@ -5192,6 +5222,7 @@ server.listen(0, "127.0.0.1", () => {
       "node-compile-cache": "true",
       "vitest-fs-cache": "true",
     });
+    expect(warmerSetup["continue-on-error"]).not.toBe(true);
     for (const legacyInput of [
       "save-actions-cache",
       "save-dependency-cache",
@@ -5216,8 +5247,24 @@ server.listen(0, "127.0.0.1", () => {
         "steps.setup-node-env.outputs.cache-mode == 'read-write'",
       );
       expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
-        warmerSteps.indexOf(warmStep),
+        warmerSteps.indexOf(warmerSetup),
       );
+      if (
+        saveStep.name === "Save Node toolchain cache" ||
+        saveStep.name === "Save exact dependency cache"
+      ) {
+        const buildStep = warmerSteps.find((step) => step.name === "Warm build cache");
+        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
+          warmerSteps.indexOf(expectDefined(buildStep, "cache warm build")),
+        );
+        // A normal step condition retains Actions' implicit success() gate,
+        // so failed setup cannot publish even if it produced cache outputs.
+        expect(saveStep.if, saveStep.name).not.toMatch(/\b(?:always|failure|cancelled)\(/u);
+      } else {
+        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
+          warmerSteps.indexOf(warmStep),
+        );
+      }
       expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
         warmerSteps.indexOf(warmAssertionStep),
       );
@@ -8708,8 +8755,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-version": "24.x",
       "install-bun": "false",
-      "dependency-cache":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
+      "dependency-cache": expect.any(String),
     } as const;
     const expectedUiE2eSetup = {
       ...expectedSharedUiE2eSetup,
@@ -8735,7 +8781,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const routedUiE2eJobs = [
       {
         job: uiE2e,
-        hybridFirstAttempt: true,
         name: "checks-ui-e2e",
         setup: uiE2eSetup,
         blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
@@ -8743,7 +8788,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       {
         job: uiE2eRealGateway,
-        hybridFirstAttempt: true,
         name: "checks-ui-e2e-real-gateway",
         setup: realGatewaySetup,
         blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
@@ -8781,7 +8825,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           runnerBackend: "hybrid",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "true" },
       },
       {
         name: "same-repo pull request retry",
@@ -8836,27 +8880,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expected: { blacksmith: true, dependencyCache: "true" },
       },
     ] as const;
-    for (const {
-      blacksmithRunner,
-      hybridFirstAttempt,
-      job,
-      name: jobName,
-      runsOn,
-      setup,
-    } of routedUiE2eJobs) {
+    for (const { blacksmithRunner, job, name: jobName, runsOn, setup } of routedUiE2eJobs) {
       expect(job["runs-on"]).toBe(runsOn);
       for (const { context, expected, name: scenarioName } of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const useBlacksmith =
-          scenarioName === "same-repo pull request with hybrid backend"
-            ? hybridFirstAttempt
-            : expected.blacksmith;
-        const expectedRunner = useBlacksmith ? blacksmithRunner : "ubuntu-24.04";
+        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(evaluateWorkflowExpression(job["runs-on"], context), assertionName).toBe(
           expectedRunner,
         );
         expect(
-          evaluateWorkflowExpression(setup.with?.["dependency-cache"], context),
+          evaluateWorkflowExpression(setup.with?.["dependency-cache"], {
+            ...context,
+            runnerEnvironment: expected.blacksmith ? "self-hosted" : "github-hosted",
+          }),
           assertionName,
         ).toBe(expected.dependencyCache);
         expect(setup.with?.["cache-mode"], assertionName).toBe(
