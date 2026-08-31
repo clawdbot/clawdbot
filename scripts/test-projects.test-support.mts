@@ -2193,6 +2193,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
     ],
   ],
+  ["scripts/build-stamp.mts", ["src/infra/build-stamp.test.ts"]],
   ["scripts/run-vitest.mjs", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-vitest.mts", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-oxlint-shards.mts", ["run-oxlint"]],
@@ -2234,8 +2235,17 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/run.sh",
+    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
+    ["upgrade-survivor-recovery-cleanup"],
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
@@ -3028,7 +3038,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-checkout-auth\.py))$/u.test(
       changedPath,
     )
   ) {

@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -14,10 +14,10 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("restores active commentary when an evicted session revalidates from its cursor", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-active-cursor-replay", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir

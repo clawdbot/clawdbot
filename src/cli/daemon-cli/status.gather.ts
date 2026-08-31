@@ -312,6 +312,7 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    gatewayReached?: true;
     kind?: "connect" | "read";
     capability?: string;
     auth?: {
@@ -667,12 +668,12 @@ export async function gatherDaemonStatus(
       : [];
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
-  const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
-  const tlsRuntime = shouldUseLocalTlsRuntime
-    ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-        loadGatewayTlsRuntime(daemonCfg.gateway?.tls),
-      )
-    : undefined;
+  const localCertificate =
+    opts.probe && !probeUrlOverride && tlsEnabled
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
+        )
+      : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   let allowRpcConfigCredentials = true;
@@ -718,10 +719,9 @@ export async function gatherDaemonStatus(
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,
-          tlsFingerprint:
-            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-              ? tlsRuntime.fingerprintSha256
-              : undefined,
+          tlsFingerprint: localCertificate?.ok
+            ? localCertificate.value.fingerprintSha256
+            : undefined,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,

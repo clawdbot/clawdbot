@@ -60,6 +60,10 @@ describe("test runtime prerequisites", () => {
       ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       "runtime",
     ],
+    ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
+    ["CLI directory", ["src/cli"], "runtime"],
+    ["CLI config", ["test/vitest/vitest.cli.config.ts"], "runtime"],
+    ["ordinary CLI unit test", ["src/cli/command-path-policy.test.ts"], undefined],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
     ["Gateway directory", ["src/gateway"], "runtime"],
@@ -532,6 +536,20 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/build-all.mts"], ["test/scripts/build-all.test.ts"]);
   });
 
+  it("routes recovery survivor orchestration to its assertion owner", () => {
+    for (const file of [
+      "scripts/e2e/upgrade-survivor-docker.sh",
+      "scripts/e2e/lib/upgrade-survivor/run.sh",
+      "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs",
+      "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
+    ]) {
+      const plan = resolveChangedTestTargetPlan([file]);
+      expect(plan.mode).toBe("targets");
+      if (plan.mode !== "targets") throw new Error(`Missing recovery test owner: ${file}`);
+      expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
+    }
+  });
+
   it("keeps force-test runner edits on its safe CLI tests", () => {
     expectChangedTargets(["scripts/test-force.ts"], ["test/scripts/test-force.test.ts"]);
   });
@@ -943,6 +961,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/clawhub-parent-authorization.test.ts",
+        "test/scripts/clawhub-postpublish.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
@@ -1030,6 +1050,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/changed-lanes.test.ts",
           "test/scripts/install-trufflehog.test.ts",
           "test/scripts/pr-prepare-gates.test.ts",
+          "test/scripts/testbox-base.test.ts",
           "test/scripts/testbox-lease-freshness.test.ts",
         ],
       ],
@@ -1039,6 +1060,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/testbox-base.test.ts",
         ],
       ],
       [
@@ -1047,6 +1069,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/testbox-base.test.ts",
         ],
       ],
       [
@@ -2024,8 +2047,11 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("chunks the broad shell helper tooling shard after isolated targets", () => {
-    const plans = buildVitestRunPlans(["test/scripts"], process.cwd());
+  it.each([
+    ["chunks the broad shell helper tooling shard after isolated targets", "test/scripts"],
+    ["chunks broad shell helper globs after isolated targets", "test/scripts/*.test.ts"],
+  ])("%s", (_title, target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
     expect(plans.slice(0, 4)).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.unit-fast.config.ts",
@@ -2037,6 +2063,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: [
           "test/scripts/android-version.test.ts",
+          "test/scripts/ci-git-prerequisites.test.ts",
           "test/scripts/ios-release-plan.test.ts",
         ],
         watchMode: false,
@@ -2212,70 +2239,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
       "watch mode with mixed test suites is not supported",
     );
-  });
-
-  it("chunks broad shell helper globs after isolated targets", () => {
-    const plans = buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd());
-    expect(plans.slice(0, 4)).toEqual([
-      expect.objectContaining({
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
-        watchMode: false,
-      }),
-      {
-        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "test/scripts/android-version.test.ts",
-          "test/scripts/ios-release-plan.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.tooling-docker.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.tooling-isolated.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "test/scripts/check-extension-package-tsc-boundary.test.ts",
-          "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
-          "test/scripts/control-ui-i18n.test.ts",
-          "test/scripts/openclaw-e2e-instance.test.ts",
-          "test/scripts/test-projects-build-admission.test.ts",
-          "test/scripts/vitest-fork-shutdown.test.ts",
-        ],
-        watchMode: false,
-      },
-    ]);
-    const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
-    const toolingPlans = plans
-      .slice(4)
-      .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
-    const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
-
-    expect(toolingPlans.length).toBeGreaterThan(1);
-    expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
-    expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
-    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
-    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
-    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
-    expect(e2ePlans).toEqual([
-      {
-        config: "test/vitest/vitest.e2e.config.ts",
-        forwardedArgs: [
-          "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
-          "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
-          "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
-          "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
-        ],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
   });
 
   it("keeps broad shell helper watch targets in one tooling shard", () => {

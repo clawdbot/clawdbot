@@ -83,6 +83,32 @@ the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection
 loss also ends the call with an error; automatic reconnection is not supported.
 
+## Session ownership
+
+`talk.client.create` and realtime `talk.session.create` resolve their session before
+loading profile context or starting a provider. An agent-prefixed `sessionKey`
+selects that agent. Otherwise, Talk uses `talk.agentId`, then the configured system
+agent or an unambiguous default agent. Without an owner in a multi-agent Gateway,
+set `talk.agentId` or send an agent-prefixed key.
+
+Omitting `sessionKey` selects the same owned main session as a bare `main` key;
+both enforce sharing, incognito, and operator-role restrictions. Main aliases
+honor `session.scope`; the [main session](/concepts/main-session) suffix is fixed at
+`main`, and custom `session.mainKey` values are ignored. A shared fixed store retains
+its recorded owner for unqualified keys, and conflicting explicit ownership is rejected
+even when a main alias becomes `global`. If routing or access changes during
+startup, creation fails rather than switching sessions; retry the request.
+
+Gateway-owned provider consultations and steering retain the prepared agent,
+canonical session key, and store. Agent replies stay in the same session as voice
+transcripts, including under global scope, while the original key continues to
+identify the voice call.
+
+Keep the original `sessionKey` for client transcript, tool-call, and close requests.
+`talk.client.close` requires both that exact key and the returned `voiceSessionId`;
+an equivalent storage alias is not a replacement. Transcription-only sessions
+without a key remain sessionless and do not select a default chat.
+
 ## Behavior (macOS)
 
 - Always-on overlay while Talk mode is enabled.
@@ -220,7 +246,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 ```
 
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set `talk.realtime.model` to
-`gpt-live-1-codex` (recommended) or `gpt-live-1-boulder-alpha`; `gpt-live-1`
+`gpt-live-1-codex`; `gpt-live-1`
 and `gpt-live-1-mini` are not valid on this route. Browser and Gateway-relay
 WebRTC prefer a ChatGPT OAuth subscription profile and fall back to Platform
 API-key auth. OAuth creates the WebRTC call through the Codex backend using

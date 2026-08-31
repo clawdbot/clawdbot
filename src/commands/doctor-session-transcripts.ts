@@ -3,20 +3,16 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  hasInternalRuntimeContext,
-  stripInternalRuntimeContext,
-} from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  isSessionTranscriptLeafControl,
-  mergeSessionTranscriptTreePaths,
-  mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "../config/sessions/transcript-tree.js";
+  normalizeLegacyOpenAICodexTranscriptMetadata,
+  selectActivePath,
+  hasBrokenPromptRewriteBranch,
+  selectActiveTranscriptEntries,
+  type TranscriptEntry,
+} from "../config/sessions/legacy-transcript-repair.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
@@ -41,16 +37,8 @@ import {
   withDoctorSqliteMaintenanceLock,
   type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
-import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
-
-type TranscriptEntry = Record<string, unknown> & {
-  id?: unknown;
-  parentId?: unknown;
-  type?: unknown;
-  message?: unknown;
-};
 
 type TranscriptRepairResult = {
   filePath: string;
@@ -61,22 +49,10 @@ type TranscriptRepairResult = {
   legacyOpenAICodexEntries: number;
   backupPath?: string;
   reason?: string;
+  deferred?: boolean;
 };
 
-type SessionTranscriptHealthIssue = TranscriptRepairResult & {
-  broken: true;
-};
-
-type ActiveTranscriptPath = {
-  entries: TranscriptEntry[];
-  entriesToPersist: TranscriptEntry[];
-  terminalLeafControl: TranscriptEntry | null;
-  appendParentId: string | null;
-};
-
-const OPENAI_PROVIDER_ID = "openai";
-const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
-const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+type SessionTranscriptHealthIssue = TranscriptRepairResult;
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
@@ -96,188 +72,6 @@ function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   return entries;
 }
 
-function getEntryId(entry: TranscriptEntry): string | null {
-  return typeof entry.id === "string" && entry.id.trim() ? entry.id : null;
-}
-
-function getParentId(entry: TranscriptEntry): string | null {
-  return typeof entry.parentId === "string" && entry.parentId.trim() ? entry.parentId : null;
-}
-
-function getMessage(entry: TranscriptEntry): Record<string, unknown> | null {
-  return entry.message && typeof entry.message === "object" && !Array.isArray(entry.message)
-    ? (entry.message as Record<string, unknown>)
-    : null;
-}
-
-function withSelectedParent(entry: TranscriptEntry, parentId: string | null): TranscriptEntry {
-  return entry.parentId === parentId ? entry : { ...entry, parentId };
-}
-
-function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]): number {
-  let changed = 0;
-  for (const entry of entries) {
-    const message = getMessage(entry);
-    if (!message) {
-      continue;
-    }
-    let touched = false;
-    if (isLegacyCodexProviderId(message.provider)) {
-      message.provider = OPENAI_PROVIDER_ID;
-      touched = true;
-    }
-    if (message.api === LEGACY_OPENAI_CODEX_RESPONSES_API) {
-      message.api = OPENAI_CHATGPT_RESPONSES_API;
-      touched = true;
-    }
-    if (touched) {
-      changed += 1;
-    }
-  }
-  return changed;
-}
-
-function textFromContent(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const text = content
-    .map((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? (part as { text: string }).text
-        : "",
-    )
-    .join("");
-  return text || null;
-}
-
-function selectActivePath(entries: TranscriptEntry[]): ActiveTranscriptPath | null {
-  const sessionEntries = entries.filter((entry) => entry.type !== "session");
-  const tree = scanSessionTranscriptTree(sessionEntries);
-  if (!tree.hasExplicitLeafUpdate) {
-    const byId = new Map<string, TranscriptEntry>();
-    for (const entry of sessionEntries) {
-      const id = getEntryId(entry);
-      if (id) {
-        byId.set(id, entry);
-      }
-    }
-    const active: TranscriptEntry[] = [];
-    const seen = new Set<string>();
-    let current = sessionEntries.at(-1);
-    while (current) {
-      const id = getEntryId(current);
-      if (!id || seen.has(id)) {
-        return null;
-      }
-      seen.add(id);
-      active.unshift(current);
-      const parentId = getParentId(current);
-      current = parentId ? byId.get(parentId) : undefined;
-    }
-    return active.length > 0
-      ? {
-          entries: active,
-          entriesToPersist: active,
-          terminalLeafControl: null,
-          appendParentId: getEntryId(active.at(-1) ?? {}),
-        }
-      : null;
-  }
-  if (!tree.hasLeafUpdate) {
-    return null;
-  }
-  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const appendPath = selectSessionTranscriptTreePathNodes(tree, tree.appendParentId);
-  const visibleEntries = mergeSessionTranscriptTreePaths([visiblePath]).map((node) =>
-    withSelectedParent(node.entry, node.selectedParentId),
-  );
-  const persistedPath = mergeSessionTranscriptVisiblePathWithOpaqueAppendPath({
-    visiblePath,
-    appendPath,
-    appendParentId: tree.appendParentId,
-  });
-  const entriesToPersist = persistedPath.nodes.map((node) =>
-    withSelectedParent(node.entry, node.selectedParentId),
-  );
-  const lastLeafUpdateEntry = tree.nodes.findLast((node) => node.leafId !== undefined)?.entry;
-  const terminalLeafControl = isSessionTranscriptLeafControl(lastLeafUpdateEntry)
-    ? lastLeafUpdateEntry
-    : null;
-  return {
-    entries: visibleEntries,
-    entriesToPersist,
-    terminalLeafControl,
-    appendParentId: persistedPath.appendParentId,
-  };
-}
-
-function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: TranscriptEntry[]) {
-  const activeIds = new Set(activePath.map(getEntryId).filter((id): id is string => Boolean(id)));
-  const activeUserByParentAndText = new Set<string>();
-
-  for (const entry of activePath) {
-    const id = getEntryId(entry);
-    const message = getMessage(entry);
-    if (!id || message?.role !== "user") {
-      continue;
-    }
-    const text = textFromContent(message.content);
-    if (text !== null) {
-      activeUserByParentAndText.add(`${getParentId(entry) ?? ""}\0${text.trim()}`);
-    }
-  }
-
-  for (const entry of entries) {
-    const id = getEntryId(entry);
-    if (!id || activeIds.has(id)) {
-      continue;
-    }
-    const message = getMessage(entry);
-    if (message?.role !== "user") {
-      continue;
-    }
-    const text = textFromContent(message.content);
-    if (!text || !hasInternalRuntimeContext(text)) {
-      continue;
-    }
-    const visibleText = stripInternalRuntimeContext(text).trim();
-    if (
-      visibleText &&
-      activeUserByParentAndText.has(`${getParentId(entry) ?? ""}\0${visibleText}`)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function selectActiveTranscriptEntries(params: {
-  entries: TranscriptEntry[];
-  activePath: ActiveTranscriptPath;
-}): TranscriptEntry[] {
-  const header = params.entries.find((entry) => entry.type === "session");
-  if (!header) {
-    throw new Error("missing session header");
-  }
-  const lastPersistedId = getEntryId(params.activePath.entriesToPersist.at(-1) ?? {});
-  const terminalLeafControl = params.activePath.terminalLeafControl
-    ? {
-        ...params.activePath.terminalLeafControl,
-        parentId: lastPersistedId,
-        appendParentId: params.activePath.appendParentId,
-      }
-    : null;
-  return [
-    header,
-    ...params.activePath.entriesToPersist,
-    ...(terminalLeafControl ? [terminalLeafControl] : []),
-  ];
-}
-
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
 async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
@@ -292,6 +86,11 @@ async function repairBrokenSessionTranscriptFile(params: {
     legacyOpenAICodexEntries: 0,
   };
   try {
+    if (!params.shouldRepair && (await fs.stat(params.filePath)).size > 1024 * 1024) {
+      result.deferred = true;
+      result.reason = "Detailed branch/provider classification deferred to offline staged import.";
+      return result;
+    }
     const raw = await fs.readFile(params.filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
     result.originalEntries = entries.length;
@@ -368,8 +167,8 @@ export async function detectSessionTranscriptHealthIssues(params?: {
   const issues: SessionTranscriptHealthIssue[] = [];
   for (const filePath of files) {
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
-    if (result.broken) {
-      issues.push(result as SessionTranscriptHealthIssue);
+    if (result.broken || result.deferred) {
+      issues.push(result);
     }
   }
   return issues;
@@ -387,7 +186,9 @@ export function sessionTranscriptIssueToHealthFinding(
   return {
     checkId: SESSION_TRANSCRIPTS_CHECK_ID,
     severity: "info",
-    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
+    message: issue.deferred
+      ? issue.reason!
+      : `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
     path: issue.filePath,
     fixHint:
       "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
@@ -413,6 +214,14 @@ export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
   sessionDirs?: string[];
 }) {
+  if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
+    await noteSessionSqliteMigrationHealth({
+      cfg: params?.cfg,
+      env: params?.env ?? process.env,
+      shouldRepair: params?.shouldRepair === true,
+    });
+    return;
+  }
   const shouldRepair = params?.shouldRepair === true;
   let sessionDirs = params?.sessionDirs;
   try {
@@ -461,14 +270,6 @@ export async function noteSessionTranscriptHealth(params?: {
       lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
     }
     note(lines.join("\n"), "Session transcripts");
-  }
-
-  if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
-    await noteSessionSqliteMigrationHealth({
-      cfg: params?.cfg,
-      env: params?.env ?? process.env,
-      shouldRepair,
-    });
   }
 }
 
@@ -633,6 +434,11 @@ async function noteSessionSqliteMigrationHealth(params: {
   if (!params.shouldRepair) {
     lines.push(
       '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
+    );
+  }
+  if (params.shouldRepair && report.migrationRun && report.totals.archivedTranscriptFiles > 0) {
+    lines.push(
+      `- After verifying the upgrade, preview rollback retirement with "${formatCliCommand("openclaw update cleanup --dry-run", params.env)}" for state ${resolveStateDir(params.env)}. Keep the same OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides.`,
     );
   }
   note(lines.join("\n"), "Session SQLite");

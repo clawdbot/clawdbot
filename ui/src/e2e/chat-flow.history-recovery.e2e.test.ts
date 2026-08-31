@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -134,10 +134,10 @@ suite.define(() => {
   });
 
   it("restores reasoning and tool activity after navigating away from a session", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -425,7 +425,10 @@ suite.define(() => {
   });
 
   it("keeps evicted paginated history stable when returning to a session", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -695,7 +698,10 @@ suite.define(() => {
   });
 
   it("stores new input while offline and sends it after reconnect", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir

@@ -1,6 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
@@ -4513,6 +4515,34 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
+  it("releases a closed pane's messages while retaining its disclosure choices", async () => {
+    resetChatThreadState();
+    class TranscriptMessage {
+      role = "assistant";
+      content = [{ type: "toolcall", id: "released-call", name: "read" }];
+    }
+    const paneId = "released-pane";
+    const sessionKey = "released-session";
+    const populatePane = () => {
+      const items = buildCachedChatItems(
+        createProps({ paneId, sessionKey, messages: [new TranscriptMessage()] }),
+      );
+      syncToolCardExpansionState(sessionKey, items, true);
+    };
+    try {
+      populatePane();
+      expect(queryObjects(TranscriptMessage)).toBe(1);
+
+      resetChatThreadState(paneId);
+      await setImmediate();
+
+      expect(queryObjects(TranscriptMessage)).toBe(0);
+      expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
+    } finally {
+      resetChatThreadState();
+    }
+  });
+
   it("skips the tool-card walk when the item array identity is unchanged", () => {
     resetChatThreadState();
     const group: MessageGroup = {

@@ -12,6 +12,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -468,18 +469,24 @@ describe("agent harness host capability", () => {
   it("keeps prepared environment access closure-bound", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
-    const { attempt } = await admittedAttempt("run-local-env", {
-      config: {
-        tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
-      },
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
+    const { attempt } = await admittedAttempt("run-local-env", { config });
+    const target = { stateDir: "/state", configPath: "/config", defaultWorkspaceDir: "/workspace" };
+    const host = withInstallationTarget(target, () =>
+      createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+    );
 
     expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
       credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
       localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
       managedLocalIdentity: true,
+      localProcessEnv: {
+        OPENCLAW_STATE_DIR: "/state",
+        OPENCLAW_CONFIG_PATH: "/config",
+        OPENCLAW_WORKSPACE_DIR: "/workspace",
+      },
     });
+    expect(Object.isFrozen(host.capabilities.preparedEnvironment?.().localProcessEnv)).toBe(true);
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
   });

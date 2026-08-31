@@ -298,9 +298,11 @@ describe("gateway version normalization", () => {
 
 describe("release note extraction", () => {
   it("requires exact App Store version notes and adds the gateway association", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.7.2",
-      changelog: `# OpenClaw iOS Changelog
+    const version = resolveIosVersion(".", {
+      appStoreRevision: 1,
+      releaseVersion: "2026.7.2",
+    });
+    const changelog = `# OpenClaw iOS Changelog
 
 ## Unreleased
 
@@ -309,13 +311,7 @@ Draft notes.
 ## 2026.7.21
 
 - App Store revision notes.
-`,
-    });
-    const version = resolveIosVersion(rootDir, {
-      appStoreRevision: 1,
-      releaseVersion: "2026.7.2",
-    });
-    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+`;
 
     expect(renderIosReleaseNotes(version, changelog)).toBe(
       "Gateway version: 2026.7.2\n\n- App Store revision notes.\n",
@@ -323,15 +319,11 @@ Draft notes.
   });
 
   it("does not fall back to gateway or Unreleased notes for App Store revisions", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.7.2",
-      changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nDraft notes.\n",
-    });
-    const version = resolveIosVersion(rootDir, {
+    const version = resolveIosVersion(".", {
       appStoreRevision: 1,
       releaseVersion: "2026.7.2",
     });
-    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+    const changelog = "# OpenClaw iOS Changelog\n\n## Unreleased\n\nDraft notes.\n";
 
     expect(() => renderIosReleaseNotes(version, changelog)).toThrow(
       "Unable to find iOS changelog notes for 2026.7.21",
@@ -339,9 +331,8 @@ Draft notes.
   });
 
   it("extracts exact pinned version sections first", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: `# OpenClaw iOS Changelog
+    const version = resolveIosVersion(".", { releaseVersion: "2026.4.6" });
+    const changelog = `# OpenClaw iOS Changelog
 
 ## Unreleased
 
@@ -350,31 +341,25 @@ Draft notes.
 ## 2026.4.6
 
 - Exact release notes.
-`,
-    });
-    const version = resolveIosVersion(rootDir);
-    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+`;
 
     expect(renderIosReleaseNotes(version, changelog)).toBe("- Exact release notes.\n");
   });
 
   it("falls back to Unreleased when the release section does not exist yet", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: `# OpenClaw iOS Changelog
+    const version = resolveIosVersion(".", { releaseVersion: "2026.4.6" });
+    const changelog = `# OpenClaw iOS Changelog
 
 ## Unreleased
 
 ### Added
 
 - New iOS feature.
-`,
-    });
-    const version = resolveIosVersion(rootDir);
-    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+`;
+    const notes = renderIosReleaseNotes(version, changelog);
 
-    expect(renderIosReleaseNotes(version, changelog)).toContain("### Added");
-    expect(renderIosReleaseNotes(version, changelog)).toContain("- New iOS feature.");
+    expect(notes).toContain("### Added");
+    expect(notes).toContain("- New iOS feature.");
   });
 
   it("extracts markdown bodies without the version heading", () => {

@@ -1,9 +1,9 @@
 // Control UI tests cover proxy-style same-client reconnects through the real browser lifecycle.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { CostUsageSummary } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -18,7 +18,13 @@ const suite = createControlUiE2eSuite({
 // Mirrors the module-private default usage TTL asserted by this flow.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("usage-reconnect", artifactRoot)
+    : undefined;
+});
 
 const totals = {
   input: 100,
@@ -107,9 +113,6 @@ function sessionsUsage(
 }
 
 async function createContext(): Promise<BrowserContext> {
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",

@@ -554,34 +554,44 @@ describe("fresh compiled subprocess invocation", () => {
     },
   );
 
-  it("loads the real Anthropic failover hook in a fresh process without global activation", (context) =>
+  it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
     fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
-      const probe = writeFixture(
-        fixtureDirectory(),
-        "anthropic-hook.mts",
-        `
-          import assert from 'node:assert/strict';
-          import {coerceToFailoverError} from ${JSON.stringify(pathToFileURL(path.join(root, "src/agents/failover-error.ts")).href)};
-          import {getActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
-          assert.equal(getActivePluginRegistry(), null);
-          const result = coerceToFailoverError(
-            {code: 'API_ERROR', message: 'provider failure'}, {provider: 'anthropic'},
-          );
-          assert.equal(result?.reason, 'server_error');
-          assert.equal(result?.provider, 'anthropic');
-          assert.equal(getActivePluginRegistry(), null);
-        `,
-      );
-      const result = await node(resolveRuntimeWorkerArgv(pathToFileURL(probe)), root, {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      });
-      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const { node, prepareWorkers } = createFixtureCommands(context);
+      const owner = createVitestWorkerRun();
+      try {
+        const manifest = await prepareWorkers(owner);
+        const directory = fixtureDirectory();
+        const bundled = path.join(directory, "bundled");
+        const pluginRoot = path.join(bundled, "anthropic");
+        writeFixture(
+          pluginRoot,
+          "openclaw.plugin.json",
+          fs.readFileSync(path.join(root, "extensions/anthropic/openclaw.plugin.json"), "utf8"),
+        );
+        writeFixture(
+          pluginRoot,
+          "index.mjs",
+          `export {default} from ${JSON.stringify(pathToFileURL(path.join(owner.descriptor.directory, "dist/extensions/anthropic/index.js")).href)};`,
+        );
+        const result = await node(
+          [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
+          root,
+          {
+            ...process.env,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          },
+        );
+        console.log(JSON.stringify({ preparationMs: manifest.durationMs }));
+        console.log(result.stdout);
+        expect(result.code, result.stderr + result.stdout).toBe(0);
+      } finally {
+        await owner.dispose();
+      }
+      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
-  it("preserves scoped and cold provider hooks in source and compiled TUI payloads", (context) =>
+  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
     fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = createFixtureCommands(context);
       const owner = createVitestWorkerRun();
@@ -591,7 +601,7 @@ describe("fresh compiled subprocess invocation", () => {
           JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
         );
         for (const mode of ["source", "compiled"] as const) {
-          for (const scope of ["scoped", "cold"] as const) {
+          for (const scope of ["scoped", "prepared"] as const) {
             const directory = fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
             const bundled = path.join(directory, "bundled");
@@ -636,6 +646,7 @@ describe("fresh compiled subprocess invocation", () => {
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
             const {buildEmbeddedRunPayloads} = await import(process.argv[2]);
+            const {resolveProviderRuntimePluginHandle} = await import(process.argv[3]);
             const imported = performance.now();
             assert.deepEqual(observed(),[], 'importing classifier code must not materialize the provider');
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null);
@@ -651,8 +662,22 @@ describe("fresh compiled subprocess invocation", () => {
                 scopedCalls++;return 'overloaded';
               },
             }});
+            const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
+            assert.ok(unprepared.some(payload=>payload.isError), 'an unprepared error still needs a visible outcome');
+            assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
+            const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
+            if (${scope === "prepared"}) {
+              assert.equal(providerOwner?.id,'fixture-provider');
+              assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
+            }
             const callStarted = performance.now();
-            const call = () => buildEmbeddedRunPayloads(input('403 fixture refusal'));
+            const call = () => {
+              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              if (${scope === "scoped"}) {
+                assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
+              }
+              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+            };
             const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
             const callMs = performance.now()-callStarted;
             const records = observed();
@@ -666,7 +691,7 @@ describe("fresh compiled subprocess invocation", () => {
               assert.equal(scopedCalls,0);
             }
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
-            assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'cold resolution must not install a global registry');
+            assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );
@@ -679,7 +704,18 @@ describe("fresh compiled subprocess invocation", () => {
                   ),
             );
             const result = await node(
-              [...resolveRuntimeWorkerArgv(pathToFileURL(probe)), url.href],
+              [
+                ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
+                url.href,
+                pathToFileURL(
+                  mode === "source"
+                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
+                    : path.join(
+                        owner.descriptor.directory,
+                        "dist/plugins/provider-hook-runtime.js",
+                      ),
+                ).href,
+              ],
               root,
               {
                 ...process.env,

@@ -135,7 +135,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     record.operation?.type === "retire" &&
     record.operation.checkpointId === record.image?.checkpointId;
   const deleteEmptyProfile = (key: string) =>
-    openStore().deleteIf?.(
+    openStore().deleteIf(
       key,
       (record) =>
         !record.image && !record.operation && Object.keys(record.allocations).length === 0,

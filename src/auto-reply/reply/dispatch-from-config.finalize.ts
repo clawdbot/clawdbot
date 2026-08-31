@@ -370,7 +370,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
-  const dispatchOutcome = queueCapRejected || messageInjectionAborted ? "skipped" : "completed";
+  const dispatchOutcome =
+    agentRunTerminalOutcome === "failed"
+      ? "error"
+      : queueCapRejected || messageInjectionAborted
+        ? "skipped"
+        : "completed";
   const dispatchReason = queueCapRejected
     ? "queue-cap"
     : messageInjectionAborted
@@ -385,7 +390,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     dispatchReason ? { reason: dispatchReason } : undefined,
   );
   state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
-  state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
+  state.markIdle(
+    dispatchOutcome === "error"
+      ? "message_error"
+      : queueCapRejected
+        ? "message_queue_cap_rejected"
+        : "message_completed",
+  );
   state.completeDispatchReplyOperation();
   const result = state.attachSourceReplyDeliveryMode({
     queuedFinal,

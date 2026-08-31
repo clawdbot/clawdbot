@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -218,9 +218,11 @@ suite.define(() => {
             toggleFocused: true,
           });
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+          : undefined;
         if (artifactDir) {
-          await fs.mkdir(artifactDir, { recursive: true });
           await header.screenshot({
             animations: "disabled",
             path: path.join(artifactDir, "catalog-header-pointer-away.png"),
@@ -315,9 +317,11 @@ suite.define(() => {
         chevronOpacity: "0.75",
       });
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDir, "native-session-host-groups.png"),
           fullPage: true,
@@ -369,9 +373,11 @@ suite.define(() => {
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({ path: path.join(artifactDir, "claude-terminal-connecting.png") });
       }
 
@@ -614,7 +620,10 @@ suite.define(() => {
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const expectCenteredLayout = async (screenshotName: string) => {
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
         catalogPane.locator(".chat-workbench").boundingBox(),
@@ -632,7 +641,6 @@ suite.define(() => {
         Math.abs(composerBox!.x + composerBox!.width / 2 - workbenchCenter),
       ).toBeLessThanOrEqual(1);
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDir, screenshotName),
           fullPage: true,
@@ -660,10 +668,10 @@ suite.define(() => {
   });
 
   it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const viewport = { width: 1280, height: 900 };
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -813,9 +821,12 @@ suite.define(() => {
     }
   });
 
-  it("shows loaded native history before fetching and revealing an earlier page", async () => {
+  it("keeps the earlier-history action fixed while loading and reveals the fetched page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
       content: [
@@ -895,8 +906,9 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     await showEarlier.waitFor();
+    const idleHistoryAction = await showEarlier.boundingBox();
+    expect(idleHistoryAction).not.toBeNull();
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "00-native-history-available.png"),
         fullPage: true,
@@ -909,12 +921,16 @@ suite.define(() => {
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+    const loadingHistoryAction = await showEarlier.boundingBox();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
         fullPage: true,
       });
     }
+    expect(loadingHistoryAction).not.toBeNull();
+    expect(loadingHistoryAction?.x).toBeCloseTo(idleHistoryAction?.x ?? 0, 0);
+    expect(loadingHistoryAction?.width).toBeCloseTo(idleHistoryAction?.width ?? 0, 0);
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",

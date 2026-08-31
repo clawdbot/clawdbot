@@ -1,5 +1,4 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -232,8 +231,7 @@ suite.define(() => {
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
     expect(await assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
 
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-single-turn-status");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
       path: path.join(artifactDir, "continuing-reply.png"),
       fullPage: true,
@@ -275,11 +273,11 @@ suite.define(() => {
   });
 
   it("restores only the unpersisted assistant response after reconnecting", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-inflight-reconnect");
+    const artifactDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? path.join(suite.artifactDir, "chat-inflight-reconnect")
+        : "";
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
@@ -586,11 +584,11 @@ suite.define(() => {
   });
 
   it("renders a safe self-abort diagnostic without leaving stale composer status", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-abort-diagnostic");
+    const artifactDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? path.join(suite.artifactDir, "chat-abort-diagnostic")
+        : "";
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

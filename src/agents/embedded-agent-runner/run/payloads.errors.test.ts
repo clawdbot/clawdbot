@@ -1,7 +1,20 @@
 // Error payload tests ensure embedded runs convert provider/tool failures into
 // concise user-facing replies without leaking raw provider bodies or secrets.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// Classification fixtures here exercise message/status tables. Provider-attributed
+// structured signals otherwise cross the plugin-consult gate and cold-materialize
+// the full bundled provider runtime, timing the unit test out under CI load
+// (src/agents/CLAUDE.md: no full-runtime cold loads for table coverage).
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
+
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -14,6 +27,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ openai/test-model request failed.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -97,7 +111,7 @@ describe("buildEmbeddedRunPayloads", () => {
         text:
           agentId === "worker"
             ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
-            : "LLM request failed.",
+            : REDACTED_TEST_MODEL_FAILURE_TEXT,
         isError: true,
       },
     ]);
@@ -213,7 +227,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
@@ -234,7 +248,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider error details");
@@ -262,7 +276,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
@@ -527,7 +541,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");

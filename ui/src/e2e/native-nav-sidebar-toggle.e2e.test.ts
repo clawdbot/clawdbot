@@ -1,10 +1,10 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -25,8 +25,17 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
-const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let TOAST_PROOF_DIR: string;
+beforeEach(() => {
+  TOAST_PROOF_DIR = createControlUiE2eArtifactDir("toast-layering");
+});
+const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let railProofDir: string | undefined;
+beforeEach(() => {
+  railProofDir = railProofDirParent
+    ? createControlUiE2eArtifactDir("native-nav-sidebar-toggle", railProofDirParent)
+    : undefined;
+});
 const limitedScopes = ["operator.read", "operator.write"];
 const UPDATE_AVAILABLE = {
   channel: "stable",
@@ -471,7 +480,6 @@ suite.define(() => {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         path: path.join(railProofDir, "native-web-top-left-controls.png"),
@@ -577,7 +585,6 @@ suite.define(() => {
       await panelControls.nth(index).click({ trial: true });
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         fullPage: true,
         path: path.join(

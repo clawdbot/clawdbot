@@ -223,6 +223,8 @@ describe("compactEmbeddedRunForRecovery", () => {
       makeRecoveryInput({
         runParams: {
           ...baseRunParams,
+          sandboxSessionKey: "global",
+          sandboxAgentId: "main",
           modelSelectionLocked: true,
           modelFallbacksOverride: [],
         },
@@ -255,6 +257,8 @@ describe("compactEmbeddedRunForRecovery", () => {
       currentTokenCount: 277_403,
       tokenBudget: 200_000,
       runtimeContext: {
+        sandboxSessionKey: "global",
+        sandboxAgentId: "main",
         trigger: "overflow",
         currentTokenCount: 277_403,
         provider: "openai",

@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
+import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import {
@@ -86,12 +88,6 @@ function packageUpdateFailure(
 }
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
-const PACKAGE_INSTALL_GUARD_PATH = path.join("dist", "openclaw-install-guard");
-const PACKAGE_LIFECYCLE_PENDING_PATH = ".openclaw-lifecycle-pending";
-const PACKAGE_PREINSTALL_SCRIPT_PATH = path.join(
-  "scripts",
-  "preinstall-package-manager-warning.mjs",
-);
 
 async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -294,8 +290,6 @@ async function validatePnpmIsolatedUpdate(params: {
     failedStep: null,
   };
 }
-const PACKAGE_POSTINSTALL_SCRIPT_PATH = path.join("scripts", "postinstall-bundled-plugins.mjs");
-
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
 }
@@ -1108,77 +1102,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       return packageUpdateFailure(failedStep, null, [...steps, failedStep]);
     }
 
-    // Some pnpm releases accept --allow-build for global local-tar installs
-    // but still skip lifecycle scripts. Keep a marker outside dist because
-    // postinstall prunes the packed guard before the remaining work finishes.
-    if (
-      finalInstallStep.exitCode === 0 &&
-      !stagedInstall &&
-      params.installTarget.manager === "pnpm" &&
-      verificationPackageRoot
-    ) {
-      const installGuardPath = path.join(verificationPackageRoot, PACKAGE_INSTALL_GUARD_PATH);
-      const lifecyclePendingPath = path.join(
-        verificationPackageRoot,
-        PACKAGE_LIFECYCLE_PENDING_PATH,
-      );
-      const hasInstallGuard = await pathExists(installGuardPath);
-      const hasPendingLifecycle = await pathExists(lifecyclePendingPath);
-      if (hasInstallGuard || hasPendingLifecycle) {
-        if (!hasPendingLifecycle) {
-          try {
-            await fs.writeFile(lifecyclePendingPath, "pending\n", "utf8");
-          } catch (error) {
-            const markerStep: PackageUpdateStepResult = {
-              name: "pnpm package lifecycle marker",
-              command: `write ${lifecyclePendingPath}`,
-              cwd: verificationPackageRoot,
-              durationMs: 0,
-              exitCode: 1,
-              stderrTail: formatErrorMessage(error),
-            };
-            steps.push(markerStep);
-            return packageUpdateFailure(markerStep, verifiedPackageRoot, steps);
-          }
-        }
-
-        const lifecycleScripts = [
-          ...(hasInstallGuard
-            ? [["pnpm package preinstall", PACKAGE_PREINSTALL_SCRIPT_PATH] as const]
-            : []),
-          ["pnpm package postinstall", PACKAGE_POSTINSTALL_SCRIPT_PATH] as const,
-        ];
-        for (const [name, relativeScript] of lifecycleScripts) {
-          const lifecycleStep = await params.runStep({
-            name,
-            argv: [process.execPath, path.join(verificationPackageRoot, relativeScript)],
-            cwd: verificationPackageRoot,
-            env: effectiveInstallEnv,
-            timeoutMs: params.timeoutMs,
-          });
-          steps.push(lifecycleStep);
-          if (lifecycleStep.exitCode !== 0) {
-            return packageUpdateFailure(lifecycleStep, verifiedPackageRoot, steps);
-          }
-        }
-
-        try {
-          await fs.rm(lifecyclePendingPath);
-        } catch (error) {
-          const finalizeStep: PackageUpdateStepResult = {
-            name: "pnpm package lifecycle finalize",
-            command: `remove ${lifecyclePendingPath}`,
-            cwd: verificationPackageRoot,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: formatErrorMessage(error),
-          };
-          steps.push(finalizeStep);
-          return packageUpdateFailure(finalizeStep, verifiedPackageRoot, steps);
-        }
-      }
-    }
-
     let afterVersion: string | null = null;
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
       const candidateVersion = await readPackageVersion(verificationPackageRoot);
@@ -1189,11 +1112,61 @@ export async function runGlobalPackageUpdateSteps(params: {
         params.packageName,
         params.installSpec,
       );
-      const verificationErrors = await collectInstalledGlobalPackageErrors({
+      let verificationErrors = await collectInstalledGlobalPackageErrors({
         packageRoot: verificationPackageRoot,
         expectedVersion,
         expectedGitCheckout: params.expectedGitCheckout,
       });
+      // v2026.8.1 alone shipped this pending marker inside the closed dist inventory.
+      const blockingVerificationErrors = verificationErrors.filter(
+        (error) =>
+          params.installSpec !== "openclaw@2026.8.1" ||
+          error !== `unexpected packaged dist file ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
+      );
+      if (blockingVerificationErrors.length === 0) {
+        let failedLifecycleStep: PackageUpdateStepResult | null = null;
+        try {
+          const completedLifecycle = await completePendingPackageLifecycle({
+            packageRoot: verificationPackageRoot,
+            timeoutMs: params.timeoutMs,
+            runScript: async (script) => {
+              const lifecycleStep = await params.runStep({
+                name: `${params.installTarget.manager} package ${script.name}`,
+                argv: [process.execPath, path.join(verificationPackageRoot, script.relativePath)],
+                cwd: verificationPackageRoot,
+                env: effectiveInstallEnv,
+                timeoutMs: params.timeoutMs,
+              });
+              steps.push(lifecycleStep);
+              if (lifecycleStep.exitCode !== 0) {
+                failedLifecycleStep = lifecycleStep;
+                throw new Error(lifecycleStep.stderrTail ?? `${lifecycleStep.name} failed`);
+              }
+            },
+          });
+          if (completedLifecycle) {
+            verificationErrors = await collectInstalledGlobalPackageErrors({
+              packageRoot: verificationPackageRoot,
+              expectedVersion,
+              expectedGitCheckout: params.expectedGitCheckout,
+            });
+          }
+        } catch (error) {
+          if (failedLifecycleStep) {
+            return packageUpdateFailure(failedLifecycleStep, verifiedPackageRoot, steps);
+          }
+          const lifecycleStep: PackageUpdateStepResult = {
+            name: `${params.installTarget.manager} package lifecycle`,
+            command: `complete ${verificationPackageRoot}`,
+            cwd: verificationPackageRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: formatErrorMessage(error),
+          };
+          steps.push(lifecycleStep);
+          return packageUpdateFailure(lifecycleStep, verifiedPackageRoot, steps);
+        }
+      }
       if (verificationErrors.length > 0) {
         steps.push({
           name: "global install verify",

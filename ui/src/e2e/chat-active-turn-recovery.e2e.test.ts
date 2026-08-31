@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -16,7 +16,12 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is required for active-turn recovery proof at ${executablePath}`,
 });
 
-const proofDir = path.resolve(".artifacts/control-ui-e2e/active-turn-recovery");
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("active-turn-recovery");
+  }
+});
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type ActiveRunSnapshotOptions = {
   events?: unknown[];
@@ -30,7 +35,6 @@ async function capture(page: Page, name: string): Promise<void> {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ path: path.join(proofDir, `${name}.png`), fullPage: true });
 }
 

@@ -171,6 +171,8 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: unknown) => model,
     prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
+    resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
@@ -376,6 +378,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),

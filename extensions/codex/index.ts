@@ -154,9 +154,10 @@ export default definePluginEntry({
       }));
     const lazyManagedThreadStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-      "entries" | "registerIfAbsent"
+      "entries" | "lookup" | "registerIfAbsent"
     > = {
       entries: () => openManagedThreadStateStore().entries(),
+      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(
@@ -165,6 +166,7 @@ export default definePluginEntry({
     );
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,

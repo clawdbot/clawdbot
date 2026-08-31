@@ -13,6 +13,22 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 describe("chat pane assistant identity snapshots", () => {
+  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    (pane as TestChatPane & { agentId: string }).agentId = "personal";
+    pane.sessionKey = "global";
+    state.sessionKey = "global";
+    state.assistantAgentId = "personal";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    pane.context.agentSelection.set("work");
+
+    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+
+    expect(state.assistantAgentId).toBe("personal");
+    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+  });
+
   it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const retireModelOverride = vi.fn();

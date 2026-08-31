@@ -13,6 +13,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // CI imports this selector from its trusted harness inside an inline Node script.
+  ".github/actions/git-owner/test-prerequisites.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -74,6 +76,7 @@ const repositoryScriptEntries = [
   "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",

@@ -6,6 +6,7 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -18,6 +19,7 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
@@ -70,15 +72,43 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       openPanelSlot,
       closePanelSlot,
     } = params;
-    const header = this.renderPaneHeader(
-      sessionWorkspace,
-      backgroundTasks,
-      selectedSession,
-      catalog,
-      agentWorkspace,
-      workspaceGit,
-      sidebarLayout,
-    );
+    if (this.inputRegion === "page") {
+      const file =
+        state.sidebarContent?.kind === "file" && sidebarLayout.open && detailSlotOpen(sidebarLayout)
+          ? state.sidebarContent
+          : undefined;
+      const workspace = resolveSessionWorkspace({
+        session: selectedSession,
+        agentWorkspace,
+        worktreePath: selectedSession?.worktree
+          ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+          : undefined,
+      });
+      publishChatWorkContext(
+        this.context,
+        this,
+        this.presented && this.selected
+          ? {
+              sessionKey: state.sessionKey,
+              sessionId: state.currentSessionId ?? undefined,
+              agentId: currentAgentId,
+              workspace: file?.root ?? workspace.root ?? undefined,
+              file: file?.path,
+            }
+          : undefined,
+      );
+    }
+    const header = this.compact
+      ? nothing
+      : this.renderPaneHeader(
+          sessionWorkspace,
+          backgroundTasks,
+          selectedSession,
+          catalog,
+          agentWorkspace,
+          workspaceGit,
+          sidebarLayout,
+        );
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
       .identity=${JSON.stringify([
@@ -95,13 +125,13 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ...chatProps,
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
-      header: board.face === "dashboard" ? nothing : html`${header}${recovery}`,
+      header: !this.compact && board.face === "dashboard" ? nothing : html`${header}${recovery}`,
     });
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? html`${header}${recovery}` : nothing}
-      ${this.renderBoardPrimary(board, chat)}
+      ${!this.compact && board.face === "dashboard" ? html`${header}${recovery}` : nothing}
+      ${this.compact ? chat : this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
@@ -126,7 +156,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource: resolveChatPaneDesktopTarget(selectedSession),
-      hasBoard: board.hasBoard,
+      hasBoard: !this.compact && board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
