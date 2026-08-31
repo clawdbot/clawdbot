@@ -54,7 +54,11 @@ import type {
   GatewaySessionStoreCache,
   GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
-import { prepareTalkSessionTarget, type PreparedTalkSessionTarget } from "./talk-session-target.js";
+import {
+  prepareTalkSessionTarget,
+  assertTalkSessionStorageTarget,
+  type PreparedTalkSessionTarget,
+} from "./talk-session-target.js";
 
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   resolved: Omit<SessionSharingTarget, "entry" | "storeKeys"> | null;
@@ -156,10 +160,20 @@ export function resolveSessionMutationAuthorization(params: {
       throw error;
     }
   };
-  const talkInput = resolveTalkSessionTargetInput(params.method, params.requestParams);
+  let talkInput: ReturnType<typeof resolveTalkSessionTargetInput>;
   let talkSessionTarget: PreparedTalkSessionTarget | undefined;
   try {
-    talkSessionTarget = talkInput && prepareTalkSessionTarget(getCfg(), talkInput.sessionKey);
+    talkInput = resolveTalkSessionTargetInput(
+      params.method,
+      params.requestParams,
+      params.client?.connId,
+    );
+    if (talkInput?.kind === "relay") {
+      assertTalkSessionStorageTarget(getCfg(), talkInput.target);
+      talkSessionTarget = talkInput.target;
+    } else {
+      talkSessionTarget = talkInput && prepareTalkSessionTarget(getCfg(), talkInput.sessionKey);
+    }
   } catch (error) {
     return {
       error: errorShape(
@@ -301,7 +315,15 @@ export function resolveSessionMutationAuthorization(params: {
         }
         let current: PreparedTalkSessionTarget;
         try {
-          current = prepareTalkSessionTarget(cfg, talkInput.sessionKey);
+          if (talkInput.kind === "relay") {
+            if (!talkInput.isCurrent()) {
+              throw targetChanged(talkSessionTarget.sessionKey);
+            }
+            assertTalkSessionStorageTarget(cfg, talkSessionTarget);
+            current = talkSessionTarget;
+          } else {
+            current = prepareTalkSessionTarget(cfg, talkInput.sessionKey);
+          }
         } catch {
           throw targetChanged(talkSessionTarget.sessionKey);
         }

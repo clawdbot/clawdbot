@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -35,6 +36,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
@@ -81,6 +83,10 @@ function createTalkRealtimeRelaySession(
   const cfg = params.cfg ?? { agents: { entries: { main: { default: true } } } };
   const session = createTalkRealtimeRelaySessionRaw({
     ...request,
+    context: {
+      ...request.context,
+      chatAbortControllers: request.context.chatAbortControllers ?? new Map(),
+    },
     cfg,
     sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
   });
@@ -93,6 +99,21 @@ function stopTalkRealtimeRelaySession(
 ): void {
   stopTalkRealtimeRelaySessionRaw(params);
   activeRelaySessions.delete(params.relaySessionId);
+}
+
+function createOwnedTalkRunControllers() {
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  registerChatAbortController({
+    chatAbortControllers,
+    runId: "run-1",
+    sessionId: "embedded-session-1",
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    ownerConnId: "conn-1",
+    timeoutMs: 60_000,
+    kind: "chat-send",
+  });
+  return chatAbortControllers;
 }
 
 function ensureActiveRelayTurnId(relaySessionId: string): string {
@@ -1142,6 +1163,9 @@ describe("talk realtime gateway relay", () => {
             controller: abortController,
             sessionId: "run-1",
             sessionKey: "main",
+            agentId: "main",
+            ownerConnId: "conn-1",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
           },
@@ -4102,14 +4126,15 @@ describe("talk realtime gateway relay", () => {
     async ({ supportsSuppression, expectedOptions, expectedSuppress }) => {
       const abortEmbeddedRun = vi.fn();
       setActiveEmbeddedRun(
-        "embedded-session-1",
+        "run-1",
         {
+          runId: "run-1",
           queueMessage: vi.fn(async () => undefined),
           isStreaming: () => true,
           isCompacting: () => false,
           abort: abortEmbeddedRun,
         },
-        "main",
+        "agent:main:main",
       );
       const bridge = makeRelayTransport({
         supportsToolResultSuppression: supportsSuppression,
@@ -4172,14 +4197,15 @@ describe("talk realtime gateway relay", () => {
 
   it("finalizes accepted cancel calls independently when another provider result rejects", async () => {
     setActiveEmbeddedRun(
-      "embedded-session-1",
+      "run-1",
       {
+        runId: "run-1",
         queueMessage: vi.fn(async () => undefined),
         isStreaming: () => true,
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
     const submitToolResult = vi
       .fn<RealtimeVoiceBridge["submitToolResult"]>()
@@ -4240,14 +4266,15 @@ describe("talk realtime gateway relay", () => {
 
   it("does not broadcast steering progress after the relay closes during provider acceptance", async () => {
     setActiveEmbeddedRun(
-      "embedded-session-1",
+      "run-1",
       {
+        runId: "run-1",
         queueMessage: vi.fn(async () => undefined),
         isStreaming: () => true,
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
     const accepted = createDeferred();
     const submitToolResult = vi.fn(() => accepted.promise);
@@ -4286,12 +4313,13 @@ describe("talk realtime gateway relay", () => {
     setActiveEmbeddedRun(
       "embedded-session-1",
       {
+        runId: "run-1",
         queueMessage: vi.fn(async () => undefined),
         isStreaming: () => true,
         isCompacting: () => false,
         abort: abortEmbeddedRun,
       },
-      "main",
+      "agent:main:main",
     );
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -4314,7 +4342,7 @@ describe("talk realtime gateway relay", () => {
       broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
         events.push({ event, payload, connIds: [...connIds] });
       },
-      chatAbortControllers: new Map(),
+      chatAbortControllers: createOwnedTalkRunControllers(),
     } as never;
 
     const session = createTalkRealtimeRelaySession({
@@ -4516,12 +4544,13 @@ describe("talk realtime gateway relay", () => {
     setActiveEmbeddedRun(
       "embedded-session-1",
       {
+        runId: "run-1",
         queueMessage: vi.fn(async () => undefined),
         isStreaming: () => true,
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -4553,7 +4582,7 @@ describe("talk realtime gateway relay", () => {
         broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
           events.push({ event, payload, connIds: [...connIds] });
         },
-        chatAbortControllers: new Map(),
+        chatAbortControllers: createOwnedTalkRunControllers(),
       } as never,
       connId: "conn-1",
       provider,
@@ -4759,6 +4788,9 @@ describe("talk realtime gateway relay", () => {
             controller: abortController,
             sessionId: "run-1",
             sessionKey: "main",
+            agentId: "main",
+            ownerConnId: "conn-1",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
           },

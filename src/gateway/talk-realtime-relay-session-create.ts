@@ -125,12 +125,11 @@ export function createTalkRealtimeRelaySession(
       }
     },
   );
-  const { agentId: relayAgentId, sessionKey: relaySessionKey } = params.sessionTarget;
+  const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
   const consultRunner = createTalkClientAgentConsultRunner({
     config: params.cfg ?? params.context.getRuntimeConfig(),
     context: params.context,
-    agentId: relayAgentId,
-    sessionKey: relaySessionKey,
+    sessionTarget: params.sessionTarget,
     ownerConnId: params.connId,
     authority: params.consultAuthority,
     getVoiceSessionId: () => relaySessionId,
@@ -141,7 +140,7 @@ export function createTalkRealtimeRelaySession(
       registerTalkRealtimeRelayAgentRun({
         relaySessionId,
         connId: params.connId,
-        sessionKey: relaySessionKey,
+        sessionKey: canonicalKey,
         runId,
       }),
   });

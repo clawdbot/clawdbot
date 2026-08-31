@@ -328,6 +328,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           kind: "realtime-relay",
           connId,
           relaySessionId: session.relaySessionId,
+          sessionTarget: target,
         });
         return respondOk(respond, {
           ...session,
@@ -491,7 +492,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respondUnavailable(respond, err);
     }
   },
-  "talk.session.steer": async ({ params, respond, client }) => {
+  "talk.session.steer": async ({ params, respond, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateTalkSessionSteerParams, "talk.session.steer", respond)) {
       return;
     }
@@ -499,12 +500,24 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        const assertCurrent = () => {
+          sessionMutationAuthorization?.assertCurrent();
+          if (
+            getUnifiedTalkSession(params.sessionId) !== session ||
+            (sessionMutationAuthorization?.talkSessionTarget &&
+              sessionMutationAuthorization.talkSessionTarget !== session.sessionTarget)
+          ) {
+            throw new Error("Talk session changed while steering the agent run");
+          }
+        };
+        assertCurrent();
         const result = await steerTalkRealtimeRelayAgentRun({
           relaySessionId: session.relaySessionId,
           connId,
           sessionKey: normalizeOptionalString(params.sessionKey),
           text: params.text,
           mode: normalizeOptionalString(params.mode),
+          assertCurrent,
         });
         respondOk(respond, result);
         return;

@@ -12,6 +12,7 @@ import type {
 } from "../talk/provider-types.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
+import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
 import {
   submitForcedTalkRealtimeRelayToolResult,
@@ -463,15 +464,28 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   sessionKey?: string;
   text: string;
   mode?: string;
+  assertCurrent?: () => void;
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  const { sessionKey } = session.sessionTarget;
+  const { sessionKey, canonicalKey } = session.sessionTarget;
   const requestedSessionKey = params.sessionKey?.trim();
   if (requestedSessionKey && requestedSessionKey !== sessionKey) {
     throw new Error("Realtime relay steering session key does not match the relay session");
   }
+  const runTarget = resolveOwnedActiveTalkRunTarget({
+    context: session.context,
+    clientConnId: session.connId,
+    sessionTarget: session.sessionTarget,
+    assertCurrent: () => {
+      params.assertCurrent?.();
+      if (relaySessions.get(session.id) !== session) {
+        throw new Error("Realtime relay session closed while steering the agent run");
+      }
+    },
+  });
   const result = await controlRealtimeVoiceAgentRun({
-    sessionKey,
+    sessionKey: canonicalKey,
+    runTarget,
     text: params.text,
     mode: params.mode,
     recentEvents: session.harness.talk.recentEvents,

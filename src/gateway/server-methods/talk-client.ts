@@ -35,6 +35,7 @@ import {
   authorizeGatewaySessionCreation,
   resolveSandboxedSessionCreation,
 } from "../operator-role-policy.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { closeTalkClientGatewayControlSession } from "../talk-client-gateway-control.js";
 import {
@@ -49,7 +50,7 @@ import {
   readLegacyVoiceBinding,
   rememberLegacyVoiceBinding,
 } from "./talk-client-legacy-voice-bindings.js";
-import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
+import { resolveOwnedActiveTalkRunTarget } from "./talk-client-run-ownership.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -121,8 +122,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
       }
       if (relaySessionId && connId) {
-        // Initialize the canonical session row BEFORE binding: the bind drains the
-        // relay's buffered finals into transcript appends, which fail without it.
         await ensureClientVoiceAgentSessionEntry({
           agentId,
           sessionKey: params.sessionKey,
@@ -276,35 +275,49 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
     }
   },
-  "talk.client.steer": async ({ params, respond, client, context }) => {
+  "talk.client.steer": async ({
+    params,
+    respond,
+    client,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateTalkClientSteerParams, "talk.client.steer", respond)) {
       return;
     }
-    if (
-      !hasOwnedActiveTalkClientRun({
+    try {
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(context.getRuntimeConfig(), params.sessionKey);
+      const runTarget = resolveOwnedActiveTalkRunTarget({
         context,
         clientConnId: client?.connId,
-        sessionKey: params.sessionKey,
-      })
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "talk.client.steer requires an active browser-owned Talk run",
-        ),
-      );
-      return;
-    }
-    try {
+        sessionTarget: target,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      });
+      if (runTarget === null) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.client.steer requires an active browser-owned Talk run",
+          ),
+        );
+        return;
+      }
       const result = await controlRealtimeVoiceAgentRun({
-        sessionKey: params.sessionKey,
+        sessionKey: target.canonicalKey,
+        runTarget,
         text: params.text,
         mode: params.mode,
       });
       respond(true, result, undefined);
     } catch (err) {
+      if (err instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, err.error);
+        return;
+      }
       respond(
         false,
         undefined,

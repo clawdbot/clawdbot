@@ -8,6 +8,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -2125,6 +2126,7 @@ describe("talk.session unified handlers", () => {
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
+      assertCurrent: expect.any(Function),
     });
     expectRespondOk(steerRespond, {
       ok: true,
@@ -3069,6 +3071,7 @@ describe("talk.client.toolCall handler", () => {
 describe("talk.client.steer handler", () => {
   const createSteerContext = (ownerConnId = "conn-1") =>
     ({
+      getRuntimeConfig: () => ({}),
       chatAbortControllers: new Map([
         [
           "run-voice-1",
@@ -3076,6 +3079,8 @@ describe("talk.client.steer handler", () => {
             controller: new AbortController(),
             sessionId: "session-active",
             sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
             ownerConnId,
@@ -3116,6 +3121,7 @@ describe("talk.client.steer handler", () => {
 
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      runTarget: expect.objectContaining({ runId: "run-voice-1" }),
       text: "use the safer plan",
       mode: "steer",
     });
@@ -3305,7 +3311,8 @@ describe("talk.client.create handler", () => {
         cfg: expect.any(Object),
         agentRuntime: mocks.agentRuntime,
         agentId: "main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
         args: { question: "Check the repository" },
         transcript: [
           { role: "user", text: `2:${"🙂".repeat(799)}` },
@@ -3607,7 +3614,7 @@ describe("talk.client.create handler", () => {
     });
     expect(chatAbortControllers.get("talk-realtime-consult:gpt-live")).toMatchObject({
       sessionId: "session-main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       agentId: "main",
       ownerConnId: "conn-1",
       controlUiVisible: false,
@@ -3633,7 +3640,8 @@ describe("talk.client.create handler", () => {
       context,
     });
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
+      runTarget: expect.objectContaining({ runId: "talk-realtime-consult:gpt-live" }),
       text: "Use the safer plan",
       mode: "steer",
     });

@@ -236,8 +236,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       const consultRunner = createTalkClientAgentConsultRunner({
         config: runtimeConfig,
         context,
-        agentId,
-        sessionKey,
+        sessionTarget: target,
         ...(ownerConnId ? { ownerConnId } : {}),
         authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
         getVoiceSessionId: () => activeVoiceSessionId,
@@ -247,7 +246,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
         ? createTalkClientGatewayControlOwner({
             voiceSessionId: activeVoiceSessionId!,
             providerId: resolution.provider.id,
-            sessionKey,
+            sessionTarget: target,
             connId: ownerConnId!,
             context,
             assertConnectionOpen: () => {
