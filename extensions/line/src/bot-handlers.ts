@@ -167,16 +167,22 @@ async function sendLinePairingReply(params: {
   });
 }
 
-async function resolveLineEventAdmission(
-  event: MessageEvent | PostbackEvent | JoinEvent,
-  context: LineHandlerContext,
-): Promise<{
+/** What an admitted event carries forward, including the group gate it passed. */
+type LineEventAdmission = {
   access: ResolvedChannelMessageIngress;
   resolveBoundAccess: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
   mentions?: LineInboundMentionAccess;
-} | null> {
+  /** Group gate this event was admitted under, re-read when a later quote names it. */
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: string[];
+};
+
+async function resolveLineEventAdmission(
+  event: MessageEvent | PostbackEvent | JoinEvent,
+  context: LineHandlerContext,
+): Promise<LineEventAdmission | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
@@ -275,6 +281,22 @@ async function resolveLineEventAdmission(
       },
     });
   const access = await resolveAccess();
+  // Quotes and authorized commands can address the bot without a native LINE
+  // mention. Preserve that effective result separately from explicit evidence.
+  const mentions = mentionFacts
+    ? {
+        ...mentionFacts,
+        wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
+        requireMention,
+      }
+    : undefined;
+  const admitted: LineEventAdmission = {
+    access,
+    resolveBoundAccess: resolveAccess,
+    mentions,
+    groupPolicy,
+    groupAllowFrom,
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "line",
@@ -289,7 +311,7 @@ async function resolveLineEventAdmission(
       groupConfig?.enabled !== false &&
       groupPolicy !== "disabled" &&
       (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
-    return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
+    return roomAllowed ? admitted : null;
   }
 
   if (
@@ -298,16 +320,7 @@ async function resolveLineEventAdmission(
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
-    // Quotes and authorized commands can address the bot without a native LINE
-    // mention. Preserve that effective result separately from explicit evidence.
-    const mentions = mentionFacts
-      ? {
-          ...mentionFacts,
-          wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
-          requireMention,
-        }
-      : undefined;
-    return { access, resolveBoundAccess: resolveAccess, mentions };
+    return admitted;
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -495,6 +508,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       account,
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
+      groupPolicy: decision.groupPolicy,
+      groupAllowFrom: decision.groupAllowFrom,
       inboundHistory: historyReservation.inboundHistory,
       mentions: decision.mentions,
       buildContext: context.buildContext,

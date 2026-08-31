@@ -4,6 +4,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import {
   buildChannelInboundEventContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
@@ -16,7 +17,7 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   ensureConfiguredBindingRouteReady,
@@ -33,10 +34,14 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom, normalizeLineAllowEntry } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
-import { readLineQuotedMessageId, resolveLineQuotedMessage } from "./quoted-messages.js";
+import {
+  readLineQuotedMessageId,
+  resolveLineQuotedMessage,
+  type LineQuotedMessage,
+} from "./quoted-messages.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -61,6 +66,9 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
+  /** Group gate the event was admitted under, re-read for a quoted sender. */
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: readonly string[];
   inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
@@ -258,6 +266,29 @@ function extractNativeMediaKind(
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
+/**
+ * Matches a quoted message's author against the group allowlist as configured
+ * right now. The bot's own message needs no entry; an id the store no longer
+ * resolves has no author to match and stays out of a restricted prompt.
+ */
+function isLineQuoteSenderAllowed(
+  allowFrom: readonly string[],
+  quoted: LineQuotedMessage | undefined,
+): boolean {
+  if (!quoted) {
+    return false;
+  }
+  if (quoted.fromBot) {
+    return true;
+  }
+  const allow = normalizeAllowFrom([...allowFrom]);
+  return (
+    allow.hasWildcard ||
+    (quoted.senderId !== undefined &&
+      allow.entries.includes(normalizeLineAllowEntry(quoted.senderId)))
+  );
+}
+
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -273,7 +304,11 @@ async function finalizeLineInboundContext(params: {
   channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
-  quotedMessageId?: string;
+  /**
+   * An inbound quote and the group gate its sender must still pass. Absent on
+   * paths that cannot carry a quote, so there is no policy-free quote to build.
+   */
+  quote?: { messageId: string; groupPolicy: GroupPolicy; allowFrom: readonly string[] };
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
   mentions?: LineInboundMentionAccess;
@@ -288,7 +323,7 @@ async function finalizeLineInboundContext(params: {
   // LINE names a quoted message by id alone, so its text and author come from
   // what this account already saw. An id it no longer holds still reaches the
   // agent as a bare quote rather than disappearing.
-  const quoted = resolveLineQuotedMessage(params.account.accountId, params.quotedMessageId);
+  const quoted = resolveLineQuotedMessage(params.account.accountId, params.quote?.messageId);
   // A LINE webhook carries no display name and no group name, so both are
   // separate lookups. They are cached, they run in parallel, and either one
   // failing degrades to the raw id rather than failing the turn.
@@ -305,6 +340,27 @@ async function finalizeLineInboundContext(params: {
     params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
     resolveDisplayName(quoted?.senderId),
   ]);
+  // Admission only proves the quoted sender passed the gate when the message was
+  // stored. That gate can narrow while the store still holds their text, so the
+  // active allowlist decides again here; an id the store no longer resolves has
+  // no sender to clear and keeps only its linkage under a restrictive policy.
+  const quoteFacts = params.quote
+    ? {
+        id: params.quote.messageId,
+        isQuote: true,
+        senderAllowed: resolveInboundSupplementalSenderAllowed({
+          isGroup: params.source.isGroup,
+          groupPolicy: params.quote.groupPolicy,
+          allowFrom: params.quote.allowFrom,
+          isSenderAllowed: (allowFrom) => isLineQuoteSenderAllowed(allowFrom, quoted),
+        }),
+        // A quote of the bot's own message keeps its linkage without a body:
+        // the store holds no outbound text, matching the core default that
+        // never repeats an assistant message the transcript already carries.
+        ...(quoted?.body ? { body: quoted.body } : {}),
+        ...(quotedSenderName ? { sender: quotedSenderName } : {}),
+      }
+    : undefined;
   const senderLabel =
     senderName ?? (params.source.userId ? `user:${params.source.userId}` : "unknown");
   const conversationLabel = params.source.isGroup
@@ -385,23 +441,7 @@ async function finalizeLineInboundContext(params: {
       channel: "line",
       accountId: params.account.accountId,
     }),
-    supplemental: params.quotedMessageId
-      ? {
-          quote: {
-            id: params.quotedMessageId,
-            isQuote: true,
-            // The store only holds messages this conversation already showed the
-            // agent, so a resolved quote can never reintroduce a sender the
-            // allowlist turned away.
-            senderAllowed: true,
-            // A quote of the bot's own message keeps its linkage without a body:
-            // the store holds no outbound text, matching the core default that
-            // never repeats an assistant message the transcript already carries.
-            ...(quoted?.body ? { body: quoted.body } : {}),
-            ...(quotedSenderName ? { sender: quotedSenderName } : {}),
-          },
-        }
-      : undefined,
+    supplemental: quoteFacts ? { quote: quoteFacts } : undefined,
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
@@ -550,7 +590,15 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
-    ...(quotedMessageId ? { quotedMessageId } : {}),
+    ...(quotedMessageId
+      ? {
+          quote: {
+            messageId: quotedMessageId,
+            groupPolicy: params.groupPolicy,
+            allowFrom: params.groupAllowFrom,
+          },
+        }
+      : {}),
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });
