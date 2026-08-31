@@ -162,6 +162,7 @@ describe("matrixMessageActions", () => {
       type: "boolean",
       description: expect.stringContaining("m.emote"),
     });
+    expect(sendSchema?.visibility).toBe("all-configured");
   });
 
   it("hides self-profile updates without owner identity context", () => {

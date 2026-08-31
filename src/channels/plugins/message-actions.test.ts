@@ -234,6 +234,30 @@ describe("message action capability checks", () => {
     expect(properties).not.toHaveProperty("emoji");
   });
 
+  it("exposes Matrix send schema from a non-Matrix current channel", () => {
+    activateDiscoveredMessageActionPlugin({
+      id: "matrix",
+      label: "Matrix",
+      describeMessageTool: () => ({
+        actions: ["send"],
+        schema: {
+          actions: ["send"],
+          visibility: "all-configured",
+          properties: {
+            emote: Type.Optional(Type.Boolean()),
+          },
+        },
+      }),
+    });
+
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "slack",
+      accountId: "slack-workspace",
+    });
+    expect(properties).toHaveProperty("emote");
+  });
+
   it("keeps contributed schema properties optional so only action stays required", () => {
     activateDiscoveredMessageActionPlugin({
       id: "demo-contrib",

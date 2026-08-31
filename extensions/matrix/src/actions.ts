@@ -67,6 +67,7 @@ const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPa
 function buildMatrixSendToolSchema(): ChannelMessageToolSchemaContribution {
   return {
     actions: ["send"],
+    visibility: "all-configured",
     properties: {
       emote: Type.Optional(
         Type.Boolean({
