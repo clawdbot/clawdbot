@@ -1,0 +1,240 @@
+#!/usr/bin/env node
+
+import { createHash } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const OWNER = "openclaw";
+const SLUG = "release-validation";
+const EXPECTED_REF = `@${OWNER}/${SLUG}`;
+const REGISTRY = "https://clawhub.ai";
+const CHECK_TIMEOUT_MS = 10_000;
+const scriptPath = fileURLToPath(import.meta.url);
+const skillDirectory = resolve(dirname(scriptPath), "..");
+const installRoot = resolve(skillDirectory, "..", "..");
+
+async function readJson(path) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+async function sha256(path) {
+  return createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex");
+}
+
+async function clawHubFingerprint(directory, root = directory) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await clawHubFingerprint(path, root)));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const bytes = await readFile(path);
+    if (bytes.includes(0)) continue;
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, 4096));
+    } catch {
+      continue;
+    }
+    files.push({
+      path: relative(root, path).split("\\").join("/"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
+  if (root !== directory) return files;
+  const payload = files
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((file) => `${file.path}:${file.sha256}`)
+    .join("\n");
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+function parseSemver(value) {
+  const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+    String(value ?? ""),
+  );
+  if (!match) return undefined;
+  return {
+    core: match.slice(1, 4).map(Number),
+    prerelease: match[4]?.split(".") ?? [],
+  };
+}
+
+function compareIdentifiers(left, right) {
+  const leftNumber = /^\d+$/.test(left) ? Number(left) : undefined;
+  const rightNumber = /^\d+$/.test(right) ? Number(right) : undefined;
+  if (leftNumber !== undefined && rightNumber !== undefined) return leftNumber - rightNumber;
+  if (leftNumber !== undefined) return -1;
+  if (rightNumber !== undefined) return 1;
+  return left.localeCompare(right);
+}
+
+function compareSemver(leftValue, rightValue) {
+  const left = parseSemver(leftValue);
+  const right = parseSemver(rightValue);
+  if (!left || !right) return undefined;
+  for (let index = 0; index < left.core.length; index += 1) {
+    if (left.core[index] !== right.core[index]) return left.core[index] - right.core[index];
+  }
+  if (left.prerelease.length === 0 && right.prerelease.length === 0) return 0;
+  if (left.prerelease.length === 0) return 1;
+  if (right.prerelease.length === 0) return -1;
+  const length = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left.prerelease[index] === undefined) return -1;
+    if (right.prerelease[index] === undefined) return 1;
+    const comparison = compareIdentifiers(left.prerelease[index], right.prerelease[index]);
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
+}
+
+async function hasLocalModifications(lockEntry, origin) {
+  if (typeof origin?.fingerprint === "string") {
+    return (await clawHubFingerprint(skillDirectory)) !== origin.fingerprint;
+  }
+  const recordedFiles = lockEntry?.verification?.artifact?.files;
+  if (Array.isArray(recordedFiles) && recordedFiles.length > 0) {
+    for (const file of recordedFiles) {
+      if (typeof file?.path !== "string" || typeof file?.sha256 !== "string") return true;
+      const path = resolve(skillDirectory, file.path);
+      const relativePath = relative(skillDirectory, path);
+      if (relativePath.startsWith("..") || isAbsolute(relativePath) || !existsSync(path))
+        return true;
+      if ((await sha256(path)) !== file.sha256) return true;
+    }
+    return false;
+  }
+  const expectedSkillHash = origin?.skillFile?.sha256;
+  if (typeof expectedSkillHash !== "string") return undefined;
+  return (await sha256(join(skillDirectory, "SKILL.md"))) !== expectedSkillHash;
+}
+
+function updateCommand({ force = false } = {}) {
+  const configuredStateRoot = resolve(
+    process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw"),
+  );
+  const globalInstall = installRoot === configuredStateRoot;
+  return [
+    "openclaw",
+    "skills",
+    "update",
+    EXPECTED_REF,
+    ...(globalInstall ? ["--global"] : []),
+    ...(force ? ["--force"] : []),
+  ];
+}
+
+export function determineStatus({ comparison, modified }) {
+  if (modified === undefined) return "untracked";
+  if (comparison === undefined) return "check-failed";
+  if (comparison < 0) return "update-available";
+  if (modified) return "local-modifications";
+  if (comparison > 0) return "ahead-of-latest";
+  return "current";
+}
+
+function print(value) {
+  console.log(
+    JSON.stringify(
+      {
+        schema: "openclaw.release-validation-skill-update/v1",
+        ...value,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function main() {
+  let source = { kind: "unknown", ref: null, version: null };
+  let canonical = { ref: EXPECTED_REF, version: null };
+
+  try {
+    const originPath = join(skillDirectory, ".clawhub", "origin.json");
+    const lockPath = join(installRoot, ".clawhub", "lock.json");
+    const origin = await readJson(originPath);
+    const lock = await readJson(lockPath);
+    const installedVersion = origin?.installedVersion;
+    const sourceMatches =
+      origin?.slug === SLUG &&
+      origin?.registry?.replace(/\/+$/, "") === REGISTRY &&
+      typeof installedVersion === "string" &&
+      (origin?.ownerHandle === undefined || origin.ownerHandle === OWNER);
+
+    if (!sourceMatches) {
+      source = {
+        kind: origin ? "different-source" : "untracked",
+        ref: origin ? `@${origin.ownerHandle ?? "unknown"}/${origin.slug ?? "unknown"}` : null,
+        version: installedVersion ?? null,
+      };
+      print({
+        source,
+        canonical,
+        status: origin ? "different-source" : "untracked",
+      });
+      return;
+    }
+
+    source = {
+      kind: "clawhub",
+      ref: EXPECTED_REF,
+      version: installedVersion,
+      artifactSha256: origin?.artifact?.sha256 ?? null,
+    };
+
+    const response = await fetch(`${REGISTRY}/api/v1/skills/${encodeURIComponent(SLUG)}`, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "openclaw-release-validation-skill",
+      },
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`ClawHub returned HTTP ${response.status}`);
+    const detail = await response.json();
+    const latestVersion = detail?.latestVersion?.version ?? detail?.skill?.tags?.latest;
+    if (typeof latestVersion !== "string")
+      throw new Error("ClawHub did not return a latest version");
+    if (detail?.owner?.handle !== OWNER)
+      throw new Error("ClawHub returned a different skill owner");
+    canonical = { ref: EXPECTED_REF, version: latestVersion };
+
+    const lockEntry = lock?.skills?.[SLUG];
+    const modified = await hasLocalModifications(lockEntry, origin);
+    const comparison = compareSemver(installedVersion, latestVersion);
+    const status = determineStatus({ comparison, modified });
+
+    print({
+      source,
+      canonical,
+      status,
+      localModifications: modified ?? null,
+      ...(status === "update-available"
+        ? { update: { cwd: installRoot, command: updateCommand({ force: modified === true }) } }
+        : {}),
+    });
+  } catch (error) {
+    print({
+      source,
+      canonical,
+      status: "check-failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(scriptPath)) {
+  await main();
+}
