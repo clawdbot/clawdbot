@@ -197,6 +197,7 @@ describe("Slack message tools", () => {
         channels: {
           slack: {
             botToken: "xoxb-test",
+            actions: { bookmarks: true },
           },
         },
       },
@@ -270,6 +271,7 @@ describe("Slack message tools", () => {
           botToken: "xoxb-test",
           actions: {
             messages: true,
+            bookmarks: true,
           },
         },
       },
@@ -301,6 +303,7 @@ describe("Slack message tools", () => {
           postAs: "user",
           userToken: "test-user-token",
           appToken: "test-app-token",
+          actions: { bookmarks: true },
         },
       },
     } as OpenClawConfig;
@@ -322,6 +325,22 @@ describe("Slack message tools", () => {
       "member-info",
       "emoji-list",
     ]);
+  });
+
+  it("does not advertise bookmark by default (existing installs lack the scope)", () => {
+    // `bookmarks` is a new surface: tokens minted before the scope existed are
+    // still valid but cannot call bookmarks.*, so the action must be opt-in via
+    // `actions.bookmarks: true` rather than advertised by default.
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).not.toContain("bookmark");
+    expect(listSlackMessageActions(cfg)).toContain("list-pins");
   });
 
   it("honors the selected Slack account during discovery", () => {

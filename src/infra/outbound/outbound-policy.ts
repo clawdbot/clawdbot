@@ -61,11 +61,30 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "sticker",
 ]);
 
+// `bookmark` is a single portable action whose `op` selects add/list/edit/remove.
+// Only the mutating ops warrant cross-context guarding; a read-only `list` mirrors
+// `list-pins`, which is not in the guarded set, and Slack applies its own
+// read-target authorization. The shared guard runs before the Slack adapter reads
+// `op`, so classify here from the portable params.
+function isContextGuardedAction(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+): boolean {
+  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
+    return false;
+  }
+  if (action === "bookmark") {
+    const op = typeof params.op === "string" ? params.op : "list";
+    return op === "add" || op === "edit" || op === "remove";
+  }
+  return true;
+}
+
 function resolveContextGuardTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
 ): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
+  if (!isContextGuardedAction(action, params)) {
     return undefined;
   }
 
@@ -231,7 +250,7 @@ export function enforceCrossContextPolicy(params: {
   if (!currentTarget) {
     return;
   }
-  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
+  if (!isContextGuardedAction(params.action, params.args)) {
     return;
   }
 

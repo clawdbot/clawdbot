@@ -2220,7 +2220,7 @@ describe("handleSlackAction", () => {
       title: "Runbook",
       link: "https://example.com/runbook",
     });
-    const cfg = slackConfig();
+    const cfg = slackConfig({ actions: { bookmarks: true } });
 
     const result = await handleSlackAction(
       {
@@ -2251,7 +2251,7 @@ describe("handleSlackAction", () => {
 
   it("lists Slack channel bookmarks", async () => {
     listSlackChannelBookmarks.mockResolvedValueOnce([{ id: "B1", title: "Runbook" }]);
-    const cfg = slackConfig();
+    const cfg = slackConfig({ actions: { bookmarks: true } });
 
     const result = await handleSlackAction(
       { action: "listChannelBookmarks", channelId: "C123" },
@@ -2275,7 +2275,7 @@ describe("handleSlackAction", () => {
 
   it("edits a Slack channel bookmark by id", async () => {
     editSlackChannelBookmark.mockResolvedValueOnce({ id: "B1", title: "Updated" });
-    const cfg = slackConfig();
+    const cfg = slackConfig({ actions: { bookmarks: true } });
 
     const result = await handleSlackAction(
       {
@@ -2306,7 +2306,7 @@ describe("handleSlackAction", () => {
   });
 
   it("removes a Slack channel bookmark by id", async () => {
-    const cfg = slackConfig();
+    const cfg = slackConfig({ actions: { bookmarks: true } });
 
     const result = await handleSlackAction(
       { action: "removeChannelBookmark", channelId: "C123", bookmarkId: "B1" },
@@ -2323,7 +2323,7 @@ describe("handleSlackAction", () => {
   });
 
   it("requires a field to edit a Slack channel bookmark", async () => {
-    const cfg = slackConfig();
+    const cfg = slackConfig({ actions: { bookmarks: true } });
 
     await expect(
       handleSlackAction(
@@ -2341,6 +2341,7 @@ describe("handleSlackAction", () => {
 
   it("rejects Slack bookmark reads for non-allowlisted target channels", async () => {
     const cfg = slackConfig({
+      actions: { bookmarks: true },
       groupPolicy: "allowlist",
       channels: { C_ALLOWED: { enabled: true } },
     });

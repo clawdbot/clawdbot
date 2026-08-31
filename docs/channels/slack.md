@@ -1274,16 +1274,18 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| bookmarks  | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default           |
+| ---------- | ----------------- |
+| messages   | enabled           |
+| reactions  | enabled           |
+| pins       | enabled           |
+| bookmarks  | disabled (opt-in) |
+| memberInfo | enabled           |
+| emojiList  | enabled           |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `bookmark`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+`bookmarks` ships default-off because the `bookmarks:read`/`bookmarks:write` scopes are new: an app installed before they existed still has a valid token but cannot call `bookmarks.*`, so advertising the action by default would expose a model-callable surface that fails at the Slack API. Add the scopes, reinstall the app, then opt in with `channels.slack.actions.bookmarks: true`. The other groups default to enabled.
+
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `bookmark`, `member-info`, and `emoji-list`. `bookmark` appears in the discovered action list only when the `bookmarks` gate is enabled. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1321,7 +1323,7 @@ Use `bookmark` to manage links on a channel's bookmark bar (the channel header s
 
 `bookmark` targets the channel given by `channelId`. When the action runs inside a channel conversation the `channelId` is inferred from the tool context (the current channel), so an explicit `channelId` is only required for delegated or cross-channel calls; a delegated `bookmark` on a channel other than the current conversation is rejected unless the operator context authorizes it.
 
-`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface, and the app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`. The Recommended bot manifests, the Enterprise Grid org-wide manifests, and the optional user-token scope list above all declare these scopes; existing installations must add them and reinstall the app before using the `bookmark` action.
+`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface and defaults to disabled: set it to `true` to advertise the `bookmark` action. The app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`. The Recommended bot manifests, the Enterprise Grid org-wide manifests, and the optional user-token scope list above all declare these scopes; existing installations must add them and reinstall the app, then set `actions.bookmarks: true`, before using the `bookmark` action.
 
 ## Access control and routing
 

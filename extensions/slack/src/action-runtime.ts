@@ -1012,7 +1012,11 @@ export async function handleSlackAction(
   }
 
   if (bookmarkActions.has(action)) {
-    if (!isActionEnabled("bookmarks")) {
+    // Default-off: existing installs lack the `bookmarks:read`/`bookmarks:write`
+    // scopes until reinstalled, so a model-callable bookmark action would fail
+    // at the Slack API. Operators opt in with `actions.bookmarks: true` after
+    // reinstalling. See message-actions.ts for the matching advertisement gate.
+    if (!isActionEnabled("bookmarks", false)) {
       throw new Error("Slack bookmarks are disabled.");
     }
     const target = resolveChannelTarget();

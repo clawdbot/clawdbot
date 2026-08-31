@@ -50,6 +50,10 @@ function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
     channels: {
       slack: {
         botToken: "xoxb-transport-trace",
+        // Bookmark gate is default-off in production (existing installs lack the
+        // scope); the transport-trace harness models a reinstalled, scope-granted
+        // app so the real SDK transport is exercised on the happy path.
+        actions: { bookmarks: true },
         ...overrides,
       },
     },

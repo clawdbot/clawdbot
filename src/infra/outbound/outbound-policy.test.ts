@@ -243,6 +243,46 @@ describe("outbound policy helpers", () => {
     },
   );
 
+  // `bookmark` is one portable action whose `op` selects add/list/edit/remove.
+  // Only the mutating ops are cross-context guarded; a read-only list mirrors
+  // `list-pins` (which is not guarded) and must pass cross-context policy so an
+  // agent can list bookmarks on another provider's channel.
+  it.each(["add", "edit", "remove"] as const)(
+    "blocks cross-provider bookmark %s mutations by default",
+    (op) => {
+      expect(() =>
+        enforceCrossContextPolicy({
+          cfg: workspaceConfig,
+          channel: "slack",
+          action: "bookmark",
+          args: { op, channelId: "C-forum-1" },
+          toolContext: {
+            currentChannelId: "C12345678",
+            currentChannelProvider: "workspace",
+          },
+        }),
+      ).toThrow(/target provider "slack" while bound to "workspace"/);
+    },
+  );
+
+  it.each([
+    { op: "list", label: "explicit list op" },
+    { op: undefined, label: "default op (list)" },
+  ])("allows cross-provider bookmark list ($label)", ({ op }) => {
+    expect(
+      enforceCrossContextPolicy({
+        cfg: workspaceConfig,
+        channel: "slack",
+        action: "bookmark",
+        args: { ...(op ? { op } : {}), channelId: "C-forum-1" },
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
     "allows cross-provider %s actions when explicitly enabled",
     (action) => {
