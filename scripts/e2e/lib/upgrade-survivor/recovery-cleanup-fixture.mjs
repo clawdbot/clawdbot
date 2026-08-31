@@ -141,16 +141,31 @@ export function seedRecoveryFixture(stateDir, spec) {
   const dependent = add("recovery-protected", "recovery-dependent", 3, "protected");
   record(dependent.source, "protected");
   const protectedDir = path.dirname(malformed.source);
-  for (const [name, contents] of [
-    ["recovery-malformed.trajectory.jsonl", '{"type":"trajectory","trace":"synthetic"}\n'],
-    [
-      "recovery-unreferenced.jsonl",
-      '{"type":"message","message":{"role":"user","content":"unindexed history"}}\n',
-    ],
+  // Incomplete index coverage leaves unknown sources in place; complete stores still archive
+  // their unindexed history as protected. Prove both without requiring an unsafe sweep.
+  for (const { source, contents, disposition, reported } of [
+    {
+      source: path.join(protectedDir, "recovery-malformed.trajectory.jsonl"),
+      contents: '{"type":"trajectory","trace":"synthetic"}\n',
+      disposition: "protected",
+      reported: true,
+    },
+    {
+      source: path.join(protectedDir, "recovery-unreferenced.jsonl"),
+      contents: '{"type":"message","message":{"role":"user","content":"unindexed history"}}\n',
+      disposition: "unmanifested",
+      reported: false,
+    },
+    {
+      source: path.join(path.dirname(old.source), "recovery-unreferenced.jsonl"),
+      contents:
+        '{"type":"message","message":{"role":"user","content":"unindexed complete-store history"}}\n',
+      disposition: "protected",
+      reported: true,
+    },
   ]) {
-    const source = path.join(protectedDir, name);
     fs.writeFileSync(source, contents);
-    record(source, "protected");
+    record(source, disposition, reported);
   }
   for (const [storePath, store] of stores) {
     const protectedStore = storePath.includes("recovery-protected");
@@ -198,6 +213,10 @@ export function readRecoveryMoves(stateDir) {
 export function assertRecoveryOriginals(fixture, moves) {
   return fixture.originals.map((original) => {
     if (original.disposition === "unmanifested") {
+      assert(
+        !moves.some((move) => move.sourcePath === original.source),
+        `unexpectedly recorded source: ${original.source}`,
+      );
       assert.deepEqual(
         recoveryFileIdentity(original.source),
         original.identity,
@@ -332,12 +351,10 @@ export function assertRecoverySnapshot(
 
 export function recoveryHistoryMessages(history) {
   assert(Array.isArray(history.messages), "chat.history omitted messages");
-  return history.messages.map((message) => ({
-    // eslint-disable-next-line no-underscore-dangle -- Public Gateway transcript identity.
-    id: message.__openclaw?.id,
-    role: message.role,
-    content: message.content,
-  }));
+  return history.messages.map(({ __openclaw: identity, role, content }) => {
+    assert(typeof identity?.id === "string", "chat.history omitted message identity");
+    return { id: identity.id, role, content };
+  });
 }
 
 export function assertRecoveryHistory(history, sessionId, expected) {

@@ -67,6 +67,37 @@ describe("recovery survivor evidence", () => {
     );
   });
 
+  it("retains unindexed sources without weakening archived-original evidence", () => {
+    const root = temporary();
+    const fixture = seedRecoveryFixture(root, { sessions: 1, eventsPerSession: 3 });
+    const retainedSource = path.join(
+      root,
+      "agents/recovery-protected/sessions/recovery-unreferenced.jsonl",
+    );
+    const originals = fixture.originals.filter((original) => original.source === retainedSource);
+    expect(originals).toHaveLength(1);
+    expect(assertRecoveryOriginals({ originals }, [])).toMatchObject([
+      {
+        source: retainedSource,
+        archive: retainedSource,
+        disposition: "unmanifested",
+        reported: false,
+      },
+    ]);
+    expect(() => assertRecoveryOriginals({ originals }, [{ sourcePath: retainedSource }])).toThrow(
+      /recorded/,
+    );
+    const archivedSource = path.join(
+      root,
+      "agents/recovery-clean/sessions/recovery-unreferenced.jsonl",
+    );
+    const archived = fixture.originals.filter((original) => original.source === archivedSource);
+    expect(archived).toHaveLength(1);
+    expect(() => assertRecoveryOriginals({ originals: archived }, [])).toThrow(/did not record/);
+    fs.appendFileSync(retainedSource, "unexpected change");
+    expect(() => assertRecoveryOriginals({ originals }, [])).toThrow(/changed/);
+  });
+
   it("does not overwrite an existing transcript when seeding", () => {
     const file = path.join(temporary(), "history.jsonl");
     fs.writeFileSync(file, "existing history");
@@ -267,5 +298,15 @@ describe("recovery survivor evidence", () => {
         expected,
       ),
     ).toThrow(/content or order/);
+    expect(() =>
+      assertRecoveryHistory(
+        {
+          sessionId: "session",
+          messages: messages.map(({ role, content }) => ({ role, content })),
+        },
+        "session",
+        expected,
+      ),
+    ).toThrow(/message identity/);
   });
 });
