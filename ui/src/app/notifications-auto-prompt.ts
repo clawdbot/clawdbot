@@ -2,7 +2,7 @@ import type { ApplicationContext } from "./context.ts";
 
 const NOTIFICATIONS_AUTO_PROMPT_KEY = "openclaw.control.notificationsAutoPrompt.v1";
 
-type NotificationsContext = Pick<ApplicationContext, "nativeNotifications" | "webPush">;
+type NotificationsContext = Pick<ApplicationContext, "notifications">;
 
 type NotificationsAutoPromptCandidate = {
   connected: boolean;
@@ -39,6 +39,12 @@ function markAutoPrompted(storage: Storage): void {
 }
 
 export function autoPromptNotificationsOnSend(context: NotificationsContext): void {
+  const snapshot = context.notifications.snapshot;
+  // Native permission belongs to the explicit Settings action. Merely using
+  // chat must not prompt, including when an embedded dashboard lacks support.
+  if (snapshot.kind === "native") {
+    return;
+  }
   let storage: Storage;
   try {
     storage = localStorage;
@@ -49,23 +55,6 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
     return;
   }
 
-  const nativeNotifications = context.nativeNotifications;
-  if (nativeNotifications) {
-    // Denied is terminal for auto-asks; the manual path may open System Settings.
-    if (nativeNotifications.snapshot.permission !== "notDetermined") {
-      return;
-    }
-    markAutoPrompted(storage);
-    // Keep the permission request in the user-gesture tick for Safari transient activation.
-    try {
-      nativeNotifications.requestPermission();
-    } catch {
-      // Notification prompting must never interrupt chat sending.
-    }
-    return;
-  }
-
-  const snapshot = context.webPush.snapshot;
   if (
     !snapshot.supported ||
     snapshot.permission !== "default" ||
@@ -84,7 +73,7 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
     void permission
       .then((next) => {
         if (next === "granted") {
-          void context.webPush.run({ kind: "enable" });
+          void context.notifications.run({ kind: "enable" });
         }
       })
       .catch(() => {});

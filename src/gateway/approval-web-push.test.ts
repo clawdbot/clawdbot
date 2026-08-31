@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import type { OperatorScope } from "./operator-scopes.js";
 
 const listDevicePairingMock = vi.fn();
 const listBoundWebPushSubscriptionsMock = vi.fn();
@@ -15,6 +16,7 @@ const listTerminalWebPushApprovalDeliveryIdsMock = vi.fn();
 const resolveUserProfileIdMock = vi.fn();
 const resolveOperatorRolePolicyForProfileMock = vi.fn();
 const isApprovalRecordVisibleToClientMock = vi.fn();
+const canAccessApprovalSessionMock = vi.fn();
 const getOperatorApprovalDetailedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/device-pairing.js", async () => {
@@ -42,6 +44,7 @@ vi.mock("../infra/push-web.js", () => ({
 
 vi.mock("../state/user-profiles.js", () => ({
   resolveUserProfileId: resolveUserProfileIdMock,
+  getUserProfileRole: () => null,
 }));
 
 vi.mock("./operator-role-policy.js", async () => {
@@ -55,7 +58,7 @@ vi.mock("./operator-role-policy.js", async () => {
 });
 
 vi.mock("./server-methods/approval-record-lookup.js", () => ({
-  canAccessApprovalSession: () => true,
+  canAccessApprovalSession: canAccessApprovalSessionMock,
   isApprovalRecordVisibleToClient: isApprovalRecordVisibleToClientMock,
 }));
 
@@ -99,6 +102,65 @@ function boundSubscription(
     deviceId,
     userProfileId,
     devicePreferences: { enabled: true, label: "" },
+  };
+}
+
+const impliedRoleScopeCases: Array<{
+  label: string;
+  tokenScopes: OperatorScope[];
+  profileScopes: OperatorScope[];
+  hasAdmin: boolean;
+}> = [
+  {
+    label: "device admin and granular profile",
+    tokenScopes: ["operator.admin"],
+    profileScopes: ["operator.read", "operator.approvals"],
+    hasAdmin: false,
+  },
+  {
+    label: "granular device and profile admin",
+    tokenScopes: ["operator.read", "operator.approvals"],
+    profileScopes: ["operator.admin"],
+    hasAdmin: false,
+  },
+  {
+    label: "device and profile admin",
+    tokenScopes: ["operator.admin"],
+    profileScopes: ["operator.admin"],
+    hasAdmin: true,
+  },
+];
+
+async function createRoleBoundApprovalDelivery(
+  tokenScopes: OperatorScope[],
+  profileScopes: OperatorScope[],
+) {
+  const subscription = boundSubscription("current-device", "profile-current");
+  listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+  listDevicePairingMock.mockReturnValue({
+    pending: [],
+    paired: [pairedOperator(subscription.deviceId, tokenScopes)],
+  });
+  const role = { sessions: { others: "write" as const }, agents: [], scopes: profileScopes };
+  resolveOperatorRolePolicyForProfileMock.mockReturnValue(role);
+  const visibility = await vi.importActual<
+    typeof import("./server-methods/approval-record-lookup.js")
+  >("./server-methods/approval-record-lookup.js");
+  isApprovalRecordVisibleToClientMock.mockImplementation(
+    visibility.isApprovalRecordVisibleToClient,
+  );
+  canAccessApprovalSessionMock.mockImplementation(visibility.canAccessApprovalSession);
+  preparedWebPushSendMock.mockResolvedValue([
+    { ok: true, subscriptionId: subscription.subscriptionId, statusCode: 201 },
+  ]);
+  const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+  return {
+    subscription,
+    delivery: createApprovalWebPushDelivery({
+      getRuntimeConfig: () => ({
+        gateway: { roles: { default: "reviewer", definitions: { reviewer: role } } },
+      }),
+    }),
   };
 }
 
@@ -146,6 +208,7 @@ describe("approval Web Push delivery", () => {
     });
     resolveUserProfileIdMock.mockImplementation((profileId: string) => profileId);
     resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    canAccessApprovalSessionMock.mockReturnValue(true);
     isApprovalRecordVisibleToClientMock.mockImplementation(
       ({ record, client }) =>
         !record.requestedByDeviceId || record.requestedByDeviceId === client?.connect?.device?.id,
@@ -320,49 +383,86 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it.each([
-    {
-      label: "device admin and granular profile",
-      tokenScopes: ["operator.admin"],
-      profileScopes: ["operator.read", "operator.approvals"],
-    },
-    {
-      label: "granular device and profile admin",
-      tokenScopes: ["operator.read", "operator.approvals"],
-      profileScopes: ["operator.admin"],
-    },
-  ])("honors implied scopes across $label", async ({ tokenScopes, profileScopes }) => {
-    const record = new ExecApprovalManager().create(
-      { command: "echo ok" },
-      60_000,
-      "exec:implied-role-scopes",
-    );
-    const current = boundSubscription("current-device", "profile-current");
-    listBoundWebPushSubscriptionsMock.mockReturnValue([current]);
-    listDevicePairingMock.mockReturnValue({
-      pending: [],
-      paired: [pairedOperator("current-device", tokenScopes)],
-    });
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
-      sessions: { others: "none" },
-      agents: [],
-      scopes: profileScopes,
-    });
-    isApprovalRecordVisibleToClientMock.mockReturnValue(true);
-    preparedWebPushSendMock.mockResolvedValue([
-      { ok: true, subscriptionId: current.subscriptionId, statusCode: 201 },
-    ]);
+  it.each(
+    impliedRoleScopeCases.flatMap(({ label, tokenScopes, profileScopes, hasAdmin }) =>
+      [false, true].map((isReviewer) => ({
+        label,
+        tokenScopes,
+        profileScopes,
+        hasAdmin,
+        isReviewer,
+      })),
+    ),
+  )(
+    "preserves approval visibility across $label (reviewer=$isReviewer)",
+    async ({ tokenScopes, profileScopes, hasAdmin, isReviewer }) => {
+      const record = new ExecApprovalManager().create(
+        { command: "echo ok" },
+        60_000,
+        "exec:implied-role-scopes",
+      );
+      record.requestedByDeviceId = "requester-device";
+      record.approvalReviewerDeviceIds = [isReviewer ? "current-device" : "other-reviewer"];
+      const { delivery, subscription } = await createRoleBoundApprovalDelivery(
+        tokenScopes,
+        profileScopes,
+      );
+      const allowed = hasAdmin || isReviewer;
 
-    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-    const delivery = createApprovalWebPushDelivery({
-      getRuntimeConfig: () => ({ gateway: { roles: { definitions: {} } } }),
-    });
+      await expect(delivery.handleRequested(record)).resolves.toBe(allowed);
 
-    await expect(delivery.handleRequested(record)).resolves.toBe(true);
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ subscriptions: [current] }),
-    );
-  });
+      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+          expect.objectContaining({ subscriptions: [subscription] }),
+        );
+      }
+    },
+  );
+
+  it.each(impliedRoleScopeCases)(
+    "rechecks bound approval recovery across $label",
+    async ({ tokenScopes, profileScopes, hasAdmin }) => {
+      const approvalId = "exec:implied-scope-recovery";
+      const { delivery, subscription } = await createRoleBoundApprovalDelivery(
+        tokenScopes,
+        profileScopes,
+      );
+      // A prior process recorded delivery while the caller still had authority.
+      approvalDeliveryTargets.set(
+        approvalId,
+        new Map([[subscription.subscriptionId, subscription]]),
+      );
+      getOperatorApprovalDetailedMock.mockReturnValue({
+        outcome: "found",
+        record: {
+          reviewerDeviceIds: ["other-reviewer"],
+          source: { agentId: null, sessionKey: null },
+        },
+      });
+      listTerminalWebPushApprovalDeliveryIdsMock.mockReturnValue({
+        approvalIds: [approvalId],
+        nextAfterApprovalId: null,
+        throughApprovalId: approvalId,
+      });
+
+      await delivery.recoverTerminalDeliveries();
+
+      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(hasAdmin ? 1 : 0);
+      if (hasAdmin) {
+        expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            subscriptions: [subscription],
+            payload: expect.objectContaining({
+              title: "OpenClaw approval updated",
+              tag: `openclaw-approval-${approvalId}`,
+            }),
+          }),
+        );
+      }
+      expect(approvalDeliveryTargets.get(approvalId)?.size).toBe(0);
+    },
+  );
 
   it("prepares the transport before rereading current approval authority", async () => {
     const manager = new ExecApprovalManager();

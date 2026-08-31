@@ -90,6 +90,7 @@ type ChatBroadcastParams = {
   runId: string;
   sessionKey: string;
   agentId?: string;
+  agentRunCompleted?: true;
 };
 
 type ChatTerminal =
@@ -120,6 +121,7 @@ export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal
     ...terminal,
   };
   params.context.broadcast("chat", payload, {
+    ...(params.agentRunCompleted ? { agentRunCompleted: true } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,

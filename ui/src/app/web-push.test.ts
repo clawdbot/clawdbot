@@ -618,9 +618,8 @@ describe("web push Gateway reconciliation", () => {
         render(
           renderNotificationsSection({
             connected: true,
-            webPush: capability.snapshot,
-            onWebPushSubscribe: () => void capability.run({ kind: "enable" }),
-            onWebPushUnsubscribe: () => void capability.run({ kind: "disable" }),
+            notifications: capability.snapshot,
+            onNotificationAction: (action) => void capability.run(action),
           }),
           container,
         );

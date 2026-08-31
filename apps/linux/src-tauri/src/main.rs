@@ -2,6 +2,9 @@ mod cli;
 mod discovery;
 mod gateway;
 mod gateway_device_identity;
+mod gateway_notifications;
+mod gateway_notifications_bridge;
+mod gateway_notifications_document;
 mod gateway_operation_queue;
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 mod gateway_sleep;
@@ -105,7 +108,15 @@ fn open_external_browser(app: &AppHandle, url: &Url) {
     }
 }
 
-fn permit_main_navigation(app: &AppHandle, target: &Url) -> bool {
+fn permit_main_navigation(
+    app: &AppHandle,
+    view: &Arc<gateway_notifications_document::BridgeView>,
+    target: &Url,
+) -> bool {
+    if gateway_notifications_bridge::intercept_navigation(app, view, target) {
+        return false;
+    }
+    view.navigated();
     let current = app
         .get_webview("main")
         .and_then(|webview| webview.url().ok());
@@ -682,6 +693,7 @@ impl DesktopState {
             .get_webview("main")
             .ok_or_else(|| "Main dashboard view is unavailable.".to_string())?;
         navigation.select_remote();
+        let notification_view = gateway_notifications_document::replace_view(app);
         // Keep the native window alive: only its child changes so tray ownership,
         // geometry and close-to-tray behavior survive auth-bound script injection.
         old_webview
@@ -692,7 +704,10 @@ impl DesktopState {
         let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard))
             .initialization_script(script)
             .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+            .initialization_script(gateway_notifications_bridge::BRIDGE_SCRIPT)
+            .on_navigation(move |target| {
+                permit_main_navigation(&navigation_app, &notification_view, target)
+            })
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
@@ -705,9 +720,13 @@ impl DesktopState {
             navigation.remote_dashboard = false;
             let browser_app = app.clone();
             let navigation_app = app.clone();
+            let notification_view = gateway_notifications_document::replace_view(app);
             let restore = WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
                 .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-                .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+                .initialization_script(gateway_notifications_bridge::BRIDGE_SCRIPT)
+                .on_navigation(move |target| {
+                    permit_main_navigation(&navigation_app, &notification_view, target)
+                })
                 .on_new_window(move |url, _features| {
                     open_external_browser(&browser_app, &url);
                     NewWindowResponse::Deny
@@ -1314,6 +1333,9 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        app.manage(gateway_notifications_document::BridgeViews::default());
+        app.manage(gateway_ws::GatewayClient::new());
+        let notification_view = gateway_notifications_document::replace_view(app.handle());
         let window_config = app
             .config()
             .app
@@ -1326,7 +1348,10 @@ fn main() {
         let navigation_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
             .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
-            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+            .initialization_script(gateway_notifications_bridge::BRIDGE_SCRIPT)
+            .on_navigation(move |target| {
+                permit_main_navigation(&navigation_app, &notification_view, target)
+            })
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
@@ -1334,7 +1359,8 @@ fn main() {
             .build()?;
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
-        app.manage(gateway_ws::GatewayClient::new());
+        app.state::<gateway_ws::GatewayClient>()
+            .activate(app.handle().clone());
         #[cfg(target_os = "linux")]
         app.manage(gateway_sleep_logind::SleepBridge::start(
             app.handle().clone(),
@@ -1409,6 +1435,12 @@ fn main() {
 
     let app = builder
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .app_handle()
+                    .state::<gateway_notifications_document::BridgeViews>()
+                    .retire();
+            }
             if window.label() == quickchat::QUICKCHAT_LABEL {
                 match event {
                     tauri::WindowEvent::Focused(false) => {

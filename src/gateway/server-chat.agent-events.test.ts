@@ -82,6 +82,7 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { createEventWebPushBroadcastHarness } from "./event-web-push.test-support.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -225,6 +226,54 @@ describe("agent event handler", () => {
     });
     return harness;
   }
+
+  it.each([
+    { name: "completed response", text: "Done.", notify: true },
+    { name: "completion without text", notify: true },
+    { name: "yielded wait", text: "Waiting.", yielded: true, notify: false },
+    { name: "silent response", text: "NO_REPLY", notify: false },
+    { name: "silent heartbeat", text: "HEARTBEAT_OK", heartbeat: true, notify: false },
+    { name: "hidden session", text: "Done.", hidden: true, notify: false },
+    { name: "reply-dispatch-owned completion", text: "Done.", replyDispatch: true, notify: false },
+  ])("sends completion push only for a visible completed run: $name", async (scenario) => {
+    const push = createEventWebPushBroadcastHarness();
+    const { broadcast, broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness({ resolveSessionKeyForRun: () => "agent:main:main" });
+    broadcast.mockImplementation(push.broadcast);
+    broadcastToConnIds.mockImplementation(push.broadcastToConnIds);
+    const runId = "notification-run";
+    registerChatRun(chatRunState, runId, "agent:main:main", runId);
+    registerAgentRunContext(runId, {
+      sessionKey: "agent:main:main",
+      isControlUiVisible: !scenario.hidden,
+      isHeartbeat: scenario.heartbeat,
+    });
+    sessionMessageSubscribers.subscribe("watching-client", "agent:main:main");
+    try {
+      if (scenario.text) {
+        emitAgentEvent(handler, runId, "assistant", { text: scenario.text });
+      }
+      emitAgentEvent(handler, runId, "lifecycle", {
+        phase: "end",
+        ...(scenario.yielded
+          ? { yielded: true, livenessState: "paused", stopReason: "end_turn" }
+          : {}),
+        ...(scenario.replyDispatch ? { completionSource: "reply-dispatch" } : {}),
+      });
+      // A microtask turn drains transport preparation without a timing-based negative assertion.
+      await Promise.resolve();
+      expect(push.send).toHaveBeenCalledTimes(scenario.notify ? 1 : 0);
+      if (scenario.notify) {
+        expect(push.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ tag: `openclaw-agent-finished-${runId}` }),
+          }),
+        );
+      }
+    } finally {
+      push.dispose();
+    }
+  });
 
   function mockSessionEntry(
     entry: ReturnType<typeof loadSessionEntry>["entry"],

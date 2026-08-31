@@ -60,6 +60,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import { createEventWebPushBroadcastHarness } from "../event-web-push.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
@@ -1465,6 +1466,104 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     bindingMocks.resolveByConversation.mockReset();
     bindingMocks.resolveByConversation.mockReturnValue(null);
   });
+
+  it.each([
+    "injected",
+    "command",
+    "queued",
+    "queued-error",
+    "completed",
+    "empty",
+    "silent",
+    "heartbeat",
+    "silent-then-visible",
+    "visible-then-silent",
+    "failed",
+  ] as const)(
+    "notifies only completed agent dispatch, not %s request bookkeeping",
+    async (kind) => {
+      const { context, respond, send, inject } = await createSqliteChatRequest(
+        `openclaw-chat-push-${kind}-`,
+      );
+      const push = createEventWebPushBroadcastHarness();
+      context.broadcast.mockImplementation(push.broadcast);
+      context.broadcastToConnIds.mockImplementation(push.broadcastToConnIds);
+      let settleQueuedTurn: (() => void) | undefined;
+      const runId = `push-${kind}`;
+      if (kind !== "injected" && kind !== "command") {
+        dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+          if (kind === "queued" || kind === "queued-error") {
+            const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+            expect(lifecycle?.onDeferred?.()).toBe(true);
+            settleQueuedTurn = lifecycle?.onSettled;
+            if (kind === "queued-error") {
+              throw new Error("dispatch failed after queue admission");
+            }
+          } else {
+            params.replyOptions?.onAgentRunStart?.(runId, undefined, {
+              completionSource: "reply-dispatch",
+              getResult: () => ({
+                terminalOutcome:
+                  kind === "failed"
+                    ? { reason: "failed", status: "error", error: "agent failed" }
+                    : { reason: "completed", status: "ok" },
+              }),
+            });
+            if (kind === "silent-then-visible") {
+              params.dispatcher.sendFinalReply({ text: "NO_REPLY" });
+            }
+            params.dispatcher.sendFinalReply({
+              text:
+                kind === "silent"
+                  ? "NO_REPLY"
+                  : kind === "heartbeat"
+                    ? "HEARTBEAT_OK"
+                    : kind === "empty"
+                      ? ""
+                      : "A settled reply.",
+            });
+            if (kind === "visible-then-silent") {
+              params.dispatcher.sendFinalReply({ text: "NO_REPLY" });
+            }
+          }
+          params.dispatcher.markComplete();
+          await params.dispatcher.waitForIdle();
+          return { ok: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+        });
+      }
+      try {
+        if (kind === "injected") {
+          await inject({ sessionKey: "main", message: "Operator transcript note." });
+          expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+        } else {
+          await send({ idempotencyKey: runId, waitFor: "dedupe" });
+        }
+        await Promise.resolve();
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ state: kind === "failed" ? "error" : "final" }),
+          expect.anything(),
+        );
+        const shouldNotify = [
+          "completed",
+          "empty",
+          "silent-then-visible",
+          "visible-then-silent",
+        ].includes(kind);
+        expect(push.send).toHaveBeenCalledTimes(shouldNotify ? 1 : 0);
+        if (shouldNotify) {
+          expect(push.send).toHaveBeenCalledWith(
+            expect.objectContaining({
+              payload: expect.objectContaining({ tag: `openclaw-agent-finished-${runId}` }),
+            }),
+          );
+        }
+      } finally {
+        settleQueuedTurn?.();
+        push.dispose();
+      }
+    },
+  );
 
   it("carries an internal runtime tool cap into agent dispatch", async () => {
     const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");

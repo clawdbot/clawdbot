@@ -4822,6 +4822,52 @@ public struct PushTestResult: Codable, Sendable {
     }
 }
 
+public struct NotificationsSubscribeParams: Codable, Sendable {
+    public let enabled: Bool
+
+    public init(
+        enabled: Bool)
+    {
+        self.enabled = enabled
+    }
+}
+
+public struct NotificationsUnsubscribeParams: Codable, Sendable {}
+
+public struct NotificationsPreferencesGetParams: Codable, Sendable {}
+
+public struct NotificationsTestParams: Codable, Sendable {}
+
+public struct NativeNotificationPreferences: Codable, Sendable {
+    public let user: [String: AnyCodable]
+    public let device: [String: AnyCodable]
+    public let effective: [String: AnyCodable]
+    public let canmanageuserpreferences: Bool
+    public let devicepersistence: AnyCodable
+
+    public init(
+        user: [String: AnyCodable],
+        device: [String: AnyCodable],
+        effective: [String: AnyCodable],
+        canmanageuserpreferences: Bool,
+        devicepersistence: AnyCodable)
+    {
+        self.user = user
+        self.device = device
+        self.effective = effective
+        self.canmanageuserpreferences = canmanageuserpreferences
+        self.devicepersistence = devicepersistence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case user
+        case device
+        case effective
+        case canmanageuserpreferences = "canManageUserPreferences"
+        case devicepersistence = "devicePersistence"
+    }
+}
+
 public struct UiSplitCommand: Codable, Sendable {
     public let kind: String
     public let direction: AnyCodable
@@ -22337,6 +22383,304 @@ public enum ProjectRecent: Codable, Sendable {
         switch self {
         case .project(let value): try value.encode(to: encoder)
         case .folder(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct NotificationsPreferencesSetParamsUser: Codable, Sendable {
+    public let scope: String
+    public let preferences: [String: AnyCodable]
+
+    public init(
+        preferences: [String: AnyCodable]
+    )
+    {
+        self.scope = "user"
+        self.preferences = preferences
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case preferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["scope", "preferences"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for NotificationsPreferencesSetParamsUser: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedScope = try container.decode(String.self, forKey: .scope)
+        guard decodedScope == "user" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .scope,
+                in: container,
+                debugDescription: "Expected scope to equal user"
+            )
+        }
+        self.scope = "user"
+        self.preferences = try container.decode([String: AnyCodable].self, forKey: .preferences)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("user", forKey: .scope)
+        try container.encode(preferences, forKey: .preferences)
+    }
+}
+
+public struct NotificationsPreferencesSetParamsDevice: Codable, Sendable {
+    public let scope: String
+    public let preferences: [String: AnyCodable]
+
+    public init(
+        preferences: [String: AnyCodable]
+    )
+    {
+        self.scope = "device"
+        self.preferences = preferences
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case preferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["scope", "preferences"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for NotificationsPreferencesSetParamsDevice: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedScope = try container.decode(String.self, forKey: .scope)
+        guard decodedScope == "device" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .scope,
+                in: container,
+                debugDescription: "Expected scope to equal device"
+            )
+        }
+        self.scope = "device"
+        self.preferences = try container.decode([String: AnyCodable].self, forKey: .preferences)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("device", forKey: .scope)
+        try container.encode(preferences, forKey: .preferences)
+    }
+}
+
+public enum NotificationsPreferencesSetParams: Codable, Sendable {
+    case user(NotificationsPreferencesSetParamsUser)
+    case device(NotificationsPreferencesSetParamsDevice)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "scope"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "user": self = try .user(NotificationsPreferencesSetParamsUser(from: decoder))
+        case "device": self = try .device(NotificationsPreferencesSetParamsDevice(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown NotificationsPreferencesSetParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .user(let value): try value.encode(to: encoder)
+        case .device(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct NativeNotificationMessageShow: Codable, Sendable {
+    public let action: String
+    public let id: String
+    public let category: String
+    public let title: String
+    public let body: String
+    public let path: String
+    public let expiresatms: Int
+    public let alert: Bool
+
+    public init(
+        id: String,
+        category: String,
+        title: String,
+        body: String,
+        path: String,
+        expiresatms: Int,
+        alert: Bool
+    )
+    {
+        self.action = "show"
+        self.id = id
+        self.category = category
+        self.title = title
+        self.body = body
+        self.path = path
+        self.expiresatms = expiresatms
+        self.alert = alert
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case id
+        case category
+        case title
+        case body
+        case path
+        case expiresatms = "expiresAtMs"
+        case alert
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "id", "category", "title", "body", "path", "expiresAtMs", "alert"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for NativeNotificationMessageShow: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "show" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal show"
+            )
+        }
+        self.action = "show"
+        self.id = try container.decode(String.self, forKey: .id)
+        self.category = try container.decode(String.self, forKey: .category)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.path = try container.decode(String.self, forKey: .path)
+        self.expiresatms = try container.decode(Int.self, forKey: .expiresatms)
+        self.alert = try container.decode(Bool.self, forKey: .alert)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("show", forKey: .action)
+        try container.encode(id, forKey: .id)
+        try container.encode(category, forKey: .category)
+        try container.encode(title, forKey: .title)
+        try container.encode(body, forKey: .body)
+        try container.encode(path, forKey: .path)
+        try container.encode(expiresatms, forKey: .expiresatms)
+        try container.encode(alert, forKey: .alert)
+    }
+}
+
+public struct NativeNotificationMessageRemove: Codable, Sendable {
+    public let action: String
+    public let id: String
+
+    public init(
+        id: String
+    )
+    {
+        self.action = "remove"
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case id
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "id"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for NativeNotificationMessageRemove: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "remove" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal remove"
+            )
+        }
+        self.action = "remove"
+        self.id = try container.decode(String.self, forKey: .id)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("remove", forKey: .action)
+        try container.encode(id, forKey: .id)
+    }
+}
+
+public enum NativeNotificationMessage: Codable, Sendable {
+    case show(NativeNotificationMessageShow)
+    case remove(NativeNotificationMessageRemove)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "action"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "show": self = try .show(NativeNotificationMessageShow(from: decoder))
+        case "remove": self = try .remove(NativeNotificationMessageRemove(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown NativeNotificationMessage discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .show(let value): try value.encode(to: encoder)
+        case .remove(let value): try value.encode(to: encoder)
         }
     }
 }

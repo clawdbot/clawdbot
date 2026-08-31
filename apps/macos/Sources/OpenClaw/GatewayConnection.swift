@@ -180,7 +180,7 @@ actor GatewayConnection {
     private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
-    var realtimeTalkSubscribers: [
+    var serverSubscribers: [
         UInt64: [UUID: AsyncStream<GatewayPush>.Continuation]
     ] = [:]
     var lastSnapshot: HelloOk?
@@ -938,7 +938,7 @@ extension GatewayConnection {
     /// reentrant work could continue on a client whose replacement is in flight.
     private func retireConfiguredConnection() -> GatewayChannelActor? {
         self.routeGeneration &+= 1
-        self.finishRealtimeTalkSubscribers()
+        self.finishServerSubscribers()
         self.resetSocketGeneration()
         self.lastSnapshot = nil
         self.resetCanvasPluginSurfaceState()
@@ -982,7 +982,7 @@ extension GatewayConnection {
         guard routeGeneration == self.routeGeneration,
               retireSocketGeneration(socketGeneration)
         else { return }
-        self.finishRealtimeTalkSubscribers(socketGeneration: socketGeneration)
+        self.finishServerSubscribers(socketGeneration: socketGeneration)
         self.lastSnapshot = nil
         self.resetCanvasPluginSurfaceState()
     }
@@ -1237,7 +1237,7 @@ extension GatewayConnection {
         }
         if let socketGeneration = self.activeSocketGeneration {
             var terminatedSubscriberIDs: [UUID] = []
-            for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
+            for (id, continuation) in self.serverSubscribers[socketGeneration] ?? [:] {
                 switch continuation.yield(push) {
                 case .enqueued:
                     break
@@ -1250,7 +1250,7 @@ extension GatewayConnection {
                 }
             }
             for id in terminatedSubscriberIDs {
-                self.removeRealtimeTalkSubscriber(id, socketGeneration: socketGeneration)
+                self.removeServerSubscriber(id, socketGeneration: socketGeneration)
             }
         }
     }

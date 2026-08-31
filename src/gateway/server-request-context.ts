@@ -53,6 +53,7 @@ type GatewayRequestContextParams = {
   ) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   approvalWebPushDelivery?: GatewayRequestContext["approvalWebPushDelivery"];
+  nativeNotifications?: GatewayRequestContext["nativeNotifications"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
@@ -210,6 +211,7 @@ export function createGatewayRequestContext(
       : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     approvalWebPushDelivery: params.approvalWebPushDelivery,
+    nativeNotifications: params.nativeNotifications,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
     systemAgentApprovalManager: params.systemAgentApprovalManager,

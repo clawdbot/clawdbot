@@ -7,6 +7,8 @@ type GatewayBroadcastStateVersion = {
 
 /** Options for gateway websocket broadcasts. */
 export type GatewayBroadcastOpts = {
+  /** Recorded by the completion owner; chat finals also represent non-run bookkeeping. */
+  agentRunCompleted?: true;
   /** Agent scope for agent-relative keys such as `global`. */
   agentId?: string;
   dropIfSlow?: boolean;

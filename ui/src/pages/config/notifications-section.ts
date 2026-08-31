@@ -3,11 +3,8 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
-import type { WebPushSnapshot } from "../../app/web-push.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import type { NotificationAction, NotificationsSnapshot } from "../../app/notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
@@ -23,21 +20,11 @@ import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 // assignable to this subset.
 type NotificationsSectionProps = {
   connected: boolean;
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
-  onNativeNotificationsRequestPermission?: () => void;
-  onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushSnapshot;
-  onWebPushSubscribe?: () => void;
-  onWebPushUnsubscribe?: () => void;
-  onWebPushTest?: () => void;
-  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
-  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
+  notifications?: NotificationsSnapshot;
+  onNotificationAction?: (action: NotificationAction) => void;
 };
 
-const WEB_PUSH_CATEGORIES = [
+const NOTIFICATION_CATEGORIES = [
   ["approvalRequested", () => t("configView.notifications.approvalRequested")],
   ["agentFinished", () => t("configView.notifications.agentFinished")],
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
@@ -83,7 +70,7 @@ function renderUserNotificationPreferences(
         <h2 class="settings-section__heading">${t("configView.notifications.accountDefaults")}</h2>
       </div>
       <div class="settings-group">
-        ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
+        ${NOTIFICATION_CATEGORIES.map(([key, label]) =>
           renderSettingsRow({
             title: label(),
             control: html`<input
@@ -354,7 +341,7 @@ function renderDeviceNotificationPreferences(
               />`,
             })
           : nothing}
-        ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
+        ${NOTIFICATION_CATEGORIES.map(([key, label]) =>
           renderSettingsRow({
             title: label(),
             control: html`<select
@@ -385,7 +372,7 @@ function renderDeviceNotificationPreferences(
   `;
 }
 
-function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
+function nativeNotificationsStatus(permission: NativeNotificationsPermission): {
   kind: "ok" | "danger" | "accent" | "muted";
   label: string;
 } {
@@ -401,24 +388,70 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
+function renderNotificationError(error: string | null | undefined) {
+  return error
+    ? html`<div class="settings-row">
+        <div class="settings-row__text">
+          <span class="cfg-field__error">${formatUiExternalText(error)}</span>
+        </div>
+      </div>`
+    : nothing;
+}
+
+function renderNotificationPreferences(props: NotificationsSectionProps) {
+  const notification = props.notifications;
+  const preferences = notification?.preferences;
+  if (
+    !notification?.supported ||
+    !preferences ||
+    (notification.kind === "web" && notification.subscription !== "registered")
+  ) {
+    return nothing;
+  }
+  return html`<div class="settings-page" ?inert=${notification.loading}>
+    ${preferences.devicePersistence === "session"
+      ? html`<p class="settings-section__desc">${t("configView.notifications.sessionOnly")}</p>`
+      : nothing}
+    ${preferences.canManageUserPreferences
+      ? renderUserNotificationPreferences(preferences.user, (next) =>
+          props.onNotificationAction?.({ kind: "set", scope: "user", preferences: next }),
+        )
+      : nothing}
+    ${renderDeviceNotificationPreferences(preferences.device, (next) =>
+      props.onNotificationAction?.({ kind: "set", scope: "device", preferences: next }),
+    )}
+  </div>`;
+}
+
 export function renderNotificationsSection(props: NotificationsSectionProps) {
-  const native = props.nativeNotifications;
-  if (native) {
-    const status = nativeNotificationsStatus(native.permission);
+  const native = props.notifications;
+  if (native?.kind === "native") {
+    const permissionStatus = nativeNotificationsStatus(native.permission);
+    const status =
+      native.supported || (native.permission === "unknown" && !native.error)
+        ? permissionStatus
+        : { kind: "muted" as const, label: t("configView.notifications.unavailable") };
     const testPending = native.test?.state === "pending";
-    const actionButton =
-      native.permission === "notDetermined"
+    const actionButton = !native.supported
+      ? nothing
+      : native.permission === "notDetermined" ||
+          (native.permission === "granted" && native.preferences?.device.enabled === false)
         ? html`
             <button
               class="btn primary"
-              @click=${() => props.onNativeNotificationsRequestPermission?.()}
+              ?disabled=${native.loading}
+              @click=${() => props.onNotificationAction?.({ kind: "enable" })}
             >
               ${t("configView.notifications.enable")}
             </button>
           `
         : native.permission === "denied"
           ? html`
-              <button class="btn" @click=${() => props.onNativeNotificationsRequestPermission?.()}>
+              <button
+                class="btn"
+                ?disabled=${native.loading}
+                @click=${() => props.onNotificationAction?.({ kind: "enable" })}
+              >
                 ${t("configView.notifications.openSystemSettings")}
               </button>
             `
@@ -426,8 +459,8 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ? html`
                 <button
                   class="btn primary"
-                  ?disabled=${testPending}
-                  @click=${() => props.onNativeNotificationsSendTest?.()}
+                  ?disabled=${native.loading || testPending}
+                  @click=${() => props.onNotificationAction?.({ kind: "test" })}
                 >
                   ${testPending ? icons.loader : icons.send}
                   ${testPending
@@ -447,7 +480,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
           <div class="settings-group">
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
-              control: renderSettingsValue(status.label),
+              control: renderSettingsValue(permissionStatus.label),
             })}
             ${actionButton !== nothing
               ? html`
@@ -469,7 +502,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ${native.test
               ? renderSettingsRow({
                   title: t("configView.notifications.testOutcome"),
-                  description: native.test.state === "error" ? native.test.message : undefined,
+                  description:
+                    native.test.state === "error"
+                      ? formatUiExternalText(native.test.message)
+                      : undefined,
                   control: renderSettingsStatus(
                     native.test.state === "pending"
                       ? {
@@ -488,13 +524,15 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                   ),
                 })
               : nothing}
+            ${renderNotificationError(native.error)}
           </div>
         </section>
+        ${renderNotificationPreferences(props)}
       </div>
     `;
   }
 
-  const push = props.webPush;
+  const push = native;
   if (!push) {
     return html`
       <div class="settings-page">
@@ -563,7 +601,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <button
               class="btn"
               ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushUnsubscribe?.()}
+              @click=${() => props.onNotificationAction?.({ kind: "disable" })}
             >
               ${icons.x} ${t("configView.notifications.unsubscribe")}
             </button>
@@ -571,7 +609,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               ? html`<button
                   class="btn primary"
                   ?disabled=${push.loading || !props.connected}
-                  @click=${() => props.onWebPushTest?.()}
+                  @click=${() => props.onNotificationAction?.({ kind: "test" })}
                 >
                   ${icons.send} ${t("configView.notifications.sendTest")}
                 </button>`
@@ -581,7 +619,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <button
               class="btn primary"
               ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushSubscribe?.()}
+              @click=${() => props.onNotificationAction?.({ kind: "enable" })}
             >
               ${push.loading ? icons.loader : nothing}
               ${push.loading
@@ -642,29 +680,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                 }),
               })
             : nothing}
-          ${push.error
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="cfg-field__error">${formatUiExternalText(push.error)}</span>
-                  </div>
-                </div>
-              `
-            : nothing}
+          ${renderNotificationError(push.error)}
         </div>
       </section>
-      ${registered && push.preferences
-        ? html`<div class="settings-page" ?inert=${push.loading}>
-            ${push.preferences.durableIdentity
-              ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
-                  props.onWebPushSetUserPreferences?.(preferences),
-                )
-              : nothing}
-            ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
-              props.onWebPushSetDevicePreferences?.(preferences),
-            )}
-          </div>`
-        : nothing}
+      ${renderNotificationPreferences(props)}
     </div>
   `;
 }

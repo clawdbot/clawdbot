@@ -229,6 +229,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_: Notification) {
         // URL/reopen callbacks can create the dashboard before didFinishLaunching.
         DashboardManager.shared.configure(updater: self.updaterController)
+        if AppLaunchRuntimePlan.current.allowsInteractiveServices {
+            NativeGatewayNotifications.shared.start()
+        }
     }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
@@ -399,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        NativeGatewayNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()
         PresenceReporter.shared.stop()

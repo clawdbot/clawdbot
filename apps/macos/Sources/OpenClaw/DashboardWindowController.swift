@@ -88,8 +88,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var currentURL: URL
     var auth: DashboardWindowAuth
     var gatewaySnapshot: DashboardGatewaySnapshot?
-    var notificationPermission = "notDetermined"
-    var notificationTestOutcome: TestNotificationOutcome?
+    var notificationState = DashboardNotificationsState()
+    let notificationTarget: DashboardGatewayTarget?
     let tlsParams: GatewayTLSParams?
     private let dashboardFrameAutosaveName: String
     private let updater: UpdaterProviding?
@@ -106,7 +106,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var isShowingFailurePage = false
     private var navigationGeneration: UInt64 = 0
     private var pendingNativeCommands: [DashboardNativeCommand] = []
-    private var pendingNativeNavigation: DashboardNativeNavigation?
+    private var pendingNativeNavigation: (navigation: DashboardNativeNavigation, isCurrent: @MainActor () -> Bool)?
     var onClosed: (() -> Void)?
 
     init(
@@ -117,6 +117,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
+        notificationTarget: DashboardGatewayTarget? = nil,
         windowTitle: String = "OpenClaw",
         windowAutosaveName: String,
         reusingWindow: NSWindow? = nil,
@@ -127,6 +128,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.currentURL = url
         self.auth = auth
         self.gatewaySnapshot = gatewaySnapshot
+        self.notificationTarget = notificationTarget
         self.tlsParams = tlsParams
         self.dashboardFrameAutosaveName = windowAutosaveName
         self.updater = updater
@@ -402,12 +404,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func closeDashboard() {
-        window?.performClose(nil)
-    }
-
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
+        self.notificationState.invalidateDocument()
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.webView.stopLoading()
@@ -421,6 +420,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func showFailure(title: String, message: String, detail: String? = nil, present: Bool = true) {
+        self.notificationState.invalidateDocument()
         self.hasLiveContent = false
         self.isShowingFailurePage = true
         self.advanceNavigationGeneration()
@@ -442,6 +442,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func load(_ url: URL) {
+        self.notificationState.invalidateDocument()
         // Endpoint swaps must queue commands for the replacement document.
         self.hasLiveContent = false
         self.isShowingFailurePage = false
@@ -809,7 +810,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // Deliberately no native fallback for pages that ignore this flag
         // (older gateway bundles, failure pages): they keep their own in-page
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
-        let capabilityScript = "window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;"
+        let capabilityScript = Self.nativeNotificationsCapabilityScript
         userContentController.addUserScript(
             WKUserScript(source: capabilityScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // Narrow widths need no rules here: the Control UI's own
@@ -900,7 +901,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return path.hasSuffix("/") ? path : path + "/"
     }
 
-    private static func jsStringLiteral(_ value: String) -> String {
+    static func jsStringLiteral(_ value: String) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: [value]),
               let raw = String(data: data, encoding: .utf8),
               raw.hasPrefix("["),
@@ -1067,7 +1068,12 @@ extension DashboardWindowController {
         self.currentURL
     }
 
+    func closeDashboard() {
+        window?.performClose(nil)
+    }
+
     func windowWillClose(_: Notification) {
+        self.notificationState.invalidateDocument()
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
         self.onClosed?()
@@ -1199,17 +1205,24 @@ extension DashboardWindowController {
         }
     }
 
-    func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
+    func dispatchNativeNavigation(
+        _ navigation: DashboardNativeNavigation,
+        isCurrent: @escaping @MainActor () -> Bool = { true })
+    {
+        guard isCurrent() else { return }
         self.advanceNavigationGeneration()
         guard self.hasLiveContent else {
             // Navigation is state selection, so only the newest destination matters while loading.
-            self.pendingNativeNavigation = navigation
+            self.pendingNativeNavigation = (navigation, isCurrent)
             return
         }
-        self.evaluateNativeNavigation(navigation)
+        self.evaluateNativeNavigation(navigation, isCurrent: isCurrent)
     }
 
-    private func evaluateNativeNavigation(_ navigation: DashboardNativeNavigation) {
+    private func evaluateNativeNavigation(
+        _ navigation: DashboardNativeNavigation,
+        isCurrent: @escaping @MainActor () -> Bool)
+    {
         let generation = self.navigationGeneration
         let sourceURL = self.currentURL
         let searchLiteral = navigation.search.map(Self.jsStringLiteral) ?? "undefined"
@@ -1221,12 +1234,14 @@ extension DashboardWindowController {
             })))()
             """
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            // A queued notification click loses authority when its presentation
+            // expires or its socket retires, including while the page loads.
+            guard let self, isCurrent() else { return }
             let result = try? await self.webView.evaluateJavaScript(script)
             let handled = result as? Bool
             // Async completions may return after another route or New Session intent.
             // Only the newest navigation intent may load its fallback URL.
-            guard handled != true,
+            guard handled != true, isCurrent(),
                   self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
             else { return }
             self.load(navigation.fallbackURL)
@@ -1242,9 +1257,9 @@ extension DashboardWindowController {
     }
 
     private func flushPendingNativeNavigation() {
-        guard let navigation = self.pendingNativeNavigation else { return }
+        guard let pending = self.pendingNativeNavigation else { return }
         self.pendingNativeNavigation = nil
-        self.evaluateNativeNavigation(navigation)
+        self.evaluateNativeNavigation(pending.navigation, isCurrent: pending.isCurrent)
     }
 }
 
@@ -1345,6 +1360,7 @@ extension DashboardWindowController {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if webView === self.webView { self.notificationState.invalidateDocument() }
         if self.linkBrowser.owns(webView) {
             self.linkBrowser.navigationDidStart(navigation, in: webView)
             self.linkBrowser.updateChrome()
@@ -1356,6 +1372,7 @@ extension DashboardWindowController {
     /// never pass through `load(_:)`, so commands queue for the new document.
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
         guard webView === self.webView else { return }
+        self.notificationState.invalidateDocument()
         self.hasLiveContent = false
         // Swipe-back/⌘[ can leave the failure page through WKWebView history
         // without a `load(_:)`; a committed http(s) document is a real
@@ -1579,7 +1596,7 @@ extension DashboardWindowController {
     }
 
     var _testPendingNativeNavigation: DashboardNativeNavigation? {
-        self.pendingNativeNavigation
+        self.pendingNativeNavigation?.navigation
     }
 
     var _testNavigationGeneration: UInt64 {

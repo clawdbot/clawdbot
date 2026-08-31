@@ -126,6 +126,8 @@ export async function startGatewayCoreRuntime(input: {
     readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
+    nativeNotifications,
+    bindNativeNotificationReplay,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForConfig,
     sessionMessageSubscribers,
@@ -313,6 +315,7 @@ export async function startGatewayCoreRuntime(input: {
     return {
       ...createGatewayAuxHandlers({
         log,
+        nativeNotifications,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
         // Grant terms freeze at mint. This reads the live config so a policy
@@ -348,8 +351,15 @@ export async function startGatewayCoreRuntime(input: {
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
+  bindNativeNotificationReplay((client) => {
+    approvalWebPushDelivery.replayNative(
+      [...execApprovalManager.listPendingRecords(), ...pluginApprovalManager.listPendingRecords()],
+      client,
+    );
+  });
   kernel.addGatewayLifetimeSidecar({
     stop: async () => {
+      nativeNotifications.clear();
       unregisterApprovalAuthorityObserver();
     },
   });

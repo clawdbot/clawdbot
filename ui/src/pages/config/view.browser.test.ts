@@ -994,7 +994,8 @@ describe("config view", () => {
       },
       formValue: {},
       originalValue: {},
-      webPush: {
+      notifications: {
+        kind: "web",
         supported: true,
         permission: "default",
         subscription: "missing",
@@ -1009,19 +1010,20 @@ describe("config view", () => {
   });
 
   it("renders Notifications with the shared settings card and button styles", () => {
-    const onWebPushSubscribe = vi.fn();
+    const onNotificationAction = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__notifications__",
       includeSections: ["__notifications__"],
       includeVirtualSections: true,
       showModeToggle: false,
       showRootTab: false,
-      onWebPushSubscribe,
+      onNotificationAction,
       schema: {
         type: "object",
         properties: {},
       },
-      webPush: {
+      notifications: {
+        kind: "web",
         supported: true,
         permission: "default",
         subscription: "missing",
@@ -1042,7 +1044,7 @@ describe("config view", () => {
     expect(container.querySelector(".config-bar__btn")).toBeNull();
 
     enableButton.click();
-    expect(onWebPushSubscribe).toHaveBeenCalledOnce();
+    expect(onNotificationAction).toHaveBeenCalledOnce();
   });
 
   it.each(["tabs", "accordion"] as const)(

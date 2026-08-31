@@ -66,6 +66,7 @@ type GatewayAuxHandlerLogger = {
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
     log: GatewayAuxHandlerLogger;
+    nativeNotifications?: GatewayRequestContext["nativeNotifications"];
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
     validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
@@ -147,6 +148,7 @@ export function createGatewayAuxHandlers(
   const approvalWebPushDelivery = createApprovalWebPushDelivery({
     getRuntimeConfig,
     log: params.log,
+    nativeNotifications: params.nativeNotifications,
   });
   // Startup already terminalized prior-runtime approvals above. Replay any
   // durable request targets so their actionable browser prompts are replaced.

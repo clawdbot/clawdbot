@@ -1052,9 +1052,13 @@ export function createAgentEventHandler({
     const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
       suppressLeadFragments: options?.suppressLeadFragments,
     });
+    const run = chatRunState.runs.get(clientRunId);
     return {
       text: projected.text.trim(),
-      shouldSuppressSilent: normalizedHeartbeatText.suppress || projected.suppress,
+      // Empty output has no silent intent; nonempty control replies were stripped by projection.
+      shouldSuppressSilent:
+        Boolean((run?.rawBuffer ?? run?.buffer)?.trim()) &&
+        (normalizedHeartbeatText.suppress || projected.suppress),
     };
   };
 
@@ -1093,13 +1097,19 @@ export function createAgentEventHandler({
   const sendChatPayload = (
     sessionKey: string,
     payload: unknown,
-    opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
+    opts?: {
+      agentId?: string;
+      controlUiVisible?: boolean;
+      dropIfSlow?: boolean;
+      agentRunCompleted?: true;
+    },
   ) => {
     const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
       broadcast("chat", payload, {
         dropIfSlow: opts?.dropIfSlow,
         sessionKeys: deliverySessionKeys,
+        ...(opts?.agentRunCompleted ? { agentRunCompleted: true } : {}),
       });
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
@@ -1167,7 +1177,11 @@ export function createAgentEventHandler({
               }
             : undefined,
       };
-      sendChatPayload(sessionKey, payload, opts);
+      sendChatPayload(sessionKey, payload, {
+        ...opts,
+        agentRunCompleted:
+          jobState === "done" && !opts?.yielded && !shouldSuppressSilent ? true : undefined,
+      });
       return;
     }
     const payload = {

@@ -147,6 +147,7 @@ export function createChatSendReplyDispatch(params: {
     channel: INTERNAL_MESSAGE_CHANNEL,
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
+  let finalReplyDisposition: "none" | "suppressed" | "visible" = "none";
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   let appendedWebchatAgentMedia = false;
   let preparingTranscript = false;
@@ -405,10 +406,23 @@ export function createChatSendReplyDispatch(params: {
   };
   const dispatcherOptions: ReplyDispatcherOptions = {
     ...replyPipeline,
+    onSkip: (_payload, info) => {
+      if (
+        info.kind === "final" &&
+        (info.reason === "silent" || info.reason === "heartbeat") &&
+        finalReplyDisposition !== "visible"
+      ) {
+        finalReplyDisposition = "suppressed";
+      }
+    },
     onError: (err) => {
       logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
     },
     deliver: async (payload, info) => {
+      if (info.kind === "final") {
+        // Normalization can skip later finals before queued delivery runs; visible output wins.
+        finalReplyDisposition = "visible";
+      }
       const payloadMetadata = getReplyPayloadMetadata(payload);
       if (
         payloadMetadata?.beforeAgentRunBlocked === true ||
@@ -476,6 +490,7 @@ export function createChatSendReplyDispatch(params: {
   return {
     captureAgentTranscriptStart,
     deliveredReplies,
+    isFinalReplySuppressed: () => finalReplyDisposition === "suppressed",
     dispatcherOptions,
     hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
     onModelSelected,

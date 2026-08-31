@@ -448,6 +448,27 @@ final class DashboardManager {
         }
     }
 
+    func showNotification(
+        target: DashboardGatewayTarget,
+        path: String,
+        search: String?,
+        connection: GatewayConnection,
+        lease: GatewayConnection.ServerLease,
+        isCurrent: @escaping @MainActor () -> Bool) async
+    {
+        guard await connection.isCurrentServerLease(lease), isCurrent() else { return }
+        await self.performOpenOrFocusDashboard(for: target)
+        guard await connection.isCurrentServerLease(lease), isCurrent(),
+              let controller = self.dashboardControllers().first(where: { $0.target == target })?.controller,
+              let fallbackURL = DashboardRouteMap.dashboardURL(
+                  byAppendingSameAppPath: path, search: search, to: controller.dashboardBaseURL)
+        else { return }
+        controller.dispatchNativeNavigation(DashboardNativeNavigation(
+            path: path,
+            search: search,
+            fallbackURL: fallbackURL), isCurrent: isCurrent)
+    }
+
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
@@ -529,6 +550,9 @@ final class DashboardManager {
     private func refreshGatewaySnapshots() async {
         guard let entries = try? await self.loadGatewayEntries() else { return }
         self.gatewayEntries = entries
+        if self.automaticGatewayProfileRefreshEnabled {
+            NativeGatewayNotifications.shared.updateTargets(entries)
+        }
         if let controller, !Self.targetIsAvailable(self.mainTarget, in: entries) {
             await self.switchTarget(.primary, in: controller)
             return
@@ -736,6 +760,9 @@ final class DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
+        if self.automaticGatewayProfileRefreshEnabled {
+            Task { await NativeGatewayNotifications.shared.refresh(target: target) }
+        }
         return DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
@@ -744,6 +771,7 @@ final class DashboardManager {
             updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,
             gatewaySnapshot: self.snapshot(for: target),
+            notificationTarget: target,
             windowTitle: configuration.displayName,
             windowAutosaveName: windowAutosaveName,
             reusingWindow: reusingWindow,

@@ -335,6 +335,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         !closed && client?.connect.role === "node" && nodeLifecycleDispatch.hasActive();
       retireTransport(code, reason);
       if (client && !retainClientUntilNodeDrain) {
+        buildRequestContext().nativeNotifications?.unregister(client);
         clients.delete(client);
       }
     };

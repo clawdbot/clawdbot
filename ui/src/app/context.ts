@@ -14,13 +14,12 @@ import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
-import type { NativeNotificationsCapability } from "./native-notifications.ts";
+import type { NotificationsCapability } from "./notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { UiSettings } from "./settings.ts";
 import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import type { WebPushCapability } from "./web-push.ts";
 
 export type {
   ApplicationGateway,
@@ -105,8 +104,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
-  readonly nativeNotifications: NativeNotificationsCapability | null;
-  readonly webPush: WebPushCapability;
+  readonly notifications: NotificationsCapability;
   readonly skillWorkshopRevisionAdmissions: ApplicationSkillWorkshopRevisionAdmissions;
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;

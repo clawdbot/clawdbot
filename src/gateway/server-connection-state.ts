@@ -1,7 +1,10 @@
+import { resolveUserProfileId } from "../state/user-profiles.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createNativeNotificationRegistry } from "./native-notifications.js";
+import { NOTIFICATION_TTL_MS } from "./notification-presentation.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
@@ -10,6 +13,7 @@ import {
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
@@ -27,7 +31,41 @@ export function createGatewayConnectionState(params: {
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
-  const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
+  let replayNativeNotifications: (client: GatewayWsClient) => void = () => {
+    throw new Error("Native notification replay is not ready");
+  };
+  const nativeNotifications = createNativeNotificationRegistry({
+    clients,
+    getRuntimeConfig: loadRuntimeConfig,
+    send: (client, message) =>
+      gatewayBroadcaster.broadcastToConnIds("notification", message, new Set([client.connId])),
+    onSubscribe: (client) => replayNativeNotifications(client),
+    createTestNotification: () => ({
+      action: "show",
+      alert: true,
+      id: "openclaw-notification-test",
+      category: "approval-requested",
+      title: "OpenClaw",
+      body: "Notifications are working on this device.",
+      path: "/settings/notifications",
+      expiresAtMs: Date.now() + NOTIFICATION_TTL_MS,
+    }),
+    onPreferencesChanged: (profileId, keys) => {
+      const connIds = new Set(
+        [...clients]
+          .filter((client) => {
+            const id = client.authenticatedUserProfile?.profileId;
+            return id && resolveUserProfileId(id) === profileId;
+          })
+          .map((client) => client.connId),
+      );
+      gatewayBroadcaster.broadcastToConnIds("users.prefs.changed", { profileId, keys }, connIds);
+    },
+  });
+  const eventWebPush = createEventWebPushDelivery({
+    getRuntimeConfig: loadRuntimeConfig,
+    nativeNotifications,
+  });
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -57,6 +95,10 @@ export function createGatewayConnectionState(params: {
   return {
     clients,
     isConnectionActive,
+    nativeNotifications,
+    bindNativeNotificationReplay: (replay: typeof replayNativeNotifications) => {
+      replayNativeNotifications = replay;
+    },
     ...gatewayBroadcaster,
     agentRunSeq,
     dedupe,

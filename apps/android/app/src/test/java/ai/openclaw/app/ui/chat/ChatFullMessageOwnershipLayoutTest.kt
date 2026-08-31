@@ -821,7 +821,7 @@ class ChatFullMessageOwnershipLayoutTest {
   @Test
   fun preparedReadCannotDispatchThroughAReplacementSocket() {
     assertPreparedReadRetired {
-      composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
+      replaceConnectionBeforeRecomposition()
     }
   }
 
@@ -1273,7 +1273,7 @@ class ChatFullMessageOwnershipLayoutTest {
     }
     composeRule.onNodeWithText("Close").assertIsDisplayed()
     assertExpandedTextAbsent()
-    composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
+    replaceConnectionBeforeRecomposition()
     composeRule.waitForIdle()
     composeRule.onNode(hasText(FULL_MESSAGE_TAIL, substring = true)).assertExists()
     composeRule.onNodeWithText("Close").assertExists()
@@ -1288,12 +1288,12 @@ class ChatFullMessageOwnershipLayoutTest {
   @Test
   fun missingMethodCatalogStillRetiresOnReconnectAndDisconnect() {
     gateway.omitMethodCatalog = true
-    composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
+    replaceConnectionBeforeRecomposition()
     composeRule.waitForIdle()
     viewAll().performClick()
     composeRule.onNodeWithText("Update the Gateway to load the full message.").assertIsDisplayed()
     val catalog = runtime.gatewayCatalogRevision.value
-    composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
+    replaceConnectionBeforeRecomposition()
     composeRule.waitForIdle()
     assertTrue(runtime.gatewayCatalogRevision.value > catalog)
     composeRule.onNodeWithText("Show less").assertDoesNotExist()
@@ -1331,7 +1331,7 @@ class ChatFullMessageOwnershipLayoutTest {
   @Test
   fun connectedGatewayWithoutFullReadMethodHasAVisibleUpdateOutcome() {
     gateway.advertiseFullRead = false
-    composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
+    replaceConnectionBeforeRecomposition()
     composeRule.waitForIdle()
     viewAll().performClick()
     composeRule.onNodeWithText("Update the Gateway to load the full message.").assertIsDisplayed()
@@ -1416,7 +1416,7 @@ class ChatFullMessageOwnershipLayoutTest {
     val oldConnection = gateway.operatorConnection.get()
     val key = runtime.chatSessionKey.value
     val session = operatorSession()
-    runtime.refreshGatewayConnection()
+    composeRule.runOnIdle { runtime.refreshGatewayConnection() }
     runBlocking {
       withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
         // A server-side read is not proof that the replacement is still current.

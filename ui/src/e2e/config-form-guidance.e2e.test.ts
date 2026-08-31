@@ -2,7 +2,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import type {
+  NativeNotificationsMessage,
+  NativeNotificationsStatus,
+} from "../test-helpers/native-notifications.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -55,6 +59,343 @@ function notificationStatusConfigMocks() {
     },
   };
 }
+
+const runtimeSuite = createControlUiE2eSuite({
+  name: "Control UI notification module recovery",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+});
+
+type NativeNotificationsFixture = {
+  messages: NativeNotificationsMessage[];
+  status: NativeNotificationsStatus;
+  publish(status: NativeNotificationsStatus): void;
+};
+
+declare global {
+  interface Window {
+    __notificationsFixture?: NativeNotificationsFixture;
+    __OPENCLAW_NATIVE_NOTIFICATIONS__?: NativeNotificationsStatus;
+  }
+}
+
+runtimeSuite.define(() => {
+  it.each(["browser", "native"] as const)(
+    "disables unavailable %s notification actions and recovers after reloading the runtime",
+    async (transport) => {
+      await runtimeSuite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 1000, width: 1440 },
+        },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            methodResponses: notificationStatusConfigMocks(),
+          });
+          if (transport === "native") {
+            await page.addInitScript(() => {
+              const status: NativeNotificationsStatus = {
+                supported: true,
+                permission: "notDetermined",
+              };
+              window["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = status;
+              Object.defineProperty(window, "__OPENCLAW_NATIVE_NOTIFICATIONS_BRIDGE__", {
+                value: {
+                  postMessage(message: NativeNotificationsMessage) {
+                    window.dispatchEvent(
+                      new CustomEvent("openclaw:native-notifications-status", {
+                        detail: { ...status, replyTo: message.requestId },
+                      }),
+                    );
+                  },
+                },
+              });
+            });
+          }
+          const runtimeModule =
+            transport === "native"
+              ? /\/native-notifications\.runtime\.ts(?:\?|$)/u
+              : /\/web-push\.runtime\.ts(?:\?|$)/u;
+          await page.route(runtimeModule, (route) => route.abort());
+          await page.goto(`${runtimeSuite.server.baseUrl}settings/appearance`);
+          await page.getByRole("link", { name: "Notifications", exact: true }).click();
+          const section = page.locator("#settings-communications-notifications");
+          await section.locator(".cfg-field__error").waitFor();
+          if (captureUiProofEnabled) {
+            await mkdir(uiProofArtifactDir, { recursive: true });
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(
+                uiProofArtifactDir,
+                `06-${transport}-notifications-runtime-unavailable.png`,
+              ),
+            });
+          }
+          await expect.poll(() => section.getByRole("button").count()).toBe(0);
+          expect(await section.locator(".cfg-field__error").textContent()).toContain("Reload");
+
+          await page.unroute(runtimeModule);
+          await page.reload();
+          await expect.poll(() => section.locator(".cfg-field__error").count()).toBe(0);
+          await section
+            .getByRole("button", { name: "Enable notifications", exact: true })
+            .waitFor();
+          await expect
+            .poll(() => section.locator(".settings-section__header").textContent())
+            .toContain(transport === "native" ? "Not requested" : "Ready");
+        },
+      );
+    },
+  );
+
+  it.each(["webkit", "tauri"] as const)(
+    "uses shared native preferences and correlated replies without Web Push (%s)",
+    async (transport) => {
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+      }
+      await runtimeSuite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 1100, width: 1440 },
+          recordVideo: captureUiProofEnabled
+            ? { dir: uiProofArtifactDir, size: { height: 1100, width: 1440 } }
+            : undefined,
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            methodResponses: notificationStatusConfigMocks(),
+          });
+          const webPushModules: string[] = [];
+          page.on("request", (request) => {
+            if (/\/web-push\.runtime\.ts(?:\?|$)/u.test(request.url())) {
+              webPushModules.push(request.url());
+            }
+          });
+          await page.addInitScript((bridgeTransport) => {
+            const native = window;
+            const user = {
+              categories: {
+                approvalRequested: true,
+                agentFinished: false,
+                agentQuestion: false,
+                scheduledTaskFailed: false,
+                backgroundTaskFailed: false,
+              },
+              detailLevel: "private" as const,
+              quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+              agentIds: [],
+            };
+            const fixture: NativeNotificationsFixture = {
+              messages: [],
+              status: {
+                supported: true,
+                permission: "notDetermined",
+                preferences: {
+                  user,
+                  device: { enabled: false, label: "Desktop" },
+                  effective: { ...user, enabled: false, label: "Desktop" },
+                  canManageUserPreferences: true,
+                  devicePersistence: "profile",
+                },
+              },
+              publish(status) {
+                fixture.status = status;
+                native["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = status;
+                window.dispatchEvent(
+                  new CustomEvent("openclaw:native-notifications-status", { detail: status }),
+                );
+              },
+            };
+            native["__notificationsFixture"] = fixture;
+            native["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = fixture.status;
+            const poster = {
+              postMessage(message: NativeNotificationsMessage) {
+                fixture.messages.push(message);
+                if (message.type === "status" || message.type === "preferences-get") {
+                  fixture.publish({ ...fixture.status, replyTo: message.requestId });
+                }
+              },
+            };
+            Object.defineProperty(
+              window,
+              bridgeTransport === "webkit" ? "webkit" : "__OPENCLAW_NATIVE_NOTIFICATIONS_BRIDGE__",
+              {
+                configurable: true,
+                value:
+                  bridgeTransport === "webkit"
+                    ? { messageHandlers: { openclawNotifications: poster } }
+                    : poster,
+              },
+            );
+          }, transport);
+          await page.goto(`${runtimeSuite.server.baseUrl}settings/appearance`);
+          await page.getByRole("link", { name: "Notifications", exact: true }).click();
+          const section = page.locator("#settings-communications-notifications");
+          const enable = section.getByRole("button", { name: "Enable notifications", exact: true });
+          await enable.waitFor();
+          if (captureUiProofEnabled) {
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(uiProofArtifactDir, `07-native-${transport}-account-preferences.png`),
+            });
+          }
+          expect(
+            await page.evaluate(() =>
+              window["__notificationsFixture"]?.messages.every(
+                ({ type }) => type === "status" || type === "preferences-get",
+              ),
+            ),
+          ).toBe(true);
+          await enable.click();
+          await expect.poll(() => enable.isDisabled()).toBe(true);
+          await page.evaluate(() => {
+            const fixture = window["__notificationsFixture"];
+            if (!fixture) {
+              throw new Error("Native notification fixture is not installed");
+            }
+            fixture.publish({
+              ...fixture.status,
+              permission: "granted",
+              replyTo: "unrelated-status",
+            });
+          });
+          await expect.poll(() => enable.isDisabled()).toBe(true);
+          await page.evaluate(() => {
+            const fixture = window["__notificationsFixture"];
+            if (!fixture) {
+              throw new Error("Native notification fixture is not installed");
+            }
+            const request = fixture.messages.findLast(({ type }) => type === "request-permission")!;
+            fixture.publish({ ...fixture.status, replyTo: request.requestId });
+          });
+          const enabledDevice = await page.evaluate(() =>
+            window["__notificationsFixture"]?.messages.findLast(
+              ({ type }) => type === "preferences-set",
+            ),
+          );
+          expect(enabledDevice).toMatchObject({
+            type: "preferences-set",
+            scope: "device",
+            preferences: { enabled: true, label: "Desktop" },
+          });
+          await expect.poll(() => enable.isDisabled()).toBe(true);
+          await page.evaluate(() => {
+            const fixture = window["__notificationsFixture"];
+            if (!fixture) {
+              throw new Error("Native notification fixture is not installed");
+            }
+            const request = fixture.messages.findLast(({ type }) => type === "preferences-set")!;
+            const preferences = fixture.status.preferences!;
+            fixture.publish({
+              ...fixture.status,
+              replyTo: request.requestId,
+              preferences: {
+                ...preferences,
+                device: { ...preferences.device, enabled: true },
+                effective: { ...preferences.effective, enabled: true },
+              },
+            });
+          });
+          const sendTest = section.getByRole("button", { name: "Send test", exact: true });
+          await expect.poll(() => sendTest.isEnabled()).toBe(true);
+          const account = page
+            .locator("section.settings-section")
+            .filter({ has: page.getByRole("heading", { name: "Account defaults", exact: true }) });
+          await account
+            .locator(".settings-row")
+            .filter({ hasText: "Agent finished" })
+            .getByRole("checkbox")
+            .check();
+          const save = await page.evaluate(() =>
+            window["__notificationsFixture"]?.messages.findLast(
+              ({ type }) => type === "preferences-set",
+            ),
+          );
+          expect(save).toMatchObject({
+            type: "preferences-set",
+            scope: "user",
+            preferences: { categories: { agentFinished: true } },
+          });
+          expect(Object.keys(save!).toSorted()).toEqual([
+            "preferences",
+            "requestId",
+            "scope",
+            "type",
+          ]);
+          await expect.poll(() => account.locator("..").getAttribute("inert")).not.toBeNull();
+          await page.evaluate(() => {
+            const fixture = window["__notificationsFixture"];
+            if (!fixture) {
+              throw new Error("Native notification fixture is not installed");
+            }
+            const request = fixture.messages.findLast(({ type }) => type === "preferences-set")!;
+            fixture.publish({
+              ...fixture.status,
+              replyTo: request.requestId,
+              preferences: {
+                ...fixture.status.preferences!,
+                canManageUserPreferences: false,
+                devicePersistence: "session",
+              },
+            });
+          });
+          await page
+            .getByText(
+              "These device settings apply only to this Gateway connection and reset on reconnect.",
+              { exact: false },
+            )
+            .waitFor();
+          await expect.poll(() => account.count()).toBe(0);
+          await page.getByRole("heading", { name: "This browser or app", exact: true }).waitFor();
+          if (captureUiProofEnabled) {
+            await mkdir(uiProofArtifactDir, { recursive: true });
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(uiProofArtifactDir, `07-native-${transport}-session-preferences.png`),
+            });
+          }
+          await page.evaluate(() => {
+            const fixture = window["__notificationsFixture"];
+            if (!fixture) {
+              throw new Error("Native notification fixture is not installed");
+            }
+            fixture.publish({
+              supported: false,
+              permission: "granted",
+              error: "Update this Gateway to use native notification preferences.",
+            });
+          });
+          await section
+            .getByText("Update this Gateway to use native notification preferences.", {
+              exact: true,
+            })
+            .waitFor();
+          expect(await section.getByRole("button").count()).toBe(0);
+          expect(
+            await page.getByRole("heading", { name: "This browser or app", exact: true }).count(),
+          ).toBe(0);
+          if (captureUiProofEnabled) {
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(uiProofArtifactDir, `08-native-${transport}-gateway-unavailable.png`),
+            });
+          }
+          expect(webPushModules).toEqual([]);
+          expect(await gateway.getRequests("push.web.subscribe")).toEqual([]);
+          expect(await gateway.getRequests("push.web.vapidPublicKey")).toEqual([]);
+        },
+      );
+    },
+  );
+});
 
 suite.define(() => {
   it("renders every accepted branch of a transform input schema", async () => {

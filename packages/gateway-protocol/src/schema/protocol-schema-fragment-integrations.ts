@@ -5,6 +5,13 @@ import * as uiCommand from "./ui-command.js";
 export const IntegrationProtocolSchemas = {
   PushTestParams: push.PushTestParamsSchema,
   PushTestResult: push.PushTestResultSchema,
+  NotificationsSubscribeParams: push.NotificationsSubscribeParamsSchema,
+  NotificationsUnsubscribeParams: push.NotificationsUnsubscribeParamsSchema,
+  NotificationsPreferencesGetParams: push.NotificationsPreferencesGetParamsSchema,
+  NotificationsPreferencesSetParams: push.NotificationsPreferencesSetParamsSchema,
+  NotificationsTestParams: push.NotificationsTestParamsSchema,
+  NativeNotificationPreferences: push.NativeNotificationPreferencesSchema,
+  NativeNotificationMessage: push.NativeNotificationMessageSchema,
   UiSplitCommand: uiCommand.UiSplitCommandSchema,
   UiClosePaneCommand: uiCommand.UiClosePaneCommandSchema,
   UiFocusCommand: uiCommand.UiFocusCommandSchema,

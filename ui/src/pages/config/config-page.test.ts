@@ -326,7 +326,7 @@ describe("ConfigPage synced preference provenance", () => {
       },
       runtimeConfig,
       theme: { refresh: vi.fn() },
-      webPush: { snapshot: {} },
+      notifications: { snapshot: {} },
     } as unknown as ApplicationContext;
     const state = page as unknown as {
       context: ApplicationContext;

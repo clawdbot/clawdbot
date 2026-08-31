@@ -1,117 +1,116 @@
-export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
+import type {
+  NativeNotificationsRuntime,
+  NativeNotificationsSnapshot,
+} from "./native-notifications.runtime.ts";
+import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+import type { NotificationsCapability } from "./notifications.ts";
 
-export type NativeNotificationTestOutcome =
-  | { state: "pending" }
-  | { state: "sent" }
-  | { state: "error"; message: string };
+export type {
+  NativeNotificationsPermission,
+  NativeNotificationsSnapshot,
+} from "./native-notifications.runtime.ts";
+export const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
+export const NATIVE_BRIDGE_UPDATE_MESSAGE =
+  "Update the OpenClaw app and Gateway, then reopen Notifications to manage native notifications.";
 
-type NativeNotificationsSnapshot = {
-  permission: NativeNotificationsPermission | "unknown";
-  test: NativeNotificationTestOutcome | null;
+type NativeNotificationsPoster = {
+  postMessage: Parameters<
+    typeof import("./native-notifications.runtime.ts").createNativeNotificationsRuntime
+  >[0]["post"];
 };
-
-type NativeNotificationsMessage =
-  | { type: "status" }
-  | { type: "request-permission" }
-  | { type: "send-test" };
-
-type WebKitNotificationsMessageHandler = {
-  postMessage(message: NativeNotificationsMessage): void;
-};
-
 type NativeNotificationsWindow = Window & {
   __OPENCLAW_NATIVE_NOTIFICATIONS__?: unknown;
-  webkit?: {
-    messageHandlers?: {
-      openclawNotifications?: WebKitNotificationsMessageHandler;
-    };
-  };
+  __OPENCLAW_NATIVE_NOTIFICATIONS_BRIDGE__?: NativeNotificationsPoster;
+  webkit?: { messageHandlers?: { openclawNotifications?: NativeNotificationsPoster } };
 };
 
-// Wire contract with the Mac app's dashboard bridge (DashboardWindowController+Notifications.swift).
-const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
-
-export type NativeNotificationsCapability = {
+export type NativeNotificationsCapability = NotificationsCapability & {
   readonly snapshot: NativeNotificationsSnapshot;
-  subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void): () => void;
-  requestPermission(): void;
-  sendTest(): void;
-  dispose(): void;
 };
-
-function isNativeNotificationsPermission(value: unknown): value is NativeNotificationsPermission {
-  return value === "granted" || value === "denied" || value === "notDetermined";
-}
-
-function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
-  if (typeof value !== "object" || value === null || !("permission" in value)) {
-    return null;
-  }
-  if (!isNativeNotificationsPermission(value.permission)) {
-    return null;
-  }
-  if (!("test" in value)) {
-    return { permission: value.permission, test: null };
-  }
-  const test = value.test;
-  if (test === null) {
-    return { permission: value.permission, test: null };
-  }
-  if (typeof test !== "object" || test === null || !("state" in test)) {
-    return null;
-  }
-  if (test.state === "pending" || test.state === "sent") {
-    return { permission: value.permission, test: { state: test.state } };
-  }
-  if (test.state === "error" && "message" in test && typeof test.message === "string") {
-    return { permission: value.permission, test: { state: "error", message: test.message } };
-  }
-  return null;
-}
-
-function getNativeNotificationsPoster():
-  | WebKitNotificationsMessageHandler["postMessage"]
-  | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-  const handler = (window as NativeNotificationsWindow).webkit?.messageHandlers
-    ?.openclawNotifications;
-  return handler?.postMessage.bind(handler);
-}
 
 export function createNativeNotificationsCapability(): NativeNotificationsCapability | null {
-  const postMessage = getNativeNotificationsPoster();
-  if (!postMessage) {
+  if (typeof window === "undefined") {
     return null;
   }
-
   const nativeWindow = window as NativeNotificationsWindow;
-  let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS__"]) ?? {
-    permission: "unknown" as const,
-    test: null,
+  const poster =
+    nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS_BRIDGE__"] ??
+    nativeWindow.webkit?.messageHandlers?.openclawNotifications;
+  if (
+    !poster &&
+    !isNativeWebChromeHost() &&
+    !("__TAURI__" in window) &&
+    !("__OPENCLAW_NATIVE_CONTROL_AUTH__" in window)
+  ) {
+    return null;
+  }
+  let snapshot: NativeNotificationsSnapshot = {
+    kind: "native",
+    supported: false,
+    permission: "unknown",
+    loading: Boolean(poster),
+    error: poster ? null : NATIVE_BRIDGE_UPDATE_MESSAGE,
   };
-  const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
-
+  let disposed = false;
+  let owner: NativeNotificationsRuntime | null = null;
+  const listeners = new Set<() => void>();
   const publish = (next: NativeNotificationsSnapshot) => {
+    if (disposed) {
+      return;
+    }
     snapshot = next;
     for (const listener of listeners) {
-      listener(snapshot);
+      listener();
     }
   };
-  const handleStatus = (event: Event) => {
-    const next = snapshotFrom((event as CustomEvent<unknown>).detail);
-    if (next) {
-      publish(next);
-    }
+  // Native status may arrive while its validator is loading. No action is
+  // available yet, so the latest snapshot is the complete state to hand over.
+  let initial: unknown = nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS__"];
+  const bufferStatus = (event: Event) => {
+    initial = (event as CustomEvent<unknown>).detail;
   };
-  // Permission may change in System Settings while the app is backgrounded.
-  const refreshStatus = () => postMessage({ type: "status" });
-
-  window.addEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-  window.addEventListener("focus", refreshStatus);
-  refreshStatus();
-
+  const stopBuffering = () =>
+    window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, bufferStatus);
+  if (poster) {
+    window.addEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, bufferStatus);
+  }
+  const runtime = poster
+    ? import("./native-notifications.runtime.ts")
+        .then(({ createNativeNotificationsRuntime }) => {
+          stopBuffering();
+          if (disposed) {
+            return null;
+          }
+          const post = poster.postMessage.bind(poster);
+          owner = createNativeNotificationsRuntime({
+            initial,
+            post(message) {
+              if (!disposed) {
+                post(message);
+              }
+            },
+            publish,
+          });
+          if (disposed) {
+            owner.dispose();
+            return null;
+          }
+          return owner;
+        })
+        .catch(() => {
+          stopBuffering();
+          if (!disposed) {
+            publish({
+              kind: "native",
+              supported: false,
+              permission: "unknown",
+              loading: false,
+              error: "Native notifications could not be loaded. Reload the page to try again.",
+            });
+          }
+          return null;
+        })
+    : null;
   return {
     get snapshot() {
       return snapshot;
@@ -120,19 +119,19 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    requestPermission() {
-      postMessage({ type: "request-permission" });
-    },
-    sendTest() {
-      if (snapshot.test?.state === "pending") {
-        return;
-      }
-      publish({ ...snapshot, test: { state: "pending" } });
-      postMessage({ type: "send-test" });
+    run(action) {
+      return disposed
+        ? Promise.resolve()
+        : owner
+          ? owner.run(action)
+          : runtime
+            ? runtime.then((loaded) => loaded?.run(action))
+            : Promise.resolve();
     },
     dispose() {
-      window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-      window.removeEventListener("focus", refreshStatus);
+      disposed = true;
+      stopBuffering();
+      owner?.dispose();
       listeners.clear();
     },
   };

@@ -5,6 +5,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { NotificationAction, NotificationPreferences } from "./notifications.ts";
 
 const SW_READY_TIMEOUT = 10_000;
 const VAPID_MISMATCH_MESSAGE =
@@ -18,32 +19,17 @@ type WebPushReconcileResult =
 
 export type WebPushSubscriptionState = WebPushReconcileResult["state"] | "unknown";
 
-export type WebPushPreferencesResult = {
-  durableIdentity: boolean;
-  user: WebPushNotificationPreferences;
-  device: WebPushDevicePreferences;
-  effective: WebPushNotificationPreferences & { enabled: boolean; label: string };
-};
-
-export type WebPushCapabilityAction =
-  | { kind: "enable" | "disable" | "test" }
-  | {
-      kind: "set";
-      scope: "user" | "device";
-      preferences: WebPushNotificationPreferences | WebPushDevicePreferences;
-    };
-
 export type WebPushCapabilityPatch = {
   error?: string | null;
   loading?: boolean;
   permission?: NotificationPermission | "unsupported";
   supported?: boolean;
   subscription?: WebPushSubscriptionState;
-  preferences?: WebPushPreferencesResult | null;
+  preferences?: NotificationPreferences | null;
 };
 
 export type WebPushCapabilityRuntime = {
-  run: (action: WebPushCapabilityAction) => Promise<void>;
+  run: (action: NotificationAction) => Promise<void>;
   dispose: () => void;
 };
 
@@ -348,20 +334,28 @@ async function requireExistingSubscription(): Promise<PushSubscription> {
 
 export async function getWebPushPreferences(
   client: GatewayBrowserClient,
-): Promise<WebPushPreferencesResult> {
+): Promise<NotificationPreferences> {
   const subscription = await requireExistingSubscription();
   const result = await client.request("push.web.preferences.get", {
     endpoint: subscription.endpoint,
   });
   // SAFETY: the Gateway validates and owns the closed preferences result contract.
-  return result as WebPushPreferencesResult;
+  const { durableIdentity, ...preferences } = result as Omit<
+    NotificationPreferences,
+    "canManageUserPreferences" | "devicePersistence"
+  > & { durableIdentity: boolean };
+  return {
+    ...preferences,
+    canManageUserPreferences: durableIdentity,
+    devicePersistence: "browser",
+  };
 }
 
 export async function setWebPushPreferences(
   client: GatewayBrowserClient,
   scope: "user" | "device",
   preferences: WebPushNotificationPreferences | WebPushDevicePreferences,
-): Promise<WebPushPreferencesResult> {
+): Promise<NotificationPreferences> {
   const subscription = await requireExistingSubscription();
   await client.request("push.web.preferences.set", {
     endpoint: subscription.endpoint,
@@ -373,7 +367,7 @@ export async function setWebPushPreferences(
 
 export async function runWebPushCapabilityAction(
   client: GatewayBrowserClient,
-  action: WebPushCapabilityAction,
+  action: NotificationAction,
 ): Promise<WebPushCapabilityPatch> {
   switch (action.kind) {
     case "enable":

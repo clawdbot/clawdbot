@@ -2,6 +2,8 @@ use crate::gateway_device_identity::{
     GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, CLIENT_DEVICE_FAMILY,
     CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
 };
+use crate::gateway_notifications::NotificationLease;
+use crate::gateway_notifications_document::BridgeDocument;
 #[cfg(any(target_os = "linux", test))]
 use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
@@ -25,6 +27,7 @@ use subtle::ConstantTimeEq;
 #[cfg(any(target_os = "linux", test))]
 use tauri::Url;
 use tauri::{AppHandle, Emitter, Manager, Webview};
+use tauri_plugin_notifications::NotificationsExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
 use tokio_tungstenite::{
@@ -283,6 +286,12 @@ struct SuspendResumeResponse {
 }
 
 enum GatewayRequest {
+    Notification {
+        lease: NotificationLease,
+        document: BridgeDocument,
+        method: &'static str,
+        params: Value,
+    },
     AgentsList,
     ChatSend(ChatSendParams),
     RefreshCanvasSurface {
@@ -299,6 +308,7 @@ enum GatewayRequest {
 }
 
 enum GatewayResponse {
+    Notification(Value),
     AgentsList(AgentsListResult),
     ChatSend(ChatSendAck),
     CanvasSurface(Option<String>),
@@ -424,9 +434,33 @@ struct CanvasSurfaceState {
     url: Option<String>,
 }
 
+#[derive(Default)]
+struct NotificationState {
+    // Keep the current lease and its error revision under one lock so a retired
+    // socket cannot overwrite the replacement's delivery status.
+    lease: Option<NotificationLease>,
+    error: (u64, Option<String>),
+    gateway_support: Option<(u64, bool)>,
+    document: Option<(u64, BridgeDocument)>,
+}
+
+impl NotificationState {
+    fn set_error(&mut self, message: Option<String>) -> u64 {
+        self.error = (self.error.0 + 1, message);
+        self.error.0
+    }
+
+    fn retire(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            lease.retire();
+        }
+    }
+}
+
 struct GatewayClientInner {
     config: Mutex<Option<GatewayWsConfig>>,
     config_generation: AtomicU64,
+    notifications: Mutex<NotificationState>,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
@@ -450,6 +484,7 @@ impl GatewayClient {
             inner: Arc::new(GatewayClientInner {
                 config: Mutex::new(None),
                 config_generation: AtomicU64::new(0),
+                notifications: Mutex::new(NotificationState::default()),
                 commands: Mutex::new(None),
                 agents_cache: Mutex::new(None),
                 identity: Mutex::new(None),
@@ -465,43 +500,35 @@ impl GatewayClient {
     }
 
     pub fn configure(&self, app: &AppHandle, config: GatewayWsConfig) {
-        *self
-            .inner
-            .config
-            .lock()
-            .expect("gateway config mutex poisoned") = Some(config);
-        *self
-            .inner
-            .agents_cache
-            .lock()
-            .expect("gateway agents cache mutex poisoned") = None;
-        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.set_canvas_surface_url(generation, None);
-        self.inner.reconnect_paused.store(false, Ordering::SeqCst);
-        self.set_connection_state(app, GatewayConnectionState::Down, None);
-        if let Some(commands) = self
-            .inner
-            .commands
-            .lock()
-            .expect("gateway command mutex poisoned")
-            .as_ref()
-        {
-            let _ = commands.try_send(DriverCommand::Reconfigure);
-        }
+        self.set_configuration(app, Some(config));
     }
 
     pub fn clear_configuration(&self, app: &AppHandle) {
-        *self
-            .inner
-            .config
-            .lock()
-            .expect("gateway config mutex poisoned") = None;
+        self.set_configuration(app, None);
+    }
+
+    fn set_configuration(&self, app: &AppHandle, config: Option<GatewayWsConfig>) {
+        let generation = {
+            let mut current = self
+                .inner
+                .config
+                .lock()
+                .expect("gateway config mutex poisoned");
+            let mut notifications = self
+                .inner
+                .notifications
+                .lock()
+                .expect("notification state mutex poisoned");
+            notifications.retire();
+            notifications.set_error(None);
+            *current = config;
+            self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1
+        };
         *self
             .inner
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
@@ -530,6 +557,146 @@ impl GatewayClient {
         tauri::async_runtime::spawn(async move {
             client.run_driver(app, receiver).await;
         });
+    }
+
+    pub(crate) fn notification_lease(&self) -> Option<NotificationLease> {
+        self.inner
+            .notifications
+            .lock()
+            .ok()?
+            .lease
+            .clone()
+            .filter(NotificationLease::is_active)
+    }
+
+    pub(crate) fn notification_target(&self) -> Option<(u64, tauri::Url)> {
+        let config = self.inner.config.lock().ok()?;
+        let url = tauri::Url::parse(&config.as_ref()?.ws_url).ok()?;
+        let target = crate::remote_gateway::dashboard_url(&url, None).ok()?;
+        Some((self.inner.config_generation.load(Ordering::SeqCst), target))
+    }
+
+    pub(crate) fn register_notification_document(&self, generation: u64, document: BridgeDocument) {
+        let _config = self
+            .inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned");
+        if self.inner.config_generation.load(Ordering::SeqCst) == generation
+            && document.is_current()
+        {
+            self.inner
+                .notifications
+                .lock()
+                .expect("notification state mutex poisoned")
+                .document = Some((generation, document));
+        }
+    }
+
+    pub(crate) fn notification_document(&self) -> Option<(u64, BridgeDocument)> {
+        self.inner.notifications.lock().ok()?.document.clone()
+    }
+
+    pub(crate) fn notification_error(&self) -> (u64, Option<String>) {
+        self.inner
+            .notifications
+            .lock()
+            .expect("notification state mutex poisoned")
+            .error
+            .clone()
+    }
+
+    pub(crate) fn notifications_supported(&self) -> bool {
+        self.inner
+            .notifications
+            .lock()
+            .expect("notification state mutex poisoned")
+            .gateway_support
+            .is_none_or(|(generation, supported)| {
+                generation != self.inner.config_generation.load(Ordering::SeqCst) || supported
+            })
+    }
+
+    fn record_notification_support(&self, generation: u64, supported: bool) {
+        let _config = self
+            .inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned");
+        if self.inner.config_generation.load(Ordering::SeqCst) == generation {
+            self.inner
+                .notifications
+                .lock()
+                .expect("notification state mutex poisoned")
+                .gateway_support = Some((generation, supported));
+        }
+    }
+
+    pub(crate) fn record_notification_error(
+        &self,
+        lease: &NotificationLease,
+        message: Option<String>,
+    ) -> Option<u64> {
+        let mut notifications = self
+            .inner
+            .notifications
+            .lock()
+            .expect("notification state mutex poisoned");
+        if !notifications
+            .lease
+            .as_ref()
+            .is_some_and(|current| current.is_same(lease) && lease.is_active())
+        {
+            return None;
+        }
+        Some(notifications.set_error(message))
+    }
+
+    fn retire_notifications(&self) {
+        self.inner
+            .notifications
+            .lock()
+            .expect("notification state mutex poisoned")
+            .retire();
+    }
+
+    pub(crate) async fn notification_request(
+        &self,
+        lease: NotificationLease,
+        document: BridgeDocument,
+        method: &'static str,
+        params: Value,
+    ) -> Result<Value, String> {
+        if !lease.is_active() || !document.is_current() {
+            return Err("The Gateway connection changed. Try again.".to_string());
+        }
+        let subscription_enabled = params.get("enabled").and_then(Value::as_bool);
+        let response = self
+            .request(GatewayRequest::Notification {
+                lease: lease.clone(),
+                document: document.clone(),
+                method,
+                params,
+            })
+            .await?;
+        if !lease.is_active() || !document.is_current() {
+            return Err("The Gateway connection changed. Try again.".to_string());
+        }
+        let GatewayResponse::Notification(value) = response else {
+            return Err("Gateway returned the wrong notification response.".to_string());
+        };
+        match method {
+            "notifications.subscribe" => {
+                if let Some(enabled) = subscription_enabled {
+                    lease.subscribed(enabled, value.clone());
+                }
+            }
+            "notifications.preferences.get" | "notifications.preferences.set" => {
+                lease.update_preferences(value.clone())
+            }
+            _ => {}
+        }
+        Ok(value)
     }
 
     pub fn emit_current_state(&self, webview: &Webview) -> Result<(), String> {
@@ -787,6 +954,7 @@ impl GatewayClient {
             if !driver_should_run(
                 app.get_webview_window(QUICKCHAT_LABEL).is_some(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+                crate::notify::notifications_supported(),
             ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
                 self.set_connection_state(&app, GatewayConnectionState::Down, None);
@@ -794,12 +962,17 @@ impl GatewayClient {
                 reconnect_attempt = 0;
                 continue;
             }
-            let config = self
-                .inner
-                .config
-                .lock()
-                .expect("gateway config mutex poisoned")
-                .clone();
+            let (config, generation) = {
+                let config = self
+                    .inner
+                    .config
+                    .lock()
+                    .expect("gateway config mutex poisoned");
+                (
+                    config.clone(),
+                    self.inner.config_generation.load(Ordering::SeqCst),
+                )
+            };
             let Some(config) = config else {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
                 self.set_connection_state(&app, GatewayConnectionState::Down, None);
@@ -809,10 +982,52 @@ impl GatewayClient {
             while let Ok(command) = receiver.try_recv() {
                 reject_disconnected_command(command);
             }
-            let generation = self.inner.config_generation.load(Ordering::SeqCst);
+            let notification_start = if crate::notify::notifications_supported() {
+                tauri::Url::parse(&config.ws_url)
+                    .map_err(|_| "Could not resolve the notification Gateway route.".to_string())
+                    .and_then(|url| crate::remote_gateway::dashboard_url(&url, None))
+                    .and_then(|target| NotificationLease::start(&app, target))
+                    .map(Some)
+            } else {
+                Ok(None)
+            };
+            let (notification_lease, setup_error) = match notification_start {
+                Ok(lease) => (lease, None),
+                Err(error) => (None, Some(error)),
+            };
+            {
+                let _config = self
+                    .inner
+                    .config
+                    .lock()
+                    .expect("gateway config mutex poisoned");
+                if self.inner.config_generation.load(Ordering::SeqCst) != generation {
+                    if let Some(lease) = notification_lease {
+                        lease.retire();
+                    }
+                    continue;
+                }
+                let mut notifications = self
+                    .inner
+                    .notifications
+                    .lock()
+                    .expect("notification state mutex poisoned");
+                notifications.lease = notification_lease.clone();
+                if let Some(message) = setup_error {
+                    eprintln!("{message}");
+                    notifications.set_error(Some(message));
+                }
+            }
             let connection_result = self
-                .connect_and_serve(&app, &config, generation, &mut receiver)
+                .connect_and_serve(
+                    &app,
+                    &config,
+                    generation,
+                    notification_lease.as_ref(),
+                    &mut receiver,
+                )
                 .await;
+            self.retire_notifications();
             let reached_hello = self.is_connected();
             let failure = connection_result.as_ref().err();
             let disconnected_state = failure
@@ -864,6 +1079,7 @@ impl GatewayClient {
             if !driver_should_run(
                 app.get_webview_window(QUICKCHAT_LABEL).is_some(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+                crate::notify::notifications_supported(),
             ) {
                 continue;
             }
@@ -884,6 +1100,7 @@ impl GatewayClient {
         app: &AppHandle,
         config: &GatewayWsConfig,
         generation: u64,
+        notification_lease: Option<&NotificationLease>,
         receiver: &mut mpsc::Receiver<DriverCommand>,
     ) -> Result<(), RequestFailure> {
         let (identity, auth) = self.identity_and_auth(app, config)?;
@@ -908,6 +1125,18 @@ impl GatewayClient {
         let config_changed = AtomicBool::new(false);
         let dispatch = |frame: &Value| {
             dispatch_chat_event(app, frame);
+            if let Some(lease) = notification_lease {
+                lease.dispatch(frame);
+                if frame.get("type").and_then(Value::as_str) == Some("event")
+                    && frame.get("event").and_then(Value::as_str) == Some("users.prefs.changed")
+                    && lease.is_active()
+                    && self.inner.config_generation.load(Ordering::SeqCst) == generation
+                {
+                    // The Gateway targets this profile; read fresh preferences
+                    // through the current lease instead of using event payloads.
+                    crate::gateway_notifications_bridge::refresh_status(app);
+                }
+            }
             if frame.get("type").and_then(Value::as_str) == Some("event")
                 && frame.get("event").and_then(Value::as_str) == Some("config.changed")
             {
@@ -929,6 +1158,7 @@ impl GatewayClient {
             };
         drop(auth);
         let hello = validate_hello(hello).map_err(RequestFailure::transport)?;
+        self.record_notification_support(generation, hello.notifications_available);
         if let Some(device_token) = hello.device_token.as_deref() {
             self.persist_device_token(&config.ws_url, device_token)?;
         }
@@ -937,6 +1167,53 @@ impl GatewayClient {
             gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
         );
 
+        if let Some(lease) = notification_lease {
+            if hello.notifications_available {
+                let enabled = match app.notifications().permission_state().await {
+                    Ok(permission) => matches!(
+                        permission,
+                        tauri_plugin_notifications::PermissionState::Granted
+                    ),
+                    Err(error) => {
+                        lease.report_error(&format!(
+                            "Could not read notification permission: {error}"
+                        ));
+                        false
+                    }
+                };
+                if !lease.is_active()
+                    || self.inner.config_generation.load(Ordering::SeqCst) != generation
+                {
+                    return Ok(());
+                }
+                match request_on_socket(
+                    &mut socket,
+                    "notifications.subscribe",
+                    json!({ "enabled": enabled }),
+                    REQUEST_TIMEOUT,
+                    &dispatch,
+                )
+                .await
+                {
+                    Ok(preferences) => {
+                        if !lease.is_active() {
+                            return Ok(());
+                        }
+                        lease.subscribed(enabled, preferences);
+                    }
+                    Err(failure) if failure.disconnect => return Err(failure),
+                    Err(failure) => {
+                        // A rejected method does not retire the physical socket.
+                        // Keep its listener so Settings can retry registration.
+                        lease.report_error(&failure.message);
+                    }
+                }
+            } else {
+                // Notification capability is additive; older Gateways still own working Quick Chat.
+                lease.report_error("Update the Gateway to use native notification preferences.");
+                lease.retire();
+            }
+        }
         let agents = request_agents_list(&mut socket, REQUEST_TIMEOUT, &dispatch).await?;
         let accent = request_gateway_accent(&mut socket, &dispatch).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
@@ -949,9 +1226,12 @@ impl GatewayClient {
 
         loop {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
+                || (hello.notifications_available
+                    && notification_lease.is_some_and(|lease| !lease.is_active()))
                 || !driver_should_run(
                     app.get_webview_window(QUICKCHAT_LABEL).is_some(),
                     self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+                    crate::notify::notifications_supported(),
                 )
             {
                 return Ok(());
@@ -1170,6 +1450,7 @@ impl GatewayClient {
             return;
         }
         self.emit_connection_state(app, state, notice);
+        crate::gateway_notifications_bridge::refresh_status(app);
     }
 
     fn emit_connection_state(
@@ -1220,10 +1501,12 @@ fn reject_disconnected_command(command: DriverCommand) {
     }
 }
 
-fn driver_should_run(window_exists: bool, sleep_active: bool) -> bool {
-    // Sleep cycles temporarily activate the driver; the companion-wide connection lifetime
-    // remains owned by Quick Chat outside that narrow window.
-    window_exists || sleep_active
+fn driver_should_run(
+    window_exists: bool,
+    sleep_active: bool,
+    notifications_available: bool,
+) -> bool {
+    window_exists || sleep_active || notifications_available
 }
 
 fn routing_target(scope: &str, selected_agent_id: &str, main_key: &str) -> ChatRoutingTarget {
@@ -1464,6 +1747,27 @@ where
 {
     let budget = budget.unwrap_or(REQUEST_TIMEOUT);
     match request {
+        GatewayRequest::Notification {
+            lease,
+            document,
+            method,
+            params,
+        } => {
+            if !lease.is_active() || !document.is_current() {
+                return Err(RequestFailure::method_with_details(
+                    "The Gateway connection changed. Try again.",
+                    None,
+                ));
+            }
+            let result = request_on_socket(socket, method, params, budget, dispatch).await?;
+            if !lease.is_active() || !document.is_current() {
+                return Err(RequestFailure::method_with_details(
+                    "The Gateway connection changed. Try again.",
+                    None,
+                ));
+            }
+            Ok(GatewayResponse::Notification(result))
+        }
         GatewayRequest::AgentsList => request_agents_list(socket, budget, dispatch)
             .await
             .map(GatewayResponse::AgentsList),
@@ -1601,6 +1905,7 @@ struct ValidatedHello {
     device_token: Option<String>,
     tick_watch_timeout: Duration,
     canvas_surface_url: Option<String>,
+    notifications_available: bool,
 }
 
 impl ValidatedHello {
@@ -1608,8 +1913,10 @@ impl ValidatedHello {
         device_token: Option<String>,
         tick_watch_timeout: Duration,
         canvas_surface_url: Option<String>,
+        notifications_available: bool,
     ) -> Self {
         Self {
+            notifications_available,
             device_token,
             tick_watch_timeout,
             canvas_surface_url,
@@ -1684,6 +1991,11 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         issued_device_auth,
         Duration::from_millis(tick_interval_ms).saturating_mul(2),
         canvas_surface_url,
+        hello
+            .features
+            .methods
+            .iter()
+            .any(|method| method == "notifications.subscribe"),
     ))
 }
 
@@ -1829,6 +2141,33 @@ fn dispatch_chat_event<R: tauri::Runtime>(app: &AppHandle<R>, frame: &Value) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn notification_capability_follows_the_current_gateway_hello() {
+        let client = GatewayClient::new();
+        let old_hello = validate_hello(json!({
+            "type": "hello-ok", "protocol": MAX_PROTOCOL_VERSION,
+            "features": {"methods": ["agents.list", "chat.send"]}, "auth": {}
+        }))
+        .unwrap();
+        client.record_notification_support(0, old_hello.notifications_available);
+        assert!(!client.notifications_supported());
+        client
+            .inner
+            .config_generation
+            .fetch_add(1, Ordering::SeqCst);
+        client.record_notification_support(0, false);
+        assert!(
+            client.notifications_supported(),
+            "an old hello must not disable a replacement Gateway"
+        );
+        let current_hello = validate_hello(json!({
+            "type": "hello-ok", "protocol": MAX_PROTOCOL_VERSION,
+            "features": {"methods": ["agents.list", "chat.send", "notifications.subscribe"]}, "auth": {}
+        })).unwrap();
+        client.record_notification_support(1, current_hello.notifications_available);
+        assert!(client.notifications_supported());
+    }
+
     #[cfg(unix)]
     mod dashboard_handoff {
         use super::*;
@@ -1972,12 +2311,13 @@ esac
         let client = GatewayClient::new();
         let sleep_active =
             |client: &GatewayClient| client.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0;
-        assert!(!driver_should_run(false, false));
-        assert!(driver_should_run(true, false));
+        assert!(!driver_should_run(false, false, false));
+        assert!(driver_should_run(true, false, false));
+        assert!(driver_should_run(false, false, true));
         client.begin_sleep_cycle();
-        assert!(driver_should_run(false, sleep_active(&client)));
+        assert!(driver_should_run(false, sleep_active(&client), false));
         client.end_sleep_cycle();
-        assert!(!driver_should_run(false, sleep_active(&client)));
+        assert!(!driver_should_run(false, sleep_active(&client), false));
     }
 
     #[test]
@@ -1988,12 +2328,12 @@ esac
         client.begin_sleep_cycle(); // cycle 1 sleeps
         client.begin_sleep_cycle(); // cycle 2 sleeps before cycle 1's wake task ends
         client.end_sleep_cycle(); // cycle 1's wake ends late
-        assert!(driver_should_run(false, sleep_active(&client)));
+        assert!(driver_should_run(false, sleep_active(&client), false));
         client.end_sleep_cycle();
-        assert!(!driver_should_run(false, sleep_active(&client)));
+        assert!(!driver_should_run(false, sleep_active(&client), false));
         // An unbalanced extra end saturates at zero instead of wrapping.
         client.end_sleep_cycle();
-        assert!(!driver_should_run(false, sleep_active(&client)));
+        assert!(!driver_should_run(false, sleep_active(&client), false));
     }
 
     #[tokio::test]

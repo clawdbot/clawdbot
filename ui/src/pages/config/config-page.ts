@@ -430,12 +430,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
-      () => this.context?.nativeNotifications ?? undefined,
-      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.webPush,
-      (webPush, notify) => webPush.subscribe(notify),
+      () => this.context?.notifications,
+      (notifications, notify) => notifications.subscribe(notify),
     )
     .watch(
       () => this.context?.theme,
@@ -1352,18 +1348,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       excludeSections,
       includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
       settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
-      nativeNotifications: this.context.nativeNotifications?.snapshot,
-      onNativeNotificationsRequestPermission: () =>
-        this.context.nativeNotifications?.requestPermission(),
-      onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
-      webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (preferences) =>
-        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
-      onWebPushSetDevicePreferences: (preferences) =>
-        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
+      notifications: this.context.notifications.snapshot,
+      onNotificationAction: (action) => void this.context.notifications.run(action),
     };
     if (this.pageId === "mcp") {
       return renderMcp({

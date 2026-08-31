@@ -26,6 +26,7 @@ import {
 } from "../../infra/push-apns.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
+  hasValidWebPushQuietHoursTimeZone,
   normalizeWebPushDevicePreferences,
   normalizeWebPushNotificationPreferences,
   resolveEffectiveWebPushPreferences,
@@ -44,21 +45,6 @@ import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function hasValidWebPushQuietHoursTimeZone(preferences: {
-  quietHours?: { timeZone: string };
-}): boolean {
-  const timeZone = preferences.quietHours?.timeZone;
-  if (!timeZone) {
-    return true;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function authorizeWebPushSubscription(
   endpoint: string,

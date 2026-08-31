@@ -491,6 +491,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               session,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
               runtimeOwnsTranscript: replyDispatchResult?.assistantTranscript !== undefined,
+              agentRunCompleted:
+                runtimeOutcome?.reason === "completed" && !replyDispatch.isFinalReplySuppressed()
+                  ? true
+                  : undefined,
               state: runtimeCancelled ? "aborted" : "final",
               stopReason: runtimeOutcome?.stopReason,
             });

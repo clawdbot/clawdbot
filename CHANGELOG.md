@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - **Session memory:** capture the departing conversation before manual, daily, or idle resets close its transcript window, preserving recent messages and their trust provenance in memory artifacts.
+- **Desktop notifications:** share Gateway notification categories and account preferences across the browser, macOS, and Tauri apps, with explicit OS permission, per-device controls, and notification cleanup when approvals resolve or connections change. Thanks @roboclaw-bot for the original browser notification work.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
@@ -79,6 +80,7 @@ Docs: https://docs.openclaw.ai
 - **Device workers:** preserve offline-runner classification and reconnect guidance when desktop preparation detects a disconnected device, without treating the disconnect as a model failure.
 - **Control UI global sessions:** preserve the selected agent's session in the composer so usage, goals, progress, and thinking options survive agent switches without reusing another agent's stale row.
 - **Image analysis startup:** prepare selected model providers and keep configuration reads independent of full runtime loading, avoiding unrelated discovery and redundant model resolution while preserving credentials and runtime cleanup.
+- **Notification delivery:** distinguish completed agent runs from other chat-final events, preserve effective approval authority across device and profile scopes, and show recovery guidance when browser notification support fails to load.
 - **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
 - **Control UI media playback:** restore inline audio and video rendition loading so readiness checks reach the Gateway instead of silently falling back to download cards. (#132832)
 - **Gateway cancellation:** route the first `chat.abort` directly to its cancellation handler without loading unrelated chat history and send workflows.

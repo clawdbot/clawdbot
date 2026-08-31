@@ -91,10 +91,17 @@ enum PermissionManager {
         }
     }
 
-    private static func ensureNotifications(interactive: Bool) async -> Bool {
-        guard self.notificationCenterAvailable else { return false }
+    @MainActor
+    static func ensureNotifications(
+        interactive: Bool,
+        isCurrent: @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard self.notificationCenterAvailable, isCurrent(), !Task.isCancelled else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
+        // The requesting document can retire while the OS reads permission.
+        // A stale request must not open a prompt or System Settings afterward.
+        guard isCurrent(), !Task.isCancelled else { return false }
         if self.isNotificationAuthorized(status: settings.authorizationStatus) {
             return true
         }

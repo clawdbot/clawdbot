@@ -79,9 +79,11 @@ describe("event Web Push classification", () => {
     preparedWebPushSendMock.mockResolvedValue([]);
   });
 
-  it("sends only final chat events as agent completion", async () => {
+  it("requires the completion owner's fact, not a final chat payload", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
-    delivery.handleEvent("chat", { state: "final", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1", agentRunCompleted: true });
+    expect(prepareWebPushNotificationSenderMock).not.toHaveBeenCalled();
+    delivery.handleEvent("chat", { state: "final", runId: "run-1" }, { agentRunCompleted: true });
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -90,7 +92,7 @@ describe("event Web Push classification", () => {
     );
 
     preparedWebPushSendMock.mockClear();
-    delivery.handleEvent("chat", { state: "delta", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "delta", runId: "run-1" }, { agentRunCompleted: true });
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
@@ -169,11 +171,11 @@ describe("event Web Push classification", () => {
         },
       ]);
 
-      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent("chat", {
-        state: "final",
-        runId: "run-1",
-        agentId,
-      });
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
+        "chat",
+        { state: "final", runId: "run-1", agentId },
+        { agentRunCompleted: true },
+      );
 
       await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
       expect(preparedWebPushSendMock).toHaveBeenCalledWith(
@@ -227,7 +229,7 @@ describe("event Web Push classification", () => {
     const getRuntimeConfig = vi.fn(() => ({}));
     const delivery = createEventWebPushDelivery({ getRuntimeConfig });
 
-    delivery.handleEvent("chat", { state: "final", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1" }, { agentRunCompleted: true });
 
     await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
@@ -243,7 +245,7 @@ describe("event Web Push classification", () => {
     listBoundWebPushSubscriptionsMock.mockReturnValue([]);
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
-    delivery.handleEvent("chat", { state: "final", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1" }, { agentRunCompleted: true });
 
     await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
     expect(prepareWebPushNotificationSenderMock).not.toHaveBeenCalled();
@@ -266,7 +268,7 @@ describe("event Web Push classification", () => {
     });
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
-    delivery.handleEvent("chat", { state: "final", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1" }, { agentRunCompleted: true });
 
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(order).toEqual(["authority", "send", "next-microtask"]);

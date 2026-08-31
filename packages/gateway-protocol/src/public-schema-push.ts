@@ -3,6 +3,13 @@
 export {
   PushTestParamsSchema,
   PushTestResultSchema,
+  NotificationsSubscribeParamsSchema,
+  NotificationsUnsubscribeParamsSchema,
+  NotificationsPreferencesGetParamsSchema,
+  NotificationsPreferencesSetParamsSchema,
+  NotificationsTestParamsSchema,
+  NativeNotificationPreferencesSchema,
+  NativeNotificationMessageSchema,
   WebPushPreferencesGetParamsSchema,
   WebPushPreferencesSetParamsSchema,
   WebPushSubscribeParamsSchema,

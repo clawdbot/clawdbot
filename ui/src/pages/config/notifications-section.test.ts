@@ -26,8 +26,14 @@ describe("native notification test outcome", () => {
     render(
       renderNotificationsSection({
         connected: true,
-        nativeNotifications: { permission: "granted", test: { state: "pending" } },
-        onNativeNotificationsSendTest: onSend,
+        notifications: {
+          kind: "native",
+          supported: true,
+          loading: false,
+          permission: "granted",
+          test: { state: "pending" },
+        },
+        onNotificationAction: onSend,
       }),
       container,
     );
@@ -45,7 +51,10 @@ describe("native notification test outcome", () => {
     render(
       renderNotificationsSection({
         connected: true,
-        nativeNotifications: {
+        notifications: {
+          kind: "native",
+          supported: true,
+          loading: false,
           permission: "granted",
           test: { state: "error", message: "Open System Settings and try again." },
         },
@@ -63,13 +72,19 @@ describe("native notification test outcome", () => {
     render(
       renderNotificationsSection({
         connected: true,
-        nativeNotifications: { permission: "granted", test: { state: "sent" } },
+        notifications: {
+          kind: "native",
+          supported: true,
+          loading: false,
+          permission: "granted",
+          test: { state: "sent" },
+        },
       }),
       container,
     );
 
     expect(container.textContent).toContain("Granted");
-    expect(container.textContent).toContain("Test notification queued");
+    expect(container.textContent).toContain("Test notification requested");
   });
 });
 
@@ -80,13 +95,15 @@ describe("Web Push preference saves", () => {
     render(
       renderNotificationsSection({
         connected: true,
-        webPush: {
+        notifications: {
+          kind: "web",
           supported: true,
           permission: "granted",
           subscription: "registered",
           loading: true,
           preferences: {
-            durableIdentity: true,
+            canManageUserPreferences: true,
+            devicePersistence: "browser",
             user: userPreferences,
             device: { enabled: true, label: "phone" },
             effective: { ...userPreferences, enabled: true, label: "phone" },

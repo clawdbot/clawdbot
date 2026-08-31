@@ -137,6 +137,65 @@ export const WebPushPreferencesSetParamsSchema = Type.Union([
   }),
 ]);
 
+/** Native notification capability is bound to the authenticated live connection. */
+export const NotificationsSubscribeParamsSchema = closedObject({ enabled: Type.Boolean() });
+export const NotificationsUnsubscribeParamsSchema = closedObject({});
+export const NotificationsPreferencesGetParamsSchema = closedObject({});
+export const NotificationsTestParamsSchema = closedObject({});
+export const NotificationsPreferencesSetParamsSchema = Type.Union([
+  closedObject({
+    scope: Type.Literal("user"),
+    preferences: WebPushNotificationPreferencesSchema,
+  }),
+  closedObject({
+    scope: Type.Literal("device"),
+    preferences: WebPushDevicePreferencesSchema,
+  }),
+]);
+
+export const NativeNotificationPreferencesSchema = closedObject({
+  user: WebPushNotificationPreferencesSchema,
+  device: WebPushDevicePreferencesSchema,
+  effective: closedObject({
+    ...WebPushNotificationPreferencesSchema.properties,
+    enabled: Type.Boolean(),
+    label: Type.String({ maxLength: 80 }),
+  }),
+  canManageUserPreferences: Type.Boolean(),
+  devicePersistence: Type.Union([Type.Literal("profile"), Type.Literal("session")]),
+});
+
+const NativeNotificationIdSchema = Type.String({ minLength: 1, maxLength: 200 });
+export const NativeNotificationMessageSchema = Type.Union([
+  closedObject({
+    action: Type.Literal("show"),
+    id: NativeNotificationIdSchema,
+    category: WebPushNotificationCategorySchema,
+    title: Type.String({ minLength: 1, maxLength: 160 }),
+    body: Type.String({ maxLength: 320 }),
+    path: Type.String({
+      minLength: 1,
+      maxLength: 1024,
+      pattern: "^/(?!/)[^\\\\\\u0000-\\u001f\\u007f]*$",
+    }),
+    expiresAtMs: Type.Integer({ minimum: 0 }),
+    alert: Type.Boolean(),
+  }),
+  closedObject({ action: Type.Literal("remove"), id: NativeNotificationIdSchema }),
+]);
+
+export type NotificationsSubscribeParams = Static<typeof NotificationsSubscribeParamsSchema>;
+export type NotificationsUnsubscribeParams = Static<typeof NotificationsUnsubscribeParamsSchema>;
+export type NotificationsPreferencesGetParams = Static<
+  typeof NotificationsPreferencesGetParamsSchema
+>;
+export type NotificationsPreferencesSetParams = Static<
+  typeof NotificationsPreferencesSetParamsSchema
+>;
+export type NotificationsTestParams = Static<typeof NotificationsTestParamsSchema>;
+export type NativeNotificationPreferences = Static<typeof NativeNotificationPreferencesSchema>;
+export type NativeNotificationMessage = Static<typeof NativeNotificationMessageSchema>;
+
 /** Empty request type for fetching the Web Push VAPID public key. */
 export type WebPushVapidPublicKeyParams = Record<string, never>;
 /** Browser PushSubscription subset persisted by the gateway. */

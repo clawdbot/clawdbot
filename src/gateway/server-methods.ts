@@ -151,6 +151,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
+  notifications: () =>
+    import("./server-methods/notifications.js").then((module) => module.notificationHandlers),
   restart: () => import("./server-methods/restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./server-methods/suspend.js").then((module) => module.suspendHandlers),
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
@@ -702,17 +704,15 @@ export async function handleGatewayRequest(
     methodRegistry,
   });
   if (authorization.error) {
-    respond(false, undefined, authorization.error);
-    return;
+    return respond(false, undefined, authorization.error);
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
-    respond(
+    return respond(
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
     );
-    return;
   }
   const invokeHandler = () =>
     handler({

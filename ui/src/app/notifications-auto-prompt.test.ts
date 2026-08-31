@@ -32,23 +32,19 @@ function createContext(
   overrides: {
     supported?: boolean;
     permission?: NotificationPermission | "unsupported";
-    subscription?: AutoPromptContext["webPush"]["snapshot"]["subscription"];
+    subscription?: "unknown" | "registered" | "missing" | "vapid-mismatch";
     loading?: boolean;
     nativePermission?: NativePermission | null;
   } = {},
 ) {
   const enable = vi.fn(async () => undefined);
-  const requestPermission = vi.fn();
   const nativePermission = overrides.nativePermission ?? null;
   const context = {
-    nativeNotifications:
-      nativePermission === null
-        ? null
-        : { snapshot: { permission: nativePermission }, requestPermission },
-    webPush: {
+    notifications: {
       snapshot: {
+        kind: nativePermission === null ? "web" : "native",
         supported: overrides.supported ?? true,
-        permission: overrides.permission ?? "default",
+        permission: nativePermission ?? overrides.permission ?? "default",
         subscription: overrides.subscription ?? "unknown",
         loading: overrides.loading ?? false,
         error: null,
@@ -56,7 +52,7 @@ function createContext(
       run: enable,
     },
   } as unknown as AutoPromptContext;
-  return { context, enable, requestPermission };
+  return { context, enable };
 }
 
 describe("notification auto-prompt", () => {
@@ -121,26 +117,25 @@ describe("notification auto-prompt", () => {
     expect(storage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it("prefers the native permission flow when permission is not determined", () => {
-    const { context, enable, requestPermission } = createContext({
+  it("leaves native permission requests to the explicit Settings action", () => {
+    const { context, enable } = createContext({
       nativePermission: "notDetermined",
     });
 
     autoPromptNotificationsOnSend(context);
 
-    expect(requestPermission).toHaveBeenCalledOnce();
+    expect(browserRequestPermission).not.toHaveBeenCalled();
     expect(enable).not.toHaveBeenCalled();
-    expect(storage.getItem(STORAGE_KEY)).toBe("1");
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it.each(["denied", "unknown"] as const)(
     "does not request native permission when it is %s",
     (nativePermission) => {
-      const { context, enable, requestPermission } = createContext({ nativePermission });
+      const { context, enable } = createContext({ nativePermission });
 
       autoPromptNotificationsOnSend(context);
 
-      expect(requestPermission).not.toHaveBeenCalled();
       expect(enable).not.toHaveBeenCalled();
       expect(storage.getItem(STORAGE_KEY)).toBeNull();
     },
@@ -153,12 +148,9 @@ describe("notification auto-prompt", () => {
         throw new Error("opaque origin");
       },
     });
-    const { context, enable, requestPermission } = createContext({
-      nativePermission: "notDetermined",
-    });
+    const { context, enable } = createContext();
 
     expect(() => autoPromptNotificationsOnSend(context)).not.toThrow();
-    expect(requestPermission).not.toHaveBeenCalled();
     expect(enable).not.toHaveBeenCalled();
   });
 });

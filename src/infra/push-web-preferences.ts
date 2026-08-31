@@ -54,6 +54,21 @@ const CATEGORY_TO_KEY: Record<WebPushNotificationCategory, CategoryKey> = {
   "background-task-failed": "backgroundTaskFailed",
 };
 
+export function hasValidWebPushQuietHoursTimeZone(preferences: {
+  quietHours?: { timeZone: string };
+}): boolean {
+  const timeZone = preferences.quietHours?.timeZone;
+  if (!timeZone) {
+    return true;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function detailLevel(value: unknown): WebPushDetailLevel | undefined {
   return value === "private" || value === "identified" || value === "detailed" ? value : undefined;
 }
@@ -92,9 +107,7 @@ function normalizeQuietHours(value: unknown) {
   ) {
     return undefined;
   }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
-  } catch {
+  if (!hasValidWebPushQuietHoursTimeZone({ quietHours: { timeZone } })) {
     return undefined;
   }
   return {

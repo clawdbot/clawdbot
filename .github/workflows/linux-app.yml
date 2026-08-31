@@ -146,3 +146,41 @@ jobs:
         # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
+
+  test-windows:
+    name: Test Windows companion
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/linux/src-tauri/target
+          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-app-${{ runner.os }}-
+
+      - name: Test Windows companion
+        working-directory: apps/linux/src-tauri
+        # Link and run the native notification backend without release signing or publication.
+        run: cargo +stable test --locked --all-targets

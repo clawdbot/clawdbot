@@ -52,7 +52,7 @@ import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
-import { createNativeNotificationsCapability } from "./native-notifications.ts";
+import { createNotificationsCapability } from "./notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
@@ -80,7 +80,6 @@ import {
   resolveTypefaces,
   syncTypefaceStylesheets,
 } from "./typography.ts";
-import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {
@@ -461,8 +460,7 @@ export function bootstrapApplication(
       isBrowserPanelAvailable(gateway.snapshot) &&
       document.querySelector("openclaw-app-shell")?.isConnected === true,
   });
-  const nativeNotifications = createNativeNotificationsCapability();
-  const webPush = createWebPushCapability(gateway);
+  const notifications = createNotificationsCapability(gateway);
   const skillWorkshopRevisionAdmissions = createSkillWorkshopRevisionAdmissions();
   const initialUserMessage = createInitialUserMessageHandoff();
   const placementStartup = createApplicationPlacementStartup({
@@ -599,8 +597,7 @@ export function bootstrapApplication(
     navigation,
     theme,
     nativeChatDrafts,
-    nativeNotifications,
-    webPush,
+    notifications,
     skillWorkshopRevisionAdmissions,
     initialUserMessage,
     chatAttachmentHandoff,
@@ -720,8 +717,7 @@ export function bootstrapApplication(
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
-      nativeNotifications?.dispose();
-      webPush.dispose();
+      notifications.dispose();
       skillWorkshopRevisionAdmissions.dispose();
       initialUserMessage.clear();
       chatAttachmentHandoff.dispose();

@@ -189,6 +189,18 @@ export const validateNodePresenceActivityPayload = compile(S.NodePresenceActivit
 export const validateNodePendingDrainParams = compile(S.NodePendingDrainParamsSchema);
 export const validateNodePendingEnqueueParams = compile(S.NodePendingEnqueueParamsSchema);
 export const validatePushTestParams = compile(S.PushTestParamsSchema);
+export const validateNotificationsSubscribeParams = compile(S.NotificationsSubscribeParamsSchema);
+export const validateNotificationsUnsubscribeParams = compile(
+  S.NotificationsUnsubscribeParamsSchema,
+);
+export const validateNotificationsPreferencesGetParams = compile(
+  S.NotificationsPreferencesGetParamsSchema,
+);
+export const validateNotificationsPreferencesSetParams = compile(
+  S.NotificationsPreferencesSetParamsSchema,
+);
+export const validateNotificationsTestParams = compile(S.NotificationsTestParamsSchema);
+export const validateNativeNotificationMessage = compile(S.NativeNotificationMessageSchema);
 export const validateWebPushVapidPublicKeyParams = compile<WebPushVapidPublicKeyParams>(
   S.WebPushVapidPublicKeyParamsSchema,
 );

@@ -1,21 +1,13 @@
 import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type {
-  WebPushDevicePreferences,
-  WebPushNotificationPreferences,
-} from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
+import type { NotificationAction, NotificationsSnapshot } from "../../app/notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
-import type { WebPushSnapshot } from "../../app/web-push.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
@@ -203,16 +195,6 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
-  onNativeNotificationsRequestPermission?: () => void;
-  onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushSnapshot;
-  onWebPushSubscribe?: () => void;
-  onWebPushUnsubscribe?: () => void;
-  onWebPushTest?: () => void;
-  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
-  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
+  notifications?: NotificationsSnapshot;
+  onNotificationAction?: (action: NotificationAction) => void;
 };

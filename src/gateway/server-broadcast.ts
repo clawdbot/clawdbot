@@ -48,6 +48,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "board.command": [READ_SCOPE],
   "progressCard.changed": [READ_SCOPE],
   "ui.command": [READ_SCOPE],
+  notification: [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
   cron: [READ_SCOPE],
