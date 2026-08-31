@@ -16,6 +16,14 @@ import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
  * Fall back to the catalog entry that installed the plugin when it is no longer
  * registered, and finally to the channel id, which every bundled channel also
  * registers as its plugin id.
+ *
+ * Scope: this covers the commands an operator drives by channel name. Doctor's
+ * per-plugin ingress lane still keys on the channel id
+ * (`state-migrations.plugin-doctor-context.ts:229` and `:244`) and is deliberately
+ * left alone here, because its `channelId` is the selector plugins choose a lane
+ * with across a published SDK contract (`plugins/doctor-contract-module.ts:57`,
+ * re-exported by `plugin-sdk/runtime-doctor-migrations.ts`), so re-keying it is a
+ * contract change rather than a call-site fix.
  */
 export function resolveChannelIngressQueueOwnerId(params: {
   channelId: string;

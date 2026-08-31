@@ -122,7 +122,7 @@ describe("channel registry helpers", () => {
       createTestRegistry([
         {
           pluginId: "@tencent-weixin/openclaw-weixin",
-          plugin: { id: "openclaw-weixin", meta: { aliases: [] } },
+          plugin: { id: "openclaw-weixin", meta: { aliases: ["wechat"] } },
           source: "test",
         },
       ]),
@@ -131,6 +131,8 @@ describe("channel registry helpers", () => {
     expect(getRegisteredChannelOwnerPluginId("openclaw-weixin")).toBe(
       "@tencent-weixin/openclaw-weixin",
     );
+    // Operators type what the docs call the channel, so an alias has to resolve too.
+    expect(getRegisteredChannelOwnerPluginId("wechat")).toBe("@tencent-weixin/openclaw-weixin");
     expect(getRegisteredChannelOwnerPluginId("not-registered")).toBeNull();
   });
 });

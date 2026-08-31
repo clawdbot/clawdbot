@@ -31,6 +31,7 @@ const registryRefreshMocks = vi.hoisted(() => ({
 
 const ingressMocks = vi.hoisted(() => ({
   purgeFailure: null as Error | null,
+  onPurge: null as (() => void) | null,
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -81,6 +82,7 @@ vi.mock("../channels/message/ingress-queue.js", async () => {
     purgeChannelIngressQueueAccount: (
       params: Parameters<typeof actual.purgeChannelIngressQueueAccount>[0],
     ) => {
+      ingressMocks.onPurge?.();
       if (ingressMocks.purgeFailure) {
         throw ingressMocks.purgeFailure;
       }
@@ -142,6 +144,7 @@ describe("channelsRemoveCommand", () => {
     wizardMocks.confirm.mockClear();
     wizardMocks.confirm.mockResolvedValue(true);
     ingressMocks.purgeFailure = null;
+    ingressMocks.onPurge = null;
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -458,6 +461,9 @@ describe("channelsRemoveCommand", () => {
     configMocks.writeConfigFile.mockImplementationOnce(async () => {
       callOrder.push("persist");
     });
+    ingressMocks.onPurge = () => {
+      callOrder.push("discard");
+    };
     runtime.log.mockImplementationOnce(() => {
       callOrder.push("output");
     });
@@ -477,7 +483,7 @@ describe("channelsRemoveCommand", () => {
     );
     // Discarding after the config write means a failed write cannot drop inbound work
     // for an account that is still configured.
-    expect(callOrder).toEqual(["persist", "output"]);
+    expect(callOrder).toEqual(["persist", "discard", "output"]);
     expect(
       purgeChannelIngressQueueAccount({
         channelId: "@vendor/external-chat-plugin",
@@ -677,5 +683,47 @@ describe("channelsRemoveCommand", () => {
     );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("reports a discard with no unanswered work without calling it lost", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "@vendor/external-chat-plugin",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "answered before removal" });
+    await queue.complete("inbound-1");
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    // Every row was settled, so the summary must not describe lost inbound work.
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Discarded 1 stored ingress event.',
+    );
   });
 });

@@ -1,9 +1,13 @@
 // Public channel registry facade for channel ids, metadata, and setup copy.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "./ids.js";
 import type { ChannelId } from "./plugins/channel-id.types.js";
 import type { ChannelMeta } from "./plugins/types.core.js";
 import {
+  findRegisteredChannelPluginEntry,
   findRegisteredChannelPluginEntryById,
   listRegisteredChannelPluginEntries,
 } from "./registry-lookup.js";
@@ -45,7 +49,14 @@ export function getRegisteredChannelPluginMeta(
  * channel id.
  */
 export function getRegisteredChannelOwnerPluginId(id: string): string | null {
-  return normalizeOptionalString(findRegisteredChannelPluginEntryById(id)?.pluginId) ?? null;
+  const key = normalizeOptionalLowercaseString(id);
+  if (!key) {
+    return null;
+  }
+  // Resolve through the alias-aware lookup, because operators type what the docs call
+  // the channel - `wechat` for `openclaw-weixin` - and an alias that fell through to the
+  // literal string would open a queue nothing owns.
+  return normalizeOptionalString(findRegisteredChannelPluginEntry(key)?.pluginId) ?? null;
 }
 
 /**

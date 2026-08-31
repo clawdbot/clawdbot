@@ -113,10 +113,10 @@ describe("channel ingress queue account purge", () => {
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "default", stateDir }),
       ).toEqual({ discarded: 0, undelivered: 0 });
-      // A second removal of the same account is a no-op rather than a repeated report.
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "work", stateDir }),
       ).toEqual({ discarded: 1, undelivered: 1 });
+      // A second removal of the same account is a no-op rather than a repeated report.
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "work", stateDir }),
       ).toEqual({ discarded: 0, undelivered: 0 });
@@ -139,6 +139,21 @@ describe("channel ingress queue account purge", () => {
       expect(await after.listPending({ limit: "all" })).toMatchObject([
         { payload: { text: "after re-adding" } },
       ]);
+    });
+  });
+
+  it("reports nothing and creates no state database when the store does not exist", async () => {
+    await withTempState(async (stateDir) => {
+      const sqlitePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await expect(fs.access(sqlitePath)).rejects.toThrow();
+
+      // Removal must not be what brings the shared store into being: a host that never
+      // queued an inbound event has nothing to discard.
+      expect(
+        purgeChannelIngressQueueAccount({ channelId: "line", accountId: "default", stateDir }),
+      ).toEqual({ discarded: 0, undelivered: 0 });
+
+      await expect(fs.access(sqlitePath)).rejects.toThrow();
     });
   });
 });
