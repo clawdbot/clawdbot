@@ -23,7 +23,9 @@ export function bindChatPageSession(
 ): void {
   const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
   if (parseCatalogSessionKey(routeKey)) {
-    if (agentId) context.agentSelection.set(agentId);
+    if (agentId) {
+      context.agentSelection.set(agentId);
+    }
     return;
   }
   const sessionKey = resolveSessionKey(routeKey, context.gateway.snapshot.hello);

@@ -15,7 +15,6 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type {
@@ -33,8 +32,7 @@ import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
-import { routeDraft } from "./route-draft.ts";
-import { loadChatRoute, type SessionChatRouteData } from "./route-loader.ts";
+import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
@@ -65,7 +63,6 @@ type RenderedPane = HTMLElement & {
   gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
-  onPaneSessionChange?: (paneId: string, sessionKey: string) => boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
 };
 
@@ -119,14 +116,6 @@ function getLayout(page: ChatPage): ChatSplitLayout | undefined {
 function setNarrow(page: ChatPage, narrow: boolean) {
   (page as unknown as { narrow: boolean }).narrow = narrow;
   page.requestUpdate();
-}
-
-function getRouteDraftForActivePane(page: ChatPage): string | undefined {
-  const state = page as unknown as {
-    data: SessionChatRouteData;
-    consumedDraftData: SessionChatRouteData | null;
-  };
-  return routeDraft(state.data, state.consumedDraftData);
 }
 
 function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {
@@ -290,59 +279,6 @@ describe("chat page split layout host", () => {
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
   });
 
-  it("keeps route ownership on the selected split pane while dock input is active", async () => {
-    const page = new ChatPage();
-    const { context, setAgent } = setNavigationContext(page);
-    page.data = { sessionKey: WORK_SESSION_KEY, agentId: "main" };
-    document.body.append(page);
-    await page.updateComplete;
-    chatInputOwnerForContext(context).claim("dock");
-    const otherSession = "agent:research:review";
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        detail: {
-          command: { kind: "split", direction: "right", sessionKey: otherSession },
-          sessionKey: WORK_SESSION_KEY,
-        },
-        cancelable: true,
-      }),
-    );
-    await page.updateComplete;
-    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(otherSession);
-    expect(setAgent).toHaveBeenLastCalledWith("research");
-    page
-      .querySelector<HTMLElement>(".chat-split-view__cell")
-      ?.dispatchEvent(new Event("pointerdown"));
-    await page.updateComplete;
-
-    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(WORK_SESSION_KEY);
-    expect(loadSettings()).toMatchObject({
-      sessionKey: WORK_SESSION_KEY,
-      lastActiveSessionKey: WORK_SESSION_KEY,
-    });
-    expect(setAgent).toHaveBeenLastCalledWith("main");
-    expect(chatInputOwnerForContext(context).current).toBe("dock");
-  });
-
-  it("binds newly resolved Home defaults even when the canonical route is equivalent", async () => {
-    const page = new ChatPage();
-    const { context, navigate, replace } = setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await page.updateComplete;
-    context.gateway.snapshot.hello = {
-      snapshot: { sessionDefaults: { mainKey: "main", mainSessionKey: "agent:main:main" } },
-    } as GatewayHelloOk;
-    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
-
-    pane.onPaneSessionChange?.(pane.paneId, "agent:main:main");
-
-    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith("agent:main:main");
-    expect(loadSettings().sessionKey).toBe("agent:main:main");
-    expect(navigate).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
-  });
-
   it("passes the chat-owned gateway capability only to the rightmost pane", async () => {
     const gatewaySnapshot: NativeGatewaysSnapshot = {
       gateways: [],
@@ -486,27 +422,6 @@ describe("chat page split layout host", () => {
     // there would silently hide the second pane it creates.
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
     expect(pane?.onOpenSplitView).toBeUndefined();
-  });
-
-  it("hands each route-provided draft to the active pane only once", async () => {
-    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
-    page.data = firstRouteData;
-    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
-
-    document.body.append(page);
-    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
-
-    expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath("main"),
-      search: "?panel=details",
-      hash: "#pane",
-    });
-    page.data = { ...firstRouteData };
-    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {

@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -25,8 +26,30 @@ import {
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([false, true])(
+    "restores sidebar tabs without opening a compact=%s presentation",
+    (compact) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const layout = openSlot({ columns: [] }, "workspace");
+      patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
+      (pane as TestChatPane & { compact: boolean }).compact = compact;
+      pane.connectedClient = null;
+
+      pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
+
+      expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("workspace");
+      expect(state.sidebarLayout.open).toBe(!compact);
+      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]?.open).toBe(true);
+    },
+  );
+
   it("hands native drafts and typing to the focused region without changing the work session", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;

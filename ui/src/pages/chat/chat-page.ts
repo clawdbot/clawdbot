@@ -438,40 +438,27 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (!trimmed) {
       return;
     }
-    const layout = this.layout;
-    if (!layout) {
-      if (zone.kind === "center") {
-        this.updateRoute(trimmed);
-        return;
-      }
-      const currentSessionKey = this.data?.sessionKey?.trim();
-      if (!currentSessionKey) {
-        return;
-      }
-      const next = insertPane(
-        this.classicLayout(currentSessionKey),
-        this.classicPaneId,
-        trimmed,
-        zone.edge,
-      );
-      this.persistLayout(next);
-      this.updateRoute(trimmed, true);
+    if (!this.layout && zone.kind === "center") {
+      this.updateRoute(trimmed);
       return;
     }
-    const pane = findPane(layout, paneId)?.pane;
-    if (!pane) {
+    // A classic edge drop starts a split; both modes then use the same layout operation.
+    const layout = this.layout ?? this.classicLayout();
+    const targetPaneId = this.layout ? paneId : this.classicPaneId;
+    const pane = findPane(layout, targetPaneId)?.pane;
+    if (!pane || (!this.layout && !pane.sessionKey)) {
       return;
     }
     if (zone.kind === "center") {
       if (pane.sessionKey === trimmed) {
         return;
       }
-      const active = setActivePane(layout, paneId);
-      this.persistLayout(setPaneSession(active, paneId, trimmed));
+      const active = setActivePane(layout, targetPaneId);
+      this.persistLayout(setPaneSession(active, targetPaneId, trimmed));
       this.updateRoute(trimmed, true);
       return;
     }
-    this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
+    this.persistLayout(insertPane(layout, targetPaneId, trimmed, zone.edge));
     this.updateRoute(trimmed, true);
   }
 

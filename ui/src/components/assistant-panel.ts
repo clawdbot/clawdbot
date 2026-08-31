@@ -397,7 +397,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                   aria-label=${t("assistantPanel.agent")}
                   .value=${home.agentId}
                   @change=${(event: Event) => {
-                    if (!(event.currentTarget instanceof HTMLSelectElement)) return;
+                    if (!(event.currentTarget instanceof HTMLSelectElement)) {
+                      return;
+                    }
                     this.pinnedAgentId = event.currentTarget.value;
                     this.persistTarget();
                   }}

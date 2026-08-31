@@ -133,63 +133,35 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
   if (renderer) {
     return renderer(props);
   }
-  if (host.devicePairSetupLoadFailed) {
-    return renderDevicePairSetupLoadFailure(host, props);
+  const failed = host.devicePairSetupLoadFailed;
+  if (!failed) {
+    host.loadDevicePairSetupRenderer();
   }
-  host.loadDevicePairSetupRenderer();
-  return renderDevicePairSetupLoading(props);
-}
-
-function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  // Loading and failure share the eager modal; a failed chunk remains dismissible and retryable.
   const title = t("devices.pairing.title");
-  const message = t("common.loading");
+  const message = t(failed ? "devices.pairing.loadFailed" : "common.loading");
   return html`<openclaw-modal-dialog
     label=${title}
     description=${message}
     @modal-cancel=${props.onClose}
   >
-    <section class="device-pair-setup" aria-busy="true">
+    <section class="device-pair-setup" aria-busy=${failed ? nothing : "true"}>
       <header class="device-pair-setup__header">
         <div>
           <h2>${title}</h2>
-          <p role="status">${message}</p>
+          <p role=${failed ? nothing : "status"}>${message}</p>
         </div>
       </header>
       <footer class="device-pair-setup__footer">
-        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
-          ${t("common.close")}
-        </button>
-      </footer>
-    </section>
-  </openclaw-modal-dialog>`;
-}
-
-// The pairing chunk failed to load while its overlay is open. Reuse the eager
-// modal chrome so the operator still gets a dialog, a reason, and a retry
-// instead of a silently empty surface.
-function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
-  const title = t("devices.pairing.title");
-  const message = t("devices.pairing.loadFailed");
-  return html`<openclaw-modal-dialog
-    label=${title}
-    description=${message}
-    @modal-cancel=${props.onClose}
-  >
-    <section class="device-pair-setup">
-      <header class="device-pair-setup__header">
-        <div>
-          <h2>${title}</h2>
-          <p>${message}</p>
-        </div>
-      </header>
-      <footer class="device-pair-setup__footer">
-        <button
-          class="btn btn--primary"
-          type="button"
-          @click=${() => host.retryDevicePairSetupRenderer()}
-        >
-          ${t("common.retry")}
-        </button>
+        ${failed
+          ? html`<button
+              class="btn btn--primary"
+              type="button"
+              @click=${() => host.retryDevicePairSetupRenderer()}
+            >
+              ${t("common.retry")}
+            </button>`
+          : nothing}
         <button class="btn btn--ghost" type="button" @click=${props.onClose}>
           ${t("common.close")}
         </button>
@@ -326,7 +298,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
-  const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -600,7 +571,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <main
         id="control-ui-main"
-        class="content ${chatLikeRoute ? "content--chat" : ""} ${custodianRoute
+        class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "custodian"
           ? "content--custodian"
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}

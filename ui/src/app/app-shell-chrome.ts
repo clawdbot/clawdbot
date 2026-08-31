@@ -137,55 +137,35 @@ export class ShellChromeOwner {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen, options);
-    window.addEventListener(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      this.handleShellNavDrawerToggle,
-      options,
-    );
-    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest, options);
-    window.addEventListener(
-      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
-      this.handleKeyboardShortcutsRequest,
-      options,
-    );
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
       signal: this.listeners.signal,
     });
     document.addEventListener("keydown", this.handleDocumentKeydownBubble, options);
-    window.addEventListener("resize", this.handleWindowResize, options);
     window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
-    window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
-    window.addEventListener(
-      "openclaw:native-toggle-sidebar",
-      this.handleNativeToggleSidebar,
-      options,
-    );
-    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch, options);
-    window.addEventListener(
-      "openclaw:native-toggle-search",
-      this.handleNativeToggleSearch,
-      options,
-    );
-    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession, options);
-    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate, options);
-    window.addEventListener(
-      TERMINAL_PANEL_TOGGLE_EVENT,
-      this.handleDeferredTerminalToggle,
-      options,
-    );
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle, options);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle, options);
-    window.addEventListener(
-      CUSTODIAN_PANEL_TOGGLE_EVENT,
-      this.handleDeferredAssistantToggle,
-      options,
-    );
-    window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle, options);
-    window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
+    for (const [type, listener] of [
+      [COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen],
+      [SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle],
+      [DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest],
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest],
+      ["resize", this.handleWindowResize],
+      [NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState],
+      ["openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar],
+      ["openclaw:native-open-search", this.handleNativeOpenSearch],
+      ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
+      ["openclaw:native-new-session", this.handleNativeNewSession],
+      ["openclaw:native-navigate", this.handleNativeNavigate],
+      [TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle],
+      [BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle],
+      [DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle],
+      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
+      [HOME_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
+      [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
+    ] as const) {
+      window.addEventListener(type, listener, options);
+    }
     this.navDrawerSwipe.connect();
     if (isMobileNavLayout()) {
       this.navDrawerSwipe.load();

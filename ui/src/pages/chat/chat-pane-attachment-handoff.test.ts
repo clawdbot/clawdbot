@@ -64,7 +64,7 @@ describe("cross-region Home composer ownership", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
   afterEach(() => {
-    for (const dispose of disposals.splice(0).reverse()) {
+    for (const dispose of disposals.splice(0).toReversed()) {
       dispose();
     }
     vi.unstubAllGlobals();
@@ -95,7 +95,9 @@ describe("cross-region Home composer ownership", () => {
       presented: () => view.presented,
       pause: () => persistence.stop(),
       resume: (restore) => {
-        if (restore) persistence.restore();
+        if (restore) {
+          persistence.restore();
+        }
         persistence.start();
       },
     });
@@ -145,9 +147,9 @@ describe("cross-region Home composer ownership", () => {
           recoveryScope: "profile-a",
           recoveryScopeReady: true,
         } as GatewayBrowserClient;
-        for (const presentation of [page, dock]) {
-          presentation.view.owner = replacement;
-          presentation.current.client = replacement;
+        for (const pane of [page, dock]) {
+          pane.view.owner = replacement;
+          pane.current.client = replacement;
         }
       }
 

@@ -331,10 +331,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this,
       this.chatMessagesBySession,
     );
-    const agentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId;
-    if (agentId) {
-      pageState.assistantAgentId = agentId;
-      pageState.agentsSelectedId = agentId;
+    const paneAgentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId;
+    if (paneAgentId) {
+      pageState.assistantAgentId = paneAgentId;
+      pageState.agentsSelectedId = paneAgentId;
     }
     if (this.compact) {
       pageState.sidebarLayout = { ...pageState.sidebarLayout, open: false };

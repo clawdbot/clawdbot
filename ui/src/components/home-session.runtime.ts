@@ -59,7 +59,7 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
     this.selectionScope = scope;
   }
 
-  private attachSelection(event: MouseEvent): void {
+  private readonly attachSelection = (event: MouseEvent): void => {
     // Capture only on the explicit action and before focus clears the selection.
     event.preventDefault();
     const selected = window.getSelection();
@@ -72,7 +72,7 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
     }
     this.selection = truncateUtf16Safe(selected.toString(), 640);
     this.includeContext = true;
-  }
+  };
 
   override render() {
     const context = { ...this.workContext, selection: this.selection || undefined };
@@ -120,7 +120,9 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
           title=${t("assistantPanel.attachSelection")}
           @mousedown=${this.attachSelection}
           @click=${(event: MouseEvent) => {
-            if (event.detail === 0) this.attachSelection(event);
+            if (event.detail === 0) {
+              this.attachSelection(event);
+            }
           }}
         >
           ${icons.messageSquare}

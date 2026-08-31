@@ -95,7 +95,7 @@ export class ChatPaneComposerHandoff {
 
   private otherRegion(scope: ComposerOwnerScope | null): ChatPaneComposerHandoff[] {
     return [...this.presentations]
-      .reverse()
+      .toReversed()
       .filter(
         (candidate) =>
           candidate.host.region() !== this.host.region() && candidate.matchesScope(scope),
