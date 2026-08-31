@@ -114,8 +114,6 @@ export async function rebuildRolledBackGitRuntime(params: {
       argv: gitCleanCheckArgs(params.gitRoot),
       cwd: params.gitRoot,
       timeoutMs: params.timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
       results: params.steps,
     });
     if (cleanCheck.exitCode !== 0) {

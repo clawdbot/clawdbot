@@ -226,8 +226,6 @@ export async function runUpdateStep(params: {
     ...params,
     cwd: params.cwd ?? process.cwd(),
     runCommand: runCommandWithTimeout,
-    stepIndex: 0,
-    totalSteps: 0,
   });
 }
 
