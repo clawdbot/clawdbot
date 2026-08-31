@@ -13,6 +13,7 @@ import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store/types.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
@@ -44,6 +45,7 @@ type CronStoreIssueKey =
   | "nonStringId"
   | "legacyScheduleString"
   | "legacyScheduleCron"
+  | "legacyScheduleKind"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
   | "legacyImageInspectionToolName"
@@ -437,6 +439,27 @@ export function normalizeStoredCronJobs(
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
       const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
+      const canonicalKind =
+        kind === "at" ||
+        kind === "every" ||
+        kind === "cron" ||
+        kind === "on-exit" ||
+        kind === "stream"
+          ? kind
+          : undefined;
+      if (canonicalKind && sched.kind !== canonicalKind) {
+        sched.kind = canonicalKind;
+        mutated = true;
+        trackIssue("legacyScheduleKind");
+      }
+      if (canonicalKind === "stream") {
+        const streamMode = normalizeOptionalLowercaseString(sched.mode);
+        if ((streamMode === "line" || streamMode === "match") && sched.mode !== streamMode) {
+          sched.mode = streamMode;
+          mutated = true;
+          trackIssue("legacyScheduleKind");
+        }
+      }
       if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
@@ -654,4 +677,57 @@ export function normalizeStoredCronJobs(
     mutated,
     removedJobs,
   };
+}
+
+export type QuarantinedCronJobRecovery = {
+  recoveredJobs: Array<Record<string, unknown>>;
+  recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+  retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+};
+
+function restoredCronJobId(job: Record<string, unknown>): string | undefined {
+  return normalizeOptionalStringifiedId(job.id) ?? normalizeOptionalStringifiedId(job.jobId);
+}
+
+/** Revalidate quarantined schedule rows for an explicit Doctor repair. */
+export function recoverValidQuarantinedCronScheduleJobs(
+  entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
+  activeJobIds: ReadonlySet<string>,
+): QuarantinedCronJobRecovery {
+  const recoveredJobs: Array<Record<string, unknown>> = [];
+  const recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const recoveredJobIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.reason !== "invalid-schedule" || !isRecord(entry.job)) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    const candidate = structuredClone(entry.job);
+    const jobId = restoredCronJobId(candidate);
+    if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    if (isRecord(entry.state)) {
+      candidate.state = structuredClone(entry.state);
+    }
+    if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+      candidate.updatedAtMs = entry.updatedAtMs;
+    }
+
+    const normalized = normalizeStoredCronJobs([candidate]);
+    if (normalized.jobs.length !== 1 || normalized.removedJobs.length !== 0) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    recoveredJobs.push(candidate);
+    recoveredEntries.push(entry);
+    if (jobId) {
+      recoveredJobIds.add(jobId);
+    }
+  }
+
+  return { recoveredJobs, recoveredEntries, retainedEntries };
 }

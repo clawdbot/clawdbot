@@ -398,16 +398,22 @@ artifact when package or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                                                                     |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                        |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live progress follow-through, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                                               |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                                |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                          |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
-| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
+| Chunk                                                           | Coverage                                                                                                                                    |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                       |
+| `package-update-openai`                                         | OpenAI package and tool-call proof, Codex on-demand install and live progress, root-managed VPS upgrades, and authenticated update restart. |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                               |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                         |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                               |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                       |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                     |
+
+The two package/update rows share the same coverage across every release profile.
+Root-managed VPS upgrade and authenticated restart checks run in the shorter
+OpenAI row to balance the workload without adding jobs or raising resource caps.
+Missing required credentials still fail the job; the diagnostic pool continues
+so independent non-live checks also report their results. Setup failures and
+cancellation do not start that pool.
 
 Expanded published-upgrade survivor and update-migration coverage runs in
 baseline-specific groups of at most three scenarios, with up to 32 targeted

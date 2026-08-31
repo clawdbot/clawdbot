@@ -2,23 +2,21 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  loadChatHistory,
-  rewindChatHistory,
-  syncSelectedSessionMessageSubscription,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
-  type ChatState,
-} from "./chat-history.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
-import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {

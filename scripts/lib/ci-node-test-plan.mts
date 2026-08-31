@@ -2388,9 +2388,14 @@ function createCompactNodeTestShardBundles(
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      // Synthesized hosted stripes need their divided parent weight. Native
-      // groups must reach the runner-specific stripe estimator during rebalance.
-      if (planned.group.shard_name !== group.shard_name) {
+      // A divided parent estimate covers only unmeasured hosted stripes. Once
+      // sampled, the child's runner-specific timing owns admission and rebalance.
+      if (
+        planned.group.shard_name !== group.shard_name &&
+        readCompactGroupTimings(options.runnerBackend === "github" ? "github" : "blacksmith")[
+          planned.group.shard_name
+        ] === undefined
+      ) {
         synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }

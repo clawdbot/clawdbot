@@ -18,8 +18,8 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
-// Resolve identity support before cancellation enters its cleanup handshake.
-// These plain-Node actors need tsx for the source helper's transitive .js imports.
+// Preload identity support before the cleanup handshake; its TypeScript graph
+// uses .js specifiers that native Node type stripping cannot resolve.
 let getFileLockProcessStartTime;
 if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
   const { tsImport } = await import("tsx/esm/api");

@@ -877,6 +877,8 @@ const releasePathPackageUpdateOpenAiLanes = [
   scheduledLane("live-codex-npm-plugin"),
   scheduledLane("codex-on-demand", { timeoutMs: 30 * 60 * 1000 }),
   scheduledLane("release-typed-onboarding"),
+  // Use the shorter package row without changing npm weights or upgrade coverage.
+  ...scheduledLaneList("root-managed-vps-upgrade", "update-restart-auth"),
 ];
 
 const releasePathPackageUpdateCoreLanes = scheduledLaneList(
@@ -888,8 +890,6 @@ const releasePathPackageUpdateCoreLanes = scheduledLaneList(
   "skill-install",
   "upgrade-survivor",
   "published-upgrade-survivor",
-  "root-managed-vps-upgrade",
-  "update-restart-auth",
   "update-run-package-self-upgrade",
 );
 

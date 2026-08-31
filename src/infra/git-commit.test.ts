@@ -6,8 +6,29 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 
 const tempDirs = createTrackedTempDirs();
+
+describe("git commit prefix matching", () => {
+  const fullCommit = "abcdef0123456789abcdef0123456789abcdef01";
+  const unrelatedCommit = "1234567890abcdef1234567890abcdef12345678";
+  const sharedPrefixCommit = "abcdef0fedcba9876543210fedcba9876543210f";
+
+  it.each([
+    ["exact equality", fullCommit, fullCommit, true],
+    ["short left prefix", "abcdef0", fullCommit, true],
+    ["short right prefix", fullCommit, "abcdef0", true],
+    ["whitespace and case normalization", "  ABCDEF0  ", fullCommit, true],
+    ["unrelated commits", fullCommit, unrelatedCommit, false],
+    ["distinct full commits sharing seven characters", fullCommit, sharedPrefixCommit, false],
+    ["short left operand", "abcdef", fullCommit, false],
+    ["short right operand", fullCommit, "abcdef", false],
+    ["whitespace-only operand", "   ", fullCommit, false],
+  ])("%s", (_name, left, right, expected) => {
+    expect(gitCommitPrefixesMatch(left, right)).toBe(expected);
+  });
+});
 
 async function makeTempDir(label: string): Promise<string> {
   return await tempDirs.make(`openclaw-${label}-`);

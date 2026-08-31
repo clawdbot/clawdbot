@@ -18,19 +18,20 @@ import {
   cloneChatAttachmentsForIndependentOwner,
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
-  commitCurrentChatHistorySnapshot,
   fetchStagedOlderHistoryPage,
   isStagedOlderHistoryPageCurrent,
-  loadChatHistory,
   loadOlderChatHistoryPage,
-  resolveChatHistoryPagination,
-  rewindChatHistory,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
   type StagedOlderHistoryPage,
-} from "./chat-history.ts";
+} from "./chat-history-request.ts";
+import {
+  commitCurrentChatHistorySnapshot,
+  resolveChatHistoryPagination,
+  type ChatHistoryResult,
+} from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,

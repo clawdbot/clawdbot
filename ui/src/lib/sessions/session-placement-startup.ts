@@ -17,7 +17,7 @@ import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-suppo
 import type { SessionPlacementTarget } from "./session-placement-recovery.ts";
 
 type SessionPlacementStartOutcome =
-  | { status: "started"; messageId: string; messageSeq?: number }
+  | { status: "started"; messageId: string }
   | { status: "cancelled" }
   | { status: "interrupted" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
@@ -472,7 +472,7 @@ export async function startSessionPlacementInitialTurn(
     return rejectBeforeDelivery("placement recovery storage is unavailable", "send-not-started");
   }
   try {
-    const sent = await client.request<{ messageSeq?: unknown }>("sessions.send", {
+    const sent = await client.request("sessions.send", {
       key: params.key,
       agentId: params.agentId,
       message: params.message,
@@ -499,13 +499,9 @@ export async function startSessionPlacementInitialTurn(
         "send-definitive-rejected",
       );
     }
-    const messageSeq = sent?.messageSeq;
     return {
       status: "started",
       messageId,
-      ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
-        ? { messageSeq }
-        : {}),
     };
   } catch (error) {
     if (!isCurrent()) {

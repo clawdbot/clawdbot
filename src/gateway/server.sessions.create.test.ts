@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
@@ -105,8 +106,6 @@ type GenerateConversationLabelWithFallback =
   (typeof import("../auto-reply/reply/conversation-label-generator.js"))["generateConversationLabelWithFallback"];
 type ScheduleChatDashboardSessionTitle =
   (typeof import("./server-methods/chat-send-background.js"))["scheduleChatDashboardSessionTitle"];
-type ReadSessionMessageCountAsync =
-  (typeof import("./session-transcript-readers.js"))["readSessionMessageCountAsync"];
 
 const sessionDiffBaselineMocks = vi.hoisted(() => ({
   captureGate: undefined as Promise<void> | undefined,
@@ -122,10 +121,6 @@ const dashboardTitleGenerationMocks = vi.hoisted(() => ({
 
 const dashboardTitleScheduleMocks = vi.hoisted(() => ({
   schedule: vi.fn<ScheduleChatDashboardSessionTitle>(),
-}));
-
-const sessionTranscriptReaderMocks = vi.hoisted(() => ({
-  readCount: vi.fn<ReadSessionMessageCountAsync>(),
 }));
 
 vi.mock("../sessions/session-diff.js", async (importOriginal) => {
@@ -157,11 +152,6 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server-methods/chat-send-background.js")>();
   return { ...actual, scheduleChatDashboardSessionTitle: dashboardTitleScheduleMocks.schedule };
-});
-
-vi.mock("./session-transcript-readers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
-  return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
 let gitWorkspaceTemplate: string;
@@ -208,13 +198,6 @@ async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSes
   return actual.scheduleChatDashboardSessionTitle;
 }
 
-async function actualSessionMessageCountReader(): Promise<ReadSessionMessageCountAsync> {
-  const actual = await vi.importActual<typeof import("./session-transcript-readers.js")>(
-    "./session-transcript-readers.js",
-  );
-  return actual.readSessionMessageCountAsync;
-}
-
 beforeEach(async () => {
   sessionDiffBaselineMocks.captureGate = undefined;
   sessionDiffBaselineMocks.captureStarted = undefined;
@@ -226,10 +209,6 @@ beforeEach(async () => {
   dashboardTitleGenerationMocks.generate.mockResolvedValue("Generated Dashboard Title");
   dashboardTitleScheduleMocks.schedule.mockReset();
   dashboardTitleScheduleMocks.schedule.mockImplementation(await actualDashboardTitleScheduler());
-  sessionTranscriptReaderMocks.readCount.mockReset();
-  sessionTranscriptReaderMocks.readCount.mockImplementation(
-    await actualSessionMessageCountReader(),
-  );
 });
 
 async function makeNonGitTempDir(prefix: string): Promise<string> {
@@ -2041,9 +2020,6 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:post-commit-worktree";
-  sessionTranscriptReaderMocks.readCount.mockRejectedValueOnce(
-    new Error("synthetic post-commit initial-turn failure"),
-  );
   try {
     const created = await directSessionReq<{
       key: string;
@@ -2055,7 +2031,7 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
       {
         agentId: "main",
         key,
-        message: "start the committed session",
+        message: "reject this initial input\u0000",
         worktree: true,
         worktreeName: "post-commit-worktree",
       },
@@ -2066,8 +2042,8 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
       payload: {
         key,
         runError: {
-          code: "UNAVAILABLE",
-          message: "synthetic post-commit initial-turn failure",
+          code: "INVALID_REQUEST",
+          message: "message must not contain null bytes",
         },
         runStarted: false,
         sessionId: expect.any(String),
@@ -6211,7 +6187,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
 });
 
 test("sessions.create can start the first agent turn from an initial task", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -6236,7 +6212,18 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   );
   expect(created.payload?.runStarted).toBe(true);
   const runId = requireNonEmptyString(created.payload?.runId, "started run id");
-  expect(created.payload?.messageSeq).toBe(1);
+  if (created.payload?.messageSeq !== undefined) {
+    const events = await loadTranscriptEvents({
+      agentId: "ops",
+      sessionId: created.payload.sessionId!,
+      sessionKey: created.payload.key!,
+      storePath,
+    });
+    const messages = events.filter((event) => asNullableRecord(event)?.type === "message");
+    expect(messages[created.payload.messageSeq - 1]).toMatchObject({
+      message: { role: "user", idempotencyKey: `${runId}:user` },
+    });
+  }
 
   const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
   expect(wait.ok).toBe(true);
