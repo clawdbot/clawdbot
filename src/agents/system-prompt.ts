@@ -739,7 +739,7 @@ export function buildModelIdentityPromptLine(model?: string): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. Model question: answer this current-run value.`;
+  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
 }
 
 export function appendModelIdentitySystemPrompt(params: {

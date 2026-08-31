@@ -2628,15 +2628,15 @@ jobs:
             fi
             cp "${tgzs[0]}" "$target"
           fi
-          echo "Validating Docker E2E package tarball: $target"
-          validator=(node scripts/check-openclaw-package-tarball.mjs)
+          # Local pack validates final bytes; imports need the trusted harness before identity checks.
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
+            echo "Validating Docker E2E package tarball: $target"
             validator=(bash -c 'cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs "$1"' --)
+            started_at="$(date +%s)"
+            timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
+            finished_at="$(date +%s)"
+            echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           fi
-          started_at="$(date +%s)"
-          timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
-          finished_at="$(date +%s)"
-          echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
           version="$(tar -xOf "$target" package/package.json | jq -r '.version')"
           name="$(tar -xOf "$target" package/package.json | jq -r '.name')"

@@ -26,6 +26,11 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
+  externalResolution?: {
+    label: string;
+    decisions?: readonly ("allow-once" | "allow-always")[];
+  } | null;
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;

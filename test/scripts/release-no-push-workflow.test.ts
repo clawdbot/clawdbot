@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -307,6 +308,143 @@ function executeParentFilterValidation(
 }
 
 describe("release validation no-push transport", () => {
+  it.each([
+    { name: "local validated package", imported: false, status: 0, calls: 0 },
+    { name: "imported package", imported: true, status: 0, calls: 1 },
+    { name: "imported validator failure", imported: true, checkExit: 7, status: 7, calls: 1 },
+    {
+      name: "local source mismatch",
+      imported: false,
+      wrongSource: true,
+      status: 1,
+      calls: 0,
+      error: "Exact-target package build commit differs from the selected SHA.",
+    },
+    {
+      name: "imported digest mismatch",
+      imported: true,
+      wrongDigest: true,
+      status: 1,
+      calls: 0,
+      error: "Declared package tarball SHA-256 differs from package_sha256.",
+    },
+    {
+      name: "imported version mismatch",
+      imported: true,
+      wrongVersion: true,
+      status: 1,
+      calls: 1,
+      error: "Resolved package identity differs from the declared immutable tuple.",
+    },
+    {
+      name: "local metadata mismatch",
+      imported: false,
+      wrongMetadata: true,
+      status: 1,
+      calls: 0,
+      error: "Exact-target package metadata does not bind the selected SHA and tarball.",
+    },
+  ])("validates package identity without repeating local pack checks: $name", (fixture) => {
+    const validate = step(
+      job(readWorkflow(LIVE_E2E), "prepare_docker_e2e_image"),
+      "Validate OpenClaw Docker E2E package",
+    );
+    const root = tempDirs.make("release package identity-");
+    const artifacts = join(root, ".artifacts/docker-e2e-package");
+    const bin = join(root, "bin");
+    const calls = join(root, "validator-calls");
+    const output = join(root, "github-output");
+    const source = "a".repeat(40);
+    const version = "2026.8.1";
+    for (const directory of [
+      artifacts,
+      bin,
+      "package/dist",
+      "scripts",
+      ".release-harness/scripts",
+    ]) {
+      mkdirSync(resolve(root, directory), { recursive: true });
+    }
+    writeFileSync(
+      join(root, "package/package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    writeFileSync(
+      join(root, "package/dist/build-info.json"),
+      JSON.stringify({ commit: fixture.wrongSource ? "b".repeat(40) : source }),
+    );
+    const fileName = fixture.imported ? "provided package.tgz" : "openclaw-current.tgz";
+    const tarball = join(artifacts, fileName);
+    const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], { encoding: "utf8" });
+    expect(pack.status, pack.stderr).toBe(0);
+    const digest = createHash("sha256").update(readFileSync(tarball)).digest("hex");
+    if (fixture.wrongMetadata) {
+      writeFileSync(
+        join(artifacts, "package-candidate.json"),
+        JSON.stringify({
+          name: "openclaw",
+          packageSourceSha: source,
+          sha256: "b".repeat(64),
+          version,
+        }),
+      );
+    }
+    writeFileSync(output, "");
+    writeFileSync(calls, "");
+    // Instrument only the validator/package-manager boundary; identity checks use real tar, jq and hashes.
+    writeFileSync(
+      join(root, "scripts/check-openclaw-package-tarball.mjs"),
+      'throw new Error("local pack already validated this package");\n',
+    );
+    writeFileSync(
+      join(root, ".release-harness/scripts/check-openclaw-package-tarball.mjs"),
+      'import fs from "node:fs"; fs.appendFileSync(process.env.VALIDATOR_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n"); process.exit(Number(process.env.CHECK_EXIT));\n',
+    );
+    writeFileSync(
+      join(bin, "pnpm"),
+      '#!/usr/bin/env bash\n[[ "$1" == exec ]] || exit 98\nshift\nexec "$@"\n',
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", validate.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        CHECK_EXIT: String(fixture.checkExit ?? 0),
+        EXPECTED_PACKAGE_FILE_NAME: fixture.imported ? fileName : "",
+        EXPECTED_PACKAGE_SHA256: fixture.imported
+          ? fixture.wrongDigest
+            ? "b".repeat(64)
+            : digest
+          : "",
+        EXPECTED_PACKAGE_SOURCE_SHA: fixture.imported ? source : "",
+        EXPECTED_PACKAGE_VERSION: fixture.imported
+          ? fixture.wrongVersion
+            ? "2026.7.1"
+            : version
+          : "",
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        GITHUB_WORKSPACE: root,
+        SELECTED_SHA: source,
+        SHARED_IMAGE_POLICY: "no-push-artifact",
+        VALIDATOR_CALLS: calls,
+      },
+    });
+    expect(result.status, result.stderr).toBe(fixture.status);
+    if (fixture.error) {
+      expect(result.stderr).toContain(fixture.error);
+    }
+    expect(readFileSync(calls, "utf8")).toBe(
+      fixture.calls ? `${JSON.stringify([join(artifacts, "openclaw-current.tgz")])}\n` : "",
+    );
+    expect(readFileSync(output, "utf8")).toBe(
+      fixture.status === 0
+        ? `sha256=${digest}\nversion=${version}\nfile_name=openclaw-current.tgz\nsource_sha=${source}\ntag=pkg-${digest.slice(0, 32)}\n`
+        : "",
+    );
+  });
+
   it("routes release retries through explicit concrete groups and resource gates", () => {
     const full = readWorkflow(FULL_RELEASE);
     const release = readWorkflow(RELEASE_CHECKS);

@@ -21,6 +21,7 @@ import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_DECLARATION_TOOL_INPUTS,
+  TSDOWN_UNIFIED_CACHE_ENV,
 } from "./tsdown-build.mts";
 
 const root = process.cwd();
@@ -31,7 +32,9 @@ try {
     staging = createDeclarationStage(root);
     const output = path.join(staging, "dist");
     const required: string[] = [];
-    const identity: string[] = [];
+    const identity = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
+      JSON.stringify([name, process.env[name] ?? ""]),
+    );
     for (const name of TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
       const config = configs.find((candidate: { name?: string }) => candidate.name === name);
       if (
@@ -106,7 +109,7 @@ try {
     const step: BuildCacheStep = {
       label: "tsdown-plugin-sdk",
       cache: {
-        env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        env: TSDOWN_UNIFIED_CACHE_ENV,
         inputs: generatorInputs,
         outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }],
         requiredOutputs: required.map((entry) => `dist/${entry}`),

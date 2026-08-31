@@ -34,6 +34,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent prompts:** keep model-identity guidance conditional so ordinary requests are not mistaken for questions about the current model.
+
 - **Update/Doctor:** preserve `update --no-restart` by requiring an offline managed Gateway during updater-owned repair and leaving restart ownership with the parent.
 - **Bun Gateway:** restore Gateway health checks and agent connections under Bun 1.4 while preserving WebSocket frame limits and authenticated request scheduling.
 - **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
@@ -200,6 +202,8 @@ Docs: https://docs.openclaw.ai
 - **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
 
 ## 2026.8.1
+
+> **Release correction:** The package published as `2026.9.1-beta.1` was incorrectly versioned and is actually `2026.8.1-beta.4`. It should not be interpreted as newer than stable `2026.8.1`.
 
 ### Highlights
 

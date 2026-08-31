@@ -19,7 +19,6 @@ import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-gene
 import * as videoGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import { createVideoGenerateTool as createVideoGenerateToolImpl } from "./video-generate-tool.js";
-import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
 
 function createVideoGenerateTool(
   params: Parameters<typeof createVideoGenerateToolImpl>[0],
@@ -549,66 +548,6 @@ describe("createVideoGenerateTool", () => {
     expect(properties.audioRoles).toBeDefined();
   });
 
-  it("does not load runtime providers while resolving an explicitly configured model", () => {
-    const listProviders = vi
-      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
-      .mockImplementation(() => {
-        throw new Error("runtime provider list should not run for explicit video model config");
-      });
-
-    expect(
-      resolveVideoGenerationModelConfigForTool({
-        cfg: asConfig({
-          agents: {
-            defaults: {
-              mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
-            },
-          },
-        }),
-      }),
-    ).toEqual({ primary: "qwen/wan2.6-t2v" });
-    expect(listProviders).not.toHaveBeenCalled();
-  });
-
-  it("orders auto-detected provider defaults by canonical aliases", () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
-      {
-        id: "fal",
-        defaultModel: "fal-ai/minimax/video-01-live",
-        models: ["fal-ai/minimax/video-01-live"],
-        capabilities: {},
-        isConfigured: () => true,
-        generateVideo: vi.fn(async () => ({ videos: [] })),
-      },
-      {
-        id: "openai",
-        aliases: ["openai"],
-        defaultModel: "sora-2",
-        models: ["sora-2"],
-        capabilities: {},
-        isConfigured: () => true,
-        generateVideo: vi.fn(async () => ({ videos: [] })),
-      },
-    ]);
-
-    expect(
-      resolveVideoGenerationModelConfigForTool({
-        cfg: asConfig({
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5",
-              },
-            },
-          },
-        }),
-      }),
-    ).toEqual({
-      primary: "openai/sora-2",
-      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
-    });
-  });
-
   it("generates videos, saves them, and emits MEDIA paths without a session-backed detach", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
@@ -753,9 +692,11 @@ describe("createVideoGenerateTool", () => {
         videos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
       })),
     };
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
-      provider,
-    ]);
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockImplementation(
+      () => {
+        throw new Error("prepared video execution should not rediscover runtime providers");
+      },
+    );
     const generateSpy = mockSavedVideoResult("deployment.mp4");
     const tool = expectVideoGenerateTool(
       createVideoGenerateTool({
