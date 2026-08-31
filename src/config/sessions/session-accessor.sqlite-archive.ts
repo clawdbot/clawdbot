@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import { resolveRuntimeWorkerExecArgv } from "../../infra/runtime-worker-url.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -283,16 +284,6 @@ function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.
   return new URL(`./session-accessor.sqlite-archive.worker${extension}`, currentModuleUrl);
 }
 
-function resolveSourceWorkerExecArgv(): string[] {
-  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
-  // register tsx's ESM resolver inside a Worker. Explicitly register the
-  // supported programmatic API so source-tree .js specifiers map back to .ts.
-  // Built .js workers do not use this development/test-only preload.
-  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
-  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
-  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
-}
-
 function spawnSqliteTranscriptArchiveWorker<Result>(params: {
   expectedMessageType: "done" | "published";
   workerData: object;
@@ -300,9 +291,7 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
   const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
   let worker: Worker;
   try {
-    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
-      ? resolveSourceWorkerExecArgv()
-      : undefined;
+    const sourceWorkerExecArgv = resolveRuntimeWorkerExecArgv(workerUrl);
     worker = new Worker(workerUrl, {
       workerData: params.workerData,
       execArgv: sourceWorkerExecArgv,

@@ -142,6 +142,53 @@ describe("OpenAI HTTP media preprocessing", () => {
     }
   });
 
+  it("returns a retryable response when document extraction capacity is full", async () => {
+    extractFileContentFromSourceMock.mockRejectedValueOnce(
+      Object.assign(new Error("Document extraction worker queue is full"), {
+        code: "document_extractor_capacity",
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-openclaw-scopes": "operator.write",
+      },
+      body: JSON.stringify({
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: Buffer.from("%PDF-1.4 saturated").toString("base64"),
+                  filename: "scan.pdf",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        message: "Document extraction is temporarily busy; retry shortly.",
+        type: "service_unavailable",
+        code: "document_extractor_capacity",
+      },
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
   it("aborts blocked OpenResponses PDF parsing when the client disconnects", async () => {
     let preprocessingSignal: AbortSignal | undefined;
     extractFileContentFromSourceMock.mockImplementationOnce(
