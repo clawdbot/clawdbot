@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { copyPrWrapperFixture } from "./pr-wrapper-fixture.js";
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
@@ -71,54 +72,7 @@ function makeMismatchedWrapperRepo(dispatchBody = 'echo "canonical wrapper execu
   git(root, ["init", "-b", "main", canonicalPath]);
   const canonical = realpathSync(canonicalPath);
   const origin = realpathSync(originPath);
-  mkdirSync(join(canonical, ".github", "workflows"), { recursive: true });
-  mkdirSync(join(canonical, "scripts", "lib"), { recursive: true });
-  cpSync("scripts/pr-lib", join(canonical, "scripts", "pr-lib"), { recursive: true });
-  writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
-  cpSync(
-    ".github/workflows/pr-crabbox-gate-publisher.yml",
-    join(canonical, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
-  );
-  cpSync(
-    "scripts/crabbox-untrusted-bootstrap.sh",
-    join(canonical, "scripts", "crabbox-untrusted-bootstrap.sh"),
-  );
-  cpSync(
-    "scripts/pr-crabbox-gate-publisher.mjs",
-    join(canonical, "scripts", "pr-crabbox-gate-publisher.mjs"),
-  );
-  cpSync("scripts/watch-pr-ci.mjs", join(canonical, "scripts", "watch-pr-ci.mjs"));
-  cpSync("scripts/watch-pr-ci.mts", join(canonical, "scripts", "watch-pr-ci.mts"));
-  cpSync(
-    "scripts/verify-pr-hosted-gates.mjs",
-    join(canonical, "scripts", "verify-pr-hosted-gates.mjs"),
-  );
-  cpSync(
-    "scripts/verify-pr-hosted-gates.mts",
-    join(canonical, "scripts", "verify-pr-hosted-gates.mts"),
-  );
-  cpSync("scripts/lib/plain-gh.mjs", join(canonical, "scripts", "lib", "plain-gh.mjs"));
-  cpSync("scripts/lib/direct-run.mjs", join(canonical, "scripts", "lib", "direct-run.mjs"));
-  for (const file of ["record-shared.mjs", "arg-utils.mts", "arg-utils.runtime.mjs"]) {
-    cpSync(`scripts/lib/${file}`, join(canonical, "scripts", "lib", file));
-  }
-  for (const extension of ["mjs", "mts"]) {
-    const file = `check-changelog-attributions.${extension}`;
-    cpSync(`scripts/${file}`, join(canonical, "scripts", file));
-  }
-  cpSync("scripts/lib/tsx-cli-shim.mjs", join(canonical, "scripts", "lib", "tsx-cli-shim.mjs"));
-  cpSync(
-    "scripts/lib/local-check-runtime.mts",
-    join(canonical, "scripts", "lib", "local-check-runtime.mts"),
-  );
-  cpSync("scripts/tsx.mjs", join(canonical, "scripts", "tsx.mjs"));
-  const normalizationRoot = join(canonical, "packages", "normalization-core");
-  mkdirSync(join(normalizationRoot, "src"), { recursive: true });
-  cpSync("packages/normalization-core/package.json", join(normalizationRoot, "package.json"));
-  cpSync(
-    "packages/normalization-core/src/record-coerce.ts",
-    join(normalizationRoot, "src", "record-coerce.ts"),
-  );
+  copyPrWrapperFixture(canonical);
   writeFileSync(
     join(canonical, "scripts", "lib", "plain-gh.sh"),
     "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
