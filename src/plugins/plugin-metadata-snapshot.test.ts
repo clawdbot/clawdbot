@@ -1,8 +1,13 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
@@ -123,6 +128,51 @@ describe("plugin metadata snapshot", () => {
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_STATE_DIR: "/unselected-state" },
     });
     expect(registry).toBe(snapshot.manifestRegistry);
+  });
+
+  it("refreshes snapshots for the selected environment's discovery policy", async () => {
+    const roots: string[] = [];
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-metadata-process-"));
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: makeTempDir(roots, "openclaw-metadata-selected-"),
+      };
+      const config = {};
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+      clearBundledDiscoveryModeMemo();
+      const index = makeIndex();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "persisted",
+        snapshot: index,
+        diagnostics: [],
+      });
+
+      const first = loadPluginMetadataSnapshot({ config, env });
+      expect(first.index.plugins.map((plugin) => plugin.enabled)).toEqual([true]);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(first);
+
+      // Doctor updates machine policy and the persisted inventory without changing env paths.
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env });
+      clearBundledDiscoveryModeMemo();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      index.plugins = index.plugins.map((plugin) => ({ ...plugin, enabled: false }));
+
+      const refreshed = loadPluginMetadataSnapshot({ config, env });
+      expect(refreshed.index.plugins.map((plugin) => plugin.enabled)).toEqual([false]);
+      expect(refreshed.policyHash).toBe(index.policyHash);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+
+      writeConfigMachineState("plugins.bundledDiscovery", "compat");
+      clearBundledDiscoveryModeMemo();
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    } finally {
+      envSnapshot.restore();
+      await Promise.all(roots.map(removeBundledDiscoveryStateRoot));
+    }
   });
 
   it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
