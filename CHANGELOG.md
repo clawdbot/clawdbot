@@ -32,7 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Restart recovery:** preserve resumed channel delivery routes when an older reply finishes cleanup during Gateway restart, including ownership changes immediately before the database write.
+- **Bun Gateway:** restore Gateway health checks and agent connections under Bun 1.4 while preserving WebSocket frame limits and authenticated request scheduling.
 - **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
 - Matrix lifecycle: drain in-flight monitor tasks without deadlocking shared-client retirement, and reject late acquisitions after their owning task closes.
 - Provider error handling: reuse prepared or already loaded provider hooks instead of cold-loading plugins during error classification, avoiding long stalls in failure reporting and model fallback.
@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Cloud session lifecycle:** prevent archive, delete, and restart recovery from deadlocking behind an earlier worker move, keep work admission closed through cleanup, and preserve the same successor for concurrent recovery requests.
+- **Restart recovery:** preserve resumed channel delivery routes when an older reply finishes cleanup during Gateway restart, including ownership changes immediately before the database write.
 - **Upgrade state metadata:** record the current application version after repairing older databases with an unset version marker, allowing CLI commands to use the running Gateway without attempting another schema repair.
 - **Gateway cancellation:** route the first `chat.abort` directly to its cancellation handler without loading unrelated chat history and send workflows.
 

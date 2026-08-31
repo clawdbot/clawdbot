@@ -409,7 +409,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    if (activeContextEngine || !historyState.messages.some((message) => message.role === "user")) {
+    // A fresh thread can inherit summaries after all prior user messages were compacted away.
+    // Resumed bindings keep their separate incremental user/assistant handoff contract.
+    const hasContinuity = historyState.messages.some(
+      (message) =>
+        message.role === "user" ||
+        (action === "started" &&
+          (message.role === "compactionSummary" || message.role === "branchSummary")),
+    );
+    if (activeContextEngine || !hasContinuity) {
       return false;
     }
     if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {

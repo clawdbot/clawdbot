@@ -174,10 +174,27 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         allowedDecisions: ["allow-once"],
       });
       if (approval.decision !== "allow-once") {
+        if (approval.decision === "deny") {
+          return {
+            ok: false,
+            code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+            message:
+              "Codex node execution was denied. Retry the action and choose Allow once to continue.",
+          };
+        }
+        if (approval.decision === "allow-always") {
+          return {
+            ok: false,
+            code: "CODEX_NODE_EXEC_APPROVAL_INVALID",
+            message:
+              "Codex node execution cannot use permanent approval. Retry the action and choose Allow once.",
+          };
+        }
         return {
           ok: false,
-          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-          message: "Codex node execution requires one-time approval.",
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
         };
       }
       return await context.invokeNode({

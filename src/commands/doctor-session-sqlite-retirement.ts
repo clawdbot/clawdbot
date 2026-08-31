@@ -33,17 +33,6 @@ import {
 } from "./doctor-session-sqlite-verification.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-async function persistRetirementManifest(run: ActiveSessionSqliteMigrationRun): Promise<void> {
-  writeSessionSqliteMigrationManifest(run);
-  // Atomic replacement fsyncs the file but only best-effort syncs its parent.
-  // Require the shared commit policy: unsupported Windows directory sync is accepted;
-  // real I/O failures and unsupported sync elsewhere still prevent retirement.
-  requireDirectorySync(
-    await syncDirectory(path.dirname(run.manifestPath)),
-    "Recovery retirement manifest",
-  );
-}
-
 function assertRecoveryOriginal(archivePath: string, artifact: MigrationArtifact): void {
   const currentPath = statMigrationPath(archivePath)
     ? archivePath
@@ -240,7 +229,7 @@ export async function retireSessionSqliteRecovery(params: {
       }
       // Every referencing manifest is durable before the first artifact in this selection moves.
       for (const run of runs) {
-        await persistRetirementManifest(run);
+        writeSessionSqliteMigrationManifest(run);
       }
       let activeItem: (typeof selected)[number] | undefined;
       const claims = selected.map((item) => {
@@ -281,7 +270,7 @@ export async function retireSessionSqliteRecovery(params: {
         }
         // All claims, including their unlink intents, must survive a crash before disposal starts.
         for (const run of runs) {
-          await persistRetirementManifest(run);
+          writeSessionSqliteMigrationManifest(run);
         }
         for (const { item, artifact, disposal, present } of claims) {
           activeItem = item;
@@ -333,7 +322,7 @@ export async function retireSessionSqliteRecovery(params: {
             }
           }
           for (const run of new Set(refs.map((ref) => ref.run))) {
-            await persistRetirementManifest(run);
+            writeSessionSqliteMigrationManifest(run);
           }
         }
       } catch (error) {

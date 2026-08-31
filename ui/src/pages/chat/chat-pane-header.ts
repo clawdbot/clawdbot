@@ -34,6 +34,7 @@ import {
   canCopySessionMarkdown,
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -53,7 +54,6 @@ import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneParentSession,
-  resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import {
   canManageChatSessionSharing,
@@ -119,7 +119,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
-    const workspace = resolveChatPaneWorkspace({
+    const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
       worktreePath: row?.worktree ? this.headerWorktreePaths.get(row.worktree.id)?.path : undefined,

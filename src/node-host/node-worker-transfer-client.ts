@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
 import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
@@ -25,6 +26,7 @@ import {
   stagedInputDirectoriesFromEntries,
 } from "../media/staged-inputs.js";
 import {
+  isNodeWorkspaceTransferInvalidReason,
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
   nodeWorkspaceTransferManifestPath,
@@ -37,6 +39,7 @@ import {
   openNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
+import { createNodeWorkerUploadSnapshot } from "./node-worker-upload-snapshot.js";
 import { captureManifest, runWorkspaceCommand } from "./node-worker-workspace-commands.js";
 import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
@@ -70,9 +73,29 @@ async function requireOk(response: IncomingMessage): Promise<void> {
     return;
   }
   const body = (await readResponseBody(response, TRANSFER_RESULT_MAX_BYTES)).toString("utf8");
-  if (response.statusCode === 413 && body.includes("workspace_transfer_limit")) {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    payload = undefined;
+  }
+  if (
+    response.statusCode === 413 &&
+    isRecord(payload) &&
+    payload.error === "workspace_transfer_limit"
+  ) {
     throw new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-limit: gateway rejected workspace transfer caps",
+    );
+  }
+  if (
+    response.statusCode === 400 &&
+    isRecord(payload) &&
+    payload.error === "workspace_transfer_invalid" &&
+    isNodeWorkspaceTransferInvalidReason(payload.reason)
+  ) {
+    throw new NodeWorkerWorkspaceTransferError(
+      `workspace-transfer-invalid: gateway rejected workspace transfer payload (${payload.reason})`,
     );
   }
   throw new NodeWorkerWorkspaceTransferError(
@@ -491,12 +514,6 @@ async function writeChunk(request: ClientRequest, chunk: Buffer): Promise<void> 
   await once(request, "drain");
 }
 
-async function uploadFile(request: ClientRequest, filePath: string): Promise<void> {
-  for await (const value of fs.createReadStream(filePath)) {
-    await writeChunk(request, Buffer.isBuffer(value) ? value : Buffer.from(value));
-  }
-}
-
 async function uploadWorkspace(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
@@ -537,55 +554,70 @@ async function uploadWorkspace(params: {
   );
   const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
   const changed = new Set(workerWorkspaceTransferPaths(current, base));
-  const files = current.entries.filter(
-    (entry): entry is Extract<(typeof current.entries)[number], { type: "file" }> =>
-      entry.type === "file" && changed.has(entry.path),
-  );
   const manifestBytes = Buffer.from(currentRaw);
   const baseBytes = Buffer.from(baseRaw);
-  const contentLength =
-    8 +
-    baseBytes.byteLength +
-    manifestBytes.byteLength +
-    files.reduce((total, entry) => total + 8 + entry.size, 0);
-  const response = await openNodeWorkerTransferHttpRequest({
-    gatewayUrl: params.gatewayUrl,
-    tlsFingerprint: params.tlsFingerprint,
-    cloudflareAccess: params.cloudflareAccess,
-    routePath: nodeWorkspaceTransferReconcilePath(
-      params.environmentId,
-      params.transfer.baseManifestRef,
+  const snapshot = await createNodeWorkerUploadSnapshot({
+    workspaceDir: params.workspaceDir,
+    sources: current.entries.flatMap((entry) =>
+      entry.type === "file" && changed.has(entry.path)
+        ? [
+            {
+              path: workspacePath(params.workspaceDir, entry.path),
+              size: entry.size,
+              sha256: entry.sha256,
+            },
+          ]
+        : [],
     ),
-    method: "POST",
-    token: params.transfer.token,
-    headers: {
-      "content-type": "application/vnd.openclaw.worker-workspace-reconcile-v1",
-      "content-length": String(contentLength),
-    },
     signal: params.signal,
-    writeBody: async (request) => {
-      for (const value of [baseBytes, manifestBytes]) {
-        const header = Buffer.allocUnsafe(4);
-        header.writeUInt32BE(value.byteLength);
-        await writeChunk(request, header);
-        await writeChunk(request, value);
-      }
-      for (const entry of files) {
-        const size = Buffer.allocUnsafe(8);
-        size.writeBigUInt64BE(BigInt(entry.size));
-        await writeChunk(request, size);
-        await uploadFile(request, workspacePath(params.workspaceDir, entry.path));
-      }
-    },
   });
-  await requireOk(response);
-  const payload = JSON.parse(
-    (await readResponseBody(response, TRANSFER_RESULT_MAX_BYTES)).toString("utf8"),
-  ) as { manifestRef?: unknown };
-  if (payload.manifestRef !== currentRef) {
-    throw new Error("workspace transfer upload acknowledgement is invalid");
+  try {
+    const contentLength =
+      8 +
+      baseBytes.byteLength +
+      manifestBytes.byteLength +
+      snapshot.files.reduce((total, file) => total + 8 + file.size, 0);
+    const response = await openNodeWorkerTransferHttpRequest({
+      gatewayUrl: params.gatewayUrl,
+      tlsFingerprint: params.tlsFingerprint,
+      cloudflareAccess: params.cloudflareAccess,
+      routePath: nodeWorkspaceTransferReconcilePath(
+        params.environmentId,
+        params.transfer.baseManifestRef,
+      ),
+      method: "POST",
+      token: params.transfer.token,
+      headers: {
+        "content-type": "application/vnd.openclaw.worker-workspace-reconcile-v1",
+        "content-length": String(contentLength),
+      },
+      signal: params.signal,
+      writeBody: async (request) => {
+        for (const value of [baseBytes, manifestBytes]) {
+          const header = Buffer.allocUnsafe(4);
+          header.writeUInt32BE(value.byteLength);
+          await writeChunk(request, header);
+          await writeChunk(request, value);
+        }
+        for (const file of snapshot.files) {
+          const size = Buffer.allocUnsafe(8);
+          size.writeBigUInt64BE(BigInt(file.size));
+          await writeChunk(request, size);
+          await snapshot.stream(file, async (chunk) => await writeChunk(request, chunk));
+        }
+      },
+    });
+    await requireOk(response);
+    const payload = JSON.parse(
+      (await readResponseBody(response, TRANSFER_RESULT_MAX_BYTES)).toString("utf8"),
+    ) as { manifestRef?: unknown };
+    if (payload.manifestRef !== currentRef) {
+      throw new Error("workspace transfer upload acknowledgement is invalid");
+    }
+    return currentRef;
+  } finally {
+    await snapshot.cleanup();
   }
-  return currentRef;
 }
 
 export async function runNodeWorkerWorkspaceTransfer(params: {

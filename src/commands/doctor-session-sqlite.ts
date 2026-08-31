@@ -143,7 +143,7 @@ export async function runDoctorSessionSqlite(
     });
   }
   if (options.mode === "import") {
-    reconcileSessionSqliteMigrationPublications({
+    await reconcileSessionSqliteMigrationPublications({
       env,
       trustedTargets: targets.map(createMigrationTargetInput),
     });
@@ -191,10 +191,10 @@ export async function runDoctorSessionSqlite(
 }
 
 /** Called only under the public maintenance lock, before its strict alias recheck. */
-export function reconcileDoctorSessionSqlitePublication(
+export async function reconcileDoctorSessionSqlitePublication(
   options: DoctorSessionSqliteOptions,
   sourcePath: string,
-): void {
+): Promise<void> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
   const targets = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
@@ -203,7 +203,7 @@ export function reconcileDoctorSessionSqlitePublication(
     resolveDoctorSessionSqliteMaintenancePaths(targets),
     resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
   );
-  reconcileSessionSqliteMigrationPublications({
+  await reconcileSessionSqliteMigrationPublications({
     env,
     sourcePath,
     trustedTargets: targets.map(createMigrationTargetInput),

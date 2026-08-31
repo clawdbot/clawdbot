@@ -273,83 +273,108 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
   });
 
-  it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("existing context", Date.now()) as never,
-    );
-    const openSpy = vi.spyOn(SessionManager, "open");
-    const contextEngine = createContextEngine();
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 321;
-    params.requestedModelId = "gpt-5.4-codex-primary";
-    params.fallbackReason = "provider_unavailable";
-    params.degradedReason = "context_overflow";
-    params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+  it.each(["compaction", "branch"] as const)(
+    "bootstraps and assembles non-legacy context before the Codex turn starts (%s summary)",
+    async (boundary) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+        sessionId: "session-1",
+      });
+      const summary = "The durable code is summary-only-engine-code-8516.";
+      if (boundary === "branch") {
+        sessionManager.branchWithSummary(null, summary);
+      }
+      const retainedId = sessionManager.appendMessage(
+        assistantMessage("ACK: existing context", Date.now()),
+      );
+      if (boundary === "compaction") {
+        sessionManager.appendCompaction(summary, retainedId, 1_000);
+      }
+      const openSpy = vi.spyOn(SessionManager, "open");
+      const contextEngine = createContextEngine();
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.prompt = "Recall the durable code from our prior work.";
+      params.contextEngine = contextEngine;
+      params.contextTokenBudget = 321;
+      params.requestedModelId = "gpt-5.4-codex-primary";
+      params.fallbackReason = "provider_unavailable";
+      params.degradedReason = "context_overflow";
+      params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
 
-    if (!contextEngine.bootstrap) {
-      throw new Error("expected bootstrap hook");
-    }
-    expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg(
-      contextEngine["bootstrap"],
-      "bootstrap",
-    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
-    expect(bootstrapParams.sessionId).toBe("session-1");
-    expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
-    expect(bootstrapParams.sessionFile).toBe(sessionFile);
-    expect(bootstrapParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
+      if (!contextEngine.bootstrap) {
+        throw new Error("expected bootstrap hook");
+      }
+      expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
+      const bootstrapParams = requireFirstCallArg(
+        contextEngine["bootstrap"],
+        "bootstrap",
+      ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
+      expect(bootstrapParams.sessionId).toBe("session-1");
+      expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
+      expect(bootstrapParams.sessionFile).toBe(sessionFile);
+      expect(bootstrapParams.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
 
-    expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
-      ContextEngine["assemble"]
-    >[0];
-    expect(assembleParams.sessionId).toBe("session-1");
-    expect(assembleParams.sessionKey).toBe("agent:main:session-1");
-    expect(assembleParams.tokenBudget).toBe(321);
-    expect(assembleParams.citationsMode).toBe("on");
-    expect(assembleParams.model).toBe("gpt-5.4-codex");
-    expect(assembleParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
-    expect(assembleParams.prompt).toBe("hello");
-    expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
-    expect(assembleParams.availableTools).toEqual(new Set());
+      expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
+      const assembleParams = requireFirstCallArg(
+        contextEngine["assemble"],
+        "assemble",
+      ) as Parameters<ContextEngine["assemble"]>[0];
+      expect(assembleParams.sessionId).toBe("session-1");
+      expect(assembleParams.sessionKey).toBe("agent:main:session-1");
+      expect(assembleParams.tokenBudget).toBe(321);
+      expect(assembleParams.citationsMode).toBe("on");
+      expect(assembleParams.model).toBe("gpt-5.4-codex");
+      expect(assembleParams.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
+      expect(assembleParams.prompt).toBe(params.prompt);
+      const summaryRole = boundary === "compaction" ? "compactionSummary" : "branchSummary";
+      expect(assembleParams.messages.map((message) => message.role)).toEqual([
+        summaryRole,
+        "assistant",
+      ]);
+      expect(assembleParams.availableTools).toEqual(new Set());
 
-    const threadStartParams = requireRequestParams(harness, "thread/start");
-    expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
-      "context-engine system",
-    );
-    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+      const threadStartParams = requireRequestParams(harness, "thread/start");
+      expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
+        "context-engine system",
+      );
+      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+      expectRequestInputTextContains(harness, `[${summaryRole}]\n${summary}`);
+      expectRequestInputTextContains(harness, "[assistant]\nACK: existing context");
+      expectRequestInputTextContains(
+        harness,
+        `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+      );
 
-    await harness.completeTurn();
-    await run;
-    expect(openSpy).not.toHaveBeenCalled();
-  });
+      await harness.completeTurn();
+      await run;
+      expect(openSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("starts a fresh turn before the post-start mirror records admission", async () => {
     const beforeMessageWrite = vi.fn();

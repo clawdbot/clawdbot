@@ -536,12 +536,10 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       validateAfterRepair: () =>
         assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
     });
+    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
-  }
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   }
   return hasPendingCurrentVersionMigration;
 }
@@ -714,15 +712,17 @@ export function ensureOpenClawAgentDatabaseSchema(
   if (readSqliteUserVersion(db) === AGENT_MEDIA_SCHEMA_VERSION) {
     maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
     const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-    // Keep canonical index recovery reachable before rebuilding the v17 identity table.
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
       allowMissingColumns: true,
-      validateAfterRepair: () =>
+      validateAfterRepair: () => {
+        // Share the savepoint so schema drift rolls back additive and index repairs together.
+        ensureSessionAdditiveColumns(db);
         assertAgentSchemaVersion(
           db,
           { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
           legacySql,
-        ),
+        );
+      },
     });
   }
   assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);

@@ -1,4 +1,4 @@
-openclaw-custodian-panel {
+openclaw-assistant-panel {
   position: fixed;
   z-index: 60;
   color: var(--text);
@@ -67,7 +67,8 @@ openclaw-custodian-panel {
   flex: 0 0 auto;
 }
 
-.cp > openclaw-custodian-surface {
+.cp > openclaw-custodian-surface,
+.cp > openclaw-home-session {
   display: flex;
   min-height: 0;
   flex: 1 1 0;
@@ -96,4 +97,58 @@ openclaw-custodian-panel {
     left: 0;
     width: auto !important;
   }
+}
+
+.cp-tab {
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  white-space: nowrap;
+}
+
+.cp-tab[aria-pressed="true"] {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.cp > openclaw-home-session {
+  flex-direction: column;
+  min-width: 0;
+}
+
+openclaw-home-session > openclaw-chat-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.assistant-panel-context {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0 12px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-panel-context details {
+  min-width: 0;
+  flex: 1;
+}
+
+.assistant-panel-context summary {
+  overflow: hidden;
+  padding-block: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-panel-context pre {
+  max-height: 160px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
