@@ -124,7 +124,7 @@ describe("SQLite historical session disk budget", () => {
       database()
         .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
         .get("idx_agent_session_windows_updated_at"),
-    ).toEqual({ stat: expect.stringMatching(/^2\b/u) });
+    ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
     expect(database().db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
   });
 

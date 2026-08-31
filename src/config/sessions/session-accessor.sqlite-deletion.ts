@@ -42,7 +42,7 @@ type PreparedSessionWrite<T> = {
 export async function runPreparedSqliteSessionWrite<T>(
   scope: ResolvedSqliteReadScope,
   prepare: () => Promise<PreparedSessionWrite<T>>,
-): Promise<{ deletedEntries: boolean; result: T }> {
+): Promise<{ deletedEntries: number; result: T }> {
   const prepared = await runExclusiveSqliteSessionWrite(scope, async () => {
     const write = await prepare();
     return write.deletedEntries.length || write.beforeCommit
@@ -50,7 +50,7 @@ export async function runPreparedSqliteSessionWrite<T>(
       : { result: await write.commit() };
   });
   if (!prepared.write) {
-    return { deletedEntries: false, result: prepared.result };
+    return { deletedEntries: 0, result: prepared.result };
   }
   const write = prepared.write;
   const result = await withSqliteSessionDeletions(
@@ -64,7 +64,7 @@ export async function runPreparedSqliteSessionWrite<T>(
       });
     },
   );
-  return { deletedEntries: write.deletedEntries.length > 0, result };
+  return { deletedEntries: write.deletedEntries.length, result };
 }
 
 /** Prepare owner leases before entering a physical writer or changing any transcript state. */

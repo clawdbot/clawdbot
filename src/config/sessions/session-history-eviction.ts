@@ -723,7 +723,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
     usage = finalPrune.usage;
   }
   if (removedEntries > 0) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved);
+    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
     usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
 

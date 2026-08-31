@@ -38,6 +38,26 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+function createPlannerStore(entryCount: number) {
+  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
+  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+  for (let index = 0; index < entryCount; index += 1) {
+    replaceSessionEntrySync(
+      { sessionKey: `agent:main:planner-${index}`, storePath },
+      { sessionId: `planner-${index}`, updatedAt: index + 1 },
+    );
+  }
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "main",
+  }).path;
+  if (!databasePath) {
+    throw new Error("expected planner maintenance database path");
+  }
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+  database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
+  return { database, storePath };
+}
+
 it("releases the store writer before maintenance archive sizing completes", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
@@ -135,22 +155,7 @@ it.each([
       }),
   },
 ])("refreshes planner statistics after bulk $name", async ({ expected, mutate }) => {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  for (let index = 0; index < 66; index += 1) {
-    replaceSessionEntrySync(
-      { sessionKey: `agent:main:planner-${index}`, storePath },
-      { sessionId: `planner-${index}`, updatedAt: index + 1 },
-    );
-  }
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-    agentId: "main",
-  }).path;
-  if (!databasePath) {
-    throw new Error("expected planner maintenance database path");
-  }
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-  database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
+  const { database, storePath } = createPlannerStore(66);
   expect(
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
@@ -164,5 +169,24 @@ it.each([
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+});
+
+it("does not refresh planner statistics after one routine session deletion", async () => {
+  const { database, storePath } = createPlannerStore(66);
+
+  await expect(
+    applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [{ sessionKey: "agent:main:planner-65" }],
+      skipMaintenance: true,
+    }),
+  ).resolves.toMatchObject({ afterCount: 65, removedEntries: 1 });
+
+  expect(
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at"),
+  ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });

@@ -70,13 +70,20 @@ import type { SessionEntry } from "./types.js";
 const MAX_SESSION_MAINTENANCE_BATCH_ENTRIES = 64;
 const MAX_SESSION_MAINTENANCE_BATCH_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
+// One full maintenance batch is the bulk-deletion boundary. Smaller routine
+// cleanups must not pay the measured synchronous full-database analysis cost.
+const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const SESSION_PLANNER_ANALYSIS_LIMIT = 1_000;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
 
 /** Coalesce bounded planner-statistics refreshes behind the per-store writer lane. */
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  deletedEntries: number,
 ): Promise<void> {
+  if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES) {
+    return;
+  }
   const storePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
   const active = plannerMaintenanceByStore.get(storePath);
   if (active) {
@@ -559,7 +566,7 @@ export function applySessionEntryMaintenance(
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
-  options: { deletedRowsBeforeMaintenance?: boolean } = {},
+  options: { deletedEntriesBeforeMaintenance?: number } = {},
 ): Promise<SessionEntryMaintenanceResult> {
   const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
   if (archivedWorktrees.length) {
@@ -588,9 +595,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     capped: 0,
   };
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
-    if (options.deletedRowsBeforeMaintenance) {
-      await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
-    }
+    await refreshSqliteSessionPlannerStatisticsBestEffort(
+      scope,
+      options.deletedEntriesBeforeMaintenance ?? 0,
+    );
     return { archivedTranscripts: [], ...committedCounts };
   }
   let archiveBytesBySessionId: Map<string, number>;
@@ -601,13 +609,14 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     );
   } catch (error) {
     warn("SQLite session maintenance archive sizing failed", error, stateDeletePlans);
-    if (options.deletedRowsBeforeMaintenance) {
-      await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
-    }
+    await refreshSqliteSessionPlannerStatisticsBestEffort(
+      scope,
+      options.deletedEntriesBeforeMaintenance ?? 0,
+    );
     return { archivedTranscripts: [], ...committedCounts };
   }
   const publishedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-  let deletedRows = options.deletedRowsBeforeMaintenance === true;
+  let deletedEntries = options.deletedEntriesBeforeMaintenance ?? 0;
   for (const batch of buildSessionMaintenanceBatches({
     archiveBytesBySessionId,
     entryRemovals,
@@ -641,8 +650,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);
       break;
     }
-    deletedRows =
-      deletedRows || batch.entryRemovals.length > 0 || batch.stateDeletePlans.length > 0;
+    deletedEntries += batch.workItems;
     emitCommittedSessionEntryRemovals(batch.entryRemovals);
     for (const removal of batch.entryRemovals) {
       if (removal.maintenanceReason === "model-run-pruned") {
@@ -659,8 +667,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       warn("SQLite session maintenance archive publication failed", error, batch.stateDeletePlans);
     }
   }
-  if (deletedRows) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
-  }
+  await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries);
   return { archivedTranscripts: publishedTranscripts, ...committedCounts };
 }

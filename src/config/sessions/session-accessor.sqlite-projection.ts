@@ -213,7 +213,7 @@ export async function applySessionStoreProjection<T>(params: {
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
-    { deletedRowsBeforeMaintenance: preparedWrite.deletedEntries },
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }
@@ -497,7 +497,7 @@ export async function applySessionEntryLifecycleMutation(params: {
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
-      { deletedRowsBeforeMaintenance: preparedWrite.deletedEntries },
+      { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
     );
   let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
   try {
@@ -637,7 +637,7 @@ export async function purgeDeletedAgentSessionEntries(
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
-      { deletedRowsBeforeMaintenance: prepared.entryRemovals.length > 0 },
+      { deletedEntriesBeforeMaintenance: prepared.entryRemovals.length },
     );
   const archivedTranscripts = [
     ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),

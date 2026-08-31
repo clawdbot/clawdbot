@@ -267,7 +267,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
-    { deletedRowsBeforeMaintenance: preparedWrite.deletedEntries },
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }

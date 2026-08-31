@@ -179,9 +179,11 @@ export async function cleanupSessionLifecycleArtifactsCore(
   );
   // The SQL commit survives a later archive-publication failure, so refresh
   // planner statistics before crossing that separate artifact boundary.
-  if (committed.removedEntries > 0 || cleanupPlan.deletePlans.length > 0) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved);
-  }
+  const deletedEntries = Math.max(
+    committed.removedEntries,
+    new Set(cleanupPlan.deletePlans.map((plan) => plan.sessionId)).size,
+  );
+  await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, deletedEntries);
   const archivedTranscripts = await publishSessionStateArchives(
     resolved,
     committed.archivedTranscripts,
