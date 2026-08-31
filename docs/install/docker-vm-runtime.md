@@ -182,9 +182,9 @@ Mount the gateway state **as a directory**, never as a single file. The repo
 
 A single-file bind follows the file the host path pointed at when the container
 started, not the path itself. Ordinary OpenClaw config saves publish a
-replacement file rather than editing that inode in place. Prefix recovery can
-write the canonical path directly. Divergence happens when a host tool
-replaces that source file after the container starts: the container keeps
+replacement file rather than editing the existing file in place. Prefix
+recovery can write the canonical path directly. Divergence happens when a host
+tool replaces that source file after the container starts: the container keeps
 reading the file it was bound to, while the host path already points at the
 new one, so later replacement saves look like a no-op inside the container.
 An in-place edit of the same file does not create that divergence.
