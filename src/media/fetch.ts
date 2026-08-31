@@ -78,6 +78,10 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /**
+   * Final synchronous dispatch check. Runs for every redirect hop and again
+   * for every media retry; throwing prevents that request.
+   */
   beforeRequest?: () => void;
   requestInit?: RequestInit;
   filePathHint?: string;

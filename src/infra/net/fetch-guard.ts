@@ -66,7 +66,11 @@ export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
-  /** Runs synchronously after transport preparation and before each request dispatch. */
+  /**
+   * Runs synchronously after transport preparation and immediately before each
+   * physical request, including redirects. Throwing prevents that dispatch and
+   * propagates the same error.
+   */
   beforeRequest?: () => void;
   init?: RequestInit;
   capture?:
