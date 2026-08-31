@@ -8,7 +8,13 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import {
+  applyToolPolicyPipeline,
+  buildDefaultToolPolicyPipelineSteps,
+  type ToolPolicyPipelineStep,
+} from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
@@ -19,7 +25,9 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -28,20 +36,53 @@ import {
 } from "./agent-session-env.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
-function resolvePluginToolPolicy(config: OpenClawConfig): {
+function resolvePluginToolPolicy(params: {
+  config: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): {
   toolAllowlist?: string[];
   toolDenylist?: string[];
+  steps?: ToolPolicyPipelineStep[];
 } {
+  if (!params.agentId) {
+    const profilePolicy = mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(params.config.tools?.profile),
+      params.config.tools?.alsoAllow,
+    );
+    const globalPolicy = pickSandboxToolPolicy(params.config.tools);
+    const toolAllowlist = collectExplicitAllowlist([profilePolicy, globalPolicy]);
+    const toolDenylist = collectExplicitDenylist([profilePolicy, globalPolicy]);
+    return {
+      ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+      ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
+    };
+  }
+  const effective = resolveEffectiveToolPolicy({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const profile = effective.profile;
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(config.tools?.profile),
-    config.tools?.alsoAllow,
+    resolveToolProfilePolicy(profile),
+    effective.profileAlsoAllow,
   );
-  const globalPolicy = pickSandboxToolPolicy(config.tools);
-  const toolAllowlist = collectExplicitAllowlist([profilePolicy, globalPolicy]);
-  const toolDenylist = collectExplicitDenylist([profilePolicy, globalPolicy]);
+  const globalPolicy = effective.globalPolicy;
+  const agentPolicy = effective.agentPolicy;
+  const policies = [profilePolicy, globalPolicy, agentPolicy];
+  const toolAllowlist = collectExplicitAllowlist(policies);
+  const toolDenylist = collectExplicitDenylist(policies);
   return {
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
+    steps: buildDefaultToolPolicyPipelineSteps({
+      profilePolicy,
+      profile,
+      globalPolicy,
+      agentPolicy,
+      agentId: effective.agentId,
+    }).map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true })),
   };
 }
 
@@ -60,17 +101,29 @@ export function resolvePluginToolsForMcp(params: {
     config: params.config,
     ...(parsedSession ? { agentId: parsedSession.agentId, sessionKey: agentSessionKey } : {}),
   };
-  const pluginToolPolicy = resolvePluginToolPolicy(params.config);
+  const { steps, ...pluginToolPolicy } = resolvePluginToolPolicy({
+    config: params.config,
+    ...(parsedSession ? { agentId: parsedSession.agentId, sessionKey: agentSessionKey } : {}),
+  });
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
     context,
     ...pluginToolPolicy,
   });
-  return resolvePluginTools({
+  const tools = resolvePluginTools({
     context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
     runtimeRegistry,
   });
+  // Flattened policy lists only bound discovery; layered allowlists must still intersect.
+  return steps
+    ? applyToolPolicyPipeline({
+        tools,
+        toolMeta: getPluginToolMeta,
+        warn: logWarn,
+        steps,
+      })
+    : tools;
 }
 
 export function createPluginToolsMcpServer(

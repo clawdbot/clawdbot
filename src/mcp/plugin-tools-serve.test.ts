@@ -160,24 +160,53 @@ describe("plugin tools MCP server", () => {
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
   });
 
-  it("threads global plugin tool policy into plugin resolution", async () => {
-    getRuntimeConfigMock.mockReturnValueOnce({
+  it("threads global and managed-agent plugin tool policy into plugin resolution", async () => {
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "dangerous_plugin_tool",
+        description: "Denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+      {
+        name: "benign_plugin_tool",
+        description: "Allowed tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
       plugins: { enabled: true },
       tools: {
-        alsoAllow: ["memory_search"],
+        allow: ["dangerous_plugin_tool", "benign_plugin_tool"],
         deny: ["memory_forget"],
       },
-    } as never);
-    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+      agents: {
+        list: [
+          {
+            id: "research",
+            tools: {
+              allow: ["benign_plugin_tool"],
+              deny: ["dangerous_plugin_tool"],
+            },
+          },
+        ],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
 
-    await servePluginToolsMcp();
+    const tools = resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+    });
 
     const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
-    expect(loadPolicy.toolAllowlist).toContain("memory_search");
-    expect(loadPolicy.toolDenylist).toEqual(["memory_forget"]);
+    expect(loadPolicy.toolAllowlist).toEqual(["dangerous_plugin_tool", "benign_plugin_tool"]);
+    expect(loadPolicy.toolDenylist).toEqual(["memory_forget", "dangerous_plugin_tool"]);
     const resolvePolicy = requireToolPolicyParams(resolvePluginToolsMock);
-    expect(resolvePolicy.toolAllowlist).toContain("memory_search");
-    expect(resolvePolicy.toolDenylist).toEqual(["memory_forget"]);
+    expect(resolvePolicy.toolAllowlist).toEqual(["dangerous_plugin_tool", "benign_plugin_tool"]);
+    expect(resolvePolicy.toolDenylist).toEqual(["memory_forget", "dangerous_plugin_tool"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
   });
 
   it("lists registered plugin tools and serializes non-array tool content", async () => {
