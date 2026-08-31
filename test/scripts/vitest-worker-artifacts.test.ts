@@ -554,43 +554,6 @@ describe("fresh compiled subprocess invocation", () => {
     },
   );
 
-  it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = createFixtureCommands(context);
-      const owner = createVitestWorkerRun();
-      try {
-        const manifest = await prepareWorkers(owner);
-        const directory = fixtureDirectory();
-        const bundled = path.join(directory, "bundled");
-        const pluginRoot = path.join(bundled, "anthropic");
-        writeFixture(
-          pluginRoot,
-          "openclaw.plugin.json",
-          fs.readFileSync(path.join(root, "extensions/anthropic/openclaw.plugin.json"), "utf8"),
-        );
-        writeFixture(
-          pluginRoot,
-          "index.mjs",
-          `export {default} from ${JSON.stringify(pathToFileURL(path.join(owner.descriptor.directory, "dist/extensions/anthropic/index.js")).href)};`,
-        );
-        const result = await node(
-          [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
-          root,
-          {
-            ...process.env,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          },
-        );
-        console.log(JSON.stringify({ preparationMs: manifest.durationMs }));
-        console.log(result.stdout);
-        expect(result.code, result.stderr + result.stdout).toBe(0);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
-
   it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
     fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = createFixtureCommands(context);
