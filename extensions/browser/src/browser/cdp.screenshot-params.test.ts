@@ -140,13 +140,20 @@ describe("CDP screenshot params", () => {
   });
 
   it.each([
-    { name: "headed managed browser", headless: false, activates: false },
-    { name: "headless managed browser", headless: true, activates: true },
-  ])("activates only when needed for a $name", async ({ headless, activates }) => {
+    { name: "headed managed browser", headless: false, preserveFocus: false, activates: false },
+    { name: "headless managed browser", headless: true, preserveFocus: true, activates: true },
+    {
+      name: "passive external browser",
+      headless: undefined,
+      preserveFocus: true,
+      activates: false,
+    },
+  ])("activates only when needed for a $name", async ({ headless, preserveFocus, activates }) => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",
       format: "png",
       headless,
+      preserveFocus,
     });
 
     const methods = sentMessages.map((message) => message.method);

@@ -235,6 +235,23 @@ describe("browser agent snapshot timeout routing", () => {
     },
   );
 
+  it("passes passive focus preservation to direct CDP", async () => {
+    browserRuntime.profiles.set(profileContext.profile.name, { running: null });
+    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", preserveFocus: true } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ headless: undefined, preserveFocus: true }),
+    );
+  });
+
   it("rejects loose screenshot timeoutMs values before dispatching", async () => {
     const handler = getScreenshotHandler();
     const response = createBrowserRouteResponse();

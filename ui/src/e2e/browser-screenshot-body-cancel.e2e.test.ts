@@ -124,7 +124,7 @@ suite.define(() => {
             (await gateway.getRequests("browser.request")).map((request) => request.params),
           )
           .toContainEqual({
-            body: { targetId: "t1", type: "png" },
+            body: { targetId: "t1", type: "png", preserveFocus: true },
             method: "POST",
             path: "/screenshot",
           });
@@ -167,7 +167,7 @@ suite.define(() => {
           ),
         ).toEqual([
           {
-            body: { targetId: "t1", type: "png" },
+            body: { targetId: "t1", type: "png", preserveFocus: true },
             method: "POST",
             path: "/screenshot",
           },

@@ -125,7 +125,7 @@ describe("browser tab card", () => {
       target: tab.target,
       ...("node" in tab ? { node: tab.node } : {}),
       query: { profile: tab.profile },
-      body: { targetId: "t1", type: "png" },
+      body: { targetId: "t1", type: "png", preserveFocus: true },
     });
     const toggle = vi.fn<(event: Event) => void>();
     element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);

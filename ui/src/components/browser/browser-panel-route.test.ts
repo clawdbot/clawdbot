@@ -230,7 +230,7 @@ describe("browser panel route handoff", () => {
         path: "/screenshot",
         target: "host",
         query: { profile: "managed" },
-        body: { targetId: "t2", type: "png" },
+        body: { targetId: "t2", type: "png", preserveFocus: true },
       }),
     );
   });
