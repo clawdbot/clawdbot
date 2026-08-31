@@ -258,7 +258,7 @@ async function runEmbeddedAgentInternal(
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
         agentId: requestedWorkspaceResolution.agentId,
-        manifestPlugins: pluginMetadataSnapshot.plugins,
+        manifestPlugins: pluginMetadataSnapshot,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",

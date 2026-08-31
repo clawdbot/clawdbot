@@ -2,7 +2,11 @@ import { isIP } from "node:net";
 import type { RemoteModelCatalogPricing } from "@openclaw/model-catalog-core";
 import { MODEL_PRICING_SOURCES } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import { modelKey, normalizeModelRef } from "../agents/model-selection.js";
+import {
+  modelKey,
+  normalizeModelRef,
+  type ModelManifestNormalizationContext,
+} from "../agents/model-selection.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
@@ -15,7 +19,7 @@ import { planEffectiveModelCatalogRows } from "./index.js";
 import { getRemoteModelCatalogPricing } from "./remote-overlay.js";
 
 type PricingValue = RemoteModelCatalogPricing | ModelCatalogCost;
-type ManifestPlugins = readonly PluginManifestRegistry["plugins"][number][];
+type ManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"];
 type ExternalPricingPolicy = {
   external: boolean;
   authoritative: boolean;
@@ -94,7 +98,7 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const hosted = snapshot ? (getRemoteModelCatalogPricing(config) ?? {}) : {};
   const normalizedHosted = new Map<string, RemoteModelCatalogPricing>();
   for (const [key, pricing] of Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b))) {
-    const normalized = normalizedHostedKey(key, snapshot?.plugins);
+    const normalized = normalizedHostedKey(key, snapshot);
     if (normalized && !normalizedHosted.has(normalized)) {
       normalizedHosted.set(normalized, pricing);
     }
@@ -212,11 +216,9 @@ export function resolveCatalogModelPricing(params: {
   const config = params.config ?? EMPTY_CONFIG;
   const context = getPricingContext(config);
   const normalized = normalizeModelRef(params.provider, params.model, {
-    manifestPlugins: context.snapshot?.plugins,
+    manifestPlugins: context.snapshot,
   });
-  if (
-    !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
-  ) {
+  if (!allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot)) {
     return undefined;
   }
   const key = modelKey(normalized.provider, normalized.model);

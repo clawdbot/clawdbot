@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 const mocks = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
@@ -64,6 +65,14 @@ describe("agent-runtime model catalog compatibility", () => {
   });
 
   it("accepts legacy options without overriding lifecycle metadata", async () => {
+    type LegacyMetadataSnapshot = Omit<PluginMetadataSnapshot, "owners"> & {
+      owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">;
+    };
+    type AcceptedMetadataSnapshot = NonNullable<
+      NonNullable<Parameters<typeof loadModelCatalog>[0]>["metadataSnapshot"]
+    >;
+    expectTypeOf<LegacyMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
+    expectTypeOf<PluginMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
     mocks.loadCatalog.mockResolvedValue([]);
     const config = {};
     const env = { OPENCLAW_STATE_DIR: "/tmp/plugin-state" };

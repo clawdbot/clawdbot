@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import {
+  collectManifestModelIdNormalizationPolicies,
+  normalizeConfiguredProviderCatalogModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -19,7 +22,11 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import * as pluginControlPlaneContext from "./plugin-control-plane-context.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  restorePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -92,6 +99,7 @@ function createSnapshot(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -499,15 +507,27 @@ describe("current plugin metadata snapshot", () => {
 
   it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
     const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
-    const snapshot = createSnapshot({ config });
+    const snapshot = createSnapshot({ config, normalizationAlias: "scoped" });
     setCurrentPluginMetadataSnapshot(snapshot, { config });
 
-    expect(
-      getCurrentPluginMetadataSnapshot({
-        allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
-      }),
-    ).toBeUndefined();
+    try {
+      expect(
+        getCurrentPluginMetadataSnapshot({
+          allowWorkspaceScopedSnapshot: true,
+          requireDefaultDiscoveryContext: true,
+        }),
+      ).toBeUndefined();
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+
+      const lease = installTemporaryCurrentPluginMetadataSnapshot(
+        createSnapshot({ normalizationAlias: "temporary" }),
+      );
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+      expect(lease.release()).toBe(true);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
   });
 
   it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
@@ -767,26 +787,28 @@ describe("current plugin metadata snapshot", () => {
   });
 
   it("does not release a temporary lease over a newer publication or lifecycle clear", () => {
-    const original = createSnapshot();
-    const temporary = createSnapshot();
-    const newer = createSnapshot();
+    const original = createSnapshot({ normalizationAlias: "original" });
+    const temporary = createSnapshot({ normalizationAlias: "temporary" });
+    const newer = createSnapshot({ normalizationAlias: "newer" });
     setCurrentPluginMetadataSnapshot(original);
 
     const clearedLease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
     clearCurrentPluginMetadataSnapshot();
     expect(clearedLease.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
 
     const replacedLease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
     setGatewayPluginMetadataSnapshot(newer);
     expect(replacedLease.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBe(newer);
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("newer");
   });
 
   it("unwinds nested temporary leases when they release out of order", () => {
-    const original = createSnapshot();
-    const outerSnapshot = createSnapshot();
-    const innerSnapshot = createSnapshot();
+    const original = createSnapshot({ normalizationAlias: "original" });
+    const outerSnapshot = createSnapshot({ normalizationAlias: "outer" });
+    const innerSnapshot = createSnapshot({ normalizationAlias: "inner" });
     setCurrentPluginMetadataSnapshot(original);
 
     const outer = installTemporaryCurrentPluginMetadataSnapshot(outerSnapshot);
@@ -794,26 +816,60 @@ describe("current plugin metadata snapshot", () => {
 
     expect(outer.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBe(innerSnapshot);
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("inner");
     expect(inner.release()).toBe(true);
     expect(getCurrentPluginMetadataSnapshot()).toBe(original);
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
     expect(inner.release()).toBe(false);
   });
 
-  it("restores the exact captured model normalization records", () => {
-    const original = createSnapshot({ normalizationAlias: "original" });
-    const temporary = createSnapshot({ normalizationAlias: "temporary" });
+  it("publishes and restores prepared model policies without enumerating declarations", () => {
+    const enumerate = vi.fn((target: object) => Reflect.ownKeys(target));
+    const prepare = (alias: string) =>
+      restorePluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "fixture",
+              modelIdNormalization: {
+                providers: new Proxy(
+                  { fixture: { aliases: { raw: alias } } },
+                  { ownKeys: (target) => enumerate(target) },
+                ),
+              },
+            },
+          ],
+        }),
+      );
+    const original = prepare("original");
+    const temporary = prepare("temporary");
+    const empty = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     const env = {
       HOME: "/home/original-snapshot",
       OPENCLAW_HOME: undefined,
     } as NodeJS.ProcessEnv;
-    setCurrentPluginMetadataSnapshot(original, { env });
-    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+    enumerate.mockClear();
 
-    const lease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
-    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+    try {
+      setCurrentPluginMetadataSnapshot(original, { env });
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
 
-    expect(lease.release()).toBe(true);
-    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+      const lease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+
+      const emptyLease = installTemporaryCurrentPluginMetadataSnapshot(empty);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+      expect(emptyLease.release()).toBe(true);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+
+      expect(lease.release()).toBe(true);
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+      clearCurrentPluginMetadataSnapshot();
+      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+      expect(enumerate).not.toHaveBeenCalled();
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
   });
 
   it("clears the current snapshot when the persisted installed index changes", () => {

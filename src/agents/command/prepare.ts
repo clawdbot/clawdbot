@@ -278,7 +278,7 @@ export async function prepareAgentCommandExecution(
       resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
+    manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
