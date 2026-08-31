@@ -6916,20 +6916,18 @@ exit 1
       key: expect.stringContaining(nativeCachePrefix),
       "restore-keys": `${nativeCachePrefix}\n`,
     });
-    expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
-    );
+    expect(macosSwift.env).not.toHaveProperty("SWIFT_TEST_EXECUTION");
     expect(testStep.id).toBe("swift-test");
     expect(renderStep.if).toBe(
       "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
     );
+    const currentTargetBranch = testStep.run.split('elif [[ "$HISTORICAL_TARGET" == "true" ]]')[0];
+    expect(currentTargetBranch).toContain("swift_test_args+=(--parallel)");
+    expect(currentTargetBranch).not.toContain("--no-parallel");
+    expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const { execution, buildExitCode } of [
-      { execution: "parallel", buildExitCode: 0 },
-      { execution: "serial", buildExitCode: 0 },
-      { execution: "parallel", buildExitCode: 23 },
-    ]) {
-      const root = tempDirs.make(`openclaw-swift-test-${execution}-${buildExitCode}-`);
+    for (const buildExitCode of [0, 23]) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
@@ -6979,7 +6977,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           HOME: root,
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          SWIFT_TEST_EXECUTION: execution,
+          SWIFT_TEST_EXECUTION: "serial",
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -6988,9 +6986,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         "build --package-path apps/macos --build-system native --enable-code-coverage --build-tests",
         ...(buildExitCode === 0
           ? [
-              `test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --${
-                execution === "parallel" ? "parallel" : "no-parallel"
-              } --skip AppStateIsolationTests`,
+              "test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --parallel --skip AppStateIsolationTests",
             ]
           : []),
       ]);

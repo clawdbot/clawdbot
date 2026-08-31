@@ -115,7 +115,7 @@ if (tool === 'swift' && args[0] === 'test') {
     RUNNER_TRACKING_ID: "synthetic-native-runner-tracking",
     GITHUB_OUTPUT: path.join(root, "outputs"),
     HISTORICAL_TARGET: "false",
-    SWIFT_TEST_EXECUTION: "parallel",
+    SWIFT_TEST_EXECUTION: "serial",
     OPENCLAW_PROFILE: "ambient-fixture",
     OPENCLAW_STATE_DIR: path.join(root, "ambient-state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "ambient-config.json"),
@@ -160,14 +160,14 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
   );
 
   it.each([
-    ["parallel", "--parallel", 0, 0],
-    ["serial", "--no-parallel", 23, 0],
-    ["parallel", "--parallel", 0, 17],
+    [0, 0],
+    [23, 0],
+    [0, 17],
   ] as const)(
-    "owns CI resources through %s (%s, exits %i/%i)",
-    (mode, flag, defaultCode, namedCode) => {
+    "owns parallel CI resources despite stale ambient execution mode (exits %i/%i)",
+    (defaultCode, namedCode) => {
       const f = fixture(defaultCode, false, namedCode);
-      const result = f.run(swiftStep, repo, { SWIFT_TEST_EXECUTION: mode });
+      const result = f.run(swiftStep);
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(defaultCode || namedCode);
       const calls = f.calls().filter((call) => call.tool === "swift");
@@ -193,7 +193,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           "native",
           "--enable-code-coverage",
           "--skip-build",
-          flag,
+          "--parallel",
           index === 0 ? "--skip" : "--filter",
           "AppStateIsolationTests",
         ]);
@@ -474,6 +474,18 @@ child.once('message', () => process.exit(0));
       expect(result.status, result.stderr).toBe(historical ? 0 : 1);
       const calls = f.calls().filter((call) => call.tool === "swift");
       expect(calls.map((call) => call.args[0])).toEqual(historical ? ["build", "test"] : ["build"]);
+      if (historical) {
+        expect(calls[1].args).toEqual([
+          "test",
+          "--package-path",
+          "apps/macos",
+          "--build-system",
+          "native",
+          "--enable-code-coverage",
+          "--skip-build",
+          "--no-parallel",
+        ]);
+      }
       if (!historical) {
         expect(result.stderr).toContain("must provide scripts/test-macos-native.mts");
       }
