@@ -865,6 +865,7 @@ export type ChannelPollContext = Pick<
   | "isAnonymous"
   | "gatewayClientScopes"
   | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 > & {
   content?: string;
   /** Trusted originating turn context for channel-owned delivery correlation. */

@@ -443,8 +443,22 @@ export async function sendDurableMessageBatchCore(
           await params.onPlatformSendDispatch?.();
         }
       : params.onPlatformSendDispatch;
+  const assertDirectAdapterHandoff =
+    ephemeralWriterAuthorities.length > 0
+      ? () => {
+          params.assertDirectAdapterHandoff?.();
+          for (const authority of ephemeralWriterAuthorities) {
+            assertSessionWriterDeliveryAuthorized(authority);
+          }
+        }
+      : params.assertDirectAdapterHandoff;
   return await withDurableMessageSendContextCore(
-    { ...params, ...pendingFinalDelivery, onPlatformSendDispatch },
+    {
+      ...params,
+      ...pendingFinalDelivery,
+      onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
+    },
     async (ctx) => {
       const rendered = await ctx.render();
       const result = await ctx.send(rendered);

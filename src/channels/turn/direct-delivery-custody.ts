@@ -9,10 +9,12 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import type { ChannelDeliveryInfo } from "./types.js";
 
 type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDelivery"> & {
+  assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
 };
 
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
+  assertPlatformSendAuthorized: () => undefined,
   onPlatformSendDispatch: () => Promise.resolve(),
 };
 
@@ -42,6 +44,8 @@ export function createDirectPendingFinalCustody(
             pendingFinalDeliveryCompletion: identity,
           })
         : nextPayload,
+    assertPlatformSendAuthorized: () =>
+      assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath),
     onPlatformSendDispatch: () => {
       const expectedStates = firstDispatch
         ? (["prepared", "queued"] as const)

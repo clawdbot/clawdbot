@@ -563,6 +563,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   conversationReadOrigin: params.conversationReadOrigin,
   deliveryQueueId: params.deliveryQueueId,
   preparedMessageId: params.preparedMessageId,
+  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   onPlatformSendDispatch: params.onPlatformSendDispatch,
   onDeliveryResult: params.onDeliveryResult,
 });

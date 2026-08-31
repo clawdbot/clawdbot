@@ -111,6 +111,7 @@ describe("channel turn failed-send custody", () => {
       delivery: {
         deliverWithProviderMessageSending: async (payload, info) => {
           await info.onPlatformSendDispatch();
+          info.assertPlatformSendAuthorized();
           return await platformSend(payload);
         },
       },
@@ -123,6 +124,57 @@ describe("channel turn failed-send custody", () => {
       sessionKey: completion.sessionKey,
       storePath: completion.storePath,
     });
+    expect(platformSend).not.toHaveBeenCalled();
+  });
+
+  it("blocks provider I/O when writer authority changes after async custody refresh", async () => {
+    const sourcePayload = setReplyPayloadMetadata(
+      { text: "reply from the replaced writer" },
+      {
+        sessionWriterDeliveryAuthority: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedSessionId: "session-failed",
+          expectedWriterRunId: "run-old",
+          sessionKey: completion.sessionKey,
+          storePath: completion.storePath,
+        },
+      },
+    );
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
+      await params.dispatcherOptions.deliver(sourcePayload, { kind: "final" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    });
+    loadSessionEntryReadOnly
+      .mockReturnValueOnce({
+        activeWriterRunId: "run-old",
+        lifecycleRevision: "revision-a",
+        sessionId: "session-failed",
+      })
+      .mockReturnValue({
+        activeWriterRunId: "run-new",
+        lifecycleRevision: "revision-b",
+        sessionId: "session-failed",
+      });
+    const platformSend = vi.fn(async (_payload: ReplyPayload) => ({ visibleReplySent: true }));
+
+    const turn = dispatchRoutedChannelTurn({
+      cfg,
+      channel: "telegram",
+      accountId: "acct",
+      route: { agentId: "main", sessionKey: completion.sessionKey },
+      ctxPayload: createCtx({ Surface: "telegram", OriginatingTo: "chat-1" }),
+      delivery: {
+        deliverWithProviderMessageSending: async (payload, info) => {
+          await info.onPlatformSendDispatch();
+          info.assertPlatformSendAuthorized();
+          return await platformSend(payload);
+        },
+      },
+    });
+
+    await expect(turn).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
     expect(platformSend).not.toHaveBeenCalled();
   });
 
