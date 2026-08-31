@@ -175,7 +175,6 @@ the ADC path.
 | `GOOGLE_APPLICATION_CREDENTIALS` | Conditional | Absolute path to a service-account key. Not needed for gcloud user ADC.                                           |
 | `GOOGLE_CLOUD_QUOTA_PROJECT`     | No          | Billing/quota project sent as the `x-goog-user-project` header. Takes precedence over the ADC `quota_project_id`. |
 | `CLOUDSDK_CONFIG`                | No          | Cloud SDK config directory. When set, it is the exclusive ADC directory override.                                 |
-| `GOOGLE_CLOUD_API_KEY`           | No          | Vertex AI Express API key, used as an alternative to ADC.                                                         |
 
 ## Available models
 
