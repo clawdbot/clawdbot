@@ -14,21 +14,52 @@ const REGISTRY = "https://clawhub.ai";
 const CHECK_TIMEOUT_MS = 10_000;
 const OPENCLAW_METADATA_DIRECTORIES = new Set([".clawhub", ".clawdhub"]);
 const scriptPath = fileURLToPath(import.meta.url);
-const skillDirectory = resolve(dirname(scriptPath), "..");
+const invokedScriptPath = process.argv[1] ? resolve(process.argv[1]) : scriptPath;
+const skillDirectory = resolve(dirname(invokedScriptPath), "..");
 const installRoot = resolve(skillDirectory, "..", "..");
 
-async function readJson(path) {
-  try {
-    return JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    return undefined;
-  }
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-async function readMetadataJson(root, filename) {
+function isValidOrigin(value) {
+  return (
+    isObject(value) &&
+    value.version === 1 &&
+    typeof value.registry === "string" &&
+    value.registry.trim().length > 0 &&
+    typeof value.slug === "string" &&
+    value.slug.trim().length > 0 &&
+    typeof value.installedVersion === "string" &&
+    value.installedVersion.trim().length > 0 &&
+    typeof value.installedAt === "number"
+  );
+}
+
+function isValidLock(value) {
+  return isObject(value) && value.version === 1 && isObject(value.skills);
+}
+
+async function readMetadataJson(root, filename, isValid) {
   for (const directory of OPENCLAW_METADATA_DIRECTORIES) {
-    const value = await readJson(join(root, directory, filename));
-    if (value !== undefined) return value;
+    const path = join(root, directory, filename);
+    let raw;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") continue;
+      throw error;
+    }
+    let value;
+    try {
+      value = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Malformed ClawHub metadata at ${path}: ${String(error)}`);
+    }
+    if (!isValid(value)) {
+      throw new Error(`Malformed ClawHub metadata at ${path}.`);
+    }
+    return value;
   }
   return undefined;
 }
@@ -190,12 +221,39 @@ function canonicalExistingPath(path) {
   }
 }
 
+function normalizedHomeValue(value) {
+  const normalized = value?.trim();
+  return normalized && normalized !== "undefined" && normalized !== "null" ? normalized : undefined;
+}
+
+function effectiveHomeDirectory() {
+  const osHome =
+    normalizedHomeValue(process.env.HOME) ??
+    normalizedHomeValue(process.env.USERPROFILE) ??
+    homedir();
+  const configuredHome = normalizedHomeValue(process.env.OPENCLAW_HOME);
+  if (!configuredHome) return resolve(osHome);
+  return resolve(configuredHome.replace(/^~(?=$|[\\/])/, () => osHome));
+}
+
+function resolveConfiguredPath(value) {
+  const trimmed = value.trim();
+  return resolve(trimmed.replace(/^~(?=$|[\\/])/, () => effectiveHomeDirectory()));
+}
+
+// Match the CLI's CONFIG_DIR precedence so --global targets the same workspace:
+// state override, config-file directory, then the effective OpenClaw home.
+function configuredGlobalInstallRoot() {
+  const stateDirectory = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDirectory) return resolveConfiguredPath(stateDirectory);
+  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) return dirname(resolveConfiguredPath(configPath));
+  return join(effectiveHomeDirectory(), ".openclaw");
+}
+
 function updateCommand({ force = false } = {}) {
-  const configuredStateRoot = resolve(
-    process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw"),
-  );
   const globalInstall =
-    canonicalExistingPath(installRoot) === canonicalExistingPath(configuredStateRoot);
+    canonicalExistingPath(installRoot) === canonicalExistingPath(configuredGlobalInstallRoot());
   return [
     "openclaw",
     "skills",
@@ -233,8 +291,12 @@ async function main() {
   let canonical = { ref: EXPECTED_REF, version: null };
 
   try {
-    const origin = await readMetadataJson(skillDirectory, "origin.json");
-    const lock = await readMetadataJson(installRoot, "lock.json");
+    const rootStat = await lstat(skillDirectory);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      throw new Error(`Skill ${JSON.stringify(SLUG)} is not a regular managed directory.`);
+    }
+    const origin = await readMetadataJson(skillDirectory, "origin.json", isValidOrigin);
+    const lock = await readMetadataJson(installRoot, "lock.json", isValidLock);
     const installedVersion = origin?.installedVersion;
     const originRegistry = normalizeRegistry(origin?.registry);
     const originOwner =

@@ -15,7 +15,11 @@ const checkerSource = path.resolve(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runChecker(scriptPath: string, workspace: string, stateDirectory = workspace) {
+async function runChecker(
+  scriptPath: string,
+  workspace: string,
+  envOverrides: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: workspace },
+) {
   const preloadPath = path.join(path.dirname(workspace), "mock-fetch.mjs");
   await writeFile(
     preloadPath,
@@ -34,7 +38,7 @@ async function runChecker(scriptPath: string, workspace: string, stateDirectory 
     process.execPath,
     ["--import", pathToFileURL(preloadPath).href, scriptPath],
     {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDirectory },
+      env: { ...process.env, ...envOverrides },
       maxBuffer: 1024 * 1024,
     },
   );
@@ -110,8 +114,22 @@ test.each([".clawhub", ".clawdhub"])(
 
     const stateLink = path.join(fixture, "state-link");
     await symlink(workspace, stateLink, process.platform === "win32" ? "junction" : "dir");
-    const throughStateLink = await runChecker(scriptPath, workspace, stateLink);
+    const throughStateLink = await runChecker(scriptPath, workspace, {
+      OPENCLAW_STATE_DIR: stateLink,
+    });
     expect(throughStateLink.update?.command).toContain("--global");
+
+    const throughConfigPath = await runChecker(scriptPath, workspace, {
+      OPENCLAW_STATE_DIR: "",
+      OPENCLAW_CONFIG_PATH: path.join(workspace, "custom-openclaw.json"),
+    });
+    expect(throughConfigPath.update?.command).toContain("--global");
+
+    const throughTildeState = await runChecker(scriptPath, workspace, {
+      OPENCLAW_HOME: fixture,
+      OPENCLAW_STATE_DIR: "~/workspace",
+    });
+    expect(throughTildeState.update?.command).toContain("--global");
 
     await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "locally edited\n");
     const modified = await runChecker(scriptPath, workspace);
@@ -168,5 +186,49 @@ test.each([".clawhub", ".clawdhub"])(
     const preDigest = await runChecker(scriptPath, workspace);
     expect(preDigest.status).toBe("untracked");
     expect(preDigest.update).toBeUndefined();
+
+    await writeFile(originPath, JSON.stringify(origin));
+    await writeFile(
+      lockPath,
+      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
+    );
+    const primaryOriginPath = path.join(skillDirectory, ".clawhub", "origin.json");
+    await mkdir(path.dirname(primaryOriginPath), { recursive: true });
+    await writeFile(primaryOriginPath, "{not json");
+    const malformedOrigin = await runChecker(scriptPath, workspace);
+    expect(malformedOrigin.status).toBe("check-failed");
+    expect(malformedOrigin.update).toBeUndefined();
+
+    await writeFile(primaryOriginPath, JSON.stringify(origin));
+    const primaryLockPath = path.join(workspace, ".clawhub", "lock.json");
+    await mkdir(path.dirname(primaryLockPath), { recursive: true });
+    await writeFile(primaryLockPath, JSON.stringify({ version: 2, skills: {} }));
+    const malformedLock = await runChecker(scriptPath, workspace);
+    expect(malformedLock.status).toBe("check-failed");
+    expect(malformedLock.update).toBeUndefined();
+
+    await writeFile(
+      primaryLockPath,
+      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
+    );
+    await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "original\n");
+    const linkedWorkspace = path.join(fixture, "linked-workspace");
+    await mkdir(path.join(linkedWorkspace, "skills"), { recursive: true });
+    await symlink(
+      skillDirectory,
+      path.join(linkedWorkspace, "skills", "release-validation"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await mkdir(path.join(linkedWorkspace, ".clawhub"));
+    await writeFile(
+      path.join(linkedWorkspace, ".clawhub", "lock.json"),
+      JSON.stringify({ version: 1, skills: { "release-validation": lockEntry } }),
+    );
+    const symlinkedRoot = await runChecker(
+      path.join(linkedWorkspace, "skills", "release-validation", "scripts", "check-update.mjs"),
+      linkedWorkspace,
+    );
+    expect(symlinkedRoot.status).toBe("check-failed");
+    expect(symlinkedRoot.update).toBeUndefined();
   },
 );
