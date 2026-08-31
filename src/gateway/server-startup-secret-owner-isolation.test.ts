@@ -39,7 +39,6 @@ import {
   testState,
 } from "./test-helpers.js";
 import "./server-startup-secret-diagnostics.test-support.js";
-import "./server-startup-secret-surfaces.test-support.js";
 
 const { webSearchProviders } = vi.hoisted(() => {
   const credentialPath = "plugins.entries.google.config.webSearch.apiKey";

@@ -1,4 +1,4 @@
-/** Integration coverage for breaker-suppressed startup SecretRef projection. */
+/** Integration coverage for isolated channel SecretRefs during Gateway startup. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../secrets/runtime-telegram.test-support.ts";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -40,7 +40,7 @@ function buildSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
   });
 }
 
-describe("gateway breaker SecretRef integration", () => {
+describe("gateway channel SecretRef integration", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
@@ -52,7 +52,7 @@ describe("gateway breaker SecretRef integration", () => {
   });
 
   it(
-    "preserves suppressed channel source for full reload projection",
+    "keeps an unavailable channel owner typed and recovers it on full reload",
     async () => {
       await withEnvAsync(
         {
@@ -111,10 +111,6 @@ describe("gateway breaker SecretRef integration", () => {
             emitStateEvent: vi.fn(),
             prepareRuntimeSecretsSnapshot,
             activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshot,
-            channelAutostartSuppression: {
-              reason: "crash-loop-breaker",
-              message: "breaker tripped: 20 unclean boots",
-            },
           });
 
           const startup = await prepareGatewayStartupConfig({
@@ -123,14 +119,22 @@ describe("gateway breaker SecretRef integration", () => {
           });
 
           expect(startup.cfg.gateway?.auth?.token).toBe("resolved-gateway-token");
-          expect(startup.cfg.channels).toBeUndefined();
+          expect(startup.cfg.channels?.telegram?.botToken).toEqual(channelTokenRef);
           const activeStartup = getActiveSecretsRuntimeSnapshot();
           if (!activeStartup) {
             throw new Error("Expected an active startup secrets snapshot");
           }
           expect(activeStartup.sourceConfig.gateway?.auth?.token).toEqual(gatewayTokenRef);
           expect(activeStartup.sourceConfig.channels?.telegram?.botToken).toEqual(channelTokenRef);
-          expect(activeStartup.config.channels).toBeUndefined();
+          expect(activeStartup.config.channels?.telegram?.botToken).toEqual(channelTokenRef);
+          expect(activeStartup.degradedOwners).toContainEqual(
+            expect.objectContaining({
+              ownerKind: "account",
+              ownerId: "telegram:default",
+              state: "unavailable",
+              degradationState: "cold",
+            }),
+          );
 
           process.env[CHANNEL_TOKEN_ENV] = "restored-channel-token";
           const reloaded = await activateRuntimeSecrets(activeStartup.sourceConfig, {
