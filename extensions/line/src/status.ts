@@ -15,6 +15,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasLineCredentials } from "./account-helpers.js";
 import type { LineProbeWebhookState, ResolvedLineAccount } from "./types.js";
+import { LINE_DEFAULT_WEBHOOK_PATH, resolveLineWebhookPath } from "./webhook-utils.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
@@ -24,6 +25,12 @@ const collectLineCredentialIssues = createDependentCredentialStatusIssueCollecto
   missingPrimaryMessage: "LINE channel access token not configured",
   missingDependentMessage: "LINE channel secret not configured",
 });
+
+/** The resolved route this account serves, published by resolveAccountSnapshot below. */
+function readSnapshotWebhookPath(account: ChannelAccountSnapshot): string {
+  const configured = isRecord(account) ? account.webhookPath : undefined;
+  return typeof configured === "string" && configured ? configured : LINE_DEFAULT_WEBHOOK_PATH;
+}
 
 function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefined {
   if (!isRecord(probe) || !isRecord(probe.webhook)) {
@@ -38,27 +45,36 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
     : undefined;
 }
 
-const LINE_WEBHOOK_DELIVERY_FIX =
-  "open the channel's Messaging API tab in the LINE Developers Console, set the webhook URL to your gateway's /line/webhook path, and turn Use webhook on";
-
 /**
  * What to tell an operator about a webhook LINE will not deliver to, or nothing when
  * it will. Startup and status both report this, and share one wording so the account
  * that logged the warning cannot describe itself differently when asked again.
+ *
+ * Each state names the fact it actually holds: a registered-but-off webhook already
+ * has a URL LINE handed back, while an unregistered one needs the route this account's
+ * monitor listens on. Naming a route the account does not serve would leave the bot
+ * silent while the warning claims it is fixed.
  */
-export function describeLineWebhookDelivery(
-  webhook: LineProbeWebhookState | undefined,
-): { message: string; fix: string } | undefined {
+export function describeLineWebhookDelivery(params: {
+  webhook: LineProbeWebhookState | undefined;
+  webhookPath: string;
+}): { message: string; fix: string } | undefined {
+  const { webhook, webhookPath } = params;
   if (!webhook || webhook.status === "active") {
     return undefined;
   }
-  return {
-    message:
-      webhook.status === "disabled"
-        ? "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off."
-        : "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-    fix: LINE_WEBHOOK_DELIVERY_FIX,
-  };
+  const consoleTab = "the channel's Messaging API tab in the LINE Developers Console";
+  return webhook.status === "disabled"
+    ? {
+        message:
+          "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
+        fix: `turn Use webhook on for ${webhook.endpoint} in ${consoleTab}`,
+      }
+    : {
+        message:
+          "LINE is not delivering webhook events: this channel has no webhook URL registered.",
+        fix: `register your gateway's public HTTPS URL ending in ${webhookPath} in ${consoleTab}, then turn Use webhook on`,
+      };
 }
 
 // LINE sends webhook events only while the console switch is on, and no API can turn
@@ -70,7 +86,10 @@ function collectLineWebhookIssues(accounts: ChannelAccountSnapshot[]): ChannelSt
     if (account.enabled === false || account.configured === false) {
       return [];
     }
-    const delivery = describeLineWebhookDelivery(readProbeWebhookState(account.probe));
+    const delivery = describeLineWebhookDelivery({
+      webhook: readProbeWebhookState(account.probe),
+      webhookPath: readSnapshotWebhookPath(account),
+    });
     return delivery
       ? [
           {
@@ -105,6 +124,7 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
         tokenStatus: account.tokenStatus,
         signingSecretStatus: account.signingSecretStatus,
         mode: "webhook",
+        webhookPath: resolveLineWebhookPath(account.config.webhookPath),
       },
     }),
   });

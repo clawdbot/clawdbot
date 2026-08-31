@@ -92,6 +92,35 @@ describe("probeLineBot", () => {
     }
   });
 
+  // The outer deadline is already running when the lookup starts. Given the exact
+  // remainder it would come due on the same tick as the outer timer, and whichever
+  // fires first decides whether a healthy identity result is reported as a failure.
+  // Only a slow identity call reaches that tie, so the hanging-lookup case above
+  // cannot cover it.
+  it("keeps the probe healthy when the identity call already spent most of the deadline", async () => {
+    vi.useFakeTimers();
+    getBotInfoMock.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({ displayName: "Bot", userId: "U1", basicId: "@bot" });
+          }, 4000);
+        }),
+    );
+    getWebhookEndpointMock.mockReturnValue(new Promise(() => {}));
+    try {
+      const pending = probeLineBotUnderTest();
+      await vi.advanceTimersByTimeAsync(6000);
+      const result = await pending;
+
+      expect(result.ok).toBe(true);
+      expect(result.webhook).toBeUndefined();
+      expect(result.bot?.userId).toBe("U1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still fails the probe when the bot identity call fails", async () => {
     getBotInfoMock.mockRejectedValue(new Error("bad token"));
 

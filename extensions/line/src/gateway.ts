@@ -7,6 +7,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { getLineRuntime } from "./runtime.js";
 import { describeLineWebhookDelivery } from "./status.js";
 import type { ResolvedLineAccount } from "./types.js";
+import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
@@ -42,7 +43,10 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       // Startup is where an operator is actually watching, and reaching the same
       // report through status costs them a flag they have no reason to try when
       // nothing looks wrong. The probe already has the answer here.
-      const delivery = describeLineWebhookDelivery(probe.ok ? probe.webhook : undefined);
+      const delivery = describeLineWebhookDelivery({
+        webhook: probe.ok ? probe.webhook : undefined,
+        webhookPath: resolveLineWebhookPath(account.config.webhookPath),
+      });
       if (delivery) {
         ctx.log?.warn?.(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
       }

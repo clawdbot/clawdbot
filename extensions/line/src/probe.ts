@@ -10,6 +10,10 @@ import type { LineProbeResult, LineProbeWebhookState } from "./types.js";
 // broken whose token is fine. @line/bot-sdk exposes no abort plumbing, so the budget
 // stops this call waiting rather than cancelling the request behind it.
 const LINE_WEBHOOK_LOOKUP_BUDGET_MS = 2000;
+// Headroom so the inner deadline always expires first. Without it, an identity call
+// that already spent most of the probe's budget leaves both timers due on the same
+// tick, and whichever wins the race decides whether a healthy token reports ok:false.
+const LINE_WEBHOOK_LOOKUP_MARGIN_MS = 250;
 
 // LINE delivers webhook events only while the channel's webhook is registered and
 // switched on in the Developers Console, and no API can set that switch. Reading it
@@ -18,7 +22,10 @@ async function readLineWebhookState(
   client: messagingApi.MessagingApiClient,
   remainingMs: number,
 ): Promise<LineProbeWebhookState | undefined> {
-  const budgetMs = Math.min(LINE_WEBHOOK_LOOKUP_BUDGET_MS, remainingMs);
+  const budgetMs = Math.min(
+    LINE_WEBHOOK_LOOKUP_BUDGET_MS,
+    remainingMs - LINE_WEBHOOK_LOOKUP_MARGIN_MS,
+  );
   if (budgetMs <= 0) {
     return undefined;
   }

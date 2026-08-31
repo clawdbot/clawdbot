@@ -39,13 +39,15 @@ describe("linePlugin status.collectStatusIssues", () => {
       webhook: { status: "disabled", endpoint: "https://gateway.example/line/webhook" },
       message:
         "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
+      fix: "turn Use webhook on for https://gateway.example/line/webhook in the channel's Messaging API tab in the LINE Developers Console",
     },
     {
       name: "never registered",
       webhook: { status: "unset" },
       message: "LINE is not delivering webhook events: this channel has no webhook URL registered.",
+      fix: "register your gateway's public HTTPS URL ending in /line/webhook in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
     },
-  ])("reports a webhook that is $name", ({ webhook, message }) => {
+  ])("reports a webhook that is $name", ({ webhook, message, fix }) => {
     expect(
       collectIssues([
         {
@@ -62,7 +64,33 @@ describe("linePlugin status.collectStatusIssues", () => {
         accountId: "default",
         kind: "config",
         message,
-        fix: "open the channel's Messaging API tab in the LINE Developers Console, set the webhook URL to your gateway's /line/webhook path, and turn Use webhook on",
+        fix,
+      },
+    ]);
+  });
+
+  // A warning that names a route the account does not serve leaves the bot silent
+  // while telling the operator they have fixed it.
+  it("names the account's own route when no webhook is registered", () => {
+    expect(
+      collectIssues([
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          tokenSource: "config",
+          webhookPath: "/hooks/line-primary",
+          probe: { ok: true, webhook: { status: "unset" } },
+        } as never,
+      ]),
+    ).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message:
+          "LINE is not delivering webhook events: this channel has no webhook URL registered.",
+        fix: "register your gateway's public HTTPS URL ending in /hooks/line-primary in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
       },
     ]);
   });
