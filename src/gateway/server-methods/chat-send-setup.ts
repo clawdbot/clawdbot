@@ -22,6 +22,7 @@ export async function prepareAndAdmitChatSend(
   options?: {
     trustedSystemInput?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
+    hideFromDisplay?: boolean;
   },
 ) {
   const normalizedRequest = normalizeChatSendRequest({
@@ -29,6 +30,7 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
+    ...(options?.hideFromDisplay ? { hideFromDisplay: true } : {}),
   });
   if (!normalizedRequest.ok) {
     respond(

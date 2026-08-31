@@ -81,6 +81,7 @@ export type NormalizedChatSendRequest = {
   normalizedAttachments: ChatAttachment[];
   rawMessage: string;
   reconnectResumeRequested: boolean;
+  hideFromDisplay?: boolean;
 };
 
 type NormalizeChatSendRequestResult =
@@ -93,6 +94,7 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
+  hideFromDisplay?: boolean;
 }): NormalizeChatSendRequestResult {
   const chatSendReceivedAtMs = performance.now();
   const client = params.client;
@@ -248,6 +250,7 @@ export function normalizeChatSendRequest(params: {
       normalizedAttachments,
       rawMessage,
       reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
+      ...(params.hideFromDisplay ? { hideFromDisplay: true } : {}),
     },
   };
 }

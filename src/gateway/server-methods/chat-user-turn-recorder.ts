@@ -44,7 +44,9 @@ export function createGatewayChatUserTurnController(params: {
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
-    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+    ...(request.goalOperation?.action === "resume" || request.hideFromDisplay
+      ? { display: false }
+      : {}),
     text: request.rawMessage,
     timestamp: session.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),

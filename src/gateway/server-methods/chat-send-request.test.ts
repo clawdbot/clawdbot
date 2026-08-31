@@ -241,3 +241,24 @@ describe("normalizeChatSendRequest", () => {
     ).toEqual({ ok: false, error: "run tool bindings require a paired browser copilot" });
   });
 });
+
+describe("normalizeChatSendRequest hideFromDisplay", () => {
+  it("propagates hideFromDisplay for trusted internal dispatches", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams(),
+        client: null,
+        trustedSystemInput: true,
+        hideFromDisplay: true,
+      }),
+    ).toMatchObject({ ok: true, value: { hideFromDisplay: true } });
+  });
+
+  it("leaves hideFromDisplay unset for ordinary sends", () => {
+    const result = normalizeChatSendRequest({ params: validParams(), client: null });
+    expect(result).toMatchObject({ ok: true });
+    expect((result as { value: { hideFromDisplay?: boolean } }).value.hideFromDisplay).toBe(
+      undefined,
+    );
+  });
+});

@@ -56,6 +56,7 @@ type ChatSendInternalOptions = {
   trustedSystemInput?: boolean;
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  hideFromDisplay?: boolean;
 };
 
 async function handleChatSendWithOptions(
@@ -533,5 +534,23 @@ export async function handleTrustedInternalChatSend(
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
     trustedSystemInput: true,
+  });
+}
+
+/**
+ * Dispatches an internally delegated turn within its caller-owned tool boundary
+ * while keeping the synthetic input out of user-visible history, exports, and
+ * compaction views. Used by realtime voice agent consults, whose structured
+ * orchestration input must not persist as a user-authored chat turn.
+ */
+export async function handleTrustedInternalChatSendWithRuntimeTools(
+  options: GatewayRequestHandlerOptions,
+  toolsAllow: string[],
+  onAdmissionOwned?: () => Promise<boolean>,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    trustedSystemInput: true,
+    toolsAllow,
+    hideFromDisplay: true,
   });
 }
