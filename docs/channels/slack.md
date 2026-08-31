@@ -1311,12 +1311,15 @@ Use `bookmark` to manage links on a channel's bookmark bar (the channel header s
 {
   "action": "bookmark",
   "channel": "slack",
+  "channelId": "C12345678",
   "op": "add",
   "title": "Runbook",
   "link": "https://runbook.example",
   "emoji": "bookmark"
 }
 ```
+
+`bookmark` targets the channel given by `channelId`. When the action runs inside a channel conversation the `channelId` is inferred from the tool context (the current channel), so an explicit `channelId` is only required for delegated or cross-channel calls; a delegated `bookmark` on a channel other than the current conversation is rejected unless the operator context authorizes it.
 
 `add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface, and the app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`. The Recommended bot manifests, the Enterprise Grid org-wide manifests, and the optional user-token scope list above all declare these scopes; existing installations must add them and reinstall the app before using the `bookmark` action.
 

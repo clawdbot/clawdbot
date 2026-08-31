@@ -41,6 +41,7 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "delete",
   "pin",
   "unpin",
+  "bookmark",
   "thread-create",
   "thread-reply",
   "sticker",
