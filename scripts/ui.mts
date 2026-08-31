@@ -409,7 +409,7 @@ function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
   return null;
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
+export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -460,7 +460,7 @@ function main(argv: string[] = process.argv.slice(2)): void {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          ["--import", "tsx", path.join(repoRoot, "scripts", validator)],
+          ["--import", new URL("./tsx.mjs", import.meta.url).href, path.join(here, validator)],
           buildEnv,
           { cwd: repoRoot },
         ),
@@ -501,5 +501,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  main();
+  runUiCli();
 }

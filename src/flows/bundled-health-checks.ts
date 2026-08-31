@@ -2,6 +2,7 @@
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import {
@@ -14,6 +15,7 @@ import { resolveProviderPolicySurface } from "../plugins/provider-public-artifac
 import {
   loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadBundledPluginPublicArtifactModuleSync,
+  loadPluginPublicArtifactModuleSync,
 } from "../plugins/public-surface-loader.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
@@ -26,6 +28,7 @@ type EmbeddingProviderSetupInspectionResult =
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
   registerCodexManagedAppServerDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
   pluginStateIsolatedDoctorCheckIds?: readonly string[];
@@ -45,6 +48,7 @@ type BundledHealthApi = {
 
 type WorkerProviderHealthApi = {
   registerWorkerProviderDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
 };
@@ -124,10 +128,31 @@ export function registerBundledHealthChecks(params: {
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });
   if (shouldRegisterCodexManagedHealth(params.cfg)) {
-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-      dirName: "codex",
-      artifactBasename: "api.js",
-    }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+    const registry = loadPluginManifestRegistryForPluginRegistry({
+      config: params.cfg,
+      workspaceDir: params.cwd,
+      env,
+      pluginIds: ["codex"],
+    });
+    const owner = registry.plugins.find((plugin) => plugin.id === "codex");
+    // Doctor must inspect the selected runtime's artifact, including official external installs.
+    // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
+    if (!owner || (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true)) {
+      throw new MissingPublicSurfaceError(
+        "Unable to resolve Codex doctor health API: install the official Codex plugin with openclaw plugins install @openclaw/codex",
+      );
+    }
+    // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
+    // Only load an advertised surface; a broken declaration must still fail visibly.
+    if (owner.doctorHealthChecks === true) {
+      loadPluginPublicArtifactModuleSync<
+        Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
+      >({
+        pluginRoot: owner.rootDir,
+        artifactBasename: "api.js",
+        origin: owner.origin === "bundled" ? "bundled" : "global",
+      }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
+    }
   }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
@@ -160,15 +185,12 @@ function registerBundledWorkerProviderHealthChecks(
     loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
       dirName: pluginId,
       artifactCandidates: ["doctor-health-api.js"],
-    })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
+    })?.registerWorkerProviderDoctorChecks?.({ getHealthCheck, registerHealthCheck });
   }
 }
 
 function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
   if (!collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")) {
-    return false;
-  }
-  if (cfg.plugins?.entries?.codex?.enabled === false) {
     return false;
   }
   return passesManifestOwnerBasePolicy({

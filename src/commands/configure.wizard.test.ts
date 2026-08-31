@@ -57,6 +57,34 @@ describe("runConfigureWizard", () => {
     setupWizardTestDefaults();
   });
 
+  it.each(["gateway", "daemon", "health", "web"] as const)(
+    "configures %s without requiring an agent owner",
+    async (section) => {
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+        gateway: { mode: "local" },
+      };
+      setupBaseWizardState(config);
+      queueWizardPrompts({ select: section === "web" ? [] : ["local"], confirm: [false, false] });
+
+      await runConfigureWizard({ command: "configure", sections: [section] }, createRuntime());
+
+      expect(mocks.promptAuthConfig).not.toHaveBeenCalled();
+      expect(mocks.clackSelect).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Which agent do you want to configure?" }),
+      );
+      if (section === "gateway") {
+        expect(mocks.promptGatewayConfig).toHaveBeenCalledOnce();
+      } else if (section === "daemon") {
+        expect(mocks.maybeInstallDaemon).toHaveBeenCalledOnce();
+      } else if (section === "health") {
+        expect(mocks.healthCommand).toHaveBeenCalledOnce();
+      } else {
+        expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);
+      }
+    },
+  );
+
   it("persists provider-owned web search config changes returned by setupSearch", async () => {
     setupBaseWizardState();
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => {

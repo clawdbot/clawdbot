@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -11,7 +12,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowNsdManager
 import org.xbill.DNS.Rcode
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -58,16 +63,156 @@ class GatewayDiscoveryTest {
   @Test
   @Config(sdk = [33])
   fun discoveredGatewayPreservesLegacyAndroidHost() {
-    val service =
-      NsdServiceInfo().apply {
-        serviceName = "Gateway"
-        serviceType = "_openclaw-gw._tcp."
-        port = 18789
-        @Suppress("DEPRECATION")
-        host = InetAddress.getByName("127.0.0.1")
-      }
+    val harness = legacyDiscovery()
+    val service = legacyService("Gateway")
+    harness.listener.onServiceFound(service)
+    harness.resolvers(service).single().onServiceResolved(service)
 
-    assertEquals("127.0.0.1", discoverGateway(service).discoveredHost())
+    assertEquals("127.0.0.1", harness.discovery.discoveredHost())
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun legacyDiscoveryResolvesServicesThroughOnePlatformSlot() {
+    val harness = legacyDiscovery()
+    val services = listOf(legacyService("First"), legacyService("Second"), legacyService("Third"))
+    services.forEach(harness.listener::onServiceFound)
+
+    assertEquals(listOf(1, 0, 0), services.map { harness.resolvers(it).size })
+    harness.resolvers(services[0]).single().onServiceResolved(services[0])
+    assertEquals(listOf(1, 1, 0), services.map { harness.resolvers(it).size })
+    harness.resolvers(services[1]).single().onServiceResolved(services[1])
+    harness.resolvers(services[2]).single().onServiceResolved(services[2])
+
+    assertEquals(
+      services.map { it.serviceName },
+      harness.discovery.gateways.value
+        .map { it.name },
+    )
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun legacyDiscoveryAdvancesAfterResolutionFailure() {
+    val harness = legacyDiscovery()
+    val first = legacyService("First")
+    val second = legacyService("Second")
+    harness.listener.onServiceFound(first)
+    harness.listener.onServiceFound(second)
+    assertTrue(harness.resolvers(second).isEmpty())
+
+    harness.resolvers(first).single().onResolveFailed(first, NsdManager.FAILURE_INTERNAL_ERROR)
+    harness.resolvers(second).single().onServiceResolved(second)
+
+    assertEquals(
+      listOf("Second"),
+      harness.discovery.gateways.value
+        .map { it.name },
+    )
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun legacyDiscoverySkipsLostQueuedServices() {
+    val harness = legacyDiscovery()
+    val first = legacyService("First")
+    val lost = legacyService("Lost")
+    val last = legacyService("Last")
+    listOf(first, lost, last).forEach(harness.listener::onServiceFound)
+    harness.listener.onServiceLost(lost)
+    assertTrue(harness.resolvers(lost).isEmpty())
+    assertTrue(harness.resolvers(last).isEmpty())
+
+    harness.resolvers(first).single().onServiceResolved(first)
+    harness.resolvers(last).single().onServiceResolved(last)
+
+    assertTrue(harness.resolvers(lost).isEmpty())
+    assertEquals(
+      listOf("First", "Last"),
+      harness.discovery.gateways.value
+        .map { it.name },
+    )
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun legacyDiscoveryKeepsLostActiveSlotUntilItsTerminalCallback() {
+    val harness = legacyDiscovery()
+    val old = legacyService("Gateway", port = 18789)
+    val replacement = legacyService("Gateway", port = 18790)
+    harness.listener.onServiceFound(old)
+    val oldResolver = harness.resolvers(old).single()
+    harness.listener.onServiceLost(old)
+    harness.listener.onServiceFound(replacement)
+
+    assertEquals(1, harness.resolvers(replacement).size)
+    oldResolver.onServiceResolved(old)
+    assertTrue(
+      harness.discovery.gateways.value
+        .isEmpty(),
+    )
+    // The shadow retains completed listeners under the same name/type: these are cumulative registrations.
+    assertEquals(2, harness.resolvers(replacement).size)
+    harness.resolvers(replacement)[1].onServiceResolved(replacement)
+
+    assertEquals(
+      18790,
+      harness.discovery.gateways.value
+        .single()
+        .port,
+    )
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun legacyDiscoveryDoesNotReleasePlatformSlotWhenCoroutineScopeIsCancelled() {
+    val harness = legacyDiscovery()
+    val first = legacyService("First")
+    val second = legacyService("Second")
+    harness.listener.onServiceFound(first)
+    harness.listener.onServiceFound(second)
+
+    scope.cancel()
+    assertTrue(harness.resolvers(second).isEmpty())
+    harness.resolvers(first).single().onResolveFailed(first, NsdManager.FAILURE_INTERNAL_ERROR)
+    harness.resolvers(second).single().onServiceResolved(second)
+
+    assertEquals(
+      listOf("Second"),
+      harness.discovery.gateways.value
+        .map { it.name },
+    )
+  }
+
+  @Test
+  @Config(sdk = [33], shadows = [RejectingNsdResolveShadow::class])
+  fun legacyDiscoveryDrainsSynchronousRejectionsBeforeResumingCallbacks() {
+    val harness = legacyDiscovery()
+    val first = legacyService("First")
+    val next = legacyService("Next")
+    val tail = legacyService("Tail")
+    harness.listener.onServiceFound(first)
+    repeat(4096) { harness.listener.onServiceFound(legacyService("Rejected $it")) }
+    harness.listener.onServiceFound(next)
+    harness.listener.onServiceFound(tail)
+    val firstResolver = harness.resolvers(first).single()
+    assertTrue(harness.resolvers(next).isEmpty())
+    assertTrue(harness.resolvers(tail).isEmpty())
+
+    val nsd = harness.nsd as RejectingNsdResolveShadow
+    nsd.failuresRemaining = 4096
+    firstResolver.onServiceResolved(first)
+
+    assertEquals(0, nsd.failuresRemaining)
+    assertEquals(1, harness.resolvers(next).size)
+    assertTrue(harness.resolvers(tail).isEmpty())
+    harness.resolvers(next).single().onServiceResolved(next)
+    harness.resolvers(tail).single().onServiceResolved(tail)
+    assertEquals(
+      listOf("First", "Next", "Tail"),
+      harness.discovery.gateways.value
+        .map { it.name },
+    )
   }
 
   @Test
@@ -134,6 +279,25 @@ class GatewayDiscoveryTest {
       },
     )
 
+  private fun legacyDiscovery(): LegacyDiscoveryHarness {
+    val context = RuntimeEnvironment.getApplication()
+    val nsd = shadowOf(context.getSystemService(NsdManager::class.java))
+    val discovery = GatewayDiscovery(context, scope)
+    return LegacyDiscoveryHarness(discovery, nsd.getDiscoveryListeners("_openclaw-gw._tcp.")!!.single(), nsd)
+  }
+
+  private fun legacyService(
+    name: String,
+    port: Int = 18789,
+  ): NsdServiceInfo =
+    NsdServiceInfo().apply {
+      serviceName = name
+      serviceType = "_openclaw-gw._tcp."
+      this.port = port
+      @Suppress("DEPRECATION")
+      host = InetAddress.getByName("127.0.0.1")
+    }
+
   private fun discoverGateway(service: NsdServiceInfo): GatewayDiscovery {
     val discovery = GatewayDiscovery(RuntimeEnvironment.getApplication(), scope)
     GatewayDiscovery::class.java.getDeclaredMethod("upsertResolvedService", NsdServiceInfo::class.java).apply {
@@ -154,6 +318,32 @@ class GatewayDiscoveryTest {
       byteArrayOf(0xfe.toByte(), 0x80.toByte(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
       3,
     )
+}
+
+/** Injects only synchronous SDK rejection; normal NSD bookkeeping stays in the pinned platform shadow. */
+@Implements(NsdManager::class)
+class RejectingNsdResolveShadow : ShadowNsdManager() {
+  var failuresRemaining = 0
+
+  @Implementation
+  override fun resolveService(
+    serviceInfo: NsdServiceInfo,
+    listener: NsdManager.ResolveListener,
+  ) {
+    if (failuresRemaining > 0) {
+      failuresRemaining--
+      throw IllegalStateException("NSD service rejected resolution")
+    }
+    super.resolveService(serviceInfo, listener)
+  }
+}
+
+private data class LegacyDiscoveryHarness(
+  val discovery: GatewayDiscovery,
+  val listener: NsdManager.DiscoveryListener,
+  val nsd: ShadowNsdManager,
+) {
+  fun resolvers(service: NsdServiceInfo): List<NsdManager.ResolveListener> = nsd.getResolveListeners(service).orEmpty()
 }
 
 private data class StatusCase(

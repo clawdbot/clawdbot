@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -239,7 +240,7 @@ describe("triageCommand", () => {
       detectedAgents: [],
       suggestedCommands: [
         `claude "$(cat '${promptPath}')"`,
-        `codex exec - < '${promptPath}'`,
+        `codex exec --skip-git-repo-check - < '${promptPath}'`,
         "openclaw triage --run",
       ],
     });
@@ -263,9 +264,10 @@ describe("triageCommand", () => {
     expect(mocks.verifySetupInference).not.toHaveBeenCalled();
   });
 
-  it("degrades to a sanitized prompt when the Gateway cannot provide diagnostics", async () => {
+  it("degrades to a sanitized prompt when the diagnostics export fails", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
-    mocks.callGatewayFromCliWithTransport.mockRejectedValue(
+    mocks.callGatewayFromCliWithTransport.mockResolvedValue({ ok: true });
+    mocks.writeDiagnosticSupportExport.mockRejectedValue(
       new Error(
         `Gateway unreachable: Config: ${stateDir}/openclaw.json; Authorization: Bearer ${secret}`,
       ),
@@ -287,7 +289,62 @@ describe("triageCommand", () => {
     expect(prompt).toContain("Diagnostics export unavailable: Gateway unreachable");
     expect(prompt).toContain("Config: $OPENCLAW_STATE_DIR/openclaw.json");
     expect(prompt).not.toContain(stateDir);
-    expect(mocks.writeDiagnosticSupportExport).not.toHaveBeenCalled();
+  });
+
+  it("preserves local diagnostics and redacted snapshot failures while the Gateway is offline", async () => {
+    const { writeDiagnosticSupportExport } = await vi.importActual<
+      typeof import("../logging/diagnostic-support-export.js")
+    >("../logging/diagnostic-support-export.js");
+    const secret = "sk-test-triage-offline-secret-1234567890";
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({ gateway: { auth: { token: secret } } }));
+    mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error(`Offline token=${secret}`));
+    mocks.gatherDaemonStatus.mockRejectedValue(new Error("Status unavailable"));
+    mocks.writeDiagnosticSupportExport.mockImplementation((options) =>
+      writeDiagnosticSupportExport({
+        ...options,
+        stateDir,
+        env: { HOME: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        readLogTail: async () => ({
+          file: path.join(stateDir, "gateway.log"),
+          cursor: 0,
+          size: 0,
+          lines: [],
+          truncated: false,
+          reset: false,
+        }),
+      }),
+    );
+    const runtime = createRuntime();
+
+    await triageCommand(runtime, { json: true });
+
+    const report = runtime.writeJson.mock.calls[0]?.[0] as {
+      promptPath: string;
+      bundlePath: string;
+      bundleError: string | null;
+    };
+    expect(report.bundleError).toBeNull();
+    expect(report.bundlePath).toEqual(expect.any(String));
+    const zip = await JSZip.loadAsync(await fs.readFile(report.bundlePath));
+    const diagnostics = JSON.parse(await zip.file("diagnostics.json")!.async("string"));
+    expect(diagnostics.config).toMatchObject({ exists: true, parseOk: true });
+    expect(diagnostics.health).toMatchObject({ status: "failed" });
+    expect(diagnostics.status).toMatchObject({ status: "failed" });
+    const entries = await Promise.all(
+      Object.values(zip.files)
+        .filter((entry) => !entry.dir)
+        .map((entry) => entry.async("string")),
+    );
+    expect(entries.join("\n")).not.toContain(secret);
+    expect(entries.join("\n")).not.toContain(stateDir);
+    expect(await fs.readFile(report.promptPath, "utf8")).toContain("Sanitized ZIP:");
+    if (process.platform !== "win32") {
+      for (const file of [report.promptPath, report.bundlePath]) {
+        expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      }
+      expect((await fs.stat(path.dirname(report.promptPath))).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("reuses the sanitized support exporter with Gateway status and health snapshots", async () => {
@@ -327,23 +384,32 @@ describe("triageCommand", () => {
     });
   });
 
-  it("refuses embedded execution when the live inference probe fails", async () => {
-    mocks.verifySetupInference.mockResolvedValue({
-      ok: false,
-      status: "auth",
-      error: "The configured model is unavailable",
-    });
-    const runtime = createRuntime();
+  it.each([true, false])(
+    "refuses embedded execution when inference fails (run=%s)",
+    async (run) => {
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        config: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
+      });
+      mocks.select.mockResolvedValue({ kind: "embedded" });
+      mocks.verifySetupInference.mockResolvedValue({
+        ok: false,
+        status: "auth",
+        error: "The configured model is unavailable",
+      });
+      const runtime = createRuntime();
 
-    await withInteractiveTerminal(async () => {
-      await expect(triageCommand(runtime, { noExport: true, run: true })).rejects.toThrow(
-        "Run `openclaw onboard` or use a suggested handoff command.",
-      );
-    });
+      await withInteractiveTerminal(async () => {
+        await expect(triageCommand(runtime, { noExport: true, run })).rejects.toThrow(
+          "Run `openclaw onboard` or use a suggested handoff command.",
+        );
+      });
 
-    expect(mocks.verifySetupInference).toHaveBeenCalledWith({ runtime, timeoutMs: 15_000 });
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
-  });
+      expect(mocks.verifySetupInference).toHaveBeenCalledWith({ runtime, timeoutMs: 15_000 });
+      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes the saved prompt to one embedded agent turn after a healthy live probe", async () => {
     mocks.verifySetupInference.mockResolvedValue({

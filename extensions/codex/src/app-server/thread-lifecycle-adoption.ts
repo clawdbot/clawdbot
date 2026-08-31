@@ -7,6 +7,7 @@ import {
 } from "./auth-start-options.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject } from "./protocol.js";
 import {
   sessionBindingIdentity,
@@ -17,7 +18,10 @@ import { captureExclusiveSharedCodexAppServerClient } from "./shared-client.js";
 import { shouldRotateCodexGpt56MultiAgentBinding } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  CodexAdoptedThreadActiveError,
+  CodexThreadBindingConflictError,
+} from "./thread-lifecycle-errors.js";
 import { resolveCodexThreadAgentDir, resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -26,6 +30,26 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
 import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
+
+/** Passive refusal must precede releasing or acquiring any native subscription. */
+export async function assertAdoptedCodexThreadResumeAllowed(
+  params: CodexStartOrResumeThreadParams,
+  threadId: string,
+  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+): Promise<void> {
+  const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
+    params.client.request(
+      "thread/read",
+      { threadId, includeTurns: false },
+      { signal: params.signal },
+    ),
+  );
+  context.throwIfAborted();
+  assertCodexThreadAcceptsDirectInput(thread);
+  if (thread.status?.type === "active") {
+    throw new CodexAdoptedThreadActiveError();
+  }
+}
 
 /** Preserve attach's native-queue-before-binding-lease order when consuming pending intent. */
 export async function withCodexThreadLifecycleBinding(
@@ -180,6 +204,7 @@ async function preparePendingCodexThreadResume(
   if (thread.id !== binding.threadId || (statusType !== "idle" && statusType !== "notLoaded")) {
     throw fail("the native thread is not idle; wait for its current run to finish");
   }
+  assertCodexThreadAcceptsDirectInput(thread);
   let unloaded = statusType === "notLoaded";
   const dispose = params.client.addNotificationHandler((notification) => {
     if (

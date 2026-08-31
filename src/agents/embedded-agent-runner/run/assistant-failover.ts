@@ -10,8 +10,9 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
-  formatAssistantErrorText,
   formatBillingErrorMessage,
+  formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
   isTimeoutErrorMessage,
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
@@ -83,6 +84,7 @@ export async function handleAssistantFailover(params: {
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
+  agentId?: string;
   authFailure: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
@@ -332,6 +334,7 @@ function resolveAssistantFailoverErrorMessage(params: {
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
+  agentId?: string;
   activeErrorContext: { provider: string; model: string };
   providerOwner?: PreparedProviderFailoverOwner;
   terminal: AgentRunAttemptTerminal;
@@ -345,9 +348,10 @@ function resolveAssistantFailoverErrorMessage(params: {
     params.terminal.kind === "timeout" && params.terminal.source !== "observation";
   return (
     (params.lastAssistant
-      ? formatAssistantErrorText(params.lastAssistant, {
+      ? formatUserFacingAssistantErrorText(params.lastAssistant, {
           cfg: params.config,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           provider: params.activeErrorContext.provider,
           providerOwner: params.providerOwner,
           model: params.activeErrorContext.model,
@@ -367,7 +371,7 @@ function resolveAssistantFailoverErrorMessage(params: {
             )
           : params.authFailure
             ? "LLM request unauthorized."
-            : "LLM request failed.")
+            : GENERIC_ASSISTANT_ERROR_TEXT)
   );
 }
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 // Control UI E2E tests cover visible browser dictation state through a real composer.
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -69,7 +70,11 @@ suite.define(() => {
       const committedDraft = cancel ? "ship it" : expected;
       expect(await textarea.inputValue()).toBe(committedDraft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureComposerProof(page, `dictation-${name.replaceAll(" ", "-")}-committed.png`);
+      await captureComposerProof(
+        suite,
+        page,
+        `dictation-${name.replaceAll(" ", "-")}-committed.png`,
+      );
       expect(await textarea.inputValue()).toBe(committedDraft);
     });
   });
@@ -132,7 +137,7 @@ suite.define(() => {
       await expect
         .poll(() => textarea.inputValue())
         .toBe("keep this draft discard this speech too");
-      await captureComposerProof(page, "dictation-new-session-recognized-preview.png");
+      await captureComposerProof(suite, page, "dictation-new-session-recognized-preview.png");
       await page.keyboard.press("Escape");
       await expect.poll(() => textarea.inputValue()).toBe("keep this draft");
       await gateway.waitForRequest("talk.session.close");
@@ -140,7 +145,7 @@ suite.define(() => {
         true,
       );
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await captureComposerProof(page, "dictation-new-session-cancelled.png");
+      await captureComposerProof(suite, page, "dictation-new-session-cancelled.png");
     });
   });
 
@@ -173,10 +178,10 @@ suite.define(() => {
 
       await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
       await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await captureComposerProof(page, "microphone-picker-hold-toggle.png");
+      await captureComposerProof(suite, page, "microphone-picker-hold-toggle.png");
       await page.screenshot({
         animations: "disabled",
-        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-hold-toggle-full.png",
+        path: path.join(suite.artifactDir, "voice-controls/microphone-picker-hold-toggle-full.png"),
       });
     });
   });
@@ -204,10 +209,13 @@ suite.define(() => {
       await expect
         .poll(() => unavailable.getByRole("button", { name: "Configure" }).count())
         .toBe(2);
-      await captureComposerProof(page, "microphone-picker-capability-gating.png");
+      await captureComposerProof(suite, page, "microphone-picker-capability-gating.png");
       await page.screenshot({
         animations: "disabled",
-        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-capability-gating-full.png",
+        path: path.join(
+          suite.artifactDir,
+          "voice-controls/microphone-picker-capability-gating-full.png",
+        ),
       });
     });
   });
@@ -252,10 +260,10 @@ suite.define(() => {
         expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
         await expect.poll(() => stop.isVisible()).toBe(true);
         await expect.poll(() => send.isVisible()).toBe(true);
-        await captureComposerProof(page, "dictation-status-actions.png");
+        await captureComposerProof(suite, page, "dictation-status-actions.png");
         await page.screenshot({
           animations: "disabled",
-          path: ".artifacts/control-ui-e2e/voice-controls/dictation-latched-after-release.png",
+          path: path.join(suite.artifactDir, "voice-controls/dictation-latched-after-release.png"),
         });
         const composerBox = await composer.boundingBox();
         expect(composerBox).not.toBeNull();

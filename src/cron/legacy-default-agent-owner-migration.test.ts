@@ -52,9 +52,7 @@ it("preserves a session-scoped owner stored only in job JSON", async () => {
   delete jobJson.agentId;
   jobJson.sessionKey = "agent:research:main";
   database
-    .prepare(
-      "UPDATE cron_jobs SET agent_id = NULL, session_key = NULL, job_json = ? WHERE store_key = ?",
-    )
+    .prepare("UPDATE cron_jobs SET agent_id = NULL, job_json = ? WHERE store_key = ?")
     .run(JSON.stringify(jobJson), storeKey);
 
   expect(await migrate(storePath, env)).toBe(0);

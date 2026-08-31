@@ -1,10 +1,12 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -13,8 +15,13 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 internal enum class ChatScrollFollowTarget {
@@ -77,7 +84,11 @@ internal data class ChatReaderScrollController(
   val listState: LazyListState,
   val showJumpToLatest: Boolean,
   val jumpToLatest: () -> Unit,
+  val onManualNavigation: () -> Unit,
+  val nestedScrollConnection: NestedScrollConnection,
 )
+
+internal val LocalChatReaderNavigation = staticCompositionLocalOf<() -> Unit> { {} }
 
 @Composable
 internal fun rememberChatReaderScrollController(
@@ -94,13 +105,37 @@ internal fun rememberChatReaderScrollController(
     rememberSaveable(sessionKey, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
-  var isApplyingScroll by remember(sessionKey) { mutableStateOf(false) }
+  var applyingScrollCount by remember(sessionKey) { mutableIntStateOf(0) }
   var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
+
+  fun pauseFollowing() {
+    readerState = readerState.copy(followTarget = null)
+    // Stop an older automatic animation at its default priority, never interrupt
+    // a newer user drag that has already taken ownership of the scroll state.
+    if (applyingScrollCount > 0) scope.launch(start = CoroutineStart.UNDISPATCHED) { listState.stopScroll() }
+  }
+
+  val nestedScroll =
+    remember(sessionKey) {
+      object : NestedScrollConnection {
+        override fun onPreScroll(
+          available: Offset,
+          source: NestedScrollSource,
+        ): Offset {
+          // A code viewport can consume the whole drag without scrolling the transcript.
+          // Its reader intent must still retire follow, without consuming the gesture.
+          if (source == NestedScrollSource.UserInput && available.y != 0f) pauseFollowing()
+          return Offset.Zero
+        }
+      }
+    }
 
   suspend fun applyTransition(transition: ChatReaderTransition) {
     readerState = transition.state
     val index = transition.scrollIndex ?: return
-    isApplyingScroll = true
+    // A replacement cancels its predecessor before the predecessor's finally runs.
+    // Count active invocations so that cleanup cannot hide the newer animation.
+    applyingScrollCount += 1
     try {
       if (transition.animated) {
         listState.animateScrollToItem(index)
@@ -108,7 +143,7 @@ internal fun rememberChatReaderScrollController(
         listState.scrollToItem(index)
       }
     } finally {
-      isApplyingScroll = false
+      applyingScrollCount -= 1
     }
   }
 
@@ -130,7 +165,7 @@ internal fun rememberChatReaderScrollController(
         listState.firstVisibleItemScrollOffset,
       )
     }.collect { (scrolling, index, offset) ->
-      if (!readerState.initialized || isApplyingScroll) return@collect
+      if (!readerState.initialized || applyingScrollCount > 0) return@collect
       if (scrolling) {
         isUserScrolling = true
         readerState = readerState.copy(followTarget = null)
@@ -149,6 +184,8 @@ internal fun rememberChatReaderScrollController(
         applyTransition(readerState.jumpToLatest(currentTimeline))
       }
     },
+    onManualNavigation = ::pauseFollowing,
+    nestedScrollConnection = nestedScroll,
   )
 }
 

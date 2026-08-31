@@ -88,7 +88,7 @@ describe("loadChatRoute", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
   });
 
@@ -498,7 +498,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -521,7 +521,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
     });
   });
@@ -541,7 +541,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
       draft: undefined,
       face: "dashboard",

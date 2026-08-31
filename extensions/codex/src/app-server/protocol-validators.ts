@@ -16,6 +16,7 @@ import type {
   CodexDynamicToolCallParams,
   CodexErrorNotification,
   CodexModelListResponse,
+  CodexThread,
   CodexThreadForkResponse,
   CodexThreadForkParams,
   CodexThreadResumeResponse,
@@ -347,6 +348,26 @@ export function assertCodexThreadForkParams(value: unknown): CodexThreadForkPara
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
   const normalized = normalizeWithDefaults(threadResumeResponseSchema, value);
   return assertCodexShape(validateThreadResumeResponse, normalized, "thread/resume response");
+}
+
+export class CodexThreadDirectInputError extends Error {
+  constructor(threadId: string) {
+    super(
+      `Codex thread ${threadId} is controlled by its parent and cannot accept direct input. ` +
+        "Continue its parent thread, or use /new for a separate OpenClaw session.",
+    );
+    this.name = "CodexThreadDirectInputError";
+  }
+}
+
+/** Native V2 children allow observation, but only their parent may supply turn input. */
+export function assertCodexThreadAcceptsDirectInput(
+  thread: Pick<CodexThread, "id" | "canAcceptDirectInput">,
+): void {
+  // Unloaded threads report null; only an explicit native refusal is conclusive.
+  if (thread.canAcceptDirectInput === false) {
+    throw new CodexThreadDirectInputError(thread.id);
+  }
 }
 
 /** Asserts and normalizes a Codex turn/start response. */

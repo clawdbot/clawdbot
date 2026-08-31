@@ -114,8 +114,6 @@ export function createUnsupportedControlError(params: {
   );
 }
 
-export const DEFAULT_ACP_RUNTIME_IDLE_TTL_MS = 0;
-
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
   const raw = meta as Record<string, unknown>;
   return (

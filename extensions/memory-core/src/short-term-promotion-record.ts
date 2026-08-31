@@ -26,9 +26,9 @@ import {
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
+  MAX_QUERY_HASHES,
   MAX_RECALL_DAYS,
   mergeProjectKeyLists,
-  mergeQueryHashes,
   mergeRecentDistinct,
   normalizeIsoDay,
   normalizeMemoryPath,
@@ -289,7 +289,7 @@ export async function recordShortTermRecalls(params: {
       );
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
-      const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
       // Workspace-file hits without explicit provenance retain the index's

@@ -1399,11 +1399,9 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.content).toEqual([
-      { type: "input_text", text: "Stable prefix\nDynamic suffix" },
-    ]);
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {

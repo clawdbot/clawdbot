@@ -123,9 +123,7 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
-  taskEnv: GatewayServiceEnv;
 }> {
-  await assertSchtasksAvailable().catch(() => undefined);
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
   const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
@@ -148,7 +146,7 @@ async function writeScheduledTaskScript({
       encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
     );
   }
-  return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
+  return { scriptPath, taskLaunchPath, taskDescription };
 }
 
 export async function stageScheduledTask({

@@ -84,7 +84,19 @@ describe("scenario flow deadline", () => {
     const finallyMutation = vi.fn();
     const laterMutation = vi.fn();
     const detailsMutation = vi.fn(() => "details");
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let markActionStarted!: () => void;
+    let releaseAction!: () => void;
+    let expireDeadline!: (reason: Error) => void;
+    let pendingStep: Promise<string | void> | undefined;
+    const actionStarted = new Promise<void>((resolve) => {
+      markActionStarted = resolve;
+    });
+    const action = new Promise<void>((resolve) => {
+      releaseAction = resolve;
+    });
+    const deadline = new Promise<never>((_resolve, reject) => {
+      expireDeadline = reject;
+    });
     const thenKey = ["th", "en"].join("");
     const ifAction = Object.fromEntries([
       ["expr", "true"],
@@ -102,7 +114,7 @@ describe("scenario flow deadline", () => {
       ],
     ]);
 
-    const result = await runScenarioFlow({
+    const pending = runScenarioFlow({
       api: {
         signal: controller.signal,
         state: createQaBusState(),
@@ -117,9 +129,8 @@ describe("scenario flow deadline", () => {
         },
         config: {},
         delayedAction: async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 40);
-          });
+          markActionStarted();
+          await action;
         },
         nestedMutation,
         catchMutation,
@@ -127,14 +138,9 @@ describe("scenario flow deadline", () => {
         laterMutation,
         detailsMutation,
         runScenario: async (name, steps) => {
-          const deadline = new Promise<never>((_resolve, reject) => {
-            deadlineTimer = setTimeout(() => {
-              controller.abort(timeoutError);
-              reject(timeoutError);
-            }, 10);
-          });
           try {
-            await Promise.race([steps[0]?.run(), deadline]);
+            pendingStep = steps[0]?.run();
+            await Promise.race([pendingStep, deadline]);
             return { name, status: "pass", steps: [] };
           } catch (error) {
             return {
@@ -143,8 +149,6 @@ describe("scenario flow deadline", () => {
               details: error instanceof Error ? error.message : String(error),
               steps: [],
             };
-          } finally {
-            clearTimeout(deadlineTimer);
           }
         },
       },
@@ -169,14 +173,32 @@ describe("scenario flow deadline", () => {
       },
     });
 
-    expect(result).toMatchObject({ status: "fail", details: timeoutError.message });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 60);
-    });
-    expect(nestedMutation).not.toHaveBeenCalled();
-    expect(catchMutation).not.toHaveBeenCalled();
-    expect(finallyMutation).toHaveBeenCalledOnce();
-    expect(laterMutation).not.toHaveBeenCalled();
-    expect(detailsMutation).not.toHaveBeenCalled();
+    try {
+      await Promise.race([
+        actionStarted,
+        pending.then(() => {
+          throw new Error("flow settled before the delayed action started");
+        }),
+      ]);
+      controller.abort(timeoutError);
+      expireDeadline(timeoutError);
+      const result = await pending;
+
+      expect(result).toMatchObject({ status: "fail", details: timeoutError.message });
+      // The outer deadline returns while the action is held; cleanup belongs to its late unwind.
+      expect(finallyMutation).not.toHaveBeenCalled();
+      releaseAction();
+      await expect(pendingStep).rejects.toBe(timeoutError);
+      expect(nestedMutation).not.toHaveBeenCalled();
+      expect(catchMutation).not.toHaveBeenCalled();
+      expect(finallyMutation).toHaveBeenCalledOnce();
+      expect(laterMutation).not.toHaveBeenCalled();
+      expect(detailsMutation).not.toHaveBeenCalled();
+    } finally {
+      controller.abort(timeoutError);
+      expireDeadline(timeoutError);
+      releaseAction();
+      await Promise.allSettled([pending, pendingStep, deadline]);
+    }
   });
 });

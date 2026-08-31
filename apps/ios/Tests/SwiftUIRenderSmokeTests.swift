@@ -21,12 +21,14 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab()
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+            let root = NavigationStack {
+                SettingsProTab(navigateToRoute: { _ in })
+            }
+            .environment(AppAppearanceModel())
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .preferredColorScheme(scheme)
 
             _ = Self.host(root)
         }
@@ -38,13 +40,15 @@ struct SwiftUIRenderSmokeTests {
                 let appModel = NodeAppModel()
                 let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-                let root = SettingsProTab(directRoute: .about)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .about, navigateToRoute: { _ in })
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .environment(\.dynamicTypeSize, typeSize)
+                .preferredColorScheme(scheme)
 
                 _ = Self.host(root, size: CGSize(width: 320, height: 852))
             }
@@ -57,13 +61,15 @@ struct SwiftUIRenderSmokeTests {
                 let appModel = NodeAppModel()
                 let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-                let root = SettingsProTab(directRoute: .privacy)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .preferredColorScheme(scheme)
-                    .environment(\.dynamicTypeSize, typeSize)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .privacy, navigateToRoute: { _ in })
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
+                .environment(\.dynamicTypeSize, typeSize)
 
                 _ = Self.host(root, size: CGSize(width: 393, height: 852))
             }
@@ -78,12 +84,14 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .licenses)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+            let root = NavigationStack {
+                SettingsProTab(directRoute: .licenses, navigateToRoute: { _ in })
+            }
+            .environment(AppAppearanceModel())
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .preferredColorScheme(scheme)
 
             windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
         }
@@ -97,13 +105,15 @@ struct SwiftUIRenderSmokeTests {
             for typeSize in [DynamicTypeSize.large, .accessibility2] {
                 let appModel = NodeAppModel()
                 let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-                let root = SettingsProTab(directRoute: .systemAgent)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .systemAgent, navigateToRoute: { _ in })
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .environment(\.dynamicTypeSize, typeSize)
+                .preferredColorScheme(scheme)
 
                 windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
             }
@@ -120,12 +130,14 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab()
-                .defaultAppStorage(defaults)
-                .environment(AppAppearanceModel(userDefaults: defaults))
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
+            let root = NavigationStack {
+                SettingsProTab(navigateToRoute: { _ in })
+            }
+            .defaultAppStorage(defaults)
+            .environment(AppAppearanceModel(userDefaults: defaults))
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
 
             _ = Self.host(root)
         }
@@ -443,5 +455,4 @@ struct SwiftUIRenderSmokeTests {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
-
 }

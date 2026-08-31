@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   visibleChatBubbleTexts,
@@ -87,7 +88,7 @@ suite.define(() => {
         methodResponses: { "sessions.list": chatSessionListResponse() },
         sessionKey: "agent:main:session-a",
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await waitForRequests(gateway, "chat.startup", 1);
       const thread = page.locator(".chat-thread");
       await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });

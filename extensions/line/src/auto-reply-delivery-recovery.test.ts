@@ -7,9 +7,11 @@ import {
   baseDeliveryParams,
   createDeps,
   createFlexMessage,
+  createQuickReply,
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { runLinePushWithRetries } from "./send-retry.js";
 
 describe("deliverLineAutoReply HTTP recovery", () => {
   const createHttpError = (status: number) =>
@@ -273,14 +275,14 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       "line:user:1",
       [
         createFlexMessage("Card", { type: "bubble" }),
-        { type: "text", text: "Choose one", quickReply: { items: ["A"] } },
+        { type: "text", text: "Choose one", quickReply: createQuickReply("A") },
       ],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       2,
       "line:user:1",
-      [{ type: "text", text: "Choose one", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "Choose one", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
@@ -315,6 +317,45 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
   });
 
+  it("does not recover text after an ambiguous push ends in a rejection", async () => {
+    vi.useFakeTimers();
+    let ambiguousFailure: unknown;
+    try {
+      let attempt = 0;
+      const failurePromise = runLinePushWithRetries(async () => {
+        attempt += 1;
+        throw attempt === 1
+          ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+          : createHttpError(400);
+      }, "line:push").catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      ambiguousFailure = await failurePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+    const pushMessagesLine = vi.fn(async () => {
+      throw ambiguousFailure;
+    });
+    const { deps } = createDeps({
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        replyToken: undefined,
+        payload: { text: "do not duplicate", channelData: { line: lineData } },
+        lineData,
+        deps,
+      }),
+    ).rejects.toBe(ambiguousFailure);
+    expect(pushMessagesLine).toHaveBeenCalledOnce();
+  });
+
   it("recovers quick replies from a rejected rich-only push", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
@@ -347,7 +388,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       2,
       "line:user:1",
-      [{ type: "text", text: "Options:\n- A", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "Options:\n- A", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
@@ -575,7 +616,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       "line:user:1",
       [
         { type: "text", text: "c5" },
-        { type: "text", text: "c6", quickReply: { items: ["A"] } },
+        { type: "text", text: "c6", quickReply: createQuickReply("A") },
       ],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
@@ -630,7 +671,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).toHaveBeenNthCalledWith(
       3,
       "line:user:1",
-      [{ type: "text", text: "c6", quickReply: { items: ["A"] } }],
+      [{ type: "text", text: "c6", quickReply: createQuickReply("A") }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });

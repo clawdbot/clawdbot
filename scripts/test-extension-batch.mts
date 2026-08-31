@@ -3,6 +3,9 @@
 // Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import pMap from "p-map";
+import { waitForever } from "../src/cli/wait.ts";
+import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   createExtensionTestProcessTargetChunks,
   listExtensionTestFilesForRoots,
@@ -19,6 +22,8 @@ import {
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts";
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
+import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
+import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
@@ -100,9 +105,7 @@ function createGroupEnv({
   return {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-      process.cwd(),
-      "node_modules",
-      ".experimental-vitest-cache",
+      resolveVitestFsModuleCacheRoot(),
       "extension-batch",
       sanitizeCacheSegment(`${groupIndex}-${group.config}`),
     ),
@@ -141,25 +144,9 @@ function addExactExcludePath(excludePaths: Set<string>, value: string) {
  */
 export function parseExactVitestExcludePaths(vitestArgs: string[]) {
   const excludePaths = new Set<string>();
-  for (let index = 0; index < vitestArgs.length; index += 1) {
-    const arg = vitestArgs[index];
-    if (arg === undefined) {
-      break;
-    }
-    if (arg === "--exclude") {
-      const value = vitestArgs[index + 1];
-      if (value && isExactExcludePath(value)) {
-        addExactExcludePath(excludePaths, value);
-      }
-      index += 1;
-      continue;
-    }
-    const prefix = "--exclude=";
-    if (arg.startsWith(prefix)) {
-      const value = arg.slice(prefix.length);
-      if (value && isExactExcludePath(value)) {
-        addExactExcludePath(excludePaths, value);
-      }
+  for (const value of collectVitestExcludePatterns(vitestArgs)) {
+    if (isExactExcludePath(value)) {
+      addExactExcludePath(excludePaths, value);
     }
   }
   return excludePaths;
@@ -178,46 +165,53 @@ function resolveGroupTargets(group: ExtensionTestPlanGroup, exactExcludePaths: S
   return testFiles.filter((file) => !exactExcludePaths.has(file));
 }
 
-async function runPlanGroup(
+function preparePlanGroup(
   group: ExtensionTestPlanGroup,
-  params: {
-    env: NodeJS.ProcessEnv;
-    groupIndex: number;
-    runGroup: (params: VitestBatchRunParams) => Promise<number>;
-    exactExcludePaths: Set<string>;
-    allowEmptyAfterExclude: boolean;
-    useDedicatedCache: boolean;
-    vitestArgs: string[];
-  },
+  groupIndex: number,
+  env: NodeJS.ProcessEnv,
+  vitestArgs: string[],
+  exactExcludePaths: Set<string>,
+  useDedicatedCache: boolean,
 ) {
-  const targets = resolveGroupTargets(group, params.exactExcludePaths);
-  if (targets.length === 0) {
-    console.error(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
-    return params.allowEmptyAfterExclude ? 0 : 1;
-  }
-
+  const targets = resolveGroupTargets(group, exactExcludePaths);
   const targetChunks =
-    params.exactExcludePaths.size > 0
-      ? shouldSplitExtensionTestProcesses(group.config, params.vitestArgs)
-        ? splitExtensionTestProcessTargets(group.config, targets)
-        : [targets]
-      : createExtensionTestProcessTargetChunks(group.config, group.roots, params.vitestArgs);
-  let finalExitCode = 0;
-  for (const [index, chunk] of targetChunks.entries()) {
-    console.log(
-      `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${chunk.length} targets${targetChunks.length > 1 ? `, chunk ${index + 1}/${targetChunks.length}` : ""})`,
-    );
-    const exitCode = await params.runGroup({
-      args: relativizeExtensionVitestArgs(params.vitestArgs),
+    targets.length === 0
+      ? []
+      : exactExcludePaths.size > 0
+        ? shouldSplitExtensionTestProcesses(group.config, vitestArgs)
+          ? splitExtensionTestProcessTargets(group.config, targets)
+          : [targets]
+        : createExtensionTestProcessTargetChunks(group.config, group.roots, vitestArgs);
+  return {
+    group,
+    invocations: targetChunks.map((chunk) => ({
+      args: relativizeExtensionVitestArgs(vitestArgs),
       config: group.config,
-      env: createGroupEnv({
-        baseEnv: params.env,
-        group,
-        groupIndex: params.groupIndex,
-        useDedicatedCache: params.useDedicatedCache,
-      }),
+      env: createGroupEnv({ baseEnv: env, group, groupIndex, useDedicatedCache }),
       targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
-    });
+    })),
+  };
+}
+
+async function runPlanGroup(
+  { group, invocations }: ReturnType<typeof preparePlanGroup>,
+  runGroup: (params: ReturnType<typeof preparePlanGroup>["invocations"][number]) => Promise<number>,
+  allowEmptyAfterExclude: boolean,
+  isCancelled: () => boolean,
+) {
+  if (invocations.length === 0) {
+    console.error(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
+    return allowEmptyAfterExclude ? 0 : 1;
+  }
+  let finalExitCode = 0;
+  for (const [index, invocation] of invocations.entries()) {
+    if (isCancelled()) {
+      break;
+    }
+    console.log(
+      `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${invocation.targets.length} targets${invocations.length > 1 ? `, chunk ${index + 1}/${invocations.length}` : ""})`,
+    );
+    const exitCode = await runGroup(invocation);
     if (exitCode !== 0 && finalExitCode === 0) {
       finalExitCode = exitCode;
     }
@@ -232,6 +226,7 @@ export async function runExtensionBatchPlan(
   batchPlan: ExtensionBatchPlan,
   params: {
     allowEmptyAfterExclude?: boolean;
+    expandExactExcludes?: boolean;
     env?: NodeJS.ProcessEnv;
     runGroup?: (params: VitestBatchRunParams) => Promise<number>;
     vitestArgs?: string[];
@@ -239,7 +234,11 @@ export async function runExtensionBatchPlan(
 ) {
   const env = params.env ?? process.env;
   const vitestArgs = params.vitestArgs ?? [];
-  const exactExcludePaths = parseExactVitestExcludePaths(vitestArgs);
+  // Single-plugin CLI historically leaves exact exclusions to Vitest.
+  const exactExcludePaths =
+    params.expandExactExcludes === false
+      ? new Set<string>()
+      : parseExactVitestExcludePaths(vitestArgs);
   const runGroup = params.runGroup ?? runVitestBatch;
   const parallelism = resolveExtensionBatchParallelism(batchPlan.planGroups.length, env);
   const orderedGroups = orderPlanGroups(batchPlan.planGroups, parallelism);
@@ -250,28 +249,133 @@ export async function runExtensionBatchPlan(
     console.log(`[test-extension-batch] Running up to ${parallelism} config groups in parallel`);
   }
 
-  let exitCode = 0;
-  await pMap(
-    orderedGroups,
-    async (group, groupIndex) => {
-      if (exitCode !== 0) {
-        return;
-      }
-      const groupExitCode = await runPlanGroup(group, {
-        env,
-        groupIndex,
-        runGroup,
-        exactExcludePaths,
-        allowEmptyAfterExclude,
-        useDedicatedCache,
-        vitestArgs,
-      });
-      if (groupExitCode !== 0 && exitCode === 0) {
-        exitCode = groupExitCode;
-      }
-    },
-    { concurrency: parallelism, stopOnError: true },
+  const preparedGroups = orderedGroups.map((group, index) =>
+    preparePlanGroup(group, index, env, vitestArgs, exactExcludePaths, useDedicatedCache),
   );
+  const invocations = preparedGroups.flatMap((group) => group.invocations);
+  const reports = await createVitestReportOwner(
+    invocations.map((invocation) => ({
+      config: invocation.config,
+      args: ["run", "--config", invocation.config, ...invocation.args, ...invocation.targets],
+    })),
+    path.resolve(import.meta.dirname, ".."),
+  );
+  const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  const onSignal = (value: NodeJS.Signals) => {
+    termination.signal ??= value;
+  };
+  if (reports) {
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
+  }
+  let reportFailure: string | undefined;
+  let exitCode = 0;
+  const started: Promise<unknown>[] = [];
+  const runInvocation = async (
+    invocation: ReturnType<typeof preparePlanGroup>["invocations"][number],
+  ) => {
+    const attempt = reports?.attempt(invocations.indexOf(invocation), invocation.args);
+    if (!attempt) {
+      return runGroup(invocation);
+    }
+    try {
+      let outcome: VitestReportOutcome | undefined;
+      const code = await runGroup({
+        ...invocation,
+        args: attempt.args,
+        onComplete(value) {
+          outcome = value;
+          termination.signal ??= value.signal;
+        },
+      });
+      attempt.complete(outcome ?? { code, signal: null });
+      return code;
+    } catch (error) {
+      attempt.fail(error);
+      throw error;
+    }
+  };
+  try {
+    // No reader may start while a shared generation is being replaced. Select
+    // from the exact emitted chunks, including existing exact-exclude expansion.
+    const preparationCode = await prepareVitestRuntime(
+      preparedGroups.flatMap((group) =>
+        group.invocations.map(({ config, args, targets }) => ({
+          configs: [config],
+          cli: { args: [...args, ...targets], dir: "extensions", env },
+        })),
+      ),
+      env,
+    );
+    if (preparationCode !== 0) {
+      exitCode = preparationCode;
+      reportFailure = "Runtime preparation failed; invocations unstarted";
+      return exitCode;
+    }
+    try {
+      await pMap(
+        preparedGroups,
+        async (group) => {
+          if (exitCode !== 0 || termination.signal) {
+            return;
+          }
+          const running = runPlanGroup(
+            group,
+            runInvocation,
+            allowEmptyAfterExclude,
+            () => termination.signal !== null,
+          ).then((groupExitCode) => {
+            if (groupExitCode !== 0 && exitCode === 0) {
+              exitCode = groupExitCode;
+            }
+          });
+          started.push(running);
+          await running;
+        },
+        { concurrency: parallelism, stopOnError: true },
+      );
+    } finally {
+      await Promise.allSettled(started);
+    }
+  } catch (error) {
+    reportFailure = String(error);
+    throw error;
+  } finally {
+    if (reports) {
+      try {
+        const reportCode = await reports.finish(
+          async (mergeArgs) => {
+            const args = mergeArgs.slice(1);
+            const configIndex = args.indexOf("--config");
+            const config = args.splice(configIndex, 2)[1]!;
+            let outcome: VitestReportOutcome | undefined;
+            const code = await runVitestBatch({
+              config,
+              args,
+              targets: [],
+              env,
+              onComplete(value) {
+                outcome = value;
+                termination.signal ??= value.signal;
+              },
+            });
+            return outcome ?? { code, signal: null };
+          },
+          termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
+        );
+        exitCode ||= reportCode;
+      } finally {
+        process.off("SIGTERM", onSignal);
+        process.off("SIGINT", onSignal);
+        if (termination.signal) {
+          process.kill(process.pid, termination.signal);
+          // Keep the loop alive for dependency signal handlers to finish cleanup
+          // and re-raise; a numeric return can win the race with signal delivery.
+          await waitForever();
+        }
+      }
+    }
+  }
   return exitCode;
 }
 

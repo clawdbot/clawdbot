@@ -268,7 +268,7 @@ export const readOnlyGatewaySessionAccessorFiles = new Set([
   "src/gateway/server-methods/sessions-subscriptions.ts",
   "src/gateway/server-methods/task-suggestions.ts",
   "src/gateway/server-methods/tools-effective.ts",
-  "src/gateway/server-methods/usage.ts",
+  "src/gateway/server-methods/usage-session-selection.ts",
   "src/gateway/server-session-events.ts",
 ]);
 

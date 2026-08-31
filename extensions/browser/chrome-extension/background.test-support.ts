@@ -78,6 +78,11 @@ export class FakeWebSocket {
     this.emit("message", { data: JSON.stringify(message) });
   }
 
+  finishClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit("close");
+  }
+
   private emit(type: string, event: SocketEvent = {}): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);

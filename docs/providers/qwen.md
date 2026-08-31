@@ -19,7 +19,9 @@ Qwen Cloud is an official external OpenClaw provider plugin with canonical id `q
 
 <Tip>
 `qwen3.7-plus` and `qwen3.6-plus` work with Coding Plan and Standard endpoints.
-For `qwen3.7-max` or `qwen3.6-flash`, use a **Standard (pay-as-you-go)** endpoint.
+For `qwen3.8-max` or `qwen3.8-flash`, use **Standard (pay-as-you-go)** or **Token Plan**.
+The older Coding Plan does not include these models. `qwen3.7-max` and
+`qwen3.6-flash` also require Standard or Token Plan.
 </Tip>
 
 ## Install plugin
@@ -86,7 +88,7 @@ Choose your plan type and follow the setup steps.
   </Tab>
 
   <Tab title="Standard (pay-as-you-go)">
-    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint, including `qwen3.7-max` and `qwen3.6-flash`, which are not available on the Coding Plan.
+    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint, including `qwen3.8-max` and `qwen3.8-flash`, which are not available on the older Coding Plan.
 
     <Steps>
       <Step title="Get your API key">
@@ -202,8 +204,11 @@ Override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
-OpenClaw ships this Qwen static catalog. The catalog is endpoint-aware: Coding
-Plan configs omit models that only work on the Standard endpoint.
+OpenClaw discovers models from the configured endpoint's authenticated `/models`
+API. The plugin keeps the following seed metadata for offline discovery and for
+endpoints that return only model IDs. Coding Plan configs omit models that are
+not included in that plan; a Standard model listing does not establish Token
+Plan or Coding Plan access.
 
 | Model ref                   | Input       | Context   | Notes                   |
 | --------------------------- | ----------- | --------- | ----------------------- |
@@ -212,6 +217,8 @@ Plan configs omit models that only work on the Standard endpoint.
 | `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Coding Plan + Standard  |
 | `qwen/qwen3.7-max`          | text        | 1,000,000 | Standard endpoints only |
 | `qwen/qwen3.7-plus`         | text, image | 1,000,000 | Coding Plan + Standard  |
+| `qwen/qwen3.8-max`          | text, image | 1,000,000 | Standard endpoints only |
+| `qwen/qwen3.8-flash`        | text, image | 1,000,000 | Standard endpoints only |
 | `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line           |
 | `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                  |
 | `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                  |
@@ -222,7 +229,9 @@ Plan configs omit models that only work on the Standard endpoint.
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
-present in the static catalog.
+present in the seed catalog. Additional chat models returned by the endpoint can
+appear without a plugin update. For locally hosted models, use the
+[Ollama](/providers/ollama) or [LM Studio](/providers/lmstudio) discovery flow.
 </Note>
 
 ### Token Plan catalog
@@ -236,6 +245,8 @@ included here because they use different APIs.
 | Model ref                          | Input       | Context   | Picker status |
 | ---------------------------------- | ----------- | --------- | ------------- |
 | `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-flash`    | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
 | `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
@@ -243,6 +254,17 @@ included here because they use different APIs.
 | `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
 
 ## Thinking controls
+
+`qwen3.8-max` and `qwen3.8-flash` support `off`, `low`, `medium`, and `xhigh`
+thinking, with `xhigh` as the default. `minimal` maps to `low`; `high` and `max`
+map to `xhigh`. This applies to Standard and Token Plan. Both models support
+131,072 output tokens. OpenClaw preserves returned reasoning in its separate
+`reasoning_content` replay field during tool use, rather than placing it in
+visible answer text.
+
+An explicit `thinking_budget` in request parameters takes precedence over the
+mapped `reasoning_effort`: Qwen rejects requests containing both. See the
+[Qwen thinking reference](https://docs.qwencloud.com/developer-guides/text-generation/thinking).
 
 `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-flash`, and `qwen3.6-plus` are
 reasoning-enabled in the built-in catalog. For reasoning models on the `qwen`
@@ -309,15 +331,15 @@ See [Video generation](/tools/video-generation) for shared tool parameters, prov
 ## Advanced configuration
 
 <AccordionGroup>
-  <Accordion title="Qwen 3.6 and 3.7 availability">
-    `qwen3.7-plus` and `qwen3.6-plus` are available on Coding Plan and Standard endpoints. `qwen3.7-max` and `qwen3.6-flash` are Standard-only. The Standard (pay-as-you-go) endpoints are:
+  <Accordion title="Qwen model availability">
+    `qwen3.7-plus` and `qwen3.6-plus` are available on Coding Plan and Standard endpoints. For `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-max`, or `qwen3.6-flash`, use Standard or Token Plan. The Standard (pay-as-you-go) endpoints are:
 
     - China: `dashscope.aliyuncs.com/compatible-mode/v1`
     - Global: `dashscope-intl.aliyuncs.com/compatible-mode/v1`
 
-    OpenClaw omits `qwen3.7-max` and `qwen3.6-flash` from Coding Plan catalogs.
-    If a Coding Plan endpoint returns an "unsupported model" error for either,
-    switch to the matching Standard endpoint and key.
+    OpenClaw omits these models from Coding Plan catalogs. If a Coding Plan
+    endpoint returns an "unsupported model" error, switch to the matching
+    Standard or Token Plan endpoint and its dedicated key.
 
   </Accordion>
 

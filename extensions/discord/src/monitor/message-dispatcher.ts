@@ -17,7 +17,10 @@ import type {
 import type { DiscordMessageEvent } from "./listeners.js";
 import { createDiscordAvatarResolver } from "./message-avatar.js";
 import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
-import { hasDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
@@ -103,7 +106,11 @@ export function createDiscordMessageDispatcher(
       message,
       eventChannelId: entry.data.channel_id,
     });
-    return channelId ? `discord:${params.accountId}:${channelId}:${authorId}` : null;
+    if (!channelId) {
+      return null;
+    }
+    const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
+    return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
