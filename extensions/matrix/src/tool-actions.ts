@@ -1,5 +1,6 @@
 // Matrix plugin module implements tool actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
   jsonResult,
@@ -298,6 +299,7 @@ export async function handleMatrixAction(
             : typeof readRawParam(params, "asVoice") === "boolean"
               ? (readRawParam(params, "asVoice") as boolean)
               : undefined;
+        const emote = readBooleanParam(params, "emote");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
@@ -305,6 +307,7 @@ export async function handleMatrixAction(
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
           audioAsVoice,
+          ...(emote === true ? { emote: true } : {}),
           ...clientOpts,
         });
         return jsonResult({ ok: true, result });

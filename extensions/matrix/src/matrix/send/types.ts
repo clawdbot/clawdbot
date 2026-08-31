@@ -16,6 +16,7 @@ import type {
 // Message types
 export const MsgType = {
   Text: "m.text",
+  Emote: "m.emote",
   Image: "m.image",
   Audio: "m.audio",
   Video: "m.video",
@@ -110,6 +111,8 @@ export type MatrixSendOpts = {
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Send text as a Matrix m.emote action instead of a normal message. */
+  emote?: boolean;
   /** Persist each concrete platform send before any later event can fail. */
   onDeliveryResult?: (result: MatrixSendResult) => Promise<void> | void;
 };
@@ -120,7 +123,7 @@ export type MatrixMediaMsgType =
   | typeof MsgType.Video
   | typeof MsgType.File;
 
-export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
+export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Emote | typeof MsgType.Notice;
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;

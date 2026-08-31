@@ -76,6 +76,27 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.options).toMatchObject({ mediaLocalRoots: undefined });
   });
 
+  it("forwards emote intent for send actions", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "send",
+        accountId: "ops",
+        params: {
+          to: "room:!room:example",
+          message: "waves",
+          emote: true,
+        },
+      }),
+    );
+
+    expect(matrixActionCall().input).toMatchObject({
+      action: "sendMessage",
+      accountId: "ops",
+      content: "waves",
+      emote: true,
+    });
+  });
+
   it.each([
     { action: "send" as const, expectedAction: "sendMessage", message: "    @room" },
     {

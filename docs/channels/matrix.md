@@ -929,6 +929,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 ### Tooling and per-room overrides
 
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
+- For the shared `message` tool's `send` action, set `emote: true` to send text as a Matrix `m.emote` (`/me`-style) event. Emote sends are text-only and reject media parameters.
 - `groups`: per-room policy map. Session identity uses the stable room ID after resolution. (`rooms` is a legacy alias.)
   - `groups.<room>.account`: restrict one inherited room entry to a specific account.
   - `groups.<room>.enabled`: per-room toggle. When `false`, the room is ignored as if it were not in the map.

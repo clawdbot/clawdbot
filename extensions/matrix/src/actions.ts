@@ -1,4 +1,5 @@
 // Matrix plugin module implements actions behavior.
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
   readPositiveIntegerParam,
@@ -62,6 +63,20 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
   ),
 } as const;
 const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
+
+function buildMatrixSendToolSchema(): ChannelMessageToolSchemaContribution {
+  return {
+    actions: ["send"],
+    properties: {
+      emote: Type.Optional(
+        Type.Boolean({
+          description:
+            "Send Matrix text as an /me-style m.emote event. Emote sends are text-only; omit for a normal message.",
+        }),
+      ),
+    },
+  };
+}
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
@@ -146,6 +161,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     });
     const listedActions = Array.from(actions);
     const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("send")) {
+      schema.push(buildMatrixSendToolSchema());
+    }
     if (actions.has("set-profile")) {
       schema.push(buildMatrixProfileToolSchema());
     }
@@ -232,6 +250,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           : typeof params.audioAsVoice === "boolean"
             ? params.audioAsVoice
             : undefined;
+      const emote = readBooleanParam(params, "emote");
       return await dispatch({
         action: "sendMessage",
         to,
@@ -240,6 +259,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         replyToId: replyTo ?? undefined,
         threadId: threadId ?? undefined,
         audioAsVoice,
+        ...(emote === true ? { emote: true } : {}),
       });
     }
 

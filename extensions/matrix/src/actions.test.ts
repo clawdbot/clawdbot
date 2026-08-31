@@ -126,7 +126,10 @@ describe("matrixMessageActions", () => {
 
     expect(enabled?.actions).toContain("emoji-list");
     expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
-    expect(enabled?.schema).toMatchObject({
+    const reactionSchema = Array.isArray(enabled?.schema)
+      ? enabled.schema.find((contribution) => contribution.actions?.includes("react"))
+      : enabled?.schema;
+    expect(reactionSchema).toMatchObject({
       actions: ["react", "reactions"],
       properties: {
         emoji: {
@@ -136,7 +139,29 @@ describe("matrixMessageActions", () => {
     });
     expect(disabled?.actions).not.toContain("emoji-list");
     expect(disabled?.actions).not.toContain("react");
-    expect(disabled?.schema).toBeNull();
+    const disabledReactionSchema = Array.isArray(disabled?.schema)
+      ? disabled.schema.find((contribution) => contribution.actions?.includes("react"))
+      : disabled?.schema?.actions?.includes("react")
+        ? disabled.schema
+        : undefined;
+    expect(disabledReactionSchema).toBeUndefined();
+  });
+
+  it("advertises Matrix emote mode on the send action", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+    } as never);
+    const schema = discovery?.schema;
+    const sendSchema = Array.isArray(schema)
+      ? schema.find((contribution) => contribution.actions?.includes("send"))
+      : schema?.actions?.includes("send")
+        ? schema
+        : undefined;
+
+    expect(sendSchema?.properties.emote).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("m.emote"),
+    });
   });
 
   it("hides self-profile updates without owner identity context", () => {

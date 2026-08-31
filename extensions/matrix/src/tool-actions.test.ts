@@ -423,6 +423,27 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("forwards emote intent to Matrix message sends", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "sendMessage",
+        accountId: "ops",
+        to: "room:!room:example",
+        content: "waves",
+        emote: true,
+      },
+      cfg,
+    );
+
+    expect(mocks.sendMatrixMessage.mock.lastCall?.[2]).toMatchObject({
+      cfg,
+      accountId: "ops",
+      emote: true,
+    });
+  });
+
   it.each(["sendMessage", "editMessage"] as const)(
     "preserves indented Markdown when handling %s",
     async (action) => {
