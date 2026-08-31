@@ -258,7 +258,7 @@ describe("runCliAgentWithLifecycle", () => {
     });
     const closeStarted = createDeferred();
     const releaseClose = createDeferred();
-    const onAssistantText = vi.fn(async () => undefined);
+    const onAssistantText = vi.fn(async (_text: string) => undefined);
 
     const run = runCliAgentWithLifecycle({
       runId: "run-delayed-reasoning-close",

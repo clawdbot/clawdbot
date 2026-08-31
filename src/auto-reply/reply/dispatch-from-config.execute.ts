@@ -53,7 +53,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
     params,
-    recordAgentDispatchCompleted,
     replyConfig,
     replyRoute,
     resolveToolDeliveryPayload,

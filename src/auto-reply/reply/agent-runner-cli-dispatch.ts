@@ -618,7 +618,12 @@ async function runCliAgentWithLifecycleInternal(
   const commentaryBridge = createCommentaryEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onCommentaryText,
+    deliver: params.onCommentaryText
+      ? async (payload) => {
+          await endReasoning();
+          await params.onCommentaryText?.(payload);
+        }
+      : undefined,
     startOrder: progressStartOrder,
   });
   const planBridge = createPlanUpdateBridge({
@@ -693,6 +698,7 @@ async function runCliAgentWithLifecycleInternal(
     return resultWithReasoning;
   } catch (err) {
     await stopAgentEventBridges(bridges);
+    await endReasoning();
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
