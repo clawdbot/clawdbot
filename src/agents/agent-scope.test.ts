@@ -11,7 +11,6 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   markAutoFallbackPrimaryProbe,
-  hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveDefaultAgentDir,
   resolveAgentDir,
@@ -19,6 +18,7 @@ import {
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
+  resolveModelFallbackAvailability,
   resolveAgentModelFallbacksOverride,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
@@ -174,6 +174,71 @@ describe("resolveAgentConfig", () => {
     };
     expect(resolveAgentExplicitModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
     expect(resolveAgentEffectiveModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
+  });
+
+  describe("resolveModelFallbackAvailability", () => {
+    const cfgWithFallbacks: OpenClawConfig = {
+      agents: {
+        defaults: { model: { fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    it.each([
+      {
+        name: "uses auto fallback provenance",
+        params: {
+          hasSessionModelOverride: true,
+          modelOverrideSource: "auto" as const,
+        },
+        expected: { kind: "active" as const, models: ["anthropic/claude-sonnet-4-6"] },
+      },
+      {
+        name: "recovers auto fallback provenance without a source marker",
+        params: {
+          hasSessionModelOverride: true,
+          hasAutoFallbackProvenance: true,
+        },
+        expected: { kind: "active" as const, models: ["anthropic/claude-sonnet-4-6"] },
+      },
+      {
+        name: "disables configured fallbacks for a user model override",
+        params: {
+          hasSessionModelOverride: true,
+          modelOverrideSource: "user" as const,
+        },
+        expected: { kind: "disabled_by_model_override" as const },
+      },
+      {
+        name: "reports no configured fallbacks",
+        params: { hasSessionModelOverride: false },
+        expected: { kind: "none_configured" as const },
+      },
+    ])("$name", ({ params, expected }) => {
+      const cfg =
+        expected.kind === "none_configured"
+          ? { agents: { list: [{ id: "main" }] } }
+          : cfgWithFallbacks;
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          ...params,
+        }),
+      ).toEqual(expected);
+    });
+
+    it("shares the disabled result with the empty ladder consumed by a run", () => {
+      const availability = resolveModelFallbackAvailability({
+        cfg: cfgWithFallbacks,
+        agentId: "main",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      });
+
+      expect(availability).toEqual({ kind: "disabled_by_model_override" });
+      expect(availability.kind === "active" ? availability.models : []).toEqual([]);
+    });
   });
 
   it("supports per-agent model primary+fallbacks", () => {
@@ -752,57 +817,6 @@ describe("resolveAgentConfig", () => {
       authProfileOverride: "selected-key",
       authProfileOverrideSource: "user",
     });
-  });
-
-  it("computes whether any model fallbacks are configured via shared helper", () => {
-    const cfgDefaultsOnly: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: ["openai/gpt-5.4"],
-          },
-        },
-        list: [{ id: "main" }],
-      },
-    };
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgDefaultsOnly,
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe(true);
-
-    const cfgAgentOverrideOnly: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: [],
-          },
-        },
-        list: [
-          {
-            id: "support",
-            model: {
-              fallbacks: ["openai/gpt-5.4"],
-            },
-          },
-        ],
-      },
-    };
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgAgentOverrideOnly,
-        agentId: "support",
-        sessionKey: "agent:support:session",
-      }),
-    ).toBe(true);
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgAgentOverrideOnly,
-        agentId: "main",
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe(false);
   });
 
   it("resolves subagent model fallbacks from the selected subagent model source", () => {

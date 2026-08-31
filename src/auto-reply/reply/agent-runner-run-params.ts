@@ -1,6 +1,6 @@
 /** Builds embedded-agent run parameters from queued follow-up run state. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import { resolveModelFallbackAvailability } from "../../agents/agent-scope.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
@@ -26,16 +26,15 @@ export function resolveModelFallbackOptions(
   configOverride: FollowupRun["run"]["config"] = run.config,
 ) {
   const config = configOverride;
-  const fallbacksOverride = run.modelSelectionLocked
-    ? []
-    : resolveEffectiveModelFallbacks({
-        cfg: config,
-        agentId: run.agentId,
-        sessionKey: run.sessionKey,
-        hasSessionModelOverride: run.hasSessionModelOverride === true,
-        modelOverrideSource: run.modelOverrideSource,
-        hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
-      });
+  const modelFallbackAvailability = resolveModelFallbackAvailability({
+    cfg: config,
+    agentId: run.agentId,
+    sessionKey: run.sessionKey,
+    hasSessionModelOverride: run.hasSessionModelOverride === true,
+    modelOverrideSource: run.modelOverrideSource,
+    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
+    modelSelectionLocked: run.modelSelectionLocked,
+  });
   return {
     cfg: config,
     provider: run.provider,
@@ -44,7 +43,9 @@ export function resolveModelFallbackOptions(
     agentDir: run.agentDir,
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
-    fallbacksOverride,
+    modelFallbackAvailability,
+    fallbacksOverride:
+      modelFallbackAvailability.kind === "active" ? modelFallbackAvailability.models : [],
   };
 }
 
@@ -116,16 +117,17 @@ export async function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbacksOverride = params.run.modelSelectionLocked
-    ? []
-    : resolveEffectiveModelFallbacks({
-        cfg: config,
-        agentId: params.run.agentId,
-        sessionKey: params.run.sessionKey,
-        hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-        modelOverrideSource: params.run.modelOverrideSource,
-        hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-      });
+  const modelFallbackAvailability = resolveModelFallbackAvailability({
+    cfg: config,
+    agentId: params.run.agentId,
+    sessionKey: params.run.sessionKey,
+    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+    modelOverrideSource: params.run.modelOverrideSource,
+    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
+    modelSelectionLocked: params.run.modelSelectionLocked,
+  });
+  const modelFallbacksOverride =
+    modelFallbackAvailability.kind === "active" ? modelFallbackAvailability.models : [];
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
@@ -166,6 +168,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),
     modelSelectionLocked: params.run.modelSelectionLocked,
+    modelFallbackAvailability,
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,

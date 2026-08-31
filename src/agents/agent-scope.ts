@@ -571,14 +571,56 @@ export function resolveRunModelFallbacksOverride(params: {
   return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 
-export function hasConfiguredModelFallbacks(params: {
-  cfg: OpenClawConfig | undefined;
-  agentId?: string | null;
+export type ModelFallbackAvailability =
+  | { kind: "active"; models: string[] }
+  | { kind: "none_configured" }
+  | { kind: "disabled_by_model_override" }
+  | { kind: "disabled_by_model_selection_lock" };
+
+function modelFallbackAvailabilityFromModels(models: string[]): ModelFallbackAvailability {
+  return models.length > 0 ? { kind: "active", models } : { kind: "none_configured" };
+}
+
+/**
+ * Resolves fallback availability once for the run scope. A pinned model override disables the
+ * configured ladder; splitting that fact from its models would report fallbacks that cannot run.
+ */
+export function resolveModelFallbackAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   sessionKey?: string | null;
-}): boolean {
-  const fallbacksOverride = resolveRunModelFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+  hasSessionModelOverride: boolean;
+  modelOverrideSource?: "auto" | "user";
+  hasAutoFallbackProvenance?: boolean;
+  modelSelectionLocked?: boolean;
+  modelFallbacksOverride?: string[];
+}): ModelFallbackAvailability {
+  if (params.modelSelectionLocked) {
+    return { kind: "disabled_by_model_selection_lock" };
+  }
+  if (params.modelFallbacksOverride !== undefined) {
+    return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride);
+  }
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  if (!params.hasSessionModelOverride) {
+    return modelFallbackAvailabilityFromModels(
+      agentFallbacksOverride ?? resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+    );
+  }
+  const canUseConfiguredFallbacks =
+    params.modelOverrideSource === "auto" ||
+    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
+  if (!canUseConfiguredFallbacks) {
+    return { kind: "disabled_by_model_override" };
+  }
+  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : undefined;
+  if (subagentFallbacksOverride !== undefined) {
+    return modelFallbackAvailabilityFromModels(subagentFallbacksOverride);
+  }
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return modelFallbackAvailabilityFromModels(agentFallbacksOverride ?? defaultFallbacks);
 }
 
 export function resolveEffectiveModelFallbacks(params: {
@@ -589,24 +631,8 @@ export function resolveEffectiveModelFallbacks(params: {
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
 }): string[] | undefined {
-  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-  if (!params.hasSessionModelOverride) {
-    return agentFallbacksOverride;
-  }
-  const canUseConfiguredFallbacks =
-    params.modelOverrideSource === "auto" ||
-    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  if (!canUseConfiguredFallbacks) {
-    return [];
-  }
-  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-    : undefined;
-  if (subagentFallbacksOverride !== undefined) {
-    return subagentFallbacksOverride;
-  }
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  return agentFallbacksOverride ?? defaultFallbacks;
+  const availability = resolveModelFallbackAvailability(params);
+  return availability.kind === "active" ? availability.models : [];
 }
 
 export function resolveAgentIdByWorkspacePath(
