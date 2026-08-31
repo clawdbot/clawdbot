@@ -40,7 +40,7 @@ async function runChecker(scriptPath: string, workspace: string) {
   return JSON.parse(stdout) as {
     localModifications: boolean;
     status: string;
-    update: { command: string[] };
+    update?: { command: string[] };
   };
 }
 
@@ -63,18 +63,17 @@ test.each([".clawhub", ".clawdhub"])(
 
     const fileTreeSha256 = await digestClawHubSkillTree(skillDirectory);
     await mkdir(path.join(skillDirectory, metadataDirectory));
-    await writeFile(
-      path.join(skillDirectory, metadataDirectory, "origin.json"),
-      JSON.stringify({
-        version: 1,
-        registry: "https://clawhub.ai",
-        slug: "release-validation",
-        ownerHandle: "openclaw",
-        installedVersion: "0.1.6",
-        installedAt: 1,
-        fileTreeSha256,
-      }),
-    );
+    const originPath = path.join(skillDirectory, metadataDirectory, "origin.json");
+    const origin = {
+      version: 1,
+      registry: "https://clawhub.ai",
+      slug: "release-validation",
+      ownerHandle: "openclaw",
+      installedVersion: "0.1.6",
+      installedAt: 1,
+      fileTreeSha256,
+    };
+    await writeFile(originPath, JSON.stringify(origin));
     await mkdir(path.join(workspace, metadataDirectory));
     await writeFile(
       path.join(workspace, metadataDirectory, "lock.json"),
@@ -115,5 +114,11 @@ test.each([".clawhub", ".clawdhub"])(
         ],
       },
     });
+
+    const { ownerHandle: _ownerHandle, ...ownerlessOrigin } = origin;
+    await writeFile(originPath, JSON.stringify(ownerlessOrigin));
+    const ownerless = await runChecker(scriptPath, workspace);
+    expect(ownerless.status).toBe("different-source");
+    expect(ownerless.update).toBeUndefined();
   },
 );

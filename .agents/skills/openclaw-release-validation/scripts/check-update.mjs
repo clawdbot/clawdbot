@@ -227,7 +227,7 @@ async function main() {
       origin?.slug === SLUG &&
       origin?.registry?.replace(/\/+$/, "") === REGISTRY &&
       typeof installedVersion === "string" &&
-      (origin?.ownerHandle === undefined || origin.ownerHandle === OWNER);
+      origin?.ownerHandle === OWNER;
 
     if (!sourceMatches) {
       source = {
