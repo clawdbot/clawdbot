@@ -1937,7 +1937,7 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     normalizeAssistantTokenText(reply).includes(normalizeAssistantTokenText(parentToken)),
   );
   expect(parentReplies).toEqual([finalReply]);
-  expect(listCodexNativeTasks()).toHaveLength(2);
+  expect(await listCodexNativeTasks()).toHaveLength(2);
   logCodexLiveStep("native-subagent-bridge-probe:complete", {
     finalReply,
     taskIds: [waveOneTask.taskId, waveTwoTask.taskId],
