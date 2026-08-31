@@ -295,6 +295,7 @@ fi
 
 function generateZshArgs(cmd: Command): string {
   return (cmd.options || [])
+    .filter((opt) => !opt.hidden)
     .map((opt) => {
       const flags = completionFlags(opt);
       const name = preferredCompletionFlag(opt);
@@ -720,7 +721,7 @@ function generateFishCompletion(program: Command): string {
         }
       }
       // Options
-      for (const opt of cmd.options) {
+      for (const opt of cmd.options.filter((option) => !option.hidden)) {
         segments.push(
           buildFishOptionCompletionLine({
             rootCmd,

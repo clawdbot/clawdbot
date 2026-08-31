@@ -39,12 +39,13 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
     inheritedValueChoices: readonly ShellCompletionValueChoice[],
   ): ShellCompletionContext => {
     const ownOptionFlags = new Set(command.options.flatMap(completionFlags));
+    const visibleOptions = command.options.filter((option) => !option.hidden);
     const context: ShellCompletionContext = {
       command,
       pathVariants,
       completions: [
         ...command.commands.flatMap(commandNameVariants),
-        ...command.options.flatMap(completionFlags),
+        ...visibleOptions.flatMap(completionFlags),
       ],
       valueOptions: [
         ...new Set([

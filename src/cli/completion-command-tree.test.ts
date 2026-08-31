@@ -24,6 +24,18 @@ describe("shell completion command tree", () => {
     expect(tree.root.valueOptions).toEqual(["-p", "--profile"]);
   });
 
+  it("omits hidden options from the suggested completions", () => {
+    const program = new Command()
+      .name("openclaw")
+      .option("-p, --profile <name>", "Profile")
+      .addOption(new Option("--internal-only").hideHelp());
+
+    const tree = collectShellCompletionCommandTree(program);
+
+    expect(tree.root.completions).toEqual(["-p", "--profile"]);
+    expect(tree.root.completions).not.toContain("--internal-only");
+  });
+
   it("expands aliases across every ancestor and inherits value-taking options", () => {
     const program = new Command().name("openclaw").option("-p, --profile <name>", "Profile");
     const cron = program.command("cron").alias("schedule").option("-z, --timezone <zone>");
