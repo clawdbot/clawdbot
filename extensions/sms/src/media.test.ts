@@ -11,6 +11,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
@@ -139,6 +140,24 @@ function twilioMediaUrl(
   return `https://api.twilio.com/2010-04-01/Accounts/${
     params.accountSid ?? ACCOUNT_SID
   }/Messages/${params.messageSid ?? MESSAGE_SID}/Media/${params.mediaSid ?? MEDIA_SID}`;
+}
+
+function materializeInboundMedia(
+  saveRemoteMedia: PluginRuntime["channel"]["media"]["saveRemoteMedia"],
+  media: Parameters<typeof materializeSmsInboundMedia>[0]["msg"]["media"],
+) {
+  return materializeSmsInboundMedia({
+    account: createAccount(),
+    msg: {
+      accountSid: ACCOUNT_SID,
+      from: "+15551234567",
+      to: "+15557654321",
+      body: "",
+      messageSid: MESSAGE_SID,
+      media,
+    },
+    mediaRuntime: { media: { saveRemoteMedia } },
+  });
 }
 
 function installRuntime() {
@@ -776,24 +795,42 @@ describe("SMS inbound MMS materialization", () => {
       });
 
     await expect(
-      materializeSmsInboundMedia({
-        account: createAccount(),
-        msg: {
-          accountSid: ACCOUNT_SID,
-          from: "+15551234567",
-          to: "+15557654321",
-          body: "",
-          messageSid: MESSAGE_SID,
-          media: [
-            { url: twilioMediaUrl(), contentType: "image/jpeg" },
-            { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
-          ],
-        },
-        mediaRuntime: { media: { saveRemoteMedia } } as never,
-      }),
+      materializeInboundMedia(saveRemoteMedia, [
+        { url: twilioMediaUrl(), contentType: "image/jpeg" },
+        { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
+      ]),
     ).rejects.toThrow("SMS credential owner became unavailable");
 
     expect(saveRemoteMedia).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks the owner before retrying an authenticated MMS download", async () => {
+    let attempts = 0;
+    const saveRemoteMedia = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+      async (options) => {
+        if (!options.retry) {
+          throw new Error("Expected SMS media retry policy");
+        }
+        return await retryAsync(async () => {
+          attempts += 1;
+          if (attempts > 1) {
+            throw new Error("Credential-bearing retry started");
+          }
+          assertSmsCredentialOwnerAvailable.mockImplementation(() => {
+            throw new Error("SMS credential owner became unavailable");
+          });
+          throw new Error("Transient first attempt");
+        }, options.retry);
+      },
+    );
+
+    await expect(
+      materializeInboundMedia(saveRemoteMedia, [
+        { url: twilioMediaUrl(), contentType: "image/jpeg" },
+      ]),
+    ).rejects.toThrow("SMS credential owner became unavailable");
+
+    expect(attempts).toBe(1);
   });
 
   it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
@@ -927,12 +964,12 @@ describe("SMS inbound MMS materialization", () => {
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
-        retry: {
+        retry: expect.objectContaining({
           attempts: 2,
           minDelayMs: 500,
           maxDelayMs: 2_000,
           jitter: 0.2,
-        },
+        }),
       }),
     );
     expect(saveRemoteMedia).toHaveBeenNthCalledWith(

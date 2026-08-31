@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { getSmsRuntime } from "./runtime.js";
@@ -421,9 +422,12 @@ export async function materializeSmsInboundMedia(params: {
   let remainingBytes = TWILIO_MMS_MAX_BYTES;
   let unavailableCount = declaredUnavailableCount;
   const batchTimeoutSignal = AbortSignal.timeout(TWILIO_MEDIA_BATCH_TIMEOUT_MS);
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, batchTimeoutSignal])
-    : batchTimeoutSignal;
+  const credentialAbortController = new AbortController();
+  const abortSignal = AbortSignal.any([
+    credentialAbortController.signal,
+    batchTimeoutSignal,
+    ...(params.abortSignal ? [params.abortSignal] : []),
+  ]);
   const savedMedia: Array<{ path: string; contentType?: string; messageId: string }> = [];
   try {
     for (const [index, media] of params.msg.media.entries()) {
@@ -454,7 +458,18 @@ export async function materializeSmsInboundMedia(params: {
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: TWILIO_MEDIA_READ_IDLE_TIMEOUT_MS,
-          retry: TWILIO_MEDIA_RETRY,
+          retry: {
+            ...TWILIO_MEDIA_RETRY,
+            sleep: async (delayMs) => {
+              await sleepWithAbort(delayMs, abortSignal);
+              try {
+                assertSmsCredentialOwnerAvailable(params.account.accountId);
+              } catch (error) {
+                credentialAbortController.abort(error);
+                throw error;
+              }
+            },
+          },
         });
         remainingBytes -= saved.size;
         savedPaths.push(saved.path);
