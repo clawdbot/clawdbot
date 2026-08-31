@@ -89,7 +89,7 @@ describe("test-projects args", () => {
     },
     {
       title: "routes script tests to the tooling config",
-      target: "src/scripts/test-projects.test.ts",
+      target: "test/scripts/test-projects-routing.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",
     },
     {

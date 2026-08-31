@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import {
+  resolvePluginActivationInputs,
+  withActivatedPluginIds,
+} from "../../plugins/activation-context.js";
+import { resolvePluginRegistryLoadCacheKey } from "../../plugins/loader-cache.js";
+import { pluginLoaderCacheState } from "../../plugins/registry-lifecycle.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
 
 describe("classifyAssistantFailoverReason", () => {
@@ -54,6 +61,7 @@ describe("classifyAssistantFailoverReason", () => {
   });
 
   it("uses structured assistant error bodies for model-not-found 400s", () => {
+    expect(getActivePluginRegistry()).toBeNull();
     expect(
       classifyAssistantFailoverReason({
         role: "assistant",
@@ -77,5 +85,29 @@ describe("classifyAssistantFailoverReason", () => {
         timestamp: 0,
       }),
     ).toBe("model_not_found");
+    // Read the completed scoped load; never load or activate a registry for this assertion.
+    const activation = resolvePluginActivationInputs({
+      rawConfig: withActivatedPluginIds({ pluginIds: ["openai"] }),
+      applyAutoEnable: true,
+    });
+    const registry = pluginLoaderCacheState.get(
+      resolvePluginRegistryLoadCacheKey({
+        config: activation.config,
+        activationSourceConfig: activation.activationSourceConfig,
+        autoEnabledReasons: activation.autoEnabledReasons,
+        onlyPluginIds: ["openai"],
+        activate: false,
+      }),
+    );
+    expect(registry?.plugins.find((plugin) => plugin.id === "openai")).toMatchObject({
+      status: "loaded",
+      providerIds: expect.arrayContaining(["openai"]),
+    });
+    expect(
+      registry?.providers.find((entry) => entry.pluginId === "openai")?.provider
+        .classifyFailoverReason,
+    ).toBeTypeOf("function");
+    expect(registry?.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 });

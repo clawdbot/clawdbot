@@ -6,9 +6,7 @@ const hoisted = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn((): FailoverReason | null => null),
 }));
 
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => hoisted,
-}));
+vi.mock("../../plugins/provider-failover.js", () => hoisted);
 
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { classifyFailoverReason, isContextOverflowError } from "./classify.js";
