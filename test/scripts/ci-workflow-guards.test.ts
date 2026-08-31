@@ -4162,7 +4162,7 @@ NODE
     );
     expect(resolve.if).toBe("inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'");
     expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
-    expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v2");
+    expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v3");
     expect(resolve.run).toContain("${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}");
     expect(resolve.run).toContain("node-$(node --version)-${deps_input_fingerprint:?}");
     expect(resolve.run).not.toMatch(/GITHUB_(?:REF|SHA|RUN_ID)|RUN_(?:ID|ATTEMPT)/u);
@@ -4374,7 +4374,7 @@ NODE
   });
 
   it.skipIf(process.platform === "win32")(
-    "preserves pnpm hard links and validates cached importers offline",
+    "preserves pnpm hard links and validates cached importers and supply-chain policy offline",
     async ({ onTestFinished, signal }) => {
       const fixtureDirs = createTempDirTracker();
       // oxlint-disable-next-line prefer-const -- Failure cleanup can run before the registry is started.
@@ -4393,6 +4393,8 @@ NODE
       const workspace = path.join(root, "workspace");
       const consumer = path.join(workspace, "packages", "consumer");
       const store = path.join(workspace, ".cache", "openclaw-pnpm-store");
+      let userHome = path.join(root, "producer-home");
+      mkdirSync(userHome, { recursive: true });
       mkdirSync(source, { recursive: true });
       mkdirSync(registry, { recursive: true });
       mkdirSync(consumer, { recursive: true });
@@ -4416,11 +4418,38 @@ NODE
         { cwd: source, encoding: "utf8", env: { ...process.env, CI: "true" } },
       ).trim();
       const pnpm = resolvePnpmRunner({ npmExecPath });
+      const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+      const configureCache = expectDefined(
+        action.runs.steps.find(
+          (step: WorkflowStep) => step.name === "Configure dependency cache store",
+        )?.run,
+        "Configure dependency cache store script",
+      );
+      const envFile = path.join(root, "dependency-cache.env");
+      execFileSync("bash", ["-c", configureCache], {
+        env: { ...process.env, GITHUB_WORKSPACE: workspace, GITHUB_ENV: envFile },
+      });
+      const dependencyEnvironment = Object.fromEntries(
+        readFileSync(envFile, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
       const runPnpm = (args: string[], cwd: string) =>
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
           cwd,
           encoding: "utf8",
-          env: { ...process.env, CI: "true", PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "hardlink" },
+          env: {
+            PATH: process.env.PATH,
+            HOME: userHome,
+            XDG_CACHE_HOME: path.join(userHome, ".cache"),
+            CI: "true",
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "hardlink",
+            ...dependencyEnvironment,
+          },
         });
       const version = runPnpm(["--version"], source);
       expect(version.status, version.stderr).toBe(0);
@@ -4440,6 +4469,10 @@ const server = createServer((request, response) => {
     const metadata = {
       name: "cache-proof-dep",
       "dist-tags": { latest: "1.0.0" },
+      time: {
+        "1.0.0": new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+        modified: new Date().toISOString(),
+      },
       versions: {
         "1.0.0": {
           name: "cache-proof-dep",
@@ -4452,7 +4485,11 @@ const server = createServer((request, response) => {
         },
       },
     };
-    response.setHeader("content-type", "application/json");
+    const abbreviated = request.headers.accept?.includes("application/vnd.npm.install-v1+json");
+    if (abbreviated) {
+      delete metadata.time;
+    }
+    response.setHeader("content-type", abbreviated ? "application/vnd.npm.install-v1+json" : "application/json");
     response.end(JSON.stringify(metadata));
     return;
   }
@@ -4512,7 +4549,9 @@ server.listen(0, "127.0.0.1", () => {
             private: true,
           }),
         );
-        writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+        const workspaceConfig =
+          "packages:\n  - packages/*\nminimumReleaseAge: 10080\nminimumReleaseAgeStrict: true\n";
+        writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), workspaceConfig);
         const writeConsumerManifest = (dependencyVersion: string) =>
           writeFileSync(
             path.join(consumer, "package.json"),
@@ -4528,13 +4567,15 @@ server.listen(0, "127.0.0.1", () => {
         if (environment !== null) {
           writeFileSync(path.join(workspace, "pnpm-lock.yaml"), `---\n${environment}\n---\n`);
         }
-        const installArgs = [
-          "install",
-          `--store-dir=${store}`,
-          "--ignore-scripts",
-          "--config.engine-strict=false",
-        ];
-        const installed = runPnpm([...installArgs, `--registry=${registryUrl}`], workspace);
+        const installArgs = ["install", "--ignore-scripts", "--config.engine-strict=false"];
+        const onlineArgs = [...installArgs, `--registry=${registryUrl}`];
+        const seeded = runPnpm([...onlineArgs, "--lockfile-only"], workspace);
+        expect(seeded.status, `${seeded.stdout}${seeded.stderr}`).toBe(0);
+        // CI publishes a frozen install, without the lockfile generator's caches.
+        rmSync(userHome, { force: true, recursive: true });
+        rmSync(store, { force: true, recursive: true });
+        mkdirSync(userHome, { recursive: true });
+        const installed = runPnpm([...onlineArgs, "--frozen-lockfile"], workspace);
         expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
 
         const findSameFile = (directory: string, referencePath: string): string | undefined => {
@@ -4576,6 +4617,9 @@ server.listen(0, "127.0.0.1", () => {
         rmSync(path.join(workspace, "node_modules"), { force: true, recursive: true });
         rmSync(path.join(consumer, "node_modules"), { force: true, recursive: true });
         rmSync(store, { force: true, recursive: true });
+        rmSync(userHome, { force: true, recursive: true });
+        userHome = path.join(root, "consumer-home");
+        mkdirSync(userHome, { recursive: true });
         execFileSync("tar", ["-xf", archive, "-C", workspace], { stdio: "pipe" });
 
         const restoredPackageFile = path.join(
@@ -4608,7 +4652,7 @@ server.listen(0, "127.0.0.1", () => {
         rmSync(registry, { force: true, recursive: true });
         const cachedIdentity = statSync(restoredPackageFile);
         const cachedLockfile = readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8");
-        const offlineArgs = [...installArgs, "--offline", "--frozen-lockfile"];
+        const offlineArgs = [...onlineArgs, "--offline", "--frozen-lockfile"];
         const reconciliation = runPnpm(offlineArgs, workspace);
         expect(reconciliation.status, `${reconciliation.stdout}${reconciliation.stderr}`).toBe(0);
         expect(statSync(restoredPackageFile)).toMatchObject({
@@ -4619,6 +4663,18 @@ server.listen(0, "127.0.0.1", () => {
         expect(
           readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
         ).toBe('module.exports = "cache-proof-v1";\n');
+        // A stricter policy invalidates pnpm's saved verification and reads the
+        // restored registry metadata. A 14-day-old release fails a 21-day gate.
+        writeFileSync(
+          path.join(workspace, "pnpm-workspace.yaml"),
+          workspaceConfig.replace("minimumReleaseAge: 10080", "minimumReleaseAge: 30240"),
+        );
+        const stricterPolicy = runPnpm(offlineArgs, workspace);
+        expect(stricterPolicy.status).toBe(1);
+        expect(`${stricterPolicy.stdout}${stricterPolicy.stderr}`).toContain(
+          "ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION",
+        );
+        writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), workspaceConfig);
         writeConsumerManifest("2.0.0");
         const drift = runPnpm(offlineArgs, workspace);
         expect(drift.status).toBe(1);
