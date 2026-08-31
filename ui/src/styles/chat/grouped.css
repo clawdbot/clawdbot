@@ -783,6 +783,8 @@ img.chat-avatar.chat-avatar--logo {
 
 /* Keep the working claw on the same left edge as the flat text column. */
 .chat-group.assistant .chat-bubble.chat-reading-indicator {
+  display: inline-flex;
+  align-items: center;
   padding: 10px 0;
 }
 
@@ -1261,6 +1263,9 @@ img.chat-avatar.chat-avatar--logo {
 :root[data-theme="tide"] .chat-confirm-popover__yes,
 :root[data-theme="phosphor"] .chat-confirm-popover__yes,
 :root[data-theme="crt"] .chat-confirm-popover__yes,
+:root[data-theme="manuscript"] .chat-confirm-popover__yes,
+:root[data-theme="rose"] .chat-confirm-popover__yes,
+:root[data-theme="miami"] .chat-confirm-popover__yes,
 :root[data-theme="beacon"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
@@ -1280,6 +1285,9 @@ img.chat-avatar.chat-avatar--logo {
 :root[data-theme="tide"] .chat-confirm-popover__yes:hover,
 :root[data-theme="phosphor"] .chat-confirm-popover__yes:hover,
 :root[data-theme="crt"] .chat-confirm-popover__yes:hover,
+:root[data-theme="manuscript"] .chat-confirm-popover__yes:hover,
+:root[data-theme="rose"] .chat-confirm-popover__yes:hover,
+:root[data-theme="miami"] .chat-confirm-popover__yes:hover,
 :root[data-theme="beacon"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }

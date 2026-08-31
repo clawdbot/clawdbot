@@ -480,7 +480,7 @@ describe("refreshChat", () => {
 
     expect(await raceWithMacrotask(refresh)).toBe("resolved");
     expect(host.chatLoading).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 400 });
+    expect(host.request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 800 });
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     expect(requestUpdate).not.toHaveBeenCalled();
   });
@@ -743,7 +743,7 @@ describe("refreshChat", () => {
     [
       "selected global agent",
       { sessionKey: "global", assistantAgentId: "work", agentsList: { defaultId: "main" } },
-      { sessionKey: "global", agentId: "work", limit: 400 },
+      { sessionKey: "global", agentId: "work", limit: 800 },
     ],
     [
       "agent main alias",
@@ -751,7 +751,7 @@ describe("refreshChat", () => {
         sessionKey: "agent:work:main",
         agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
       },
-      { sessionKey: "agent:work:main", agentId: "work", limit: 400 },
+      { sessionKey: "agent:work:main", agentId: "work", limit: 800 },
     ],
     [
       "agent session",
@@ -759,7 +759,7 @@ describe("refreshChat", () => {
         sessionKey: "agent:work:dashboard",
         agentsList: { defaultId: "main", mainKey: "main" },
       },
-      { sessionKey: "agent:work:dashboard", limit: 400 },
+      { sessionKey: "agent:work:dashboard", limit: 800 },
     ],
     [
       "hello default before the agents list loads",
@@ -770,12 +770,12 @@ describe("refreshChat", () => {
           snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
         },
       },
-      { sessionKey: "global", agentId: "ops", limit: 400 },
+      { sessionKey: "global", agentId: "ops", limit: 800 },
     ],
     [
       "unknown session",
       { sessionKey: "unknown", assistantAgentId: "work", agentsList: { defaultId: "main" } },
-      { sessionKey: "unknown", limit: 400 },
+      { sessionKey: "unknown", limit: 800 },
     ],
   ])("scopes history for %s", async (_name, overrides, expected) => {
     const host = makeChatHost({
@@ -9617,7 +9617,7 @@ describe("handleSendChat", () => {
     await waitForFast(() => {
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: "agent:main",
-        limit: 400,
+        limit: 800,
         inputRunIds: [
           findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
         ],
@@ -9717,7 +9717,7 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: sourceSessionKey,
-        limit: 400,
+        limit: 800,
       }),
     );
     host.sessionKey = replacementSessionKey;
@@ -9749,7 +9749,7 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: "agent:main",
-        limit: 400,
+        limit: 800,
       }),
     );
     host.client = clientWithRequest(makeRequestMock());
@@ -9814,7 +9814,7 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
-      limit: 400,
+      limit: 800,
     });
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessagesBySession?.has("agent:work:main")).toBe(false);
@@ -9951,7 +9951,7 @@ describe("handleSendChat", () => {
     expect(host.lastError).toContain("clear request may have completed");
     expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main",
-      limit: 400,
+      limit: 800,
     });
 
     await retryQueuedChatMessage(host, queuedId);
@@ -9993,7 +9993,7 @@ describe("handleSendChat", () => {
       await waitForFast(() =>
         expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
           sessionKey: sourceSessionKey,
-          limit: 400,
+          limit: 800,
         }),
       );
       const scrollGeneration = host.chatScrollGeneration;
@@ -10052,7 +10052,7 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
-      limit: 400,
+      limit: 800,
     });
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
