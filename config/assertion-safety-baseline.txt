@@ -2557,7 +2557,7 @@ src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
 src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/doctor/shared/stale-subagent-allowlist.ts	2
 src/commands/export-trajectory.ts	1
-src/commands/gateway-health-auth-diagnostic.ts	2
+src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	20

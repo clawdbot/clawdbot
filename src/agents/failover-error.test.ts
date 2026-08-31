@@ -2,8 +2,22 @@
  * Regression coverage for provider/model failover classification.
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+
+// Classification here is message/status table behavior. Provider-attributed
+// structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
+// gate and cold-materialize the full bundled provider runtime, which times the
+// unit test out under CI load (src/agents/CLAUDE.md: no full-runtime cold
+// loads for table coverage). No bundled hook classifies these fixtures anyway.
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,

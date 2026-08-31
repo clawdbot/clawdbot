@@ -1,6 +1,7 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -339,6 +340,7 @@ describe("checkGatewayHealth", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -370,6 +372,7 @@ describe("checkGatewayHealth", () => {
       kind: "connect",
       error: "connect failed",
       connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+      gatewayReached: true,
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -403,6 +406,7 @@ describe("checkGatewayHealth", () => {
       retryable: true,
       retryAfterMs: 60_000,
     });
+    retainGatewayResponsePayload(error, undefined);
     callGateway.mockRejectedValueOnce(error);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -427,6 +431,7 @@ describe("checkGatewayHealth", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
