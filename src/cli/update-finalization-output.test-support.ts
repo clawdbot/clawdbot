@@ -60,7 +60,7 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
