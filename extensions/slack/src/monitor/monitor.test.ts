@@ -113,6 +113,26 @@ describe("resolveSlackChannelConfig", () => {
     });
   });
 
+  it.each([
+    [undefined, undefined, undefined],
+    ["parent-only", undefined, "parent-only"],
+    ["parent-only", "all", "all"],
+    ["all", "parent-only", "parent-only"],
+  ] as const)(
+    "resolves acknowledgment thread scope from wildcard=%s and channel=%s to %s",
+    (wildcard, channel, expected) => {
+      const res = resolveSlackChannelConfig({
+        channelId: "C1",
+        channels: {
+          "*": { ackReactionThreadScope: wildcard },
+          C1: { ackReactionThreadScope: channel },
+        },
+      });
+
+      expect(res?.ackReactionThreadScope).toBe(expected);
+    },
+  );
+
   it("matches channel config key stored in lowercase when Slack delivers uppercase channel ID", () => {
     // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345).
     // Users commonly copy them in lowercase from docs or older CLI output.

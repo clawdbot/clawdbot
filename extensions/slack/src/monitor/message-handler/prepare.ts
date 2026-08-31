@@ -1425,6 +1425,8 @@ export async function prepareSlackMessage(params: {
     accountId: account.accountId,
   });
   const ackReactionValue = ackReaction ?? "";
+  const ackReactionThreadScope =
+    channelConfig?.ackReactionThreadScope ?? account.config.ackReactionThreadScope ?? "all";
   const sourceRepliesAreToolOnly =
     resolveChannelMessageSourceReplyDeliveryMode({
       cfg,
@@ -1435,6 +1437,7 @@ export async function prepareSlackMessage(params: {
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
+      (ackReactionThreadScope !== "parent-only" || !isThreadReply) &&
       shouldAckReactionGate({
         scope: ctx.ackReactionScope as AckReactionScope | undefined,
         inboundEventKind,

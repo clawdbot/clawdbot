@@ -38,6 +38,8 @@ export type SlackChannelConfig = {
   ignoreOtherMentions?: boolean;
   /** Override Slack reply/thread behavior for this channel. */
   replyToMode?: ReplyToMode;
+  /** Override the account's acknowledgment thread filter for this channel. */
+  ackReactionThreadScope?: "all" | "parent-only";
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -167,6 +169,8 @@ export type SlackAccountConfig = Omit<
     unfurlLinks?: boolean;
     /** Pass through Slack chat.postMessage media unfurl control. Omitted by default. */
     unfurlMedia?: boolean;
+    /** Limit acknowledgment and status reactions to parent messages. Default: all. */
+    ackReactionThreadScope?: "all" | "parent-only";
     /**
      * Optional per-chat-type reply threading overrides.
      * Example: { direct: "all", group: "first", channel: "off" }.

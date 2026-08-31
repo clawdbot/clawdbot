@@ -18,6 +18,7 @@ export type SlackChannelConfigResolved = {
   requireMention: boolean;
   ignoreOtherMentions?: boolean;
   replyToMode?: ReplyToMode;
+  ackReactionThreadScope?: SlackChannelConfig["ackReactionThreadScope"];
   allowBots?: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
@@ -33,6 +34,7 @@ type SlackChannelConfigEntry = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
   replyToMode?: ReplyToMode;
+  ackReactionThreadScope?: SlackChannelConfig["ackReactionThreadScope"];
   allowBots?: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
@@ -115,6 +117,10 @@ export function resolveSlackChannelConfig(params: {
   );
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
   const replyToMode = firstDefined(resolved.replyToMode, fallback?.replyToMode);
+  const ackReactionThreadScope = firstDefined(
+    resolved.ackReactionThreadScope,
+    fallback?.ackReactionThreadScope,
+  );
   const botLoopProtection = mergePairLoopGuardConfig(
     fallback?.botLoopProtection,
     matched?.botLoopProtection,
@@ -134,6 +140,7 @@ export function resolveSlackChannelConfig(params: {
     requireMention,
     ignoreOtherMentions,
     replyToMode,
+    ackReactionThreadScope,
     allowBots,
     botLoopProtection,
     users: users.length > 0 ? users : undefined,

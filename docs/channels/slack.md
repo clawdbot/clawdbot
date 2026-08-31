@@ -1524,6 +1524,26 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 }
 ```
 
+### Parent-only acknowledgments
+
+Set `channels.slack.ackReactionThreadScope` to `"parent-only"` to acknowledge new
+parent messages without reacting to thread replies, even when a reply mentions
+the bot. The default, `"all"`, preserves acknowledgments on both. This filter also
+applies to lifecycle status reactions; it does not change message handling,
+reply threading, or `typingReaction`.
+
+Override it for one account with
+`channels.slack.accounts.<accountId>.ackReactionThreadScope`, or for one room with
+`channels.slack.channels.<channelId>.ackReactionThreadScope` (also supported under
+an account's `channels` map). Channel overrides take precedence over account
+settings; omitted values inherit. DMs use the account setting.
+Group DMs also use the account setting because per-channel overrides apply only
+to Slack channels.
+
+`messages.ackReactionScope` still applies. Parent-only filtering does not enable
+acknowledgments in otherwise excluded conversations. A root whose `thread_ts`
+equals its own timestamp still counts as a parent.
+
 ## Text streaming
 
 `channels.slack.streaming` controls live preview behavior:

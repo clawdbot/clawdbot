@@ -397,6 +397,46 @@ describe("slack config schema", () => {
     });
   });
 
+  it.each(["all", "parent-only"] as const)("accepts %s acknowledgment thread scope", (scope) => {
+    expectSlackConfigValid({
+      ackReactionThreadScope: scope,
+      channels: { C123: { ackReactionThreadScope: scope } },
+      accounts: {
+        work: {
+          ackReactionThreadScope: scope,
+          channels: { C456: { ackReactionThreadScope: scope } },
+        },
+      },
+    });
+  });
+
+  it("rejects invalid acknowledgment thread scopes", () => {
+    expectSlackConfigIssue({ ackReactionThreadScope: "replies" }, "ackReactionThreadScope");
+    expectSlackConfigIssue(
+      { channels: { C123: { ackReactionThreadScope: "replies" } } },
+      "channels.C123.ackReactionThreadScope",
+    );
+  });
+
+  it.each([undefined, "all"] as const)(
+    "resolves the root acknowledgment thread filter with account override=%s",
+    (accountScope) => {
+      const cfg = {
+        channels: {
+          slack: SlackConfigSchema.parse({
+            ackReactionThreadScope: "parent-only",
+            accounts: {
+              work: accountScope === undefined ? {} : { ackReactionThreadScope: accountScope },
+            },
+          }),
+        },
+      } as OpenClawConfig;
+      const account = resolveSlackAccount({ cfg, accountId: "work" });
+
+      expect(account.config.ackReactionThreadScope).toBe(accountScope ?? "parent-only");
+    },
+  );
+
   it("rejects invalid per-channel replyToMode", () => {
     expectSlackConfigIssue(
       {
