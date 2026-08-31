@@ -63,6 +63,14 @@ class GlobalFetchRequestCapture {
   // handled, so it would prove nothing about this fix. (ClawSweeper P2 on
   // #134423.)
   readonly rawResponseTexts: string[] = [];
+  // One promise per captured response, in the same order as `requests` /
+  // `rawResponseTexts`. The tee's capture branch is read in the background so
+  // the real SDK consumer is never blocked on it, but that means
+  // rawResponseTexts[i] is not populated yet when fetch() itself resolves --
+  // a caller MUST await captureCompletions[i] before reading it, or it may
+  // observe an empty or partial string depending on scheduling (ClawSweeper
+  // P2 on #134423).
+  readonly captureCompletions: Array<Promise<void>> = [];
   private readonly realFetch = globalThis.fetch;
 
   install(): void {
@@ -84,23 +92,25 @@ class GlobalFetchRequestCapture {
       const [forCaller, forCapture] = response.body.tee();
       const captureIndex = this.rawResponseTexts.length;
       this.rawResponseTexts.push("");
-      void (async () => {
-        const reader = forCapture.getReader();
-        const decoder = new TextDecoder();
-        let text = "";
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
+      this.captureCompletions.push(
+        (async () => {
+          const reader = forCapture.getReader();
+          const decoder = new TextDecoder();
+          let text = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              text += decoder.decode(value, { stream: true });
             }
-            text += decoder.decode(value, { stream: true });
+          } catch {
+            // Best-effort capture; the real caller's own stream is unaffected.
           }
-        } catch {
-          // Best-effort capture; the real caller's own stream is unaffected.
-        }
-        this.rawResponseTexts[captureIndex] = text;
-      })();
+          this.rawResponseTexts[captureIndex] = text;
+        })(),
+      );
       return new Response(forCaller, {
         status: response.status,
         statusText: response.statusText,
@@ -213,7 +223,12 @@ describeLive(
           // on the wire -- not a model-quoted string, which the pre-fix
           // comparison already handled and would make this whole test prove
           // nothing about the fix. Inspects raw SSE bytes, before any
-          // OpenClaw-side parsing.
+          // OpenClaw-side parsing. Must await the capture's own completion
+          // first: it fills in rawResponseTexts[0] on a background task, in
+          // parallel with (not blocking) the real SDK's own stream consumer,
+          // so reading it before this resolves would race an unfinished or
+          // empty capture.
+          await capture.captureCompletions[0];
           const rawArguments = extractRawFunctionCallArguments(capture.rawResponseTexts[0] ?? "");
           expect(
             rawArguments,
