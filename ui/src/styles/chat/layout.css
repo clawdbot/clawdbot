@@ -1663,29 +1663,28 @@ openclaw-chat-video-player {
   color: inherit;
 }
 
-.chat-assistant-attachment-card--checking {
+.chat-assistant-attachment-card--checking,
+.chat-controls__model-trigger-skeleton {
   --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
   --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
 }
 
 .chat-assistant-attachment-card__status-meta.skeleton {
   inline-size: clamp(112px, 14vw, 144px);
-  max-inline-size: 100%;
 }
 
 .chat-assistant-attachment-card__action-skeleton {
   position: absolute;
-  inset-block-start: 0;
+  inset-block: 0;
   inset-inline-end: 0;
-  inline-size: 64px;
-  block-size: 30px;
-  border-radius: 999px;
+  width: 64px;
+  border-radius: 50%;
 }
 
 .chat-assistant-attachment-card__actions--loading {
   position: relative;
-  padding-inline-start: 38px;
-  block-size: 30px;
+  padding-inline: 38px 0;
+  height: 30px;
   font-size: 12px;
   font-weight: 600;
 }
@@ -6248,8 +6247,6 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-trigger-skeleton {
-  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
-  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
   --skeleton-duration: 1.45s;
 
   display: block;
