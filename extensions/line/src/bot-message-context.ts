@@ -41,7 +41,6 @@ type EventSource = webhook.Source | undefined;
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 type StickerEventMessage = webhook.StickerMessageContent;
-type TextEventMessage = webhook.TextMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
@@ -199,21 +198,14 @@ function describeLineSticker(sticker: StickerEventMessage): string {
   return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
 }
 
-// LINE writes every inline LINE emoji into the message text as a two-character
-// "()" placeholder and describes it only in `emojis`, so the raw text reaches the
-// agent as bare parentheses and an emoji-only message as nothing but "()". Each
-// span names itself instead. Offsets are UTF-16 code units, matching LINE's
-// mention contract, so they index the JS string directly; spans are replaced from
-// the end so the earlier offsets stay valid while the text grows.
-const LINE_EMOJI_PLACEHOLDER = "[emoji]";
-
-export function readLineTextMessageBody(message: TextEventMessage): string {
-  const spans = (message.emojis ?? [])
-    .filter((emoji) => emoji.index >= 0 && emoji.length > 0)
-    .toSorted((left, right) => right.index - left.index);
+export function readLineTextMessageBody(message: webhook.TextMessageContent): string {
   let text = message.text;
-  for (const span of spans) {
-    text = `${text.slice(0, span.index)}${LINE_EMOJI_PLACEHOLDER}${text.slice(span.index + span.length)}`;
+  // LINE can send an empty "()" alternative; retain meaningful alternatives.
+  // Replace from the end so LINE's UTF-16 offsets survive earlier replacements.
+  for (const { index, length } of (message.emojis ?? []).toSorted((a, b) => b.index - a.index)) {
+    if (index >= 0 && length === 2 && text.slice(index, index + length) === "()") {
+      text = `${text.slice(0, index)}[emoji]${text.slice(index + length)}`;
+    }
   }
   return text;
 }

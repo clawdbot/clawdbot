@@ -14,11 +14,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
-import {
-  buildLineMessageContext,
-  buildLinePostbackContext,
-  readLineTextMessageBody,
-} from "./bot-message-context.js";
+import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
@@ -889,94 +885,64 @@ describe("buildLineMessageContext", () => {
     );
   });
 
-  it("names an inline LINE emoji in the body the agent reads", async () => {
-    const event = createMessageEvent(
-      { type: "user", userId: "U1234567890abcdef1234567890abcdef" },
-      {
-        message: {
-          id: "1",
-          type: "text",
-          text: "()hello",
-          quoteToken: "quote-token",
-          emojis: [{ index: 0, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "130" }],
-        },
-      },
-    );
-
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
-
-    expect(context?.ctxPayload.BodyForAgent).toBe("[emoji]hello");
-    expect(context?.ctxPayload.RawBody).toBe("[emoji]hello");
-  });
-});
-
-describe("readLineTextMessageBody", () => {
-  const emojiBodyCases: {
-    name: string;
-    message: webhook.TextMessageContent;
-    expected: string;
-  }[] = [
+  it.each([
+    { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
+    { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
     {
-      name: "names the placeholder a LINE emoji leaves in the text",
-      message: {
-        id: "1",
-        type: "text",
-        text: "()hello",
-        quoteToken: "quote-token",
-        emojis: [{ index: 0, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "130" }],
-      },
-      expected: "[emoji]hello",
+      text: "😂() (hello)",
+      spans: [
+        [2, 2],
+        [5, 7],
+      ],
+      expected: "😂[emoji] (hello)",
     },
+    { text: "call foo()", spans: [], expected: "call foo()" },
     {
-      name: "reads offsets as UTF-16 code units, not codepoints",
-      message: {
-        id: "1",
-        type: "text",
-        text: "\u{1F602}()",
-        quoteToken: "quote-token",
-        emojis: [{ index: 2, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "123" }],
-      },
-      expected: "\u{1F602}[emoji]",
-    },
-    {
-      name: "names every emoji the message carries",
-      message: {
-        id: "1",
-        type: "text",
-        text: "()a()",
-        quoteToken: "quote-token",
-        emojis: [
-          { index: 0, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "1" },
-          { index: 3, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "2" },
-        ],
-      },
+      text: "()a()",
+      spans: [
+        [0, 2],
+        [3, 2],
+      ],
       expected: "[emoji]a[emoji]",
     },
+    { text: "call foo() now ()", spans: [[15, 2]], expected: "call foo() now [emoji]" },
     {
-      name: "leaves parentheses the sender typed themselves alone",
-      message: {
-        id: "1",
-        type: "text",
-        text: "call foo() now ()",
-        quoteToken: "quote-token",
-        emojis: [{ index: 15, length: 2, productId: "670e0cce840a8236ddd4ee4c", emojiId: "1" }],
-      },
-      expected: "call foo() now [emoji]",
+      text: "@openclaw3 ()",
+      spans: [[11, 2]],
+      expected: "@openclaw3 [emoji]",
+      mention: { mentionees: [{ type: "user" as const, index: 0, length: 10, isSelf: true }] },
     },
-    {
-      name: "leaves text alone when LINE reports no emoji",
-      message: { id: "1", type: "text", text: "()", quoteToken: "quote-token" },
-      expected: "()",
-    },
-  ];
+  ])(
+    "projects LINE emoji metadata without losing text: $text",
+    async ({ text, spans, expected, mention }) => {
+      const context = await buildLineMessageContext({
+        event: createMessageEvent(
+          { type: "user", userId: "user-1" },
+          {
+            message: {
+              id: "emoji-message",
+              type: "text",
+              text,
+              quoteToken: "quote-token",
+              emojis: spans.map(([index, length]) => ({
+                index,
+                length,
+                productId: "emoji-set",
+                emojiId: "1",
+              })),
+              mention,
+            },
+          },
+        ),
+        allMedia: [],
+        cfg,
+        account,
+        commandAuthorized: true,
+      });
 
-  it.each(emojiBodyCases)("$name", ({ message, expected }) => {
-    expect(readLineTextMessageBody(message)).toBe(expected);
-  });
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.RawBody).toBe(expected);
+      expect(context?.ctxPayload.CommandBody).toBe(mention ? "()" : text);
+    },
+  );
 });
