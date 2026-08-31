@@ -393,6 +393,7 @@ async function readMatrixStorageMetadata(
       try {
         await fs.access(databasePath);
       } catch (error) {
+        // SAFETY: fs.access rejects with Node errno errors; only ENOENT permits legacy metadata.
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return await readJsonFile(legacyMetadataPath);
         }
@@ -406,9 +407,7 @@ async function readMatrixStorageMetadata(
           WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
             AND (expires_at IS NULL OR expires_at > ?)`,
       )
-      .get(MATRIX_PLUGIN_ID, "storage-meta", "current", Date.now()) as
-      | { valueJson: unknown }
-      | undefined;
+      .get(MATRIX_PLUGIN_ID, "storage-meta", "current", Date.now());
     // Current SQLite identity wins over stale sidecars, including a mismatch.
     // Legacy metadata remains readable only until the Matrix doctor migrates it.
     return row ? parsePluginStateJson(row.valueJson) : await readJsonFile(legacyMetadataPath);
