@@ -285,6 +285,7 @@ describe("createUserTurnTranscriptRecorder", () => {
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "managed completion",
+        idempotencyKey: "managed-delivery-staged:user",
         sessionDeliveryAckIds: ["delivery-approved"],
       },
       target,
