@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
@@ -1434,6 +1434,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1443,7 +1444,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 error");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {
@@ -1474,6 +1475,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1483,7 +1485,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 conflict");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {

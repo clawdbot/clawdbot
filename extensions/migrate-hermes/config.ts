@@ -61,18 +61,6 @@ export function buildConfigItems(params: {
   if (params.hasMemoryFiles || memoryProvider) {
     items.push(
       createMigrationConfigPatchItem({
-        id: "config:memory",
-        target: "memory",
-        path: ["memory"],
-        value: { backend: "builtin" },
-        message: "Use OpenClaw built-in file memory for imported Hermes memory files.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["memory"], { backend: true }),
-      }),
-    );
-    items.push(
-      createMigrationConfigPatchItem({
         id: "config:memory-plugin-slot",
         target: "plugins.slots",
         path: ["plugins", "slots"],

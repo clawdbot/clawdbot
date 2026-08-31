@@ -246,6 +246,8 @@ At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider i
 
 Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies, archive-only report copies, cached config-runtime wrappers, and migration reports.
 
+In JSON mode, an apply that finishes with item errors or conflicts writes one complete migration report and exits with code `1`. Inspect `summary` and `items` to identify partial results.
+
 ## Onboarding integration
 
 Onboarding can offer migration when a provider detects a known source. Both `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying. Unlike standalone migration, the fresh-target onboarding path stages local artifacts and imported credentials, verifies or repairs imported inference inside staging, then promotes workspace and agent state before committing configuration. A mode-`0600` promotion journal lets the next run finish or roll back an interrupted publish, including any deferred external activation, without replaying imported local data.

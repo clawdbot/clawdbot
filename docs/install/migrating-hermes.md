@@ -155,7 +155,7 @@ openclaw migrate hermes --dry-run --json
 openclaw migrate apply hermes --json --yes
 ```
 
-With `--json` and no `--yes`, apply prints the plan and does not mutate state — the safest mode for CI and shared scripts.
+`openclaw migrate hermes --json` without `--yes` prints the plan without applying it. Non-interactive `migrate apply` requires `--yes`. A partial apply failure returns the complete JSON report and exits with code `1`.
 
 ## Troubleshooting
 

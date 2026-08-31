@@ -1,5 +1,6 @@
 // Migrate Hermes tests cover config plugin behavior.
 import path from "node:path";
+import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolvePreferredOpenClawTmpDir,
@@ -174,6 +175,7 @@ describe("Hermes migration config mapping", () => {
         "",
       ].join("\n"),
     );
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
 
     const provider = buildHermesMigrationProvider();
     const result = await provider.apply(
@@ -197,6 +199,18 @@ describe("Hermes migration config mapping", () => {
     );
     expect(config.mcp?.servers?.time?.command).toBe("npx");
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
+    expect(config.plugins?.slots?.memory).toBe("memory-core");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeFile(configPath, JSON.stringify(config));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      isolateEnv: true,
+      pluginValidation: "core-only",
+    });
+    expect(snapshot.issues).toEqual([]);
+    expect(snapshot.valid).toBe(true);
   });
 
   it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
