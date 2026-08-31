@@ -13,8 +13,8 @@ import {
   type OpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { resolveDatabasePath as resolveOpenClawStateDatabasePath } from "../state/openclaw-state-db-maintenance.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
