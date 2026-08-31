@@ -8,6 +8,11 @@
   "contracts": {
     "usageProviders": ["venice"]
   },
+  "modelPricing": {
+    "providers": {
+      "venice": { "venice": { "provider": "venice" } }
+    }
+  },
   "providerAuthChoices": [
     {
       "provider": "venice",

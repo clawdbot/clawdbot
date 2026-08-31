@@ -21,6 +21,7 @@ describe("initial user message handoff", () => {
     });
 
     expect(handoff.read("main", owner)).toEqual({
+      pending: true,
       sessionKey: "agent:main:main",
       message: first,
       owner,

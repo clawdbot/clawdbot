@@ -774,7 +774,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
       env: { AWS_PROFILE: "default" } as NodeJS.ProcessEnv,
       explicitProviders: { "amazon-bedrock": explicitProvider },
-      sourceModelInputOmissions: new Set(["amazon-bedrock/vision-model"]),
+      sourceModelFields: new Map([
+        ["amazon-bedrock/vision-model", { inputOmitted: true, cost: undefined }],
+      ]),
     });
 
     expect(providers?.["amazon-bedrock"]?.models).toMatchObject([

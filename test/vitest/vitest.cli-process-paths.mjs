@@ -3,6 +3,7 @@
 export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/cli-process-child.test-helpers.test.ts",
+  "src/cli/cron-output.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
   "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",

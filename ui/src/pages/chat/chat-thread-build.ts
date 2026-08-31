@@ -1,7 +1,3 @@
-import {
-  isLocallyOptimisticSessionMessage,
-  readSessionMessageIdentity,
-} from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -113,10 +109,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
-        !(
-          isLocallyOptimisticSessionMessage(message) &&
-          acceptedRunIds.has(readSessionMessageIdentity(message)?.runId ?? "")
-        ) &&
         (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
     ),
   );

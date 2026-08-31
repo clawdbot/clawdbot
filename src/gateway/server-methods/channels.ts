@@ -32,7 +32,10 @@ import {
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
-import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type {
+  ChannelAccountStartOutcome,
+  ChannelRuntimeSnapshot,
+} from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -48,6 +51,7 @@ type ChannelStartPayload = {
   channel: ChannelId;
   accountId: string;
   started: boolean;
+  outcome: ChannelAccountStartOutcome;
 };
 
 type ChannelStopPayload = {
@@ -292,7 +296,15 @@ async function startChannelAccount(params: {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
-  await params.context.startChannel(params.channelId, resolvedAccountId, { manual: true });
+  const outcomes = await params.context.startChannel(params.channelId, resolvedAccountId, {
+    manual: true,
+  });
+  const outcome = outcomes.get(resolvedAccountId);
+  if (!outcome) {
+    throw new Error(
+      `Channel ${params.channelId} did not report a start outcome for ${resolvedAccountId}`,
+    );
+  }
   const runtime = params.context.getRuntimeSnapshot();
   const started =
     resolveRuntimeAccountSnapshot({
@@ -304,6 +316,7 @@ async function startChannelAccount(params: {
     channel: params.channelId,
     accountId: resolvedAccountId,
     started,
+    outcome,
   };
 }
 

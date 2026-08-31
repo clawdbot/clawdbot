@@ -182,6 +182,7 @@ describe("ordinary browser input admission", () => {
         undefined,
         expect.anything(),
       );
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
       expect(transcriptAtAck).toEqual(activeTranscript);
       expect(pendingAtAck).toMatchObject({
         total: 1,
@@ -214,7 +215,7 @@ describe("ordinary browser input admission", () => {
       await fixture.send(respond);
       expect(respond).toHaveBeenCalledWith(
         true,
-        expect.objectContaining({ status: "started" }),
+        expect.objectContaining({ status: "started", messageSeq: 2 }),
         undefined,
         expect.anything(),
       );

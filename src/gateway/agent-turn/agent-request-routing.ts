@@ -120,7 +120,6 @@ export async function prepareAgentRequestRouting(params: {
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
-        clone: false,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {

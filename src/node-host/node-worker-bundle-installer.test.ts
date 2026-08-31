@@ -22,6 +22,7 @@ describe("node worker bundle installer", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await new Promise<void>((resolve) => {
       if (!server) {
         resolve();
@@ -115,6 +116,132 @@ describe("node worker bundle installer", () => {
     }
     return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
   }
+
+  it("does not publish a bundle when cancellation arrives during receipt staging", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const controller = new AbortController();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).endsWith("bootstrap-receipt.json") && args[1] === "wx") {
+        controller.abort(new Error("installer cancelled"));
+      }
+      return handle;
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("installer cancelled");
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(
+      fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
+    ).resolves.toEqual([]);
+  });
+
+  it("restores the prior destination when cancelled between publication renames", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
+    const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "prior-install"), "preserved");
+    const controller = new AbortController();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (args[0] === destination && String(args[1]).includes(".previous-")) {
+        controller.abort(new Error("publication cancelled"));
+      }
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("publication cancelled");
+
+    await expect(fs.readdir(bundlesRoot)).resolves.toEqual([fixture.input.build.bundleHash]);
+    await expect(fs.readdir(destination)).resolves.toEqual(["prior-install"]);
+    await expect(fs.readFile(path.join(destination, "prior-install"), "utf8")).resolves.toBe(
+      "preserved",
+    );
+  });
+
+  it("does not renew retention when cancelled while validating an installed bundle", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    const controller = new AbortController();
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (String(args[0]).endsWith("worker.mjs")) {
+        controller.abort(new Error("cached install cancelled"));
+      }
+      return result;
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("cached install cancelled");
+
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(
+      installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [fixture.input.build.bundleHash],
+      }),
+    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 1 });
+  });
+
+  it("rejects cancellation during final cleanup without renewing retention or removing published bytes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const controller = new AbortController();
+    const rm = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      await rm(...args);
+      if (path.basename(String(args[0])).startsWith(".staging-")) {
+        controller.abort(new Error("install cleanup cancelled"));
+      }
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("install cleanup cancelled");
+
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
+    await expect(
+      installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [fixture.input.build.bundleHash],
+      }),
+    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
+  });
 
   it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed");

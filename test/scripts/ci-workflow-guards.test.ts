@@ -4585,6 +4585,22 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
       "${{ needs.validate_selected_ref.outputs.selected_sha }}",
     );
+    const build = repoE2eSteps.find((step) => step.name === "Build dist for repo E2E");
+    for (const row of repoE2eRows) {
+      const command = build?.run?.startsWith("${{")
+        ? evaluateWorkflowExpression(build.run, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: row,
+          })
+        : build?.run;
+      // Gateway shards include packed-package type consumers; UI and the
+      // standalone agent-plugin proof need runtime and canonical SDK artifacts.
+      expect(command, row.name).toBe(
+        row.command.startsWith("pnpm test:e2e:gateway ") ? "pnpm build" : "pnpm build:ci-artifacts",
+      );
+    }
     const sandboxSetupIndex = repoE2eSteps.findIndex(
       (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
     );
