@@ -109,7 +109,7 @@ import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identi
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-export const CHAT_HISTORY_REQUEST_LIMIT = 400;
+export const CHAT_HISTORY_REQUEST_LIMIT = 800;
 // Back-scroll pages are larger than the startup tail: session open stays cheap
 // while older-history reads amortize round trips and prepend/re-anchor cycles.
 // The gateway independently bounds each response (entry cap + byte budget).
