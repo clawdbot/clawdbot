@@ -4103,6 +4103,22 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
+  it("does not clean handoffs before rejecting an unknown package owner", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-unknown-owner"));
+    resolveGlobalManager.mockRejectedValueOnce(
+      new Error(
+        "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+      ),
+    );
+
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toThrow(
+      "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+    );
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
   it("reports an incompatible package target during dry-run", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-dry-run"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(

@@ -19,7 +19,7 @@ import {
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForChildClose } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForChildClose, waitForDead } from "../helpers/process-wait.js";
 
 const fixture = createFixtureLifetime();
 const { createTempDir } = fixture;
@@ -54,29 +54,6 @@ async function waitForFile(
     await delay(5);
   }
   throw new Error(`Timed out waiting for ${filePath}`);
-}
-
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function waitForDead(pid: number, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await delay(5);
-  }
-  throw new Error(`Process ${pid} was still alive after ${timeoutMs}ms`);
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
