@@ -340,7 +340,7 @@ export function resolveExternalPackageAliasesForVite(
 ): ControlUiViteAlias[] {
   const packageRoot = (specifier: string) =>
     path.dirname(resolvePackage(`${specifier}/package.json`));
-  const packageDist = (specifier: string) => path.join(packageRoot(specifier), "dist");
+  const packageDist = (specifier: string) => path.dirname(resolvePackage(specifier));
   return [
     {
       find: "@openclaw/fs-safe",
