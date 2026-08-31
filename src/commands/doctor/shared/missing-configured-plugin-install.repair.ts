@@ -168,7 +168,7 @@ async function repairMissingPluginInstalls(params: {
           }),
       );
     } catch (error) {
-      await rollbackPluginInstallTransactionsAfterFailure({
+      return await rollbackPluginInstallTransactionsAfterFailure({
         transactions: pendingInstallTransactions,
         error,
         message: "Plugin repair failed and payload rollback failed",
@@ -461,7 +461,7 @@ async function repairMissingPluginInstallsWithLease(
             : updateParams,
         );
       } catch (error) {
-        await rollbackPluginInstallTransactionsAfterFailure({
+        return await rollbackPluginInstallTransactionsAfterFailure({
           transactions: dependencyRepairTransactions,
           error,
           message: "Plugin dependency repair failed and payload rollback failed",
