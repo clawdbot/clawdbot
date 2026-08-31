@@ -58,6 +58,28 @@ function setMode(env: NodeJS.ProcessEnv, mode: "compat" | "allowlist") {
 }
 
 describe("bundled provider compatibility in installed plugin indexes", () => {
+  it("passes the caller environment through manifest validation", () => {
+    const { candidate, env } = createFixture();
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        {
+          ...candidate,
+          origin: "global",
+          packageDir: candidate.rootDir,
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/contract-provider",
+              minHostVersion: ">=2099.1.1",
+            },
+          },
+        },
+      ],
+      env: { ...env, OPENCLAW_VERSION: "2099.1.1" },
+    });
+
+    expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual([PLUGIN_ID]);
+  });
+
   it("applies fresh and dynamic policy to a contract-only provider", () => {
     const { candidate, env } = createFixture();
     const config = { plugins: { allow: ["listed"] } };

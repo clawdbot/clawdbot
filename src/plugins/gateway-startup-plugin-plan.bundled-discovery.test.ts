@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./channel-plugin-ids.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -130,8 +131,8 @@ describe("gateway startup plan under bundledDiscovery compat", () => {
     } finally {
       envSnapshot.restore();
       clearBundledDiscoveryModeMemo();
-      await fs.rm(compatRoot, { recursive: true, force: true });
-      await fs.rm(plainRoot, { recursive: true, force: true });
+      await removeBundledDiscoveryStateRoot(compatRoot);
+      await removeBundledDiscoveryStateRoot(plainRoot);
     }
   });
 });

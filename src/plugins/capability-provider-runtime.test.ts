@@ -2,11 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
@@ -420,6 +421,15 @@ describe("resolvePluginCapabilityProviders", () => {
     // isolate:false shared worker: the compat state root must not outlive
     // this file's last test into sibling suites.
     restoreBundledDiscoveryState();
+  });
+
+  afterAll(async () => {
+    restoreBundledDiscoveryState();
+    if (discoveryCompatRoot) {
+      const stateRoot = discoveryCompatRoot;
+      discoveryCompatRoot = undefined;
+      await removeBundledDiscoveryStateRoot(stateRoot);
+    }
   });
 
   it("resolves bundled capability plugins from the current metadata snapshot", () => {

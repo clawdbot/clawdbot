@@ -81,6 +81,7 @@ function buildInstalledPluginIndex(
   const registry = loadPluginManifestRegistryCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
     installRecords,
