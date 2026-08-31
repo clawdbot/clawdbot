@@ -18,6 +18,8 @@ const ExpectedMarkedUnreadAt = Type.Optional(
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
+  color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
@@ -54,6 +56,8 @@ const SessionsPatchMutationProperties = {
   ),
   elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  // Retired v4 fields stay wire-valid so the applier can explain their replacement.
+  // Remove them only with the next owner-approved protocol version bump.
   execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

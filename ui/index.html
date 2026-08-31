@@ -21,7 +21,19 @@
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1, tide: 1, beacon: 1, phosphor: 1 };
+        var THEMES = {
+          claw: 1,
+          knot: 1,
+          dash: 1,
+          absolutely: 1,
+          tide: 1,
+          beacon: 1,
+          phosphor: 1,
+          crt: 1,
+          manuscript: 1,
+          rose: 1,
+          miami: 1,
+        };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -40,8 +52,7 @@
               if (raw) break;
             }
           }
-          if (!raw) return;
-          var s = JSON.parse(raw);
+          var s = raw ? JSON.parse(raw) : null;
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
@@ -61,6 +72,10 @@
             tide: ["tide", "tide-light"],
             beacon: ["beacon", "beacon-light"],
             phosphor: ["phosphor", "phosphor-light"],
+            crt: ["crt", "crt-light"],
+            manuscript: ["manuscript", "manuscript-light"],
+            rose: ["rose", "rose-light"],
+            miami: ["miami", "miami-light"],
           };
           var pair = FAMILIES[theme];
           var resolved = pair
@@ -155,6 +170,38 @@
 
       html[data-theme="phosphor-light"] {
         background: #f4f7f4;
+      }
+
+      html[data-theme="crt"] {
+        background: #090a09;
+      }
+
+      html[data-theme="crt-light"] {
+        background: #f5f5f4;
+      }
+
+      html[data-theme="manuscript"] {
+        background: #211e18;
+      }
+
+      html[data-theme="manuscript-light"] {
+        background: #f6f1e4;
+      }
+
+      html[data-theme="rose"] {
+        background: #191724;
+      }
+
+      html[data-theme="rose-light"] {
+        background: #faf4ed;
+      }
+
+      html[data-theme="miami"] {
+        background: #140f1e;
+      }
+
+      html[data-theme="miami-light"] {
+        background: #f7f3f6;
       }
 
       body {

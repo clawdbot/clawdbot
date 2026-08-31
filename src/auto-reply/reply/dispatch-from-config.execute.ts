@@ -2,6 +2,7 @@ import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
@@ -10,13 +11,14 @@ import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isCommandReplyForDelivery,
   isReplyPayloadStatusNotice,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
@@ -41,9 +43,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     dispatcher,
     failDispatchReplyOperation,
     flushPendingCommentaryProgress,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
-    hookRunner,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
@@ -53,7 +55,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     onToolResultFromReplyOptions,
     params,
     reasoningPayloadsEnabled,
-    recordAgentDispatchCompleted,
     replyConfig,
     replyRoute,
     resolveToolDeliveryPayload,
@@ -575,6 +576,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                               }
                             },
                           ),
+                          "delivery",
                         );
                       }
                     }
@@ -597,14 +599,26 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
       );
     }
+    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
+    const adopted = state.turnAdoptionState?.adopted === true;
     if (
       params.replyOptions?.isHeartbeat === true ||
-      !didDeliverVisiblePartialReply ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
+    if (!didDeliverVisiblePartialReply) {
+      // Adoption retires ingress replay before the model starts. A progress ACK
+      // cannot settle a later failure; use normal final delivery and its policy.
+      return adopted &&
+        state.noVisibleReplyFallbackDirected &&
+        !state.suppressDelivery &&
+        !state.getObservedReplyDelivery()
+        ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
+        : undefined;
+    }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,
@@ -622,7 +636,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   }
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);
-  const finalDispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
+  const resolvedCommandReply = isCommandReplyForDelivery(replyResult);
+  const finalDispatchAcquisition = resolvedCommandReply
+    ? ({ status: "ready" } as const)
+    : await state.ensureDispatchReplyOperation("dispatch");
   if (finalDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
   }
@@ -638,68 +655,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     };
   }
 
-  if (ctx.AcpDispatchTailAfterReset === true) {
-    // Command handling prepared a trailing prompt after ACP in-place reset.
-    // Route that tail through ACP now (same turn) instead of embedded dispatch.
-    ctx.AcpDispatchTailAfterReset = false;
-    if (hookRunner?.hasHooks("reply_dispatch")) {
-      const tailDispatchResult = await runWithDispatchLifecycleAdmission(
-        async () =>
-          await runWithDispatchAbortSignal(
-            getDispatchAbortSignal(),
-            () =>
-              hookRunner.runReplyDispatch(
-                createReplyDispatchEvent({
-                  ctx,
-                  runId: params.replyOptions?.runId,
-                  sessionKey: state.acpDispatchSessionKey,
-                  toolsAllow: params.replyOptions?.toolsAllow,
-                  images: params.replyOptions?.images,
-                  inboundAudio: state.inboundAudio,
-                  sessionTtsAuto,
-                  ttsChannel: deliveryChannel,
-                  suppressUserDelivery: state.suppressHookUserDelivery,
-                  suppressReplyLifecycle: state.suppressHookReplyLifecycle,
-                  sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
-                  shouldRouteToOriginating,
-                  originatingChannel: state.routeReplyChannel,
-                  originatingTo: state.routeReplyTo,
-                  originatingAccountId: state.replyContextAccountId,
-                  originatingThreadId: state.routeReplyThreadId,
-                  originatingChatType: replyRoute.chatType,
-                  shouldSendToolSummaries: state.shouldSendToolSummaries,
-                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
-                  sendPolicy: state.sendPolicy,
-                  isTailDispatch: true,
-                }),
-                {
-                  cfg,
-                  dispatcher: state.dispatchHookDispatcher,
-                  abortSignal:
-                    state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
-                  onReplyStart: params.replyOptions?.onReplyStart,
-                  recordProcessed: state.recordProcessed,
-                  markIdle: state.markIdle,
-                },
-              ),
-            trackDispatchLifecycleWork,
-          ),
-      );
-      if (tailDispatchResult?.handled) {
-        recordAgentDispatchCompleted("completed");
-        state.completeDispatchReplyOperation();
-        return {
-          status: "complete" as const,
-          result: state.attachSourceReplyDeliveryMode({
-            queuedFinal: tailDispatchResult.queuedFinal,
-            counts: tailDispatchResult.counts,
-            ...(state.routeState.sessionMetadataChangesForResult
-              ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
-              : {}),
-          }),
-        };
-      }
-    }
+  const acpTailResult = await handleAcpDispatchTailAfterReset(state);
+  if (acpTailResult) {
+    return acpTailResult;
   }
   const nextState = extendPreparedDispatchState(state, {
     deliberateSilentTerminalReply,

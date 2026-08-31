@@ -23,6 +23,7 @@ type GatewayRootWorkAdmission = {
 
 type GatewayWorkAdmissionState = {
   restartDraining: boolean;
+  restartDrainController: AbortController;
   restartSignalPending: boolean;
   restartSignalGeneration: number;
   suspendPhase: GatewaySuspendAdmissionPhase;
@@ -39,6 +40,7 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
   (): GatewayWorkAdmissionState => ({
     restartDraining: false,
+    restartDrainController: new AbortController(),
     restartSignalPending: false,
     restartSignalGeneration: 0,
     suspendPhase: "accepting",
@@ -185,6 +187,10 @@ export function isGatewayRestartDraining(): boolean {
   );
 }
 
+export function getGatewayRestartDrainSignal(): AbortSignal {
+  return GATEWAY_WORK_ADMISSION_STATE.restartDrainController.signal;
+}
+
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
   return error instanceof GatewayDrainingError && isGatewayRestartDraining();
 }
@@ -199,6 +205,9 @@ export function markGatewayRestartDraining(): void {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = true;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
+    new GatewayDrainingError("gateway is draining for restart"),
+  );
   resolveSuspendOpenWaiters();
   logAdmissionClosed("restart drain");
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
@@ -500,6 +509,7 @@ export function resetGatewayWorkAdmission(): void {
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController = new AbortController();
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {

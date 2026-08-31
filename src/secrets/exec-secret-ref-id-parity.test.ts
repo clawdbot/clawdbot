@@ -210,7 +210,7 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("talk.")) {
       return "talk";
     }
-    if (id.startsWith("tts.providers.")) {
+    if (id.startsWith("tts.")) {
       return "tts";
     }
     if (id.startsWith("tools.web.fetch.")) {

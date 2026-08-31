@@ -68,6 +68,7 @@ type TelegramSendPayloadOptions = {
   promptContextSequence?: TelegramPromptContextProjectionSequence;
   textMode?: "html";
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
@@ -231,7 +232,7 @@ export async function sendPayload(
     isSingleUseReplyToMode(turn.replyToMode) &&
     !targetsDifferentMessage;
   const deliverablePayload = consumedSingleUseReply
-    ? (({ replyToId: _, replyToTag: _tag, replyToCurrent: _current, ...rest }) => rest)(
+    ? (({ replyToId: _replyToId, replyToTag: _tag, replyToCurrent: _current, ...rest }) => rest)(
         targetedPayload,
       )
     : targetedPayload;
@@ -317,6 +318,7 @@ export async function sendPayload(
       mediaLoader: turn.telegramDeps.loadWebMedia,
       promptContextSequence: projectionSequence,
       onPlatformSendDispatch: options?.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: options?.assertPlatformSendAuthorized,
       ...(options?.textMode ? { textMode: options.textMode } : {}),
     });
     if (!result.delivered) {
@@ -443,6 +445,7 @@ async function deliverTelegramProgressModeFinalAnswer(
   text: string,
   promptContextSequence: TelegramPromptContextProjectionSequence,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
   const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
@@ -453,6 +456,7 @@ async function deliverTelegramProgressModeFinalAnswer(
       durable: true,
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     });
     if (!delivered) {
@@ -467,6 +471,7 @@ async function deliverTelegramProgressModeFinalAnswer(
     durable: true,
     promptContextSequence,
     onPlatformSendDispatch,
+    assertPlatformSendAuthorized,
     bindPendingFinalDelivery,
   });
   // The final must dispatch before the activity window retires, so the answer
@@ -486,6 +491,7 @@ export async function deliverFinalAnswerText(
   text: string,
   buttons?: TelegramInlineButtons,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
   const transcriptFinal = await turn.resolveCurrentTurnTranscriptFinal();
@@ -509,6 +515,7 @@ export async function deliverFinalAnswerText(
       finalText,
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     );
   } else {
@@ -526,6 +533,7 @@ export async function deliverFinalAnswerText(
       allowStream: !usesNativeTelegramQuote(turn, answerPayload),
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     });
     if (!isFollowUp && result.kind !== "skipped") {

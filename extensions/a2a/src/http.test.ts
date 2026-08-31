@@ -1,9 +1,8 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import type { ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createA2aHttpHandler } from "./http.js";
 import { A2aTaskStore } from "./task-store.js";
@@ -60,9 +59,7 @@ async function startHttpHarness(options?: {
     body?: string;
     token?: string | null;
   }) {
-    const request = Readable.from(
-      dispatch.body === undefined ? [] : [dispatch.body],
-    ) as IncomingMessage;
+    const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
     request.url = dispatch.endpoint;
     request.headers = {
@@ -75,8 +72,8 @@ async function startHttpHarness(options?: {
           }),
       ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
     };
-    Object.defineProperty(request, "socket", {
-      value: { remoteAddress: "127.0.0.1" },
+    Object.defineProperty(request.socket, "remoteAddress", {
+      value: "127.0.0.1",
     });
 
     const response = createMockServerResponse();

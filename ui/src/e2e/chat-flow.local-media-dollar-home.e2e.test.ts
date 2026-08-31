@@ -1,13 +1,17 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("allows tilde local media previews when the preview root home contains a literal $ pattern", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.local-media-dollar-home", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -34,7 +38,7 @@ suite.define(() => {
       }
       await route.fulfill({
         contentType: "audio/mpeg",
-        body: Buffer.from("ID3\u0003\u0000\u0000\u0000\u0000\u0000\u0000"),
+        body: createPlaybackMediaFixture("mp3"),
       });
     });
 
@@ -63,11 +67,18 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const attachment = page.locator(".chat-assistant-attachment-card--compact");
+      const attachment = page.locator("openclaw-chat-audio-player");
       await attachment.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(1);
+      await expect
+        .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(2);
       expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
       expect(requestedMediaUrls[0]?.searchParams.get("source")).toBe(source);
+      expect(
+        requestedMediaUrls
+          .slice(1)
+          .some((url) => url.searchParams.get("mediaTicket") === "ticket-dollar-home"),
+      ).toBe(true);
       const downloadHref = await attachment
         .locator(".chat-assistant-attachment-card__download")
         .getAttribute("href");
@@ -75,10 +86,15 @@ suite.define(() => {
       const downloadUrl = new URL(downloadHref ?? "", suite.server.baseUrl);
       expect(downloadUrl.searchParams.get("mediaTicket")).toBe("ticket-dollar-home");
       expect(downloadUrl.searchParams.get("source")).toBe(source);
-      expect(await attachment.locator("audio, video").count()).toBe(0);
+      await expect
+        .poll(() =>
+          attachment
+            .locator("audio")
+            .evaluate((element) => (element as HTMLMediaElement).readyState),
+        )
+        .toBeGreaterThanOrEqual(1);
       expect(await page.getByText("Outside allowed folders").count()).toBe(0);
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "local-media-dollar-home-allowed.png"),

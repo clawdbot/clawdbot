@@ -2,7 +2,7 @@ import {
   BOARD_CRON_TRIGGER_PREFIX,
   BOARD_DATA_BINDING_ID_MAX_LENGTH,
   BOARD_WIDGET_TOOL_MAX_LENGTH,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/board.js";
 import { CORE_BOARD_HOST_CAPABILITY_IDS } from "../boards/board-host-capability-ids.js";
 import type {
   PluginDashboardActionVerbRegistration,

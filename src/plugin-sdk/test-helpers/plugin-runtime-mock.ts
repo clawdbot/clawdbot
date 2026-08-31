@@ -30,6 +30,7 @@ export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (para
     abortSignal: source?.abortSignal ?? new AbortController().signal,
     onAdopted: async () => await source?.onAdopted?.(),
     onDeferred: () => source?.onDeferred?.(),
+    onDeferredHeartbeat: () => source?.onDeferredHeartbeat?.(),
     onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
     onFailed: source?.onFailed ? async (error) => await source.onFailed?.(error) : undefined,
     onAbandoned: async () => await source?.onAbandoned?.(),

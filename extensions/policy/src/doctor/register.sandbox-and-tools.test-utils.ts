@@ -854,6 +854,32 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("accepts agent exec mode posture that matches policy", async () => {
+    const cfg = cfgWithPolicyOverrides({
+      agents: {
+        list: [{ id: "reviewer", tools: { exec: { mode: "ask" } } }],
+      },
+    });
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          tools: {
+            exec: {
+              allowSecurity: ["allowlist"],
+              requireAsk: ["on-miss"],
+            },
+          },
+        },
+      },
+    });
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("reports global and agent-scoped tool claims independently", async () => {
     const cfg = cfgWithPolicyOverrides({
       tools: {

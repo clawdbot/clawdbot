@@ -20,6 +20,7 @@ import {
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
@@ -382,6 +383,11 @@ export async function openTerminalSession(
           ),
         ),
       );
+      return;
+    }
+    const readinessError = resolveSessionWorkStartError(agentSessionKey, entry);
+    if (readinessError) {
+      invalid(respond, terminalFailureMessage(readinessError, request.failureHint));
       return;
     }
     agentOwner = {

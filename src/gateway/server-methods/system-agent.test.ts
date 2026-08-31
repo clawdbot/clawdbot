@@ -6,6 +6,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import {
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
+  setRuntimeConfigAppliedHash,
+} from "../../config/runtime-snapshot.js";
+import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
@@ -15,6 +22,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -26,12 +34,10 @@ import type {
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { WizardSession } from "../../wizard/session.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import {
-  runExclusiveSystemAgentSetupActivation,
-  whenAdmittedWizardSessionSettled,
-} from "./setup-admission.js";
+import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -43,13 +49,6 @@ const setupInferenceMocks = vi.hoisted(() => ({
 const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
 const setupInferenceDetectionMocks = vi.hoisted(() => ({
   detectSetupInferenceIsolated: vi.fn(),
-}));
-const providerAuthChoiceMocks = vi.hoisted(() => ({
-  applyAuthChoiceLoadedPluginProvider: vi.fn(),
-}));
-const setupSharedMocks = vi.hoisted(() => ({
-  readSetupConfigFileSnapshot: vi.fn(),
-  writeWizardConfigFile: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendTranscriptReset: vi.fn(),
@@ -77,13 +76,6 @@ vi.mock("../../system-agent/inference-fallback.js", () => ({
 }));
 vi.mock("../../system-agent/setup-inference-detection.js", () => ({
   detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
-}));
-vi.mock("../../plugins/provider-auth-choice.js", () => ({
-  applyAuthChoiceLoadedPluginProvider: providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider,
-}));
-vi.mock("../../wizard/setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
-  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
 }));
 vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
@@ -122,7 +114,7 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 }
 
 function makeWizardContext() {
-  const wizardSessions = new Map();
+  const wizardSessions = new Map<string, WizardSession>();
   return {
     wizardSessions,
     context: {
@@ -159,6 +151,22 @@ let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let previousAppliedHash: string | null = null;
+
+async function makeVerificationContext() {
+  const stateDir = systemAgentTempDirs.make("openclaw-setup-verification-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  fs.writeFileSync(configPath, "{}\n");
+  const snapshot = await readConfigFileSnapshot();
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(snapshot.sourceConfig));
+  return {
+    configPath,
+    getRuntimeConfig: vi.fn(() => snapshot.runtimeConfig ?? snapshot.config),
+    isConfigReloadSettled: vi.fn(() => true),
+  };
+}
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
   return expectDefined(verifiedInference, "verified inference fixture was not initialized");
@@ -236,6 +244,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  previousAppliedHash = getRuntimeConfigAppliedHash();
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
@@ -251,16 +260,6 @@ beforeEach(() => {
   setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
     requireVerifiedInferenceFixture().configuredRoute,
   );
-  setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "prepare-base-hash",
-    sourceConfig: verifiedConfig,
-    config: verifiedConfig,
-    issues: [],
-  });
-  setupSharedMocks.writeWizardConfigFile.mockImplementation(async (config) => config);
   transcriptStoreMocks.appendTranscriptTurn.mockReset();
   transcriptStoreMocks.appendTranscriptReset.mockReset();
   transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
@@ -281,6 +280,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setRuntimeConfigAppliedHash(previousAppliedHash);
   vi.restoreAllMocks();
   vi.resetAllMocks();
   resetPluginStateStoreForTests();
@@ -332,6 +332,7 @@ describe("openclaw.setup", () => {
           error: {
             code: "UNAVAILABLE",
             message: "OpenClaw setup is already in progress; try again when it finishes.",
+            details: { code: "SETUP_ADMISSION_BUSY" },
             retryable: true,
           },
         },
@@ -369,6 +370,7 @@ describe("openclaw.setup", () => {
           error: {
             code: "UNAVAILABLE",
             message: "OpenClaw setup is already in progress; try again when it finishes.",
+            details: { code: "SETUP_ADMISSION_BUSY" },
             retryable: true,
           },
         },
@@ -378,104 +380,6 @@ describe("openclaw.setup", () => {
       releaseOwner.resolve();
       await owner;
     }
-  });
-  it("starts provider auth as an interactive wizard session", async () => {
-    const { wizardSessions, context } = makeWizardContext();
-    setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
-      await params.prompter.note("Open the browser and enter ABCD", "Pair GitHub");
-      return { ok: true, modelRef: "github-copilot/test", latencyMs: 10, lines: ["ready"] };
-    });
-    const { calls, respond } = makeRespond();
-
-    await systemAgentHandler("openclaw.setup.auth.start")({
-      params: { sessionId: "auth-session-1", agentId: "research", authChoice: "github-copilot" },
-      respond,
-      context,
-    } as never);
-
-    expect(calls[0]).toMatchObject({
-      ok: true,
-      payload: { sessionId: "auth-session-1", done: false, status: "running" },
-    });
-    const session = wizardSessions.get("auth-session-1");
-    const first = await session.next();
-    expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
-    );
-    expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe("research");
-    expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].signal).toBe(
-      session.signal,
-    );
-    expect(first).toMatchObject({
-      done: false,
-      status: "running",
-      step: { type: "note", title: "Pair GitHub", message: "Open the browser and enter ABCD" },
-    });
-    await session.answer(first.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
-    await whenAdmittedWizardSessionSettled(session);
-  });
-  it("runs the selected provider method in a shared wizard session and commits its config", async () => {
-    const preparedConfig: OpenClawConfig = {
-      ...verifiedConfig,
-      models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-    };
-    providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockImplementationOnce(
-      async (params) => {
-        await params.prompter.note("Model ready", "Ollama");
-        await params.beforePersistentEffect();
-        return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
-      },
-    );
-    const { wizardSessions, context } = makeWizardContext();
-    const { calls, respond } = makeRespond();
-
-    await systemAgentHandler("openclaw.setup.prepare.start")({
-      params: {
-        sessionId: "prepare-session-1",
-        agentId: "research",
-        authChoice: "ollama",
-        workspace: "/tmp/models-workspace",
-      },
-      respond,
-      context,
-    } as never);
-
-    expect(calls[0]).toMatchObject({
-      ok: true,
-      payload: { sessionId: "prepare-session-1", done: false, status: "running" },
-    });
-    const session = wizardSessions.get("prepare-session-1");
-    const note = await session.next();
-    expect(note).toMatchObject({
-      done: false,
-      step: { type: "note", title: "Ollama", message: "Model ready" },
-    });
-    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authChoice: "ollama",
-        agentId: "research",
-        config: verifiedConfig,
-        workspaceDir: "/tmp/models-workspace",
-        setDefaultModel: false,
-        preserveExistingDefaultModel: true,
-        signal: session.signal,
-        isRemote: true,
-      }),
-    );
-    await session.answer(note.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({
-      done: true,
-      status: "done",
-      preparedModelRef: "ollama/qwen3:0.6b",
-    });
-    await whenAdmittedWizardSessionSettled(session);
-    expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
-      allowConfigSizeDrop: false,
-      baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
-      baseHash: "prepare-base-hash",
-    });
-    await whenAdmittedWizardSessionSettled(session);
   });
 });
 
@@ -581,13 +485,65 @@ describe("openclaw.chat", () => {
     const { calls, respond } = makeRespond();
 
     const verify = systemAgentHandler("openclaw.setup.verify");
-    await verify({ params: { agentId: "research" }, respond } as never);
+    await verify({
+      params: { agentId: "research" },
+      respond,
+      context: await makeVerificationContext(),
+    } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       agentId: "research",
       runtime: defaultRuntime,
     });
     expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+  });
+
+  it.each([
+    { change: "unapplied revision", when: "before" },
+    { change: "unknown revision", when: "before" },
+    { change: "restart with unchanged config", when: "before" },
+    { change: "unapplied revision", when: "during" },
+    { change: "restart with unchanged config", when: "during" },
+    { change: "replaced runtime", when: "during" },
+  ])("rejects $change $when verification without false readiness", async ({ change, when }) => {
+    const context = await makeVerificationContext();
+    const changeRuntime = () => {
+      if (change === "unapplied revision") {
+        fs.writeFileSync(context.configPath, JSON.stringify({ logging: { level: "debug" } }));
+      } else if (change === "unknown revision") {
+        setRuntimeConfigAppliedHash(null);
+      } else if (change === "replaced runtime") {
+        context.getRuntimeConfig.mockReturnValue({ ...verifiedConfig });
+      } else {
+        context.isConfigReloadSettled.mockReturnValue(false);
+      }
+    };
+    if (when === "before") {
+      changeRuntime();
+    } else {
+      setupInferenceMocks.verifySetupInference.mockImplementationOnce(async () => {
+        changeRuntime();
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1 };
+      });
+    }
+    const { calls, respond } = makeRespond();
+
+    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond, context } as never);
+
+    expect(calls).toEqual([
+      {
+        ok: true,
+        payload: {
+          ok: false,
+          status: "unavailable",
+          error: expect.stringContaining("not active"),
+        },
+        error: undefined,
+      },
+    ]);
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledTimes(
+      when === "before" ? 0 : 1,
+    );
   });
 
   it("rejects unknown setup verification params without running inference", async () => {
@@ -602,57 +558,166 @@ describe("openclaw.chat", () => {
     expect(calls[0]?.ok).toBe(false);
   });
 
-  it("forwards setup activation on the gateway lane until its response is sent", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    const activationResult = {
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 250,
-      lines: ["Default model: openai/gpt-5.5"],
-    };
-    setupInferenceMocks.activateSetupInference.mockImplementation(async () => {
-      started.resolve();
-      await release.promise;
-      return activationResult;
-    });
-    const { calls, respond } = makeRespond();
-    const activeAtResponse: number[] = [];
+  it.each([
+    "applied",
+    "applied-restart-required",
+    "restart-pending",
+    "failed",
+    "stopped",
+    "superseded",
+  ] as const)(
+    "settles setup after the Gateway application receipt without holding its lane: %s",
+    async (outcome) => {
+      const application = createRuntimeConfigWriteApplication();
+      const claim = expectDefined(application.claim(), "application claim");
+      const result = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.6-luna",
+        latencyMs: 1,
+        lines: [],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(
+        async (params: ActivateSetupInferenceParams) => {
+          params.onRuntimeApplication?.(application);
+          return result;
+        },
+      );
+      const { calls, respond } = makeRespond();
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never);
+      try {
+        await vi.waitFor(() =>
+          expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce(),
+        );
+        await waitOneTask();
+        expect(calls).toEqual([]);
+        expect(systemAgentLane().activeCount).toBe(0);
+        await systemAgentHandler("openclaw.setup.verify")({
+          params: {},
+          respond: () => {},
+          context: await makeVerificationContext(),
+        } as never);
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+      } finally {
+        claim.settle(outcome);
+        if (
+          outcome === "applied" ||
+          outcome === "applied-restart-required" ||
+          outcome === "restart-pending"
+        ) {
+          await pending;
+        } else {
+          await expect(pending).rejects.toThrow(
+            outcome === "superseded" ? "newer settings" : "Restart the Gateway before chatting",
+          );
+        }
+      }
+      if (
+        outcome === "applied" ||
+        outcome === "applied-restart-required" ||
+        outcome === "restart-pending"
+      ) {
+        expect(calls).toEqual([
+          {
+            ok: true,
+            payload: outcome === "applied" ? result : { ...result, gatewayRestartRequired: true },
+            error: undefined,
+          },
+        ]);
+      } else {
+        // The RPC error stops automatic candidate fallthrough after a saved choice.
+        expect(calls).toEqual([]);
+      }
+    },
+  );
 
-    const pending = systemAgentHandler("openclaw.setup.activate")({
-      params: {
+  it("reports restart required when the committed setup application is unclaimed", async () => {
+    setupInferenceMocks.activateSetupInference.mockImplementation(
+      async (params: ActivateSetupInferenceParams) => {
+        params.onRuntimeApplication?.(createRuntimeConfigWriteApplication());
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    const { calls, respond } = makeRespond();
+    await expect(
+      systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never),
+    ).rejects.toThrow("Restart the Gateway before chatting");
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["success", "task error", "response error"])(
+    "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
+    async (outcome) => {
+      const failure = new Error("admitted operation failed");
+      const started = createDeferred();
+      const release = createDeferred();
+      const activationResult = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 250,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        if (outcome === "task error") {
+          throw failure;
+        }
+        return activationResult;
+      });
+      const { calls, respond } = makeRespond();
+      const activeAtResponse: number[] = [];
+
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: {
+          kind: "api-key",
+          agentId: "research",
+          modelRef: "openai/gpt-5.5",
+          authChoice: "openai-api-key",
+          apiKey: "test-key",
+          workspace: "/tmp/work",
+        },
+        respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+          activeAtResponse.push(systemAgentLane().activeCount);
+          if (outcome === "response error") {
+            throw failure;
+          }
+          respond(ok, payload, error);
+        },
+      } as never);
+
+      await started.promise;
+      expect(systemAgentLane().activeCount).toBe(1);
+      release.resolve();
+      if (outcome === "success") {
+        await pending;
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+
+      expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
         kind: "api-key",
         agentId: "research",
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
         workspace: "/tmp/work",
-      },
-      respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-        activeAtResponse.push(systemAgentLane().activeCount);
-        respond(ok, payload, error);
-      },
-    } as never);
-
-    await started.promise;
-    expect(systemAgentLane().activeCount).toBe(1);
-    release.resolve();
-    await pending;
-
-    expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
-      kind: "api-key",
-      agentId: "research",
-      modelRef: "openai/gpt-5.5",
-      authChoice: "openai-api-key",
-      apiKey: "test-key",
-      workspace: "/tmp/work",
-      surface: "gateway",
-      runtime: expect.objectContaining({ exit: expect.any(Function) }),
-    });
-    expect(calls).toEqual([{ ok: true, payload: activationResult, error: undefined }]);
-    expect(activeAtResponse).toEqual([1]);
-    expect(systemAgentLane().activeCount).toBe(0);
-  });
+        surface: "gateway",
+        runtime: expect.objectContaining({ exit: expect.any(Function) }),
+        onRuntimeApplication: expect.any(Function),
+      });
+      expect(calls).toEqual(
+        outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
+      );
+      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [0]);
+      expect(systemAgentLane().activeCount).toBe(0);
+    },
+  );
 
   it("rejects invalid params", async () => {
     const call = await callChat(makeContext(new Map()), {});

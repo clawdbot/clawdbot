@@ -116,6 +116,7 @@ struct CommandResponse {
 struct DashboardResponse {
     ok: bool,
     url: Option<String>,
+    browser_url: Option<String>,
     ws_url: Option<String>,
     gateway_password: Option<String>,
     tls_fingerprint: Option<String>,
@@ -243,16 +244,20 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
             Err(error) => return Err(error.to_string()),
         };
     if response.ok && output.status.success() {
-        let dashboard_url = response
+        // The browser owns the one-time pairing grant; Quick Chat keeps the
+        // legacy URL's shared credential and must never consume that grant.
+        let shared_auth_url = response
             .url
             .ok_or_else(|| "Dashboard response did not include a URL.".to_string())?;
         let ws_url = response
             .ws_url
             .ok_or_else(|| "Dashboard response did not include a WebSocket URL.".to_string())?;
-        let token = dashboard_token(&dashboard_url)?;
+        let token = dashboard_token(&shared_auth_url)?;
         return Ok(ReadyGateway {
             snapshot,
-            dashboard_url,
+            dashboard_url: response
+                .browser_url
+                .ok_or_else(unsupported_dashboard_integration)?,
             gateway_ws: GatewayWsConfig::new(
                 ws_url,
                 token,

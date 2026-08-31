@@ -5,7 +5,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
-  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -23,6 +22,7 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  voicesByModel?: Record<string, readonly string[]>;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
   defaultModel: string | null;
@@ -54,8 +54,6 @@ type TalkViewProps = {
 };
 
 const TALK_PICKER_UNSET = "";
-
-const TALK_DOCS_URL = "https://docs.openclaw.ai/nodes/talk";
 
 /** Config may name a provider by alias; pickers always speak canonical ids. */
 function findProviderOption(
@@ -258,8 +256,10 @@ function renderModelRow(props: TalkViewProps) {
 
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
-  const { speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  if (!provider || provider.voices.length === 0) {
+  const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
+  const voices =
+    provider?.voicesByModel?.[model ?? provider.defaultModel ?? ""] ?? provider?.voices ?? [];
+  if (voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
       description: t("talkPage.voice.description"),
@@ -268,8 +268,8 @@ function renderVoiceRow(props: TalkViewProps) {
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
-    ...provider.voices.map((value) => ({ value, label: value })),
-    ...(voice && !provider.voices.includes(voice) ? [{ value: voice, label: voice }] : []),
+    ...voices.map((value) => ({ value, label: value })),
+    ...(voice && !voices.includes(voice) ? [{ value: voice, label: voice }] : []),
   ];
   return renderTalkSelectRow({
     title: t("talkPage.voice.title"),
@@ -308,9 +308,6 @@ export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
-        <p class="settings-page__intro">
-          ${t("talkPage.intro")} ${renderDocsLink(TALK_DOCS_URL, t("common.learnMore"))}
-        </p>
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),

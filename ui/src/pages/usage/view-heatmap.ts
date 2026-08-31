@@ -59,7 +59,9 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
               width=${HEATMAP_CELL}
               height=${HEATMAP_CELL}
               rx="2.5"
-            ><title>${tooltip}</title></rect>
+              data-tooltip=${tooltip}
+              aria-label=${tooltip}
+            ></rect>
           `;
         }),
       )}

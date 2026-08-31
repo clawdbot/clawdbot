@@ -281,9 +281,11 @@ describe("renderUsageHeatmap", () => {
       "Token Activity",
     );
     expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
-      "20 tokens",
-    );
+    expect(
+      container
+        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
+        ?.getAttribute("data-tooltip"),
+    ).toContain("20 tokens");
   });
 
   it("keeps short ranges at their natural cell width", () => {
@@ -630,11 +632,9 @@ describe("renderSessionsCard", () => {
     copyButton?.click();
     await vi.waitFor(() => {
       expect(copyButton?.textContent?.trim()).toBe(feedback);
-      expect(copyButton?.getAttribute("aria-label")).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBeNull();
     });
     expect(writeText).toHaveBeenCalledWith("Selected thread");
-    expect(copyButton?.dataset[copied ? "copied" : "error"]).toBe("1");
-    expect(copyButton?.dataset[copied ? "error" : "copied"]).toBeUndefined();
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
     expect(onSelectSession).toHaveBeenCalledWith(

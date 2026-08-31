@@ -1,12 +1,18 @@
 // Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
+import * as execSpawn from "./exec-spawn.js";
 import {
   resolveCommandEnv,
   resolveProcessExitCode,
@@ -532,48 +538,88 @@ describe("runCommandBuffered", () => {
   it.runIf(process.platform !== "win32")(
     "force-kills inherited-pipe descendants after the direct child exits",
     { timeout: 5_000 },
-    async () => {
-      const descendantSource =
-        "process.on('SIGTERM', () => {}); setInterval(() => process.stdout.write('.'), 20)";
-      const parentSource = [
-        "const { spawn } = require('node:child_process')",
-        `const child = spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'inherit', 'inherit'] })`,
-        "child.unref()",
-        "process.stdout.write(`PID:${child.pid}\\n`)",
-      ].join(";");
-      const result = await runCommandBuffered([process.execPath, "-e", parentSource], {
-        // The timeout starts before Node initializes; loaded CI still needs time to spawn and report the descendant.
-        timeoutMs: 500,
-      });
-      const pidMatch = result.stdout.toString().match(/PID:(\d+)/u);
-      if (!pidMatch) {
-        throw new Error(`missing descendant pid in ${result.stdout.toString()}`);
-      }
-      const descendantPid = Number(pidMatch[1]);
-
-      try {
-        expect(result).toMatchObject({ code: null, termination: "timeout" });
-        let descendantExited = false;
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-          try {
-            process.kill(descendantPid, 0);
-          } catch {
-            descendantExited = true;
-            break;
-          }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 25);
-          });
-        }
-        expect(descendantExited).toBe(true);
-      } finally {
+    async () =>
+      withTempDir("openclaw-exec-descendant-", async (dir) => {
+        const pidPath = path.join(dir, "descendant.pid");
+        const termPath = path.join(dir, "sigterm");
+        // Acknowledge only after the handler and keepalive exist. Stay quiet so
+        // inherited-pipe release cannot kill the descendant through EPIPE.
+        const descendantSource = [
+          "const { writeFileSync } = require('node:fs')",
+          `process.on('SIGTERM', () => writeFileSync(${JSON.stringify(termPath)}, 'handled'))`,
+          "setInterval(() => {}, 1_000)",
+          "process.send('ready')",
+        ].join(";");
+        const parentSource = [
+          "const { spawn } = require('node:child_process')",
+          "const { writeFileSync } = require('node:fs')",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })`,
+          `child.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(child.pid)); process.exit(0) })`,
+        ].join(";");
+        const realSetTimeout = setTimeout;
+        const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+        let parent: ChildProcess | undefined;
+        let command: ReturnType<typeof runCommandBuffered> | undefined;
+        // Freeze deadlines, not subprocess I/O: Node startup must not consume the
+        // timeout or the 100ms inherited-pipe idle grace. Polling must stay real.
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
         try {
-          process.kill(descendantPid, "SIGKILL");
-        } catch {
-          // Already gone.
+          let settled = false;
+          command = runCommandBuffered([process.execPath, "-e", parentSource], {
+            timeoutMs: 50,
+          }).then((result) => {
+            settled = true;
+            return result;
+          });
+          const spawnResult = spawnSpy.mock.results[0];
+          if (spawnResult?.type !== "return") {
+            throw new Error("command did not spawn");
+          }
+          parent = spawnResult.value.child.nodeChildProcess;
+          if (!parent) {
+            throw new Error("command did not expose a child process");
+          }
+          expect(await once(parent, "exit", { signal: AbortSignal.timeout(2_000) })).toEqual([
+            0,
+            null,
+          ]);
+          const descendantPid = await readPidFile(pidPath);
+          expect(isPidAlive(descendantPid)).toBe(true);
+          expect(settled).toBe(false);
+
+          await vi.advanceTimersByTimeAsync(50);
+          for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
+            await new Promise<void>((resolve) => {
+              realSetTimeout(resolve, 25);
+            });
+          }
+          expect(existsSync(termPath)).toBe(true);
+          expect(isPidAlive(descendantPid)).toBe(true);
+          expect(settled).toBe(false);
+
+          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          expect(await command).toMatchObject({ code: null, termination: "timeout" });
+          vi.useRealTimers();
+          expect(await waitForPidToExit(descendantPid)).toBe(true);
+        } finally {
+          try {
+            if (parent?.pid) {
+              try {
+                process.kill(-parent.pid, "SIGKILL");
+              } catch {
+                // Already gone.
+              }
+            }
+            if (vi.isFakeTimers()) {
+              await vi.runAllTimersAsync();
+            }
+          } finally {
+            vi.useRealTimers();
+            spawnSpy.mockRestore();
+          }
+          await command;
         }
-      }
-    },
+      }),
   );
 
   it.runIf(process.platform !== "win32")(

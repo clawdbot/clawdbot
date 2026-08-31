@@ -6,7 +6,6 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
-import { writeDiagnosticMemoryPressureBundleSync } from "./diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 // Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
@@ -18,8 +17,8 @@ const DEFAULT_HEAP_WARNING_BYTES = 1024 * MB;
 const DEFAULT_HEAP_CRITICAL_BYTES = 2048 * MB;
 const DEFAULT_HEAP_WARNING_RATIO = 0.5;
 const DEFAULT_HEAP_CRITICAL_RATIO = 0.75;
-const DEFAULT_HEAP_WARNING_MAX_BYTES = 4 * GB;
-const DEFAULT_HEAP_CRITICAL_MAX_BYTES = 6 * GB;
+const BUN_HEAP_WARNING_MAX_BYTES = 4 * GB;
+const BUN_HEAP_CRITICAL_MAX_BYTES = 6 * GB;
 const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
@@ -61,9 +60,14 @@ function isPositiveMemoryLimit(value: number | undefined): value is number {
 function resolveProcessMemoryLimitBytes(
   processMemoryLimitBytes: number | undefined,
   physicalMemoryBytes: number | undefined,
+  isBunRuntime: boolean,
 ): number | undefined {
   if (!isPositiveMemoryLimit(processMemoryLimitBytes)) {
-    return undefined;
+    // Node can report no constraint even when an explicit heap exceeds physical RAM.
+    // Keep Bun's existing no-constraint RSS policy independent of its compatibility heap.
+    return !isBunRuntime && isPositiveMemoryLimit(physicalMemoryBytes)
+      ? physicalMemoryBytes
+      : undefined;
   }
   return isPositiveMemoryLimit(physicalMemoryBytes)
     ? Math.min(processMemoryLimitBytes, physicalMemoryBytes)
@@ -94,35 +98,36 @@ function resolveThresholds(
   isBunRuntime = false,
 ): Required<DiagnosticMemoryThresholds> {
   const hasHeapLimit = isPositiveMemoryLimit(heapSizeLimitBytes);
-  // Scale both directions with V8's effective limit, but keep a warning/critical
-  // ceiling so very large heaps still surface actionable pressure diagnostics.
+  // Node pressure follows the measured V8 limit, including explicit larger heaps.
+  // Bun's node:v8 compatibility metadata retains its existing caps.
   const heapWarningBytes = hasHeapLimit
     ? Math.min(
         Math.floor(heapSizeLimitBytes * DEFAULT_HEAP_WARNING_RATIO),
-        DEFAULT_HEAP_WARNING_MAX_BYTES,
+        isBunRuntime ? BUN_HEAP_WARNING_MAX_BYTES : Infinity,
       )
     : DEFAULT_HEAP_WARNING_BYTES;
   const heapCriticalBytes = hasHeapLimit
     ? Math.min(
         Math.floor(heapSizeLimitBytes * DEFAULT_HEAP_CRITICAL_RATIO),
-        DEFAULT_HEAP_CRITICAL_MAX_BYTES,
+        isBunRuntime ? BUN_HEAP_CRITICAL_MAX_BYTES : Infinity,
       )
     : DEFAULT_HEAP_CRITICAL_BYTES;
   const usableProcessMemoryLimitBytes = resolveProcessMemoryLimitBytes(
     processMemoryLimitBytes,
     physicalMemoryBytes,
+    isBunRuntime,
   );
   const hasProcessMemoryLimit = usableProcessMemoryLimitBytes !== undefined;
   // Bun's node:v8 heap limit is compatibility metadata, not an RSS process budget.
   const useBunRssCaps = isBunRuntime && hasProcessMemoryLimit;
   const useHeapForRss = !isBunRuntime && hasHeapLimit;
   const rssWarningBase = useBunRssCaps
-    ? DEFAULT_HEAP_WARNING_MAX_BYTES
+    ? BUN_HEAP_WARNING_MAX_BYTES
     : useHeapForRss
       ? heapWarningBytes
       : DEFAULT_RSS_WARNING_BYTES;
   const rssCriticalBase = useBunRssCaps
-    ? DEFAULT_HEAP_CRITICAL_MAX_BYTES
+    ? BUN_HEAP_CRITICAL_MAX_BYTES
     : useHeapForRss
       ? heapCriticalBytes
       : DEFAULT_RSS_CRITICAL_BYTES;
@@ -312,11 +317,9 @@ function formatPressureNextStep(
     : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
 }
 
-function logMemoryPressure(params: {
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
-  writeCriticalBundle: boolean;
-}): void {
-  const { pressure } = params;
+function logMemoryPressure(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): void {
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
     ` ${formatPressureSummary(pressure)}` +
@@ -325,9 +328,7 @@ function logMemoryPressure(params: {
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
-    (pressure.level === "critical"
-      ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
-      : "") +
+    (pressure.level === "critical" ? " memoryPressureSnapshot=disabled" : "") +
     ` ${formatPressureNextStep(pressure)}`;
   log.warn(message);
 }
@@ -342,10 +343,6 @@ export function emitDiagnosticMemorySample(options?: {
   uptimeMs?: number;
   thresholds?: DiagnosticMemoryThresholds;
   emitSample?: boolean;
-  writeCriticalBundle?: boolean;
-  stateDir?: string;
-  sessionStorePaths?: string[];
-  resolveSessionStorePaths?: () => string[] | undefined;
 }): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
   const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
@@ -376,25 +373,8 @@ export function emitDiagnosticMemorySample(options?: {
       type: "diagnostic.memory.pressure",
       ...pressure,
     });
-    const writeCriticalBundle = options?.writeCriticalBundle === true;
-    logMemoryPressure({ pressure, writeCriticalBundle });
-    if (pressure.level === "critical" && writeCriticalBundle) {
-      // Critical snapshots are opt-in because bundle writes can add IO during memory pressure.
-      const sessionStorePaths = options?.sessionStorePaths ?? options?.resolveSessionStorePaths?.();
-      const result = writeDiagnosticMemoryPressureBundleSync({
-        pressure,
-        stateDir: options?.stateDir,
-        sessionStorePaths,
-        now: new Date(now),
-      });
-      if (result.status === "written") {
-        log.warn(
-          `critical memory pressure bundle written: path=${result.path} reason=${pressure.reason} level=${pressure.level}`,
-        );
-      } else if (result.status === "failed") {
-        log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
-      }
-    } else if (pressure.level === "critical") {
+    logMemoryPressure(pressure);
+    if (pressure.level === "critical") {
       log.warn("critical memory pressure snapshot disabled");
     }
   }

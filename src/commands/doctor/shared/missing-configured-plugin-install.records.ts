@@ -10,10 +10,6 @@ import {
   resolvePluginNpmPackageDir,
 } from "../../../plugins/install-paths.js";
 import { resolveUserPath } from "../../../utils.js";
-import type {
-  BundledPluginPackageDescriptor,
-  DownloadableInstallCandidate,
-} from "./missing-configured-plugin-install.candidates.js";
 
 export function forceNpmInstallRecordRepair(record: PluginInstallRecord): PluginInstallRecord {
   if (record.source !== "npm") {
@@ -58,9 +54,10 @@ export function resolveLegacyNpmPackageInstallPath(params: {
   return path.join(params.npmRoot, "node_modules", ...params.packageName.split("/"));
 }
 
-function collectCandidateOfficialPackageNames(
-  candidate: DownloadableInstallCandidate,
-): Set<string> {
+function collectCandidateOfficialPackageNames(candidate: {
+  npmSpec?: string;
+  clawhubSpec?: string;
+}): Set<string> {
   const names = new Set<string>();
   const npmName = candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined;
   const clawhubName = candidate.clawhubSpec
@@ -101,7 +98,7 @@ function collectInstalledRecordPackageNames(record: PluginInstallRecord): Set<st
 
 export function isTrustedOfficialInstallRecordForCandidate(params: {
   record: PluginInstallRecord | undefined;
-  candidate: DownloadableInstallCandidate;
+  candidate: { npmSpec?: string; clawhubSpec?: string };
 }): boolean {
   const record = params.record;
   if (!record) {
@@ -127,7 +124,7 @@ export function isTrustedOfficialInstallRecordForCandidate(params: {
 
 export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
   pluginId: string;
-  candidate: DownloadableInstallCandidate;
+  candidate: { npmSpec?: string };
   record: PluginInstallRecord | undefined;
   env: NodeJS.ProcessEnv;
 }): string | null {
@@ -171,7 +168,7 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
 
 export function recordMatchesBundledPackage(
   record: PluginInstallRecord,
-  bundled: BundledPluginPackageDescriptor,
+  bundled: { name?: string; packageName?: string },
 ): boolean {
   const packageName = bundled.packageName?.trim() || bundled.name?.trim();
   if (!packageName) {

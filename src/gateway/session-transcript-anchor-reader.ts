@@ -47,9 +47,10 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
   }
   return {
     found: true,
+    displaySource: page.displaySource,
     hasOverreadContext: page.hasOverreadContext,
     messages: page.events.flatMap((entry) => {
-      const message = projectTranscriptEntryMessage(entry.event, entry.seq);
+      const message = projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
       return message === undefined ? [] : [message];
     }),
     offset: page.offset,

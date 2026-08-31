@@ -485,6 +485,11 @@ export function createCuaComputerProvider(
       features: { recording: true, agentCursor: false, multiDisplay: false },
     }),
     isAvailable,
+    prepare: async () => {
+      if (isSupportedPlatform && macOsEndpoint === undefined && !stopped) {
+        await availabilityDriver().prepareAvailability?.();
+      }
+    },
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
       const timer = interval(() => {

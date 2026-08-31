@@ -31,6 +31,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import {
+  closeAuthProfileReadPool,
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
@@ -65,7 +66,7 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: mocks.resolveExternalCliAuthProfiles,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
@@ -166,14 +167,18 @@ describe("auth profile sqlite store", () => {
       const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
       expect(
         database
-          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
           .get(),
-      ).toEqual({ store_key: "shared" });
+      ).toEqual({ state_key: "authProfiles.store" });
       expect(
         database
-          .prepare("SELECT store_key FROM auth_profile_state WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.state'",
+          )
           .get(),
-      ).toEqual({ store_key: "shared" });
+      ).toEqual({ state_key: "authProfiles.state" });
       expect(
         database
           .prepare(
@@ -220,7 +225,9 @@ describe("auth profile sqlite store", () => {
       ).toBeUndefined();
       expect(
         sharedDatabase
-          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
           .get(),
       ).toBeUndefined();
       sharedDatabase.close();
@@ -314,7 +321,11 @@ describe("auth profile sqlite store", () => {
           .get(),
       ).toBeUndefined();
       expect(
-        after.prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'").get(),
+        after
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
+          .get(),
       ).toBeUndefined();
       after.close();
       expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
@@ -559,6 +570,45 @@ describe("auth profile sqlite store", () => {
       } finally {
         statementCacheSpy.mockRestore();
         openSpy.mockRestore();
+      }
+    });
+  });
+
+  it("retains scoped readers for a retry when native close fails", async () => {
+    await withAgentDirEnv("openclaw-auth-reader-close-", (agentDir) => {
+      const siblingAgentDir = `${agentDir}-sibling`;
+      saveAuthProfileStore(apiKeyStore("qa-synthetic"), agentDir);
+      saveAuthProfileStore(apiKeyStore("qa-sibling"), siblingAgentDir);
+      clearRuntimeAuthProfileStoreSnapshots();
+      const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      let reader: DatabaseSync | undefined;
+      try {
+        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
+        reader = openSpy.mock.results[0]?.value as DatabaseSync;
+        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
+        const siblingReader = openSpy.mock.results[1]?.value as DatabaseSync;
+        const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
+          throw new Error("native close failed");
+        });
+        try {
+          expect(() => closeAuthProfileReadPool({ kind: "root", rootPath: agentDir })).toThrow(
+            "native close failed",
+          );
+          expect(reader.isOpen).toBe(true);
+          closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+          expect(reader.isOpen).toBe(false);
+          expect(siblingReader.isOpen).toBe(true);
+          expect(loadPersistedAuthProfileStore(siblingAgentDir)).toMatchObject(
+            apiKeyStore("qa-sibling"),
+          );
+        } finally {
+          close.mockRestore();
+        }
+      } finally {
+        openSpy.mockRestore();
+        if (reader?.isOpen) {
+          reader.close();
+        }
       }
     });
   });

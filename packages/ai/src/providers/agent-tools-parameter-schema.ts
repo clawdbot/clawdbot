@@ -892,7 +892,15 @@ function normalizeToolParameterSchemaUncached(
     return applyProviderCleaning(inlinedSchema);
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
-  const mergedProperties: Record<string, unknown> = {};
+  // Seed mergedProperties with the root-declared properties so branch properties
+  // merge *into* them instead of replacing them. Otherwise a root `required`
+  // field that is not re-declared in any branch would be dropped from
+  // `properties` while staying `required`, producing an unsatisfiable schema
+  // when `additionalProperties` is false (#128743).
+  const rootProperties = isSchemaRecord(schemaRecord.properties)
+    ? { ...schemaRecord.properties }
+    : {};
+  const mergedProperties: Record<string, unknown> = rootProperties;
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;
 

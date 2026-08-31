@@ -10,7 +10,6 @@ import {
   addSession,
   appendOutput,
   deleteSession,
-  drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   isProcessSessionIdTaken,
@@ -19,6 +18,7 @@ import {
   markBackgrounded,
   markExited,
   markTerminalPollObserved,
+  prepareSessionPoll,
   recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
@@ -26,6 +26,8 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createSessionSlug } from "./session-slug.js";
+
+const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
@@ -353,6 +355,7 @@ describe("bash process registry", () => {
 
     addSession(session);
     markBackgrounded(session);
+    session.backgrounded = false;
     deleteSession(session.id);
 
     expect(listRunningSessions()).toHaveLength(0);
@@ -362,23 +365,28 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
-  it("keeps a hidden active session id reserved until exit", () => {
-    const session = createRegistrySession({
-      id: "amber-atlas",
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
+  it.each([false, true])(
+    "keeps a hidden active session id reserved until exit (backgrounded=%s)",
+    (backgrounded) => {
+      const session = createRegistrySession({
+        id: "amber-atlas",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: false,
+      });
 
-    addSession(session);
-    markBackgrounded(session);
-    deleteSession(session.id);
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
+      addSession(session);
+      if (backgrounded) {
+        markBackgrounded(session);
+      }
+      deleteSession(session.id);
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
 
-    session.backgrounded = false;
-    markExited(session, 0, null, "completed");
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
-  });
+      session.backgrounded = false;
+      markExited(session, 0, null, "completed");
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
+    },
+  );
 
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({

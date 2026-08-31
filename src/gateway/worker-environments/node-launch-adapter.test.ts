@@ -7,6 +7,7 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
@@ -14,11 +15,16 @@ import {
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  createNodeWorkerLaunchAdapter,
+  measureNodeWorkerLaunchBytes,
+} from "./node-launch-adapter.js";
 
 const DEVICE_ID = "device-session-host";
 const WORKER_RUNS = {
@@ -36,13 +42,14 @@ function nodeProof(connId = "conn-1", available = 2): NodeWorkerSupervisorNodePr
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 2, available } },
+    workerHost: { enabled: true, capacity: { total: 2, available }, environmentSession: 1 },
     commands: ["system.run"],
   };
 }
 
 function launchInput(): NodeWorkerLaunchInput {
   return {
+    environmentSession: 1,
     launchId: "turn-1",
     gatewayNamespace: "gateway-1",
     expectedBundleHash: WORKER_RUNS.bundleHash,
@@ -131,10 +138,35 @@ function launchRequest(input = launchInput()) {
 describe("node worker launch adapter", () => {
   it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {
     const input = launchInput();
+    input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
+    input.descriptor.assignment.systemPrompt += "x".repeat(
+      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - measureNodeWorkerLaunchBytes(DEVICE_ID, input),
+    );
+    const bound = measureNodeWorkerLaunchBytes(DEVICE_ID, input);
+    expect(bound).toBe(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
     const launches: NodeWorkerLaunchInput[] = [];
     const delays: number[] = [];
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       const attempt = request.params as NodeWorkerLaunchInput;
+      const frameBytes = Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: "00000000-0000-0000-0000-000000000000",
+            nodeId: request.node.nodeId,
+            command: request.command,
+            params: attempt,
+            timeoutMs: request.timeoutMs!,
+            idempotencyKey: request.idempotencyKey,
+          }),
+        ),
+      );
+      expect(frameBytes).toBeLessThanOrEqual(bound);
+      expect(measureWorkerProcessTurnBytes(attempt.descriptor)).toBeLessThanOrEqual(bound);
+      console.info(
+        "worker-admission-rearm",
+        JSON.stringify({ turnIdLength: attempt.launchId.length, frameBytes, bound }),
+      );
       launches.push(attempt);
       return wire({
         ...receipt(attempt, "completed"),
@@ -322,26 +354,12 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it.each([
-    { label: "offline", slots: [undefined], code: "runner-offline" },
-    { label: "full", slots: [0], code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE },
-    { label: "full then offline", slots: [0, undefined], code: "runner-offline" },
-    {
-      label: "offline then full",
-      slots: [undefined, 0],
-      code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
-    },
-  ])("reports $label availability when the dispatch grace expires", async ({ slots, code }) => {
+  it("reports offline availability when the dispatch grace expires", async () => {
     vi.useFakeTimers();
     const onDispatchReady = vi.fn();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-    let reads = 0;
     const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () =>
-        transportWith(invoke, async () => {
-          const available = slots[Math.min(reads++, slots.length - 1)];
-          return available === undefined ? [] : [nodeProof("conn-1", available)];
-        }),
+      getTransport: () => transportWith(invoke, async () => []),
     });
     try {
       const launch = adapter
@@ -349,7 +367,7 @@ describe("node worker launch adapter", () => {
         .catch((error: unknown) => error);
       await vi.runAllTimersAsync();
 
-      expect(await launch).toMatchObject({ code });
+      expect(await launch).toMatchObject({ code: "runner-offline" });
       expect(invoke).not.toHaveBeenCalled();
       expect(onDispatchReady).not.toHaveBeenCalled();
     } finally {
@@ -357,58 +375,31 @@ describe("node worker launch adapter", () => {
     }
   });
 
-  it.each(["available", "abort"] as const)(
-    "waits at capacity until %s without dispatching early",
-    async (outcome) => {
-      const input = launchInput();
-      const controller = new AbortController();
-      let available = 0;
-      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
-        wire(receipt(input, "completed")),
-      );
-      const sleep = vi.fn(async () => {
-        expect(invoke).not.toHaveBeenCalled();
-        if (outcome === "abort") {
-          controller.abort(new Error("operator cancelled capacity wait"));
-        } else {
-          available = 1;
-        }
-      });
-      const adapter = createNodeWorkerLaunchAdapter({
-        getTransport: () => transportWith(invoke, async () => [nodeProof("conn-1", available)]),
-        sleep,
-      });
-      const launch = adapter.launch({ ...launchRequest(input), signal: controller.signal });
-      if (outcome === "abort") {
-        await expect(launch).rejects.toThrow("operator cancelled capacity wait");
-        expect(invoke).not.toHaveBeenCalled();
-      } else {
-        await expect(launch).resolves.toEqual(receipt(input, "completed"));
-        expect(invoke).toHaveBeenCalledOnce();
-      }
-      expect(sleep).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("launches once, polls status, and returns the exact completed receipt", async () => {
+  it("dispatches a bound environment at capacity so its retained worker can reuse the slot", async () => {
     const input = launchInput();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
-      request.command === "worker.launch.v1"
-        ? wire(receipt(input, "running"))
-        : wire(receipt(input, "completed")),
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
+      wire(receipt(input, "completed")),
     );
     const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke),
-      sleep: async () => {},
+      getTransport: () => transportWith(invoke, async () => [nodeProof("conn-1", 0)]),
     });
 
     await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
       receipt(input, "completed"),
     );
-    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      "worker.launch.v1",
-      "worker.status.v1",
-    ]);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it("requires environment lifetime support before dispatching a turn", async () => {
+    const node = nodeProof();
+    delete node.workerHost.environmentSession;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke, async () => [node]),
+    });
+
+    await expect(adapter.launch(launchRequest())).rejects.toThrow("openclaw update");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("reacquires the node and replays the identical launch after ambiguous disconnect", async () => {

@@ -122,47 +122,6 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("opens a catalog-targeted draft from its new-session action", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("research", ["agent:research:main"]),
-      "panel",
-      {
-        defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "global",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "research", name: "Research" },
-        ],
-      },
-    );
-    const onOpenNewSession = vi.fn();
-    sidebar.connected = true;
-    sidebar.onOpenNewSession = onOpenNewSession;
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: {
-          continueSession: true,
-          archive: false,
-          createSession: { model: "anthropic/claude-opus-4-8" },
-        },
-        hosts: [],
-      },
-    ];
-    sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
-
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
-    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
-    button?.click();
-
-    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
-  });
-
   it.each([
     { id: "claude", label: "Claude Code", branded: true },
     { id: "codex", label: "Codex", branded: true },

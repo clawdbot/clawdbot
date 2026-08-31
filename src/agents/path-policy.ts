@@ -171,11 +171,13 @@ export function preserveAtPrefixedRelativePath(
   filePath: string,
   cwd: string,
   bridge: SandboxFsBridge | undefined,
+  signal?: AbortSignal,
 ): string | Promise<string>;
 export function preserveAtPrefixedRelativePath(
   filePath: string,
   cwd: string,
   bridge?: SandboxFsBridge,
+  signal?: AbortSignal,
 ): string | Promise<string> {
   if (!filePath.startsWith("@")) {
     return filePath;
@@ -216,10 +218,11 @@ export function preserveAtPrefixedRelativePath(
       ? literalPath
       : filePath;
   }
+  signal?.throwIfAborted();
   return bridge
-    .stat({ filePath: literalPath, cwd })
+    .stat({ filePath: literalPath, cwd, signal })
     .then(async (stat) =>
-      stat || (ancestorPath && (await bridge.stat({ filePath: ancestorPath, cwd })))
+      stat || (ancestorPath && (await bridge.stat({ filePath: ancestorPath, cwd, signal })))
         ? literalPath
         : filePath,
     );

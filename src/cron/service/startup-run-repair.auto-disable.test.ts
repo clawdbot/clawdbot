@@ -52,6 +52,7 @@ describe("startup run repair auto-disable", () => {
         runningAtMs,
         consecutiveErrors: 9,
         lastErrorReason: "timeout",
+        deliverySuppressionReason: "silent",
       },
     };
     const deferredNotifications: Array<() => void> = [];
@@ -76,6 +77,7 @@ describe("startup run repair auto-disable", () => {
       },
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(job.state.deliverySuppressionReason).toBeUndefined();
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
 
@@ -283,6 +285,7 @@ describe("startup run repair auto-disable", () => {
       name: "required delivery failed",
       completionStatus: "failed" as const,
       deliveryStatus: "not-delivered" as const,
+      failureNotificationDelivery: { status: "delivered" as const, delivered: true },
     },
     {
       name: "completion evidence unknown",
@@ -294,8 +297,24 @@ describe("startup run repair auto-disable", () => {
       completionStatus: undefined,
       deliveryStatus: "not-delivered" as const,
     },
-  ])("retains finalized one-shot after $name", ({ completionStatus, deliveryStatus }) => {
+    {
+      name: "best-effort undelivered completion followed by a delivery mode edit",
+      completionStatus: "succeeded" as const,
+      deliveryStatus: "not-delivered" as const,
+      deliveryMode: "none" as const,
+    },
+    {
+      name: "best-effort unknown completion followed by a delivery mode edit",
+      completionStatus: "succeeded" as const,
+      deliveryStatus: "unknown" as const,
+      deliveryMode: "none" as const,
+    },
+  ])("applies recorded completion to one-shot cleanup after $name", (testCase) => {
+    const { completionStatus, deliveryStatus } = testCase;
+    const failureNotificationDelivery =
+      "failureNotificationDelivery" in testCase ? testCase.failureNotificationDelivery : undefined;
     const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
+    const deferredNotifications: Array<() => void> = [];
     const state = createCronServiceState({
       storePath: "/tmp/startup-run-repair-completion.json",
       cronEnabled: true,
@@ -304,6 +323,7 @@ describe("startup run repair auto-disable", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
+      sendCronFailureAlert: vi.fn(async () => undefined),
     });
     const job: CronJob = {
       id: "finalized-required-delivery",
@@ -317,7 +337,11 @@ describe("startup run repair auto-disable", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "do not replay" },
       // Current policy is intentionally mutable and must not decide replay.
-      delivery: { mode: "announce", bestEffort: true },
+      delivery: {
+        mode: testCase.deliveryMode ?? "announce",
+        bestEffort: true,
+      },
+      failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
       state: { runningAtMs },
     };
 
@@ -325,6 +349,7 @@ describe("startup run repair auto-disable", () => {
       state,
       job,
       runningAtMs,
+      deferredNotifications,
       entry: {
         ts: runningAtMs + 1_000,
         jobId: job.id,
@@ -332,12 +357,13 @@ describe("startup run repair auto-disable", () => {
         status: "ok",
         ...(completionStatus === undefined ? {} : { completionStatus }),
         deliveryStatus,
+        failureNotificationDelivery,
         runAtMs: runningAtMs,
         durationMs: 1_000,
       },
     });
 
-    expect(restored?.shouldDelete).toBe(false);
+    expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
     expect(job).toMatchObject({
       enabled: false,
       state: {
@@ -346,6 +372,12 @@ describe("startup run repair auto-disable", () => {
       },
     });
     expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(deferredNotifications).toEqual([]);
+    expect(state.deps.sendCronFailureAlert).not.toHaveBeenCalled();
+    if (failureNotificationDelivery) {
+      expect(job.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+      expect(job.state.lastFailureNotificationDelivered).toBe(true);
+    }
   });
 
   it("buffers quiet-trigger repair notifications until the recovery commit", () => {

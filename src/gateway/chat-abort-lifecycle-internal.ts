@@ -18,11 +18,23 @@ export function notifyChatAbortControllerRemoved(entry: object): void {
 }
 
 /** Waits for captured run registrations and their terminal persistence owner to leave. */
-export async function waitForChatAbortControllerRemoval<TEntry extends object>(params: {
+export async function waitForChatAbortControllerRemoval<
+  TEntry extends {
+    projectSessionTerminalPending?: boolean;
+    projectSessionTerminalPersistence?: Promise<void>;
+  },
+>(params: {
   entries: ReadonlyMap<string, TEntry>;
   targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
   timeoutMs: number;
 }): Promise<boolean> {
+  const terminalOwnersSettled = () =>
+    params.targets.every(
+      ({ entry }) =>
+        entry.projectSessionTerminalPending !== true &&
+        entry.projectSessionTerminalPersistence === undefined &&
+        !terminalPersistenceErrorByEntry.has(entry),
+    );
   const registeredWaiters: Array<{ entry: TEntry; resolve: () => void }> = [];
   const removals = params.targets.flatMap(({ runId, entry }) => {
     if (params.entries.get(runId) !== entry) {
@@ -38,7 +50,7 @@ export async function waitForChatAbortControllerRemoval<TEntry extends object>(p
     ];
   });
   if (removals.length === 0) {
-    return true;
+    return terminalOwnersSettled();
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -49,9 +61,9 @@ export async function waitForChatAbortControllerRemoval<TEntry extends object>(p
         timer.unref?.();
       }),
     ]);
-    return (
-      removed && params.targets.every(({ entry }) => !terminalPersistenceErrorByEntry.has(entry))
-    );
+    // Maintenance may retire a registration before its write settles. Registry
+    // removal alone must not let a lifecycle mutation bypass that terminal owner.
+    return removed && terminalOwnersSettled();
   } finally {
     if (timer) {
       clearTimeout(timer);

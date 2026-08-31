@@ -1,7 +1,10 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import {
+  normalizeSessionColorValue,
+  normalizeSessionIconValue,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
@@ -69,6 +72,15 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     canonicalValue.icon = icon;
   } else {
     delete canonicalValue.icon;
+  }
+  const color =
+    typeof canonicalValue.color === "string"
+      ? normalizeSessionColorValue(canonicalValue.color)
+      : null;
+  if (color) {
+    canonicalValue.color = color;
+  } else {
+    delete canonicalValue.color;
   }
   const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
   const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
@@ -218,7 +230,7 @@ function normalizePendingDeliveryNotice(
   const intentId = normalizeOptionalString(value.intentId);
   return createdAt !== undefined &&
     intentId &&
-    (value.state === "owed" || value.state === "unresolved")
+    (value.state === "owed" || value.state === "unresolved" || value.state === "acknowledged")
     ? { createdAt, context: value.context, intentId, state: value.state }
     : undefined;
 }

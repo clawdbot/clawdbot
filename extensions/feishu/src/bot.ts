@@ -126,7 +126,7 @@ function isFeishuTopicSessionScope(
   return scope === "group_topic" || scope === "group_topic_sender";
 }
 
-async function resolveFeishuAudioPreflightTranscript(params: {
+async function resolveFeishuAudioTranscript(params: {
   cfg: ClawdbotConfig;
   mediaList: FeishuMediaInfo[];
   content: string;
@@ -134,7 +134,7 @@ async function resolveFeishuAudioPreflightTranscript(params: {
   chatType: "direct" | "group";
   log: (msg: string) => void;
 }): Promise<string | undefined> {
-  if (params.messageType !== "audio" || params.content.trim()) {
+  if (params.messageType !== "audio") {
     return undefined;
   }
   const audioMedia = params.mediaList.filter(
@@ -143,6 +143,11 @@ async function resolveFeishuAudioPreflightTranscript(params: {
   );
   if (audioMedia.length === 0) {
     return undefined;
+  }
+  // Audio content is the server transcript. Return it for the shared marker path,
+  // but only after the media check so failed downloads retain their notice.
+  if (params.content.trim()) {
+    return params.content;
   }
 
   try {
@@ -1042,7 +1047,7 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const audioTranscript = await resolveFeishuAudioPreflightTranscript({
+    const audioTranscript = await resolveFeishuAudioTranscript({
       cfg: effectiveCfg,
       mediaList,
       content: ctx.content,
@@ -1050,14 +1055,14 @@ export async function handleFeishuMessage(params: {
       chatType: isGroup ? "group" : "direct",
       log,
     });
-    const preflightAudioIndex =
+    const transcribedAudioIndex =
       audioTranscript === undefined
         ? -1
         : mediaList.findIndex(
             (media) => media.kind === "audio" || media.contentType?.startsWith("audio/"),
           );
     const inboundMedia = await toInboundMediaFactsWithMetadata(mediaList, {
-      transcribed: (_media, index) => index === preflightAudioIndex,
+      transcribed: (_media, index) => index === transcribedAudioIndex,
     });
     const requiredMentionTargets =
       isGroup && ctx.senderType === "bot" && ctx.senderOpenId
