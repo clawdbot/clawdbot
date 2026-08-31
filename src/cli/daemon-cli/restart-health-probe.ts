@@ -174,13 +174,14 @@ export async function confirmGatewayReachable(params: {
     });
     const reachedGateway =
       probe.ok ||
-      looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-      (params.allowDeviceIdentityRequired === true &&
-        probe.close?.code === 1008 &&
-        normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-      (probe.connectLatencyMs != null &&
-        probe.server?.version != null &&
-        probe.auth.capability === "connected_no_operator_scope");
+      (probe.gatewayReached === true &&
+        (looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+          (params.allowDeviceIdentityRequired === true &&
+            probe.close?.code === 1008 &&
+            normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
+          (probe.connectLatencyMs != null &&
+            probe.server?.version != null &&
+            probe.auth.capability === "connected_no_operator_scope")));
     return {
       reachable: reachedGateway,
       gatewayVersion: probe.server?.version ?? null,

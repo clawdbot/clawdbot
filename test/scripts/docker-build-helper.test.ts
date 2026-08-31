@@ -4611,6 +4611,109 @@ exit ${exitCode}
   );
 
   it.each([
+    ["target overlap", "busy", 0],
+    ["target settlement", "busy", 0],
+    ["target overlap", "legacy", 1],
+    ["target settlement", "other-detail", 1],
+    ["target overlap", "not-retryable", 1],
+    ["target overlap", "wrong-type", 1],
+    ["target overlap", "success", 1],
+    ["source overlap", "legacy", 0],
+    ["source overlap", "legacy-stderr", 0],
+  ] as const)(
+    "checks self-upgrade %s against its package contract: %s",
+    (phase, fixture, exitCode) => {
+      const workDir = tempDirs.make("openclaw-self-upgrade-wizard-");
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+        "utf8",
+      );
+      const assertions = source.slice(
+        source.indexOf("assert_gateway_call_error_message() {"),
+        source.indexOf("\ngateway_call channels.status"),
+      );
+      const targetStart = source.indexOf("CURRENT_PHASE=target-wizard");
+      const waitStart = source.indexOf("wait_for_target_wizard_start() {", targetStart);
+      const waitEnd = source.indexOf("\n}\n", waitStart) + 3;
+      const overlapStart = source.indexOf(
+        "if gateway_call wizard.start",
+        phase === "source overlap" ? 0 : waitEnd,
+      );
+      const overlapEnd = source.indexOf("\ngateway_call wizard.cancel", overlapStart);
+      const invocation =
+        phase === "target settlement"
+          ? 'wait_for_target_wizard_start "$OUTPUT" "$ERROR_OUTPUT" "target settlement"'
+          : source.slice(overlapStart, overlapEnd);
+      const error = fixture.startsWith("legacy")
+        ? { type: "gateway_request_error", code: "UNAVAILABLE", message: "wizard already running" }
+        : {
+            type: fixture === "wrong-type" ? "transport_error" : "gateway_request_error",
+            code: "UNAVAILABLE",
+            message: "Setup admission is busy.",
+            details: {
+              code: fixture === "other-detail" ? "OTHER_FAILURE" : "SETUP_ADMISSION_BUSY",
+            },
+            retryable: fixture !== "not-retryable",
+          };
+      writeFileSync(
+        join(workDir, "response.json"),
+        JSON.stringify({ ok: fixture === "success", error }),
+      );
+      writeFileSync(join(workDir, "calls"), "");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+${assertions}
+${source.slice(targetStart, waitEnd)}
+openclaw_e2e_print_log() { cat "$1"; }
+gateway_call() {
+  printf '%s\\n' "$1" >>"$PROBE_CALLS"
+  : >"$4"
+  if [ "$(wc -l <"$PROBE_CALLS")" -eq 1 ]; then
+    if [ "$PROBE_FIXTURE" = legacy-stderr ]; then
+      : >"$3"
+      printf 'wizard already running\\n' >"$4"
+    else
+      cat "$PROBE_RESPONSE" >"$3"
+    fi
+    [ "$PROBE_FIXTURE" = success ]
+  else
+    printf '{"sessionId":"replacement","done":false,"status":"running","step":{"id":"ready"}}\\n' >"$3"
+  fi
+}
+${invocation}
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PROBE_CALLS: join(workDir, "calls"),
+            PROBE_RESPONSE: join(workDir, "response.json"),
+            PROBE_FIXTURE: fixture,
+            OUTPUT: join(workDir, "output.json"),
+            ERROR_OUTPUT: join(workDir, "error.txt"),
+            TARGET_WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            TARGET_WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+            WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      const expectedCalls = phase === "target settlement" && exitCode === 0 ? 2 : 1;
+      expect(readFileSync(join(workDir, "calls"), "utf8").trim().split("\n")).toEqual(
+        Array(expectedCalls).fill("wizard.start"),
+      );
+      if (phase === "target settlement" && exitCode === 0) {
+        expect(result.stdout).toMatch(/replacement\t2\s*$/u);
+      }
+    },
+  );
+
+  it.each([
     ["direct failure", 42, false],
     ["substitution failure", 42, false],
     ["assertion after success", 43, false],

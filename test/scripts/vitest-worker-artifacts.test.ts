@@ -554,7 +554,7 @@ describe("fresh compiled subprocess invocation", () => {
     },
   );
 
-  it("loads the real Anthropic failover hook in a fresh process without global activation", (context) =>
+  it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
     fixtureLifetime.run(async () => {
       const { node } = createFixtureCommands(context);
       const probe = writeFixture(
@@ -564,10 +564,19 @@ describe("fresh compiled subprocess invocation", () => {
           import assert from 'node:assert/strict';
           import {coerceToFailoverError} from ${JSON.stringify(pathToFileURL(path.join(root, "src/agents/failover-error.ts")).href)};
           import {getActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
+          import {loadPluginRegistryHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/loader.ts")).href)};
+          import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
           assert.equal(getActivePluginRegistry(), null);
-          const result = coerceToFailoverError(
+          const classify = () => coerceToFailoverError(
             {code: 'API_ERROR', message: 'provider failure'}, {provider: 'anthropic'},
           );
+          assert.equal(classify(), null, 'error handling must not discover a provider');
+          const registry = loadPluginRegistryHandle({
+            config: {plugins:{entries:{anthropic:{enabled:true}}}},
+            onlyPluginIds: ['anthropic'],
+          });
+          assert.ok(registry.providers.some(entry=>entry.provider.id==='anthropic'));
+          const result = withPluginRuntimeRegistryScope(registry,classify);
           assert.equal(result?.reason, 'server_error');
           assert.equal(result?.provider, 'anthropic');
           assert.equal(getActivePluginRegistry(), null);
@@ -581,7 +590,7 @@ describe("fresh compiled subprocess invocation", () => {
       expect(result.code, result.stderr + result.stdout).toBe(0);
     }));
 
-  it("preserves scoped and cold provider hooks in source and compiled TUI payloads", (context) =>
+  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
     fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = createFixtureCommands(context);
       const owner = createVitestWorkerRun();
@@ -591,7 +600,7 @@ describe("fresh compiled subprocess invocation", () => {
           JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
         );
         for (const mode of ["source", "compiled"] as const) {
-          for (const scope of ["scoped", "cold"] as const) {
+          for (const scope of ["scoped", "prepared"] as const) {
             const directory = fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
             const bundled = path.join(directory, "bundled");
@@ -632,6 +641,7 @@ describe("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
+            import {resolveProviderRuntimePluginHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/provider-hook-runtime.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -651,8 +661,16 @@ describe("fresh compiled subprocess invocation", () => {
                 scopedCalls++;return 'overloaded';
               },
             }});
+            const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
+            assert.ok(unprepared.some(payload=>payload.isError), 'an unprepared error still needs a visible outcome');
+            assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
+            const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
+            if (${scope === "prepared"}) {
+              assert.equal(providerOwner?.id,'fixture-provider');
+              assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
+            }
             const callStarted = performance.now();
-            const call = () => buildEmbeddedRunPayloads(input('403 fixture refusal'));
+            const call = () => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
             const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
             const callMs = performance.now()-callStarted;
             const records = observed();
@@ -666,7 +684,7 @@ describe("fresh compiled subprocess invocation", () => {
               assert.equal(scopedCalls,0);
             }
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
-            assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'cold resolution must not install a global registry');
+            assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );
