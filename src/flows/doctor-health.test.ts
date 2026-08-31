@@ -137,7 +137,13 @@ describe("runDoctorHealthFlow", () => {
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
 
-  it.each(["ready", "repair-failed", "config-refused", "restart-unhealthy"] as const)(
+  it.each([
+    "ready",
+    "repair-failed",
+    "config-refused",
+    "workspace-cleanup-failed",
+    "restart-unhealthy",
+  ] as const)(
     "coordinates the matching managed writer through legacy multi-agent repair: %s",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -149,6 +155,22 @@ describe("runDoctorHealthFlow", () => {
             ],
           },
         });
+        mocks.config.mockReturnValue({
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { workspace: state.workspaceDir },
+              research: { workspace: state.path("research") },
+            },
+          },
+        });
+        if (outcome === "workspace-cleanup-failed") {
+          fs.mkdirSync(state.workspaceDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(state.workspaceDir, "openclaw-workspace-state.json"),
+            JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
+          );
+        }
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const secondary = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
         secondary.db.exec(
@@ -213,6 +235,26 @@ describe("runDoctorHealthFlow", () => {
           }
           const result = await migrateLegacyMediaPersistence();
           expect(result.warnings).toEqual([]);
+          if (outcome === "workspace-cleanup-failed") {
+            const migration = await migrateLegacyWorkspaceState({
+              stateDir: state.stateDir,
+              env: state.env,
+              detected: detectLegacyWorkspaceState({
+                cfg: ctx.cfg,
+                stateDir: state.stateDir,
+                env: state.env,
+                homedir: () => state.home,
+                doctorOnlyStateMigrations: true,
+              }),
+              removeSource: () => {
+                throw new Error("simulated unlink failure");
+              },
+            });
+            expect(migration.warnings.join("\n")).toContain("legacy cleanup failed");
+            expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
+              "2026-07-15T00:00:00.000Z",
+            );
+          }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         if (outcome === "config-refused") {
@@ -235,6 +277,8 @@ describe("runDoctorHealthFlow", () => {
           const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "workspace-cleanup-failed") {
+            await expect(run).rejects.toThrow(/workspace.*requires migration/);
           } else if (outcome === "restart-unhealthy") {
             await expect(run).rejects.toThrow("managed Gateway did not become ready");
           } else {
