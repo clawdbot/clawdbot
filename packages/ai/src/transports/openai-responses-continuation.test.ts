@@ -402,4 +402,56 @@ describe("OpenAI Responses continuation", () => {
     );
     survivor?.release();
   });
+
+  it("evicts by true commit order, not Map iteration position, when a reclaim lands in the same millisecond", () => {
+    // Date.now() is not a unique completion order: a Map re-set on an
+    // existing key keeps that key's original iteration position, so a
+    // session reclaimed (claimed again, then re-committed) in the same
+    // millisecond as the rest of a full cache still iterates first --
+    // exactly where a strict `<` timestamp comparison would keep it as
+    // "oldest" even though it just became the freshest entry. Freeze time
+    // so every commit below shares one timestamp, isolating the ordering
+    // fix from real wall-clock progression.
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < MAX_HTTP_CONTINUATION_READY_ENTRIES; i++) {
+        const c = claim({ sessionId: `reclaim-session-${i}` });
+        c?.commit(continuationState().lastRequest, {
+          id: `reclaim-resp-${i}`,
+          output: continuationState().lastResponseItems,
+        });
+      }
+
+      // Reclaim session-0: consumes its ready entry (claim), then commits a
+      // fresh one -- Map.set on the existing key keeps it at iteration
+      // position 0, but it is now the most-recently-committed entry.
+      const reclaimed = claim({ sessionId: "reclaim-session-0", request: nextRequest() });
+      expect(reclaimed?.request.previous_response_id).toBe("reclaim-resp-0");
+      reclaimed?.commit(continuationState().lastRequest, {
+        id: "reclaim-resp-0-refreshed",
+        output: continuationState().lastResponseItems,
+      });
+
+      // One more commit pushes the map over capacity again.
+      const overflow = claim({ sessionId: "reclaim-session-overflow" });
+      overflow?.commit(continuationState().lastRequest, {
+        id: "reclaim-resp-overflow",
+        output: continuationState().lastResponseItems,
+      });
+
+      // The just-reclaimed entry must survive -- it is the newest by true
+      // commit order, regardless of its Map position or tied timestamp.
+      const stillReady = claim({ sessionId: "reclaim-session-0", request: nextRequest() });
+      expect(stillReady?.request.previous_response_id).toBe("reclaim-resp-0-refreshed");
+      stillReady?.release();
+
+      // The entry actually oldest by commit order (never reclaimed) is the
+      // one that gets evicted instead.
+      const evicted = claim({ sessionId: "reclaim-session-1", request: nextRequest() });
+      expect(evicted?.request.previous_response_id).toBeUndefined();
+      evicted?.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
