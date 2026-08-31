@@ -450,32 +450,30 @@ async function main() {
     throw error;
   } finally {
     try {
-      try {
-        await workers?.dispose();
-      } catch (error) {
+      await workers?.dispose().catch((error: unknown) => {
         reportFailure ??= String(error);
-        throw error;
-      } finally {
-        if (reports) {
-          const reportCode = await reports.finish(
-            async (mergeArgs) => {
-              // Replay is source-only: selected configs load after all compiled
-              // borrowers close; report blobs own the exact executed selection.
-              const outcome = await runPnpmSpecCommand({ ...runSpecs[0]!, env: baseEnv }, [
-                "exec",
-                "node",
-                ...resolveVitestNodeArgs(baseEnv),
-                resolveVitestCliEntry(),
-                ...mergeArgs,
-              ]);
-              termination.signal ??= outcome.signal;
-              return outcome;
-            },
-            termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
-          );
-          if (reportCode) {
-            process.exitCode ||= reportCode;
-          }
+        process.exitCode ||= 1;
+        console.error(error);
+      });
+      if (reports) {
+        const reportCode = await reports.finish(
+          async (mergeArgs) => {
+            // Replay is source-only: selected configs load after all compiled
+            // borrowers close; report blobs own the exact executed selection.
+            const outcome = await runPnpmSpecCommand({ ...runSpecs[0]!, env: baseEnv }, [
+              "exec",
+              "node",
+              ...resolveVitestNodeArgs(baseEnv),
+              resolveVitestCliEntry(),
+              ...mergeArgs,
+            ]);
+            termination.signal ??= outcome.signal;
+            return outcome;
+          },
+          termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
+        );
+        if (reportCode) {
+          process.exitCode ||= reportCode;
         }
       }
       printCompletedSummary?.();
