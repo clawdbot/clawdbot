@@ -1856,6 +1856,11 @@ describe("gateway run option collisions", () => {
 
     const recover = gatewayStartOptions().tryRecoverChannelAutostartSuppression;
     expect(recover).toBeTypeOf("function");
+    // Fix #133820: breaker previously required uncleanBoots === 0, but the
+    // current safe-mode boot stays open while stable (counts as 1), so
+    // requiring zero blocked self-healing for a full extra window. After the
+    // fix, recovery succeeds as soon as the window drains below threshold
+    // (recovered=true), even with the current open row (1).
     bootLifecycle.decisions.push(
       {
         tripped: false,
@@ -1873,10 +1878,10 @@ describe("gateway run option collisions", () => {
       },
     );
 
-    expect(recover?.()).toBe(false);
-    expect(bootLifecycle.recover).not.toHaveBeenCalled();
     expect(recover?.()).toBe(true);
     expect(bootLifecycle.recover).toHaveBeenCalledWith("boot-id", process.env, undefined);
+    expect(recover?.()).toBe(true);
+    expect(bootLifecycle.recover).toHaveBeenCalledTimes(2);
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
