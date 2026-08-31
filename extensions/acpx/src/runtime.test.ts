@@ -332,36 +332,52 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
+  it("rebuilds the managed plugin-tools delegate after a fresh reset", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
     };
     const { runtime } = makeRuntime(baseStore, {
-      openclawToolsMcpBridgeEnabled: true,
+      pluginToolsMcpBridgeEnabled: true,
       mcpServers: [
         {
-          name: "openclaw-tools",
+          name: "openclaw-plugin-tools",
           command: "node",
-          args: ["dist/mcp/openclaw-tools-serve.js"],
+          args: ["dist/mcp/plugin-tools-serve.js"],
           env: [],
         },
       ],
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+      resolveManagedToolsDelegateForSession(
+        sessionKey: string,
+        model?: string,
+      ): {
+        options?: {
+          mcpServers?: Array<{ env?: Array<{ name: string; value: string }>; name: string }>;
+        };
+      };
     };
 
-    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main");
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
+      "agent:worker:main",
+      "openai/gpt-5.5",
+    );
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
-      firstDelegate,
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
+    const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
+      "agent:worker:main",
+      "openai/gpt-5.6",
     );
+    expect(secondDelegate).not.toBe(firstDelegate);
+    expect(secondDelegate.options?.mcpServers?.[0]?.env).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
+      value: "openai/gpt-5.6",
+    });
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {

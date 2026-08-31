@@ -1877,9 +1877,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
-    // Fresh reset has no ACP handle to close the delegate's upstream client.
-    // Keep the scoped delegate reachable so the next ensure can replace it;
-    // close() owns cache release when the session lifecycle ends.
+    // Fresh reset has no ACP handle to close the upstream client, but retaining
+    // a model-scoped delegate would reuse stale policy identity on the next ensure.
+    this.releaseManagedToolsDelegateForSession(input.sessionKey);
     this.sessionStore.markFresh(input.sessionKey);
   }
 
