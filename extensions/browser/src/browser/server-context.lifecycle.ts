@@ -470,6 +470,7 @@ export function beginProfileTransition(
   const reason = lifecycleError(params.runtime.profile.name, params.reason);
 
   actor.generation += 1;
+  params.runtime.externalBrowserMode = undefined;
   if (params.advanceConfigRevision) {
     actor.configRevision += 1;
   }

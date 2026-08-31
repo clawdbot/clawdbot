@@ -69,6 +69,7 @@ vi.mock("./cdp-timeouts.js", async () => {
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
 import {
   getChromeWebSocketEndpoint,
+  inspectLocalChromeHeadlessMode,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -478,6 +479,101 @@ describe("chrome.ts internal", () => {
       });
       existsSpy.mockRestore();
     });
+  });
+
+  it.each([
+    {
+      name: "headed Chrome",
+      extraArgs: [] as string[],
+      ownsPort: true,
+      loopback: true,
+      expected: false,
+    },
+    {
+      name: "headless Chrome",
+      extraArgs: ["--headless=new"],
+      ownsPort: true,
+      loopback: true,
+      expected: true,
+    },
+    {
+      name: "a browser behind a local relay",
+      extraArgs: [] as string[],
+      ownsPort: false,
+      loopback: true,
+      expected: undefined,
+    },
+    {
+      name: "a remote browser with a coincident local pid",
+      extraArgs: [] as string[],
+      ownsPort: true,
+      loopback: false,
+      expected: undefined,
+    },
+  ])("inspects $name only after proving local process ownership", async (testCase) => {
+    const originalPlatform = process.platform;
+    const browserPid = 43210;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/EXTERNAL_MODE",
+        onConnection: (wss) => {
+          wss.on("connection", (socket) => {
+            socket.on("message", (raw) => {
+              const message = JSON.parse(rawDataToString(raw)) as {
+                id: number;
+                method: string;
+              };
+              if (message.method === "SystemInfo.getProcessInfo") {
+                socket.send(
+                  JSON.stringify({
+                    id: message.id,
+                    result: { processInfo: [{ type: "browser", id: browserPid }] },
+                  }),
+                );
+              }
+            });
+          });
+        },
+        run: async (baseUrl) => {
+          const port = Number(new URL(baseUrl).port);
+          mockLinuxManagedChromeOwnership({
+            pid: browserPid,
+            port,
+            executablePath: "/usr/bin/chromium",
+            userDataDir: "/tmp/external-browser",
+            ownsPort: testCase.ownsPort,
+            extraArgs: testCase.extraArgs,
+          });
+          const profile = {
+            name: "manual-cdp",
+            cdpUrl: baseUrl,
+            cdpHost: "127.0.0.1",
+            cdpIsLoopback: testCase.loopback,
+            cdpPort: port,
+            color: "#00AA00",
+            driver: "openclaw",
+            headless: false,
+            attachOnly: true,
+          } as ResolvedBrowserProfile;
+          await expect(
+            inspectLocalChromeHeadlessMode({
+              profile,
+              browserWebSocketUrl: `ws://127.0.0.1:${port}/devtools/browser/EXTERNAL_MODE`,
+              timeoutMs: 100,
+            }),
+          ).resolves.toBe(testCase.expected);
+        },
+      });
+      if (testCase.loopback) {
+        expect(killSpy).toHaveBeenCalledWith(browserPid, 0);
+      } else {
+        expect(killSpy).not.toHaveBeenCalled();
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   describe("launchOpenClawChrome", () => {

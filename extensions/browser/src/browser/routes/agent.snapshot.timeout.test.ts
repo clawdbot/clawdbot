@@ -34,7 +34,13 @@ const profileContext = vi.hoisted(() => ({
   })),
 }));
 const browserRuntime = vi.hoisted(() => ({
-  profiles: new Map<string, { running: { headless?: boolean; headlessSource?: string } | null }>(),
+  profiles: new Map<
+    string,
+    {
+      running: { headless?: boolean; headlessSource?: string } | null;
+      externalBrowserMode?: { browserWebSocketUrl: string; headless?: boolean };
+    }
+  >(),
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -212,16 +218,40 @@ describe("browser agent snapshot timeout routing", () => {
       expectedHeadless: true,
     },
     {
-      name: "untracked browser without authoritative launch state",
+      name: "observed headed external browser",
+      configuredHeadless: true,
+      running: null,
+      externalHeadless: false,
+      expectedHeadless: false,
+    },
+    {
+      name: "observed headless external browser",
+      configuredHeadless: false,
+      running: null,
+      externalHeadless: true,
+      expectedHeadless: true,
+    },
+    {
+      name: "external browser without authoritative launch state",
       configuredHeadless: false,
       running: null,
       expectedHeadless: undefined,
     },
   ])(
     "passes the actual launch mode for $name",
-    async ({ configuredHeadless, running, expectedHeadless }) => {
+    async ({ configuredHeadless, running, externalHeadless, expectedHeadless }) => {
       profileContext.profile.headless = configuredHeadless;
-      browserRuntime.profiles.set(profileContext.profile.name, { running });
+      browserRuntime.profiles.set(profileContext.profile.name, {
+        running,
+        ...(typeof externalHeadless === "boolean"
+          ? {
+              externalBrowserMode: {
+                browserWebSocketUrl: "ws://127.0.0.1:18800/devtools/browser/test-browser",
+                headless: externalHeadless,
+              },
+            }
+          : {}),
+      });
       cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
       const handler = getScreenshotHandler();
       const response = createBrowserRouteResponse();
@@ -234,23 +264,6 @@ describe("browser agent snapshot timeout routing", () => {
       );
     },
   );
-
-  it("passes passive focus preservation to direct CDP", async () => {
-    browserRuntime.profiles.set(profileContext.profile.name, { running: null });
-    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
-    const handler = getScreenshotHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.(
-      { params: {}, query: {}, body: { type: "png", preserveFocus: true } },
-      response.res,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
-      expect.objectContaining({ headless: undefined, preserveFocus: true }),
-    );
-  });
 
   it("rejects loose screenshot timeoutMs values before dispatching", async () => {
     const handler = getScreenshotHandler();

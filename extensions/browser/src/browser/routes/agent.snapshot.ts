@@ -590,6 +590,7 @@ export function registerBrowserAgentSnapshotRoutes(
           });
           buffer = snap.buffer;
         } else {
+          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           buffer = await captureScreenshot({
             wsUrl: tab.wsUrl ?? "",
             ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
@@ -597,8 +598,8 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
-            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
-            preserveFocus: toBoolean(body.preserveFocus) ?? false,
+            headless:
+              profileRuntime?.running?.headless ?? profileRuntime?.externalBrowserMode?.headless,
           });
         }
 

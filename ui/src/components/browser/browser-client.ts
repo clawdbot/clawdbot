@@ -176,7 +176,7 @@ export async function captureBrowserScreenshot(
     await browserRequest(client, {
       method: "POST",
       path: "/screenshot",
-      body: { targetId, type: "png", preserveFocus: true },
+      body: { targetId, type: "png" },
     }),
   );
   const path = stringOrEmpty(result?.path);

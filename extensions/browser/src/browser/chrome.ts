@@ -926,11 +926,16 @@ export async function isChromeCdpReady(
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
+  options?: {
+    /** Record connection-owned facts before the ready result reaches route callers. */
+    onDiagnostic?: (diagnostic: ChromeCdpDiagnostic) => void | Promise<void>;
+  },
 ): Promise<boolean> {
   const diagnostic = await diagnoseChromeCdp(cdpUrl, timeoutMs, handshakeTimeoutMs, ssrfPolicy);
   if (!diagnostic.ok) {
     log.debug(formatChromeCdpDiagnostic(diagnostic));
   }
+  await options?.onDiagnostic?.(diagnostic);
   return diagnostic.ok;
 }
 
@@ -1302,21 +1307,92 @@ export async function launchOpenClawChrome(
   return await launchOnceAndWait(true);
 }
 
-function cdpProcessListOwnsBrowser(result: unknown, pid: number): boolean {
+function cdpBrowserProcessId(result: unknown): number | null {
   if (!result || typeof result !== "object" || !("processInfo" in result)) {
-    return false;
+    return null;
   }
   const processInfo = (result as { processInfo?: unknown }).processInfo;
+  if (!Array.isArray(processInfo)) {
+    return null;
+  }
+  const browser = processInfo.find((entry) => {
+    const process = entry as { id?: unknown; type?: unknown } | null;
+    return (
+      process?.type === "browser" &&
+      typeof process.id === "number" &&
+      Number.isSafeInteger(process.id) &&
+      process.id > 0
+    );
+  }) as { id?: number } | undefined;
+  return browser?.id ?? null;
+}
+
+function cdpProcessListOwnsBrowser(result: unknown, pid: number): boolean {
+  return cdpBrowserProcessId(result) === pid;
+}
+
+function processCommandUsesHeadlessChrome(command: {
+  argv: string[] | null;
+  text: string;
+}): boolean {
+  const args = command.argv ?? command.text.split(/\s+/);
   return (
-    Array.isArray(processInfo) &&
-    processInfo.some(
-      (entry) =>
-        entry !== null &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "browser" &&
-        (entry as { id?: unknown }).id === pid,
-    )
+    args.some((arg) => /^['"]?--headless(?:=.*)?['"]?$/i.test(arg)) ||
+    /(?:^|[\\/])(?:chrome-headless-shell|headless_shell)(?=\s|$|["'])/i.test(command.text)
   );
+}
+
+/** Read the mode of a browser process proven to own this host's loopback CDP port. */
+export async function inspectLocalChromeHeadlessMode(params: {
+  profile: ResolvedBrowserProfile;
+  browserWebSocketUrl: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<boolean | undefined> {
+  if (!params.profile.cdpIsLoopback) {
+    return undefined;
+  }
+  try {
+    const timeoutMs = Math.max(1, Math.min(params.timeoutMs, CHROME_WS_READY_TIMEOUT_MS));
+    const directEndpoint =
+      isDirectCdpWebSocketEndpoint(params.profile.cdpUrl) &&
+      params.browserWebSocketUrl === params.profile.cdpUrl;
+    const policy = directEndpoint
+      ? params.ssrfPolicy
+      : scopeCdpPolicyToConfiguredEndpoint(params.profile.cdpUrl, params.ssrfPolicy);
+    const pin = await assertCdpEndpointAllowed(
+      params.browserWebSocketUrl,
+      policy,
+      directEndpoint ? undefined : { source: "discovered", configuredUrl: params.profile.cdpUrl },
+    );
+    const result = await withCdpSocket(
+      params.browserWebSocketUrl,
+      async (send) => await send("SystemInfo.getProcessInfo"),
+      {
+        commandTimeoutMs: timeoutMs,
+        handshakeRetries: 0,
+        handshakeTimeoutMs: timeoutMs,
+        lookup: pin?.lookup,
+        signal: params.signal,
+      },
+    );
+    const pid = cdpBrowserProcessId(result);
+    if (!pid || !isPidAlive(pid) || !pidListensOnPort(pid, params.profile.cdpPort)) {
+      return undefined;
+    }
+    const command = readManagedProcessCommandLine(pid);
+    if (
+      !command ||
+      !processCommandHasArg(command, `--remote-debugging-port=${params.profile.cdpPort}`)
+    ) {
+      return undefined;
+    }
+    return processCommandUsesHeadlessChrome(command);
+  } catch {
+    params.signal?.throwIfAborted();
+    return undefined;
+  }
 }
 
 /** Verify that a managed CDP endpoint belongs to the exact spawned browser pid. */

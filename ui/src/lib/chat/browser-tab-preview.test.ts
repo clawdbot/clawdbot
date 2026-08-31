@@ -127,7 +127,7 @@ describe("browser tab previews", () => {
           path: "/screenshot",
           target: "host",
           query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png", preserveFocus: true },
+          body: { targetId: "tab-1", type: "png" },
         },
       ],
       [
@@ -137,7 +137,7 @@ describe("browser tab previews", () => {
           path: "/screenshot",
           target: "host",
           query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png", preserveFocus: true },
+          body: { targetId: "tab-1", type: "png" },
         },
       ],
     ]);
@@ -186,7 +186,7 @@ describe("browser tab previews", () => {
           target: tab.target,
           ...("node" in tab ? { node: tab.node } : {}),
           query: { profile: tab.profile },
-          body: { targetId: "t1", type: "png", preserveFocus: true },
+          body: { targetId: "t1", type: "png" },
         },
       ]);
     }

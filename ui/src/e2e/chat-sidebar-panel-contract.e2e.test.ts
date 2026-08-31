@@ -507,7 +507,7 @@ suite.define(() => {
           (await gateway.getRequests("browser.request")).map((request) => request.params),
         )
         .toContainEqual({
-          body: { targetId: "blacksmith-tab", type: "png", preserveFocus: true },
+          body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
         });

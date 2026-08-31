@@ -15,8 +15,13 @@ import {
 } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
-import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
+  type ChromeCdpDiagnostic,
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
+} from "./chrome.diagnostics.js";
+import {
+  inspectLocalChromeHeadlessMode,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -175,6 +180,45 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
+  const observeExternalBrowserMode = async (
+    diagnostic: ChromeCdpDiagnostic,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => {
+    if (!diagnostic.ok) {
+      runtime.externalBrowserMode = undefined;
+      return;
+    }
+    const current = runtime.externalBrowserMode;
+    if (current?.browserWebSocketUrl === diagnostic.wsUrl) {
+      return;
+    }
+
+    const observation: NonNullable<ProfileRuntimeState["externalBrowserMode"]> = {
+      browserWebSocketUrl: diagnostic.wsUrl,
+    };
+    runtime.externalBrowserMode = observation;
+    try {
+      // Only a process proven to own this host's port may suppress the historical
+      // activation fallback; Docker, tunnels, and unsupported hosts stay unknown.
+      const headless = await inspectLocalChromeHeadlessMode({
+        profile,
+        browserWebSocketUrl: diagnostic.wsUrl,
+        timeoutMs,
+        signal,
+        ssrfPolicy: getCdpReachabilityPolicy(),
+      });
+      signal?.throwIfAborted();
+      if (runtime.externalBrowserMode === observation && headless !== undefined) {
+        observation.headless = headless;
+      }
+    } catch (error) {
+      if (runtime.externalBrowserMode === observation) {
+        runtime.externalBrowserMode = undefined;
+      }
+      throw error;
+    }
+  };
   // Extension profiles probe against the relay server, so it must be listening
   // before any reachability check; starting it reconciles port/token drift and
   // is cheap and idempotent.
@@ -213,6 +257,18 @@ export function createProfileAvailability({
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    if (profile.attachOnly && capabilities.supportsPerTabWs) {
+      return await isChromeCdpReady(
+        profile.cdpUrl,
+        httpTimeoutMs,
+        wsTimeoutMs,
+        getCdpReachabilityPolicy(),
+        {
+          onDiagnostic: async (diagnostic) =>
+            await observeExternalBrowserMode(diagnostic, wsTimeoutMs, options?.signal),
+        },
+      );
+    }
     return await isChromeCdpReady(
       profile.cdpUrl,
       httpTimeoutMs,

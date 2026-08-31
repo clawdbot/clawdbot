@@ -105,16 +105,15 @@ export async function captureScreenshot(opts: {
   timeoutMs?: number;
   /** Effective launch mode recorded on the owned Chrome process, when known. */
   headless?: boolean;
-  preserveFocus?: boolean;
 }): Promise<Buffer> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
 
-      // Headless background tabs need activation to produce a frame. Passive
-      // captures preserve focus when an external browser's launch mode is unknown.
-      if (opts.headless === true || (!opts.preserveFocus && opts.headless !== false)) {
+      // Headless background tabs need activation to produce a frame. Preserve
+      // focus only when the browser process is authoritatively known headed.
+      if (opts.headless !== false) {
         await send("Page.bringToFront").catch(() => {});
       }
 

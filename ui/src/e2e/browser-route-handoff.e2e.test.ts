@@ -402,7 +402,7 @@ suite.define(() => {
               path: "/screenshot",
               target: "host",
               query: { profile: "managed" },
-              body: { targetId: "t1", type: "png", preserveFocus: true },
+              body: { targetId: "t1", type: "png" },
             });
           const hostRequests = (await gateway.getRequests("browser.request")).slice(beforeHostOpen);
           expect(hostRequests.map((request) => asNullableRecord(request.params)?.path)).toEqual(
