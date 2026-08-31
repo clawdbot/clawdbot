@@ -2155,6 +2155,7 @@
     "oxfmt": "0.60.0",
     "oxlint": "1.79.0",
     "oxlint-tsgolint": "7.0.2001",
+    "pako": "3.0.1",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
     "postcss-lit": "1.4.1",

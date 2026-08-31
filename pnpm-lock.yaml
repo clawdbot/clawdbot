@@ -458,6 +458,9 @@ importers:
       oxlint-tsgolint:
         specifier: 7.0.2001
         version: 7.0.2001
+      pako:
+        specifier: 3.0.1
+        version: 3.0.1
       playwright:
         specifier: 1.62.1
         version: 1.62.1
