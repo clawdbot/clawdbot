@@ -78,7 +78,12 @@ suite.define(() => {
           historyMessages: [
             {
               role: "assistant",
-              content: [{ type: "text", text: "Selectable transcript content" }],
+              content: [
+                {
+                  type: "text",
+                  text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
+                },
+              ],
             },
           ],
           models: [
@@ -135,6 +140,10 @@ suite.define(() => {
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
+        const fileLink = page.getByRole("button", { name: "example.ts", exact: true });
+        expect(await fileLink.evaluate((element) => getComputedStyle(element).userSelect)).toBe(
+          "text",
+        );
         const thread = page.locator(".chat-thread");
         expect(await readFocusOutline(thread)).toMatchObject({
           focusVisible: false,

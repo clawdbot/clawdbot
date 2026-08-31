@@ -717,12 +717,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Limit accidental drag selections to controls and navigation; page copy,
-   settings values, and instructions keep the browser's normal selection. */
+/* Keep page text and document links selectable, including anchors with button
+   roles; suppress accidental drag selections on controls and navigation. */
 button,
 select,
 summary,
-[role="button"],
+[role="button"]:not(a),
 [role="tab"],
 .btn,
 .sidebar,
