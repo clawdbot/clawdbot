@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Bun Gateway:** restore Gateway health checks and agent connections under Bun 1.4 while preserving WebSocket frame limits and authenticated request scheduling.
 - **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
 - Matrix lifecycle: drain in-flight monitor tasks without deadlocking shared-client retirement, and reject late acquisitions after their owning task closes.
 - Provider error handling: reuse prepared or already loaded provider hooks instead of cold-loading plugins during error classification, avoiding long stalls in failure reporting and model fallback.
