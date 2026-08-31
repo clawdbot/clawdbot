@@ -1,10 +1,12 @@
 // Branch-owned coverage for the Claude bridge auth handoff: the bridge owns transport and
 // therefore skips generic runtime-auth bootstrap, but runtime preparation must still
 // materialize the selected Anthropic profile so the bridge can seed its child env.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
+  createOverflowRunParams,
   loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedEnsureAuthProfileStore,
@@ -12,8 +14,9 @@ import {
   mockedGetApiKeyForModel,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
 } from "./run.overflow-compaction.harness.js";
+
+let state: OpenClawTestState;
 
 const bridgeProfileId = "anthropic:default";
 const bridgeToken = "anthropic-token";
@@ -55,11 +58,20 @@ async function prepareClaudeBridgeRun() {
 }
 
 describe("claude bridge auth materialization", () => {
+  beforeEach(async () => {
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.claude-bridge-auth-materialization" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
+  });
+
   it("materializes the selected Anthropic profile for the Claude bridge child env", async () => {
     const runEmbeddedAgent = await prepareClaudeBridgeRun();
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "test-model",
       authProfileId: bridgeProfileId,
