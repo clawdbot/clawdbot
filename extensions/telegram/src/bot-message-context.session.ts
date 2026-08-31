@@ -321,21 +321,35 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "telegram",
     accountId: route.accountId,
   });
+  // Bot/self messages already count as implicit mentions in groups; treat them
+  // as allowed supplemental quote/reply context so a user replying to a bot-sent
+  // notification keeps the quoted bot text under allowlist visibility.
+  // Forwarded origins still use the normal allowlist gate.
+  const botSenderId = primaryCtx.me?.id != null ? String(primaryCtx.me.id) : undefined;
   const shouldIncludeGroupSupplementalContext = (paramsLocal: {
     kind: "quote" | "forwarded";
     senderId?: string;
     senderUsername?: string;
+    /** Only the immediate reply target may use the bot-self allowlist bypass. */
+    allowBotSelfQuote?: boolean;
   }): boolean => {
     if (!isGroup) {
       return true;
     }
-    const senderAllowed = effectiveGroupAllow?.hasEntries
-      ? isSenderAllowed({
-          allow: effectiveGroupAllow,
-          senderId: paramsLocal.senderId,
-          senderUsername: paramsLocal.senderUsername,
-        })
-      : true;
+    const isBotSelfQuote =
+      paramsLocal.allowBotSelfQuote === true &&
+      paramsLocal.kind === "quote" &&
+      botSenderId != null &&
+      paramsLocal.senderId === botSenderId;
+    const senderAllowed = isBotSelfQuote
+      ? true
+      : effectiveGroupAllow?.hasEntries
+        ? isSenderAllowed({
+            allow: effectiveGroupAllow,
+            senderId: paramsLocal.senderId,
+            senderUsername: paramsLocal.senderUsername,
+          })
+        : true;
     return evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
       kind: paramsLocal.kind,
@@ -354,6 +368,7 @@ export async function buildTelegramInboundContextPayload(params: {
         kind: "quote",
         senderId: target.senderId,
         senderUsername: target.senderUsername,
+        allowBotSelfQuote: true,
       })
     ) {
       return null;
@@ -432,6 +447,7 @@ export async function buildTelegramInboundContextPayload(params: {
         kind: "quote",
         senderId: visibleEntry.senderId,
         senderUsername: visibleEntry.senderUsername,
+        allowBotSelfQuote: entry.messageId === visibleReplyTargetEntry?.messageId,
       })
     ) {
       return [];
