@@ -1,7 +1,7 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import type { UpdateChannel } from "../infra/update-channels.js";
+import { isBetaTag, type UpdateChannel } from "../infra/update-channels.js";
 
 type ChannelInstallSpecs = {
   installSpec: string;
@@ -41,7 +41,6 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
-  requestedTag?: string;
 }): ChannelInstallSpecs {
   if (
     params.updateChannel === "extended-stable" ||
@@ -67,22 +66,24 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
       recordSpec: params.spec,
     };
   }
-  if (params.updateChannel !== "beta") {
-    return {
-      installSpec: params.spec,
-      recordSpec: params.spec,
-    };
-  }
   const betaTarget = resolveDefaultNpmSpec(params.spec);
-  if (!betaTarget) {
+  if (params.updateChannel !== "beta" || !betaTarget) {
     return {
       installSpec: params.spec,
       recordSpec: params.spec,
     };
   }
-  // Use the explicitly requested tag if provided, otherwise default to @beta.
-  const requestedTag = params.requestedTag?.trim();
-  const betaSpec = requestedTag ? `${betaTarget.name}@${requestedTag}` : `${betaTarget.name}@beta`;
+  // The installed core survives post-update process handoffs; a moving beta tag
+  // can select a different release from an explicitly requested core version.
+  const coreVersion = params.coreVersion?.trim();
+  const betaVersion =
+    params.officialPackageName === betaTarget.name &&
+    coreVersion &&
+    isExactSemverVersion(coreVersion) &&
+    isBetaTag(coreVersion)
+      ? coreVersion
+      : "beta";
+  const betaSpec = `${betaTarget.name}@${betaVersion}`;
   return {
     installSpec: betaSpec,
     recordSpec: params.spec,

@@ -8,7 +8,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
+import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -191,7 +191,6 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: UpdateChannel;
-  requestedTag?: string;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
@@ -269,8 +268,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel = params.channel;
   const coreVersion = await readPackageVersion(params.root);
+  const pluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: params.channel,
+    currentVersion: coreVersion,
+  });
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
@@ -279,7 +281,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
     config: syncConfig,
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
-    requestedTag: params.requestedTag,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
