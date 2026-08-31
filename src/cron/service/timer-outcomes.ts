@@ -172,6 +172,7 @@ export function applyJobResult(
         runAtMs: result.startedAt,
         consecutiveCount: job.state.consecutiveSkipped,
         deferredNotifications: opts?.deferredNotifications,
+        taskRunId: result.taskRunId,
       });
     }
   } else {
@@ -209,6 +210,7 @@ export function applyJobResult(
       autoDisableNotificationOwnsFailure,
       replay: opts?.replay,
       deferredNotifications: opts?.deferredNotifications,
+      taskRunId: result.taskRunId,
     });
     return shouldDelete;
   };

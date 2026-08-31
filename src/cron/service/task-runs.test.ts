@@ -16,9 +16,11 @@ import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
+import { maybeEmitFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
   findCronTaskRunRecoveryInDatabase,
+  settleCronTaskRunFailureAlertOutcome,
   tryCreateCronTaskRunHandle,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
@@ -907,6 +909,96 @@ describe("cron task run terminal records", () => {
           );
         expect(findRecoveryId(stateA)).toBe(runA);
         expect(findRecoveryId(stateB)).toBe(runB);
+      },
+    );
+  });
+});
+
+describe("cron failure-alert run-history settlement", () => {
+  it("settles the deferred alert outcome on the run-history row and stays idempotent", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-alert-history-settle-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const job: CronJob = {
+          id: "alert-history-settle",
+          name: "alert history settle",
+          agentId: "   ",
+          sessionKey: "agent:ops:telegram:group:creator",
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "work" },
+          schedule: { kind: "every", everyMs: 60_000 },
+          state: {},
+          createdAtMs: 100,
+          updatedAtMs: 100,
+          enabled: true,
+        };
+        const state = createCronServiceState({
+          storePath: "/tmp/jobs.json",
+          cronEnabled: true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(),
+          sendCronFailureAlert: async (params) => {
+            params.onDeliveryAttempt?.(true);
+          },
+        });
+
+        const taskRunId = tryCreateCronTaskRun({ state, job, startedAt: 1_500 });
+        expect(taskRunId).toBeTruthy();
+        // Production finalizes the history row while the alert is still pending.
+        tryFinishCronTaskRun(state, {
+          taskRunId,
+          job,
+          event: {
+            action: "finished",
+            jobId: job.id,
+            job,
+            status: "error",
+            error: "job failed",
+            failureNotificationDelivery: { status: "unknown" },
+            runAtMs: 1_500,
+          } as Parameters<typeof tryFinishCronTaskRun>[1]["event"],
+        });
+        const storeKey = cronStoreKey(state.deps.storePath);
+        const readDelivery = () =>
+          readCronTaskRunHistoryPage({ jobId: job.id, storeKey, limit: 10 }).entries[0]
+            ?.failureNotificationDelivery;
+        expect(readDelivery()).toMatchObject({ status: "unknown" });
+
+        const deferred: Array<() => void> = [];
+        maybeEmitFailureAlert(state, {
+          job,
+          alertConfig: {
+            after: 1,
+            cooldownMs: 60_000,
+            channel: "last",
+            mode: "announce",
+            includeSkipped: false,
+            alternateRoute: false,
+          },
+          status: "error",
+          error: "job failed",
+          consecutiveCount: 1,
+          deferredNotifications: deferred,
+          taskRunId,
+        });
+        for (const notify of deferred) {
+          notify();
+        }
+        await vi.waitFor(() => {
+          expect(readDelivery()).toMatchObject({ status: "delivered", delivered: true });
+        });
+
+        // A late duplicate completion must not downgrade the settled history row.
+        settleCronTaskRunFailureAlertOutcome(state, {
+          taskRunId,
+          delivered: false,
+          error: "late transport failure",
+        });
+        expect(readDelivery()).toMatchObject({ status: "delivered", delivered: true });
       },
     );
   });

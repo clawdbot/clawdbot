@@ -35,6 +35,7 @@ import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronQuietTriggerTaskDetail,
+  cronTaskDetailWithFailureAlertOutcome,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -516,6 +517,65 @@ export function tryFinishCronTaskRun(
     state.deps.log.warn(
       { runId: candidateRunId, jobStatus: entry.status, error },
       "cron: failed to update task ledger record",
+    );
+  }
+}
+
+/**
+ * Settles the deferred failure-alert delivery fact on the already-finalized
+ * run-history row. `cron runs` projects the stored history detail rather than
+ * live job state, so the detached alert completion must land here too or the
+ * two audit surfaces report different outcomes for the same failed run.
+ * Idempotent: an already-settled history row is never overwritten, so a late
+ * duplicate completion cannot downgrade a recipient that was reached.
+ */
+export function settleCronTaskRunFailureAlertOutcome(
+  state: CronServiceState,
+  result: {
+    taskRunId?: string;
+    delivered: boolean;
+    error?: string;
+  },
+): void {
+  if (!result.taskRunId) {
+    return;
+  }
+  try {
+    const task = findTaskByRunId(result.taskRunId);
+    if (task?.runtime !== "cron") {
+      return;
+    }
+    const entry = cronTaskRecordToRunLogEntry(task);
+    if (!entry) {
+      return;
+    }
+    const settledStatus = entry.failureNotificationDelivery?.status;
+    if (settledStatus === "delivered" || settledStatus === "not-delivered") {
+      return;
+    }
+    const detail = cronTaskDetailWithFailureAlertOutcome(task, {
+      status: result.delivered ? "delivered" : "not-delivered",
+      delivered: result.delivered,
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    });
+    if (!detail) {
+      return;
+    }
+    finalizeTaskRunByRunIdCore({
+      runId: result.taskRunId,
+      runtime: "cron",
+      // SAFETY: finished cron rows only carry terminal statuses; this patch must not change the row's terminal state.
+      status: task.status as Extract<
+        TaskStatus,
+        "succeeded" | "failed" | "timed_out" | "cancelled"
+      >,
+      endedAt: resolveCronTaskRecordTimestamp(task),
+      detail,
+    });
+  } catch (cause) {
+    state.deps.log.warn(
+      { runId: result.taskRunId, err: cause },
+      "cron: failed to settle failure-alert outcome on run history",
     );
   }
 }

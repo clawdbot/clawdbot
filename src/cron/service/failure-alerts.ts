@@ -22,6 +22,7 @@ import type {
 } from "../types.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { settleCronTaskRunFailureAlertOutcome } from "./task-runs.js";
 import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
@@ -261,6 +262,7 @@ function transportFailureAlert(
     payload: ReplyPayload;
     runAtMs?: number;
     route: ResolvedFailureAlert;
+    taskRunId?: string;
   },
 ): void {
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
@@ -279,6 +281,10 @@ function transportFailureAlert(
       jobId: params.job.id,
       alertAtMs,
       attemptId,
+      delivered: false,
+    });
+    settleCronTaskRunFailureAlertOutcome(state, {
+      taskRunId: params.taskRunId,
       delivered: false,
     });
     return;
@@ -308,6 +314,10 @@ function transportFailureAlert(
         attemptId,
         delivered: reachedRecipient,
       });
+      settleCronTaskRunFailureAlertOutcome(state, {
+        taskRunId: params.taskRunId,
+        delivered: reachedRecipient,
+      });
     })
     .catch((err: unknown) => {
       state.deps.log.warn(
@@ -321,6 +331,11 @@ function transportFailureAlert(
         jobId: params.job.id,
         alertAtMs,
         attemptId,
+        delivered: reachedRecipient,
+        ...(reachedRecipient ? {} : { error: err instanceof Error ? err.message : String(err) }),
+      });
+      settleCronTaskRunFailureAlertOutcome(state, {
+        taskRunId: params.taskRunId,
         delivered: reachedRecipient,
         ...(reachedRecipient ? {} : { error: err instanceof Error ? err.message : String(err) }),
       });
@@ -338,6 +353,7 @@ function emitFailureAlert(
     consecutiveErrors: number;
     route: ResolvedFailureAlert;
     status: "error" | "skipped";
+    taskRunId?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
@@ -375,6 +391,7 @@ function emitFailureAlert(
     payload,
     runAtMs: params.runAtMs,
     route: params.route,
+    taskRunId: params.taskRunId,
   });
 }
 
@@ -415,6 +432,7 @@ export function maybeEmitFailureAlert(
     runAtMs?: number;
     consecutiveCount: number;
     deferredNotifications?: DeferredCronNotifications;
+    taskRunId?: string;
   },
 ) {
   const alertConfig = params.alertConfig;
@@ -441,6 +459,7 @@ export function maybeEmitFailureAlert(
       consecutiveErrors: params.consecutiveCount,
       route: alertConfig,
       status: params.status,
+      taskRunId: params.taskRunId,
     });
   if (params.deferredNotifications) {
     params.deferredNotifications.push(notify);
@@ -465,6 +484,7 @@ export function finalizeCronFailureNotifications(
     autoDisableNotificationOwnsFailure: boolean;
     replay?: boolean;
     deferredNotifications?: DeferredCronNotifications;
+    taskRunId?: string;
   },
 ): void {
   // Finalized history owns notification facts and cooldown; recovery never requests an alert.
@@ -482,6 +502,7 @@ export function finalizeCronFailureNotifications(
       runAtMs: params.result.startedAt,
       consecutiveCount: params.job.state.consecutiveErrors ?? 0,
       deferredNotifications: params.deferredNotifications,
+      taskRunId: params.taskRunId,
     });
   } else if (
     params.result.status === "ok" &&
@@ -509,6 +530,7 @@ export function finalizeCronFailureNotifications(
         payload,
         runAtMs: params.result.startedAt,
         route,
+        taskRunId: params.taskRunId,
       });
     if (params.deferredNotifications) {
       params.deferredNotifications.push(notify);
