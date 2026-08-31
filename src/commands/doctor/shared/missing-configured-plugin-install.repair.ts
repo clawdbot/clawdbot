@@ -21,10 +21,7 @@ import {
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
 import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
-import {
-  type PluginLifecycleLeaseContext,
-  withPluginLifecycleLease,
-} from "../../../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -163,7 +160,12 @@ async function repairMissingPluginInstalls(params: {
       result = await repairMissingPluginInstallsWithLease(
         params,
         pendingInstallTransactions,
-        lease,
+        async (records, options) => {
+          await writePersistedInstalledPluginIndexInstallRecordsWithLease(records, {
+            ...options,
+            lease,
+          });
+        },
       );
     } catch (error) {
       try {
@@ -194,7 +196,10 @@ async function repairMissingPluginInstalls(params: {
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
   pendingInstallTransactions: PluginInstallTransaction[],
-  lease: PluginLifecycleLeaseContext,
+  writeInstallRecords: (
+    records: Record<string, PluginInstallRecord>,
+    options: { config: OpenClawConfig; env: NodeJS.ProcessEnv },
+  ) => Promise<void>,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
@@ -730,22 +735,16 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const persistedIndexOptions = { config: params.cfg, env, lease };
+  const persistedIndexOptions = { config: params.cfg, env };
   if (nextRecords !== records) {
-    await writePersistedInstalledPluginIndexInstallRecordsWithLease(
-      nextRecords,
-      persistedIndexOptions,
-    );
+    await writeInstallRecords(nextRecords, persistedIndexOptions);
   } else if (params.baselineRecords) {
     // The caller seeded us from in-memory state that may not yet have been
     // persisted (e.g. earlier sync/npm record mutations). Even if repair
     // itself made no further changes, persist the baseline so the disk
     // matches what we are about to return — otherwise the next reader gets
     // a stale snapshot.
-    await writePersistedInstalledPluginIndexInstallRecordsWithLease(
-      nextRecords,
-      persistedIndexOptions,
-    );
+    await writeInstallRecords(nextRecords, persistedIndexOptions);
   }
   const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
   return {

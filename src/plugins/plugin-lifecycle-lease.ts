@@ -14,7 +14,7 @@ const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
 };
 
