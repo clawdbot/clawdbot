@@ -173,27 +173,39 @@ function saturateSession(ownerKey: string, resumeAfterKey: string | null): void 
   );
 }
 
-function resolveTranscriptStartIndex(
+function prepareTranscriptRequests(
   ownerKey: string,
-  requests: readonly { key: string }[],
-): number | null {
+  candidates: Iterable<{ name: string; args?: unknown }>,
+): { requests: Array<{ key: string; input: string; name: string }>; startIndex: number } | null {
   const saturation = readLru(saturatedSessions, ownerKey);
-  if (!saturation) {
-    return 0;
-  }
-  if (saturation.expiresAt > Date.now()) {
+  if (saturation && saturation.expiresAt > Date.now()) {
     return null;
+  }
+  const requests: Array<{ key: string; input: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const request = resolveToolTitleRequest(candidate.name, candidate.args);
+    if (!request || seen.has(request.key)) {
+      continue;
+    }
+    seen.add(request.key);
+    requests.push({ ...request, name: candidate.name });
+  }
+  if (!saturation) {
+    return { requests, startIndex: 0 };
   }
   if (saturation.resumeAfterKey === null) {
     saturatedSessions.delete(ownerKey);
-    return 0;
+    return { requests, startIndex: 0 };
   }
+  // Live rows can restore the cursor without changing the history revision.
+  // Search before suppressing another render of a previously missing cursor.
   const cursorIndex = requests.findIndex((request) => request.key === saturation.resumeAfterKey);
   if (cursorIndex >= 0) {
     // Resume after the last admitted row. Re-admitting LRU-evicted rows before
     // this cursor would spend every later bounded window without making progress.
     saturatedSessions.delete(ownerKey);
-    return cursorIndex + 1;
+    return { requests, startIndex: cursorIndex + 1 };
   }
   if (saturation.cursorMissingHistoryVersion === null) {
     saturation.cursorMissingHistoryOwner = activeHistoryOwner;
@@ -209,7 +221,7 @@ function resolveTranscriptStartIndex(
   // The prior complete projection did not contain the cursor, so retention or
   // compaction removed it. Resume from this projection's first remaining row.
   saturatedSessions.delete(ownerKey);
-  return 0;
+  return { requests, startIndex: 0 };
 }
 
 function discardQueuedOwner(ownerKey: string): void {
@@ -314,31 +326,19 @@ export function getToolCallTitle(name: string, args: unknown): string | undefine
 }
 
 export function scheduleToolTitlesForTranscript(
-  candidates: readonly { name: string; args: unknown }[],
+  candidates: Iterable<{ name: string; args?: unknown }>,
 ): void {
   if (!activeSchedulingEnabled || titlesDisabledByGateway || !activeClient || !activeSessionKey) {
     return;
   }
-  const requests: Array<{ key: string; input: string; name: string }> = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const request = resolveToolTitleRequest(candidate.name, candidate.args);
-    if (!request || seen.has(request.key)) {
-      continue;
-    }
-    seen.add(request.key);
-    requests.push({ ...request, name: candidate.name });
-  }
   const ownerKey = queueOwnerKey(activeSessionKey, activeAgentId);
-  const startIndex = resolveTranscriptStartIndex(ownerKey, requests);
-  if (startIndex === null) {
+  const prepared = prepareTranscriptRequests(ownerKey, candidates);
+  if (!prepared) {
     return;
   }
+  const { requests, startIndex } = prepared;
   for (let index = startIndex; index < requests.length; index++) {
-    const request = requests[index];
-    if (!request) {
-      continue;
-    }
+    const request = requests[index]!;
     scheduleTitleRequest(request.name, request);
     if (saturatedSessions.has(ownerKey)) {
       break;
