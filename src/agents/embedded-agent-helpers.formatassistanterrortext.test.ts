@@ -14,6 +14,7 @@ import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-f
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { isRawApiErrorPayload } from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-generation.js";
 
 describe("formatAssistantErrorText", () => {
   const BILLING_ERROR_USER_MESSAGE =
@@ -178,14 +179,16 @@ describe("formatAssistantErrorText", () => {
       errorType: "upstream_error",
     });
 
-    expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
-    expect(
-      classifyAssistantFailoverReason(
-        makeAssistantError(
-          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+    withPreparedFailoverProviders(["openai"], () => {
+      expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
+      expect(
+        classifyAssistantFailoverReason(
+          makeAssistantError(
+            '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+          ),
         ),
-      ),
-    ).toBe("server_error");
+      ).toBe("server_error");
+    });
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
