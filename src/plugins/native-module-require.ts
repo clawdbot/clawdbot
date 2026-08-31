@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -60,7 +60,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
-  modulePath: string,
+  moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
     aliasMap?: Record<string, string> | ((specifier: string) => string | undefined);
@@ -71,6 +71,7 @@ export function tryNativeRequireJavaScriptModule(
   if (process.platform === "win32" && options.allowWindows !== true) {
     return { ok: false };
   }
+  const modulePath = toNativeRequirePath(moduleSpecifier);
   if (!isJavaScriptModulePath(modulePath)) {
     return { ok: false };
   }
@@ -97,7 +98,7 @@ export function clearPluginModuleRequireCache(
   options: { dependencyRoot?: string } = {},
 ): void {
   try {
-    const resolved = nodeRequire.resolve(modulePath);
+    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
     clearRequireCacheSubtree(
       resolved,
       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
@@ -105,6 +106,15 @@ export function clearPluginModuleRequireCache(
     );
   } catch {
     // Best-effort lifecycle cleanup: unresolved paths were not loaded.
+  }
+}
+
+// Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
+function toNativeRequirePath(specifier: string): string {
+  try {
+    return /^file:\/\//iu.test(specifier) ? fileURLToPath(specifier) : specifier;
+  } catch {
+    return specifier;
   }
 }
 

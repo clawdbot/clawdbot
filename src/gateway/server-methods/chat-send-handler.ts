@@ -420,10 +420,13 @@ async function handleChatSendWithOptions(
       clientRunId,
       ...(chatSendTiming ? { chatSendTiming } : {}),
     });
+    // Only the recorder can attest transcript placement; custody and a started ACK cannot.
+    const receipt = userTurnRecorder.getAdmissionReceipt?.();
     const ackPayload = {
       ...goalResult,
       runId: clientRunId,
       status: "started" as const,
+      ...(receipt ? { messageSeq: receipt.activeMessagePosition + 1 } : {}),
       ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };

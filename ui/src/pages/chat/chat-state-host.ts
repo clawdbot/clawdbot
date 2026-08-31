@@ -14,10 +14,10 @@ import type {
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
-import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
@@ -34,7 +34,7 @@ import type {
   FallbackStatus,
   ToolStreamEntry,
   WaitingApprovalStatus,
-} from "./tool-stream.ts";
+} from "./tool-stream-contract.ts";
 
 export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 

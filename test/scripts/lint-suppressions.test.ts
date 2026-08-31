@@ -242,6 +242,8 @@ describe("production lint suppressions", () => {
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
+        // The queue ring reserves sparse capacity and reads only its occupied slots.
+        "src/process/command-queue.state.ts|unicorn/no-new-array|1",
         // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",

@@ -2,13 +2,13 @@
 
 import { describe, expect, it } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 import { retainChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({
