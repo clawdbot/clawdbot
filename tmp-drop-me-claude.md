@@ -140,3 +140,41 @@ Generated surfaces were regenerated from the merged owners. Prompt snapshot
 check reports all 7 files current. Plugin SDK surface reports 148 public
 entrypoints, 4,374 exports, 2,598 callable exports, 1,141 deprecated exports,
 50 wildcard reexports, and zero forbidden package subpaths.
+
+## 2026-08-31 - Section 0A: bounded absorb named refs and tool identities
+
+This cycle is bound to openclaw/openclaw#129388 and freezes upstream at exact
+`8e32494fcf839181a5f02a1f0649068cd91d2b14`. Later upstream motion is context
+only. The safe lane was published unchanged at the accepted candidate before
+this evidence commit.
+
+| Ref role | Named ref | Full SHA | Identity receipt |
+| --- | --- | --- | --- |
+| Product/base | `codeagent/129388-semantic-tree-valid-trailer-reemit-20260830` | `0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` | local object = `origin/` tracking = server; tree `52b6141c80e575813f94241635ce02007b50d140` |
+| Pinned upstream floor | `openclaw/openclaw@8e32494fcf839181a5f02a1f0649068cd91d2b14` | `8e32494fcf839181a5f02a1f0649068cd91d2b14` | local object = GitHub server commit; tree `466a6dc233262280d5586c3126d1b7fb81c347b5`; tracking N/A for immutable commit |
+| Merge base | `openclaw/openclaw@43a7cb3c92c7b5b8d5ddd56d9d157c009e0c85e5` | `43a7cb3c92c7b5b8d5ddd56d9d157c009e0c85e5` | local object = GitHub server commit; tree `7f2ff579be8b954e4becdd10b6388ae79afc09ab`; tracking N/A for immutable commit |
+| Safe lane | `codeagent/129388-0ed59cb6-upstream-8e32494f-gates-absorb-20260831` | `0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` | local = `origin/` tracking = server before this journal commit |
+| Accepted savegame | `savegame/129388-semantic-tree-valid-trailer-reemit-0ed59cb6-20260830T1615Z` | `0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` | local `origin/` tracking = server; immutable rollback/loss-traversal anchor |
+| CI/workflow | `karmaterminal/openclaw-bootstrap:codeagent/129388-primitive-core-semantic-test-routing-cure-20260830` | `3c5acdb72e94755f469fc6cc3276d5b8623d5b49` | bootstrap `origin/` tracking = server; tree `0d3fd64e035e1f812bb8a5c6d8770a848ff23da6` |
+| Presentation | `karmaterminal/openclaw:codeagent/85651-upstream-1ba243c8-gates` | `00c7f721a55554d0b9228337cc8bc6bec88f9e9f` | local object = `origin/` tracking = server; read-only, no presentation operation authorized |
+| Docs/proof corpus | `karmaterminal/karmaterminal-openclaw-docs:codeagent/129388-0ed59cb6-full-exact-proof-20260830` | `ba8d344c1240275a9c54042294b8129eea4e497b` | fetched local object = server branch; tree `ef41579bd847b4da2719b99a229ac66624493bb5`; read-only |
+| Reviewed harness implementation | `karmaterminal/karmaterminal-openclaw-docs:savegame/129388-harness-sql-comment-tokenizer-cure-15e47942-20260830T223855Z` | `15e479424518b4831c95511873f5c6b81ad52a79` | fetched local object = server savegame; tree `5b1ccbaed5f5bebb28459680db1c61cd6414a0cb`; read-only |
+| Reviewed harness report | `karmaterminal/karmaterminal-openclaw-docs:codeagent/129388-harness-sql-comment-tokenizer-cure-20260830` | `1f272dbef90048fa08df5a454bf63c224e3a9313` | fetched local object = server branch; tree `3d5953752a36ca8099efb10297601cf5929613f2`; read-only |
+| Independent harness review | `karmaterminal/karmaterminal-openclaw-docs:codeagent/129388-15e47942-tokenizer-independent-review-20260830` | `192a1814cf4150fc07496c1164fbcff6c3fe9e54` | fetched local object = server branch; tree `8ffbfda579cd2577c3f389ed452a60a4e30df30a`; read-only |
+| Components / docs main / fleet | N/A | N/A | Explicitly read-only and not an evidence or mutation target for this bounded lane |
+
+Pinned GATES and runtime identities:
+
+| Tool or contract | Exact identity | Receipt |
+| --- | --- | --- |
+| `RUNBOOKS/PR-DRIFT-CURE-GATES-RUNBOOK.md` | blob `e42d5eedbf52cb1d0fa307749b83c8625899c26e` | identical on bootstrap `main@e768ccc2e1e0887be455e6880db0bff91a1dfddd` and reviewed workflow SHA |
+| `tools/drift-cure-gate.sh` | blob `90e4caddbe9f40248510d376bc00558ec75bcdcb` | identical on bootstrap main and reviewed workflow SHA |
+| `tools/feature-cores-byte-check.sh` | blob `4e86ba83621cec98573c5173d91e426f72e1d321` | identical on bootstrap main and reviewed workflow SHA |
+| `tools/drift-cure-gate.primitive-cores.txt` | blob `78b89718ca8c2cb18c3f085678c7246049cd69d6` | reviewed workflow branch; 35 explicit paths plus 3 tombstones |
+| `tests/test-drift-cure-primitive-semantic-tests.sh` | blob `0afa2e9b8363eaa70fae25fe2d1fde0cdf174b1a` | reviewed workflow branch |
+| `.github/workflows/openclaw-local-ci.yml` | blob `8d9d16d7b6e6c3fb581d7a102003f8c59bee8dc3` | identical on bootstrap main and reviewed workflow SHA |
+| `scripts/prepush-ci.sh` | blob `766533b6c57409f939ace2b193c6ddab6b5bd720` | accepted product candidate; fallback not authorized for this cycle |
+| `scripts/run-vitest.mjs` | blob `f71cb1c62b4272abac1c7059cb925e4afdbacc97` | accepted product candidate |
+| Node | `/home/figs/.nvm/versions/node/v24.17.0/bin/node`, `v24.17.0` | local executable version receipt |
+| Corepack | `/home/figs/.nvm/versions/node/v24.17.0/bin/corepack`, `0.35.0` | local executable version receipt |
+| pnpm | `12.0.0` via the pinned package-manager contract | lane-local Corepack cache under session state; inherited `~/.local/bin/pnpm` rejected as a stale Actions-cache link |
