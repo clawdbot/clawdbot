@@ -36,6 +36,7 @@ import { VERSION } from "../version.js";
 export {
   GatewayClientRequestError,
   isGatewayConnectAssemblyError,
+  isGatewayProtocolResponseError,
 } from "../../packages/gateway-client/src/index.js";
 export type {
   GatewayClientCloseInfo,

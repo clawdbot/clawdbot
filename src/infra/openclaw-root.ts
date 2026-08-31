@@ -1,13 +1,10 @@
 // Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
-const packageNameCache = new Map<string, string | null>();
-const packageRootCache = new Map<string, string | null>();
-const packageRootsCache = new Map<string, string[]>();
-const argv1CandidateCache = new Map<string, string[]>();
 
 function parsePackageName(raw: string): string | null {
   const parsed = JSON.parse(raw) as { name?: unknown };
@@ -15,6 +12,7 @@ function parsePackageName(raw: string): string | null {
 }
 
 async function readPackageName(dir: string): Promise<string | null> {
+  const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
@@ -30,6 +28,7 @@ async function readPackageName(dir: string): Promise<string | null> {
 }
 
 function readPackageNameSync(dir: string): string | null {
+  const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
@@ -85,6 +84,7 @@ function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {
+  const argv1CandidateCache = getPluginCache().sdk.argvDirectories;
   const cacheKey = path.resolve(argv1);
   const cached = argv1CandidateCache.get(cacheKey);
   if (cached) {
@@ -125,18 +125,23 @@ export async function resolveOpenClawPackageRoot(opts: {
 }): Promise<string | null> {
   const candidates = buildCandidates(opts);
   const cacheKey = createPackageRootCacheKey(candidates);
-  if (packageRootCache.has(cacheKey)) {
-    return packageRootCache.get(cacheKey) ?? null;
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey);
+  if (cached?.all) {
+    return cached.all[0] ?? null;
+  }
+  if (cached?.first !== undefined) {
+    return cached.first;
   }
   for (const candidate of candidates) {
     const found = await findPackageRoot(candidate);
     if (found) {
-      packageRootCache.set(cacheKey, found);
+      searches.set(cacheKey, { ...searches.get(cacheKey), first: found });
       return found;
     }
   }
 
-  packageRootCache.set(cacheKey, null);
+  searches.set(cacheKey, { ...searches.get(cacheKey), first: null });
   return null;
 }
 
@@ -152,7 +157,8 @@ export function resolveOpenClawPackageRootsSync(opts: {
 }): string[] {
   const candidates = buildCandidates(opts);
   const cacheKey = createPackageRootCacheKey(candidates);
-  const cached = packageRootsCache.get(cacheKey);
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey)?.all;
   if (cached) {
     return [...cached];
   }
@@ -165,7 +171,7 @@ export function resolveOpenClawPackageRootsSync(opts: {
       roots.push(found);
     }
   }
-  packageRootsCache.set(cacheKey, roots);
+  searches.set(cacheKey, { all: roots });
   return [...roots];
 }
 

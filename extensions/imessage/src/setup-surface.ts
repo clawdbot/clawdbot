@@ -86,7 +86,10 @@ export const imessageSetupWizard: ChannelSetupWizard = {
     }
     try {
       await options?.beforePersistentEffect?.();
-      const result = await installIMessageCli(runtime, { upgrade: cliDetected });
+      const result = await installIMessageCli(runtime, {
+        upgrade: cliDetected,
+        cliPath: normalizedCliPath,
+      });
       if (result.ok && result.cliPath) {
         await prompter.note(`Installed imsg at ${result.cliPath}`, "iMessage");
         return {
@@ -94,6 +97,12 @@ export const imessageSetupWizard: ChannelSetupWizard = {
             cliPath: result.cliPath,
           },
         };
+      }
+      if (result.ok) {
+        await prompter.note(
+          `Using existing imsg at ${normalizedCliPath}; Homebrew does not manage this binary.`,
+          "iMessage",
+        );
       }
       if (!result.ok) {
         await prompter.note(result.error ?? "imsg install failed.", "iMessage");

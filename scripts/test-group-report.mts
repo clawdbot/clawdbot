@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import {
   inspectManagedProcessGroup,
@@ -132,16 +133,8 @@ function usage() {
   ].join("\n");
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 function readPositiveIntValue(argv: string[], index: number, flag: string) {
-  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
+  return parsePositiveInt(requireOptionArgument(argv, index, flag), flag);
 }
 
 /**
@@ -197,13 +190,13 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--config") {
-      args.configs.push(readRequiredValue(argv, index, "--config"));
+      args.configs.push(requireOptionArgument(argv, index, "--config"));
       index += 1;
       continue;
     }
     if (arg === "--compare") {
-      const before = readRequiredValue(argv, index, "--compare");
-      const after = readRequiredValue(argv, index + 1, "--compare");
+      const before = requireOptionArgument(argv, index, "--compare");
+      const after = requireOptionArgument(argv, index + 1, "--compare");
       setSingleValueFlag(arg, () => {
         args.compare = { before, after };
       });
@@ -211,12 +204,12 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--report") {
-      args.reports.push(readRequiredValue(argv, index, "--report"));
+      args.reports.push(requireOptionArgument(argv, index, "--report"));
       index += 1;
       continue;
     }
     if (arg === "--group-by") {
-      const value = readRequiredValue(argv, index, "--group-by");
+      const value = requireOptionArgument(argv, index, "--group-by");
       setSingleValueFlag(arg, () => {
         args.groupBy = value;
       });
@@ -224,7 +217,7 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--output") {
-      const value = readRequiredValue(argv, index, "--output");
+      const value = requireOptionArgument(argv, index, "--output");
       setSingleValueFlag(arg, () => {
         args.output = value;
       });

@@ -7,8 +7,11 @@ import Testing
 
 @Suite("iOS managed media artifact loader")
 struct IOSMediaArtifactLoaderTests {
-    @Test @MainActor func `loads ticketed image with proxy headers and without a gateway bearer`() async throws {
-        let gatewayURL = try #require(URL(string: "wss://gateway.example"))
+    @Test(arguments: Self.gatewayRoutes)
+    @MainActor func `loads ticketed image with proxy headers and without a gateway bearer`(
+        route: (gateway: String, media: String)) async throws
+    {
+        let gatewayURL = try #require(URL(string: route.gateway))
         let config = Self.config(url: gatewayURL)
         let loader = IOSMediaArtifactLoader(
             connectionProvider: {
@@ -20,7 +23,7 @@ struct IOSMediaArtifactLoaderTests {
             requestFactory: { _, maximumBytes in
                 #expect(maximumBytes == 12 * 1024 * 1024)
                 return { request in
-                    #expect(request.url?.absoluteString == Self.ticketedAbsoluteURL)
+                    #expect(request.url?.absoluteString == route.media + Self.ticketedPath)
                     #expect(request.value(forHTTPHeaderField: "Accept") == "image/*")
                     #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
                     #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
@@ -41,8 +44,11 @@ struct IOSMediaArtifactLoaderTests {
         #expect(media.mimeType == "image/png")
     }
 
-    @Test @MainActor func `returns direct video stream when route needs no pinned session`() async throws {
-        let config = try Self.config(url: #require(URL(string: "wss://gateway.example")))
+    @Test(arguments: Self.gatewayRoutes)
+    @MainActor func `returns direct video stream when route needs no pinned session`(
+        route: (gateway: String, media: String)) async throws
+    {
+        let config = try Self.config(url: #require(URL(string: route.gateway)))
         let loader = IOSMediaArtifactLoader(
             connectionProvider: {
                 IOSMediaArtifactLoader.Connection(
@@ -64,7 +70,7 @@ struct IOSMediaArtifactLoaderTests {
             Issue.record("video should use the ticketed stream URL")
             return
         }
-        #expect(stream.url.absoluteString == Self.ticketedAbsoluteURL)
+        #expect(stream.url.absoluteString == route.media + Self.ticketedPath)
         #expect(stream.mimeType == "video/mp4")
         #expect(stream.sizeBytes == 4096)
     }
@@ -135,8 +141,11 @@ struct IOSMediaArtifactLoaderTests {
         #expect(media.mimeType == "video/mp4")
     }
 
-    @Test @MainActor func `requests playback rendition for buffered audio`() async throws {
-        let config = try Self.config(url: #require(URL(string: "wss://gateway.example")))
+    @Test(arguments: Self.gatewayRoutes)
+    @MainActor func `requests playback rendition for buffered audio`(
+        route: (gateway: String, media: String)) async throws
+    {
+        let config = try Self.config(url: #require(URL(string: route.gateway)))
         let loader = IOSMediaArtifactLoader(
             connectionProvider: {
                 IOSMediaArtifactLoader.Connection(
@@ -146,7 +155,7 @@ struct IOSMediaArtifactLoaderTests {
             },
             requestFactory: { _, _ in
                 { request in
-                    #expect(request.url?.absoluteString == Self.ticketedPlaybackAbsoluteURL)
+                    #expect(request.url?.absoluteString == route.media + Self.ticketedPath + "&playback=1")
                     #expect(request.value(forHTTPHeaderField: "Range") == nil)
                     return try Self.response(
                         for: request,
@@ -299,6 +308,17 @@ struct IOSMediaArtifactLoaderTests {
         }
     }
 
+    private static let gatewayRoutes = [
+        (gateway: "wss://gateway.example", media: "https://gateway.example"),
+        (gateway: "wss://gateway.example/", media: "https://gateway.example"),
+        (
+            gateway: "wss://gateway.example:8443/tenant%20gateway/gw",
+            media: "https://gateway.example:8443/tenant%20gateway/gw"),
+        (
+            gateway: "wss://gateway.example/tenant%2Fgateway//gw/",
+            media: "https://gateway.example/tenant%2Fgateway//gw/"),
+        (gateway: "wss://gateway.example/tenant%FFgateway/gw", media: "https://gateway.example/tenant%FFgateway/gw"),
+    ]
     private static let ticketedPath =
         "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full?mediaTicket=ticket"
     private static let ticketedAbsoluteURL = "https://gateway.example\(ticketedPath)"

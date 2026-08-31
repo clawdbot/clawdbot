@@ -67,6 +67,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 import {
+  isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
@@ -839,11 +840,6 @@ export const streamSimpleAnthropic: StreamFunction<
   } satisfies AnthropicCompactionOptions);
 };
 
-function isOAuthToken(apiKey: string): boolean {
-  // Inspect the host-resolved shape only for auth routing; the SDK still receives the sentinel.
-  return getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat");
-}
-
 function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
     return true;
@@ -971,7 +967,7 @@ function createClient(
   }
 
   // OAuth: Bearer auth, Claude Code identity headers
-  if (isOAuthToken(apiKey)) {
+  if (isAnthropicOAuthApiKey(apiKey)) {
     const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,

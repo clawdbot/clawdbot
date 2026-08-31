@@ -10,12 +10,39 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("broadcasts updated versions to uncontrolled window clients during activation", async () => {
+  it("reloads stale root and chat clients once while excluding other pages", async () => {
     const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
-    const windowClient = { postMessage: vi.fn() };
-    const matchedClients = createDeferred<Array<typeof windowClient>>();
+    const client = (id: string, url: string) => ({
+      id,
+      url,
+      postMessage: vi.fn(),
+      navigate: vi.fn(async () => undefined),
+    });
+    const staleClients = [
+      client("root", "https://control.example/openclaw/"),
+      client("chat", "https://control.example/openclaw/chat"),
+      client(
+        "chat-deep-link",
+        "https://control.example/openclaw/chat/main/session?mode=compact#latest",
+      ),
+    ];
+    const excludedClients = [
+      client("settings", "https://control.example/openclaw/settings/appearance"),
+      client("chat-sibling", "https://control.example/openclaw/chatty"),
+      client("cross-origin", "https://other.example/openclaw/chat/main/session"),
+    ];
+    const matchedClients = createDeferred<Array<ReturnType<typeof client>>>();
     const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
     const cacheDelete = vi.fn(async () => true);
+    const reloadMarkers = new Set<string>();
+    const reloadCache = {
+      match: vi.fn(async (request: Request) =>
+        reloadMarkers.has(request.url) ? new Response("new-build") : undefined,
+      ),
+      put: vi.fn(async (request: Request) => {
+        reloadMarkers.add(request.url);
+      }),
+    };
     const clients = {
       claim: vi.fn(async () => undefined),
       matchAll: vi.fn(() => matchedClients.promise),
@@ -29,22 +56,33 @@ describe("Control UI service worker cache versioning", () => {
         "openclaw-control-new-build",
         "other-cache",
       ]),
-      open: vi.fn(),
+      open: vi.fn(async () => reloadCache),
     };
     const serviceWorkerGlobal = {
       addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
         listeners.set(type, [...(listeners.get(type) ?? []), listener]);
       },
       clients,
-      location: { href: "https://control.example/sw.js?v=new-build" },
+      location: { href: "https://control.example/openclaw/sw.js?v=new-build" },
       registration: { showNotification: vi.fn() },
       skipWaiting: vi.fn(),
     };
     const context = vm.createContext({
       URL,
+      MessageChannel: UnresponsiveMessageChannel,
+      Request,
+      Response,
       caches,
+      clearTimeout,
       fetch: vi.fn(),
-      self: serviceWorkerGlobal,
+      setTimeout,
+      self: {
+        ...serviceWorkerGlobal,
+        registration: {
+          scope: "https://control.example/openclaw/",
+          showNotification: vi.fn(),
+        },
+      },
     });
 
     new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
@@ -65,19 +103,80 @@ describe("Control UI service worker cache versioning", () => {
     await Promise.resolve();
 
     expect(activationSettled).toBe(false);
-    expect(windowClient.postMessage).not.toHaveBeenCalled();
+    expect(staleClients[0]?.navigate).not.toHaveBeenCalled();
 
-    matchedClients.resolve([windowClient]);
+    matchedClients.resolve([...staleClients, ...excludedClients]);
     await activationPromise;
 
     expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
     expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
     expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
-    expect(windowClient.postMessage).toHaveBeenCalledWith({
-      type: "sw-updated",
-      version: "new-build",
+    for (const staleClient of staleClients) {
+      expect(staleClient.postMessage).toHaveBeenCalledOnce();
+      expect(staleClient.navigate).toHaveBeenCalledExactlyOnceWith(staleClient.url);
+    }
+    for (const excludedClient of excludedClients) {
+      expect(excludedClient.postMessage).not.toHaveBeenCalled();
+      expect(excludedClient.navigate).not.toHaveBeenCalled();
+    }
+
+    listeners.get("activate")?.[0]?.({
+      waitUntil(promise: Promise<unknown>) {
+        activationPromise = promise;
+      },
     });
-    expect(windowClient.postMessage.mock.calls[0]).toHaveLength(1);
+    await activationPromise;
+    for (const staleClient of staleClients) {
+      expect(staleClient.postMessage).toHaveBeenCalledTimes(2);
+      expect(staleClient.navigate).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("keeps a current document mounted during activation", async () => {
+    const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
+    const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
+    const navigate = vi.fn(async () => undefined);
+    const clients = {
+      claim: vi.fn(async () => undefined),
+      matchAll: vi.fn(async () => [
+        {
+          id: "current-chat-deep-link",
+          url: "https://control.example/chat/main/session",
+          postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
+            ports[0]?.postMessage({ version: "new-build" });
+          }),
+          navigate,
+        },
+      ]),
+    };
+    const context = vm.createContext({
+      URL,
+      MessageChannel,
+      caches: { delete: vi.fn(), keys: vi.fn(async () => []), open: vi.fn() },
+      clearTimeout,
+      fetch: vi.fn(),
+      setTimeout,
+      self: {
+        addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
+          listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        clients,
+        location: { href: "https://control.example/sw.js?v=new-build" },
+        registration: { scope: "https://control.example/", showNotification: vi.fn() },
+        skipWaiting: vi.fn(),
+      },
+    });
+    new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
+    let activationPromise: Promise<unknown> | undefined;
+
+    listeners.get("activate")?.[0]?.({
+      waitUntil(promise: Promise<unknown>) {
+        activationPromise = promise;
+      },
+    });
+
+    await expect(activationPromise).resolves.toBeUndefined();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 
@@ -190,6 +289,16 @@ describe("Control UI service worker notification scope", () => {
       nestedScope,
       [`${nestedScope}chat?session=42#latest`],
       { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
+    ),
+    notificationScenario(
+      "opens a scope-relative approval route with its Gateway handoff fragment",
+      nestedScope,
+      [],
+      {
+        target: "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+        openedUrl:
+          "https://control.example/openclaw/approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+      },
     ),
     notificationScenario(
       "prefers a later exact explicit route over an unrelated nested app tab",
@@ -411,6 +520,27 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
+  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const tag = "openclaw-approval-exec:replacement";
+
+    const requested = await worker.dispatchPush({
+      title: "OpenClaw approval requested",
+      body: "Open OpenClaw to review this request.",
+      tag,
+      renotify: false,
+    });
+    const terminal = await worker.dispatchPush({
+      title: "OpenClaw approval updated",
+      body: "This approval is no longer pending.",
+      tag,
+      renotify: false,
+    });
+
+    expect(requested.options).toMatchObject({ tag, renotify: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false });
+  });
+
   it.each([
     {
       name: "root",
@@ -509,6 +639,11 @@ type ActivateEventStub = {
   waitUntil(promise: Promise<unknown>): void;
 };
 
+class UnresponsiveMessageChannel {
+  port1 = { addEventListener() {}, start() {} };
+  port2 = {};
+}
+
 type NotificationClickScenario = {
   name: string;
   scope: string;
@@ -522,6 +657,8 @@ type NotificationClickScenario = {
 type ServiceWorkerPushPayload = {
   title: string;
   body: string;
+  renotify?: boolean;
+  tag?: string;
   url?: string;
 };
 
@@ -530,6 +667,7 @@ type ServiceWorkerNotificationOptions = {
   icon: string;
   badge: string;
   tag: string;
+  renotify: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 

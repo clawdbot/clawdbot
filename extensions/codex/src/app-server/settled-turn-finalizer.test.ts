@@ -152,8 +152,10 @@ describe("runCodexSettledTurnFinalization", () => {
   });
 
   it("runs an isolated history-backed final turn and returns only its visible answer", async () => {
+    const attempt = createAttempt();
+    attempt.prepareAssistantTranscriptMessage = (message) => message;
     const result = await runCodexSettledTurnFinalization(
-      { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+      { attempt, settledAttempt: createSettledAttempt() },
       { pluginConfig: {} },
     );
 
@@ -180,6 +182,7 @@ describe("runCodexSettledTurnFinalization", () => {
         sessionId: "session-1",
         idempotencyScope: "codex-settled-finalizer:run-1",
         skipBeforeMessageWriteHooks: true,
+        prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
         messages: [expect.objectContaining({ role: "assistant" })],
       }),
     );
@@ -224,7 +227,7 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it("rejects an intentionally silent final answer before transcript mutation", async () => {
+  it("returns an intentionally silent final answer as completed empty before transcript mutation", async () => {
     mocks.runBounded.mockResolvedValue({ text: "NO_REPLY", items: [], model: "gpt-5.4" });
 
     await expect(
@@ -232,7 +235,7 @@ describe("runCodexSettledTurnFinalization", () => {
         { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
         {},
       ),
-    ).rejects.toThrow("completed without a visible answer");
+    ).resolves.toMatchObject({ assistant: { content: [{ type: "text", text: "" }] } });
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 

@@ -1,9 +1,15 @@
-/** Tests configured model aliases through parser and reply-routing boundaries. */
+/** Tests configured directives through parser, reply-routing, and delivery boundaries. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
+import {
+  createOpenAiResponsesPartial,
+  createOpenAiResponsesTextEvent,
+} from "../../agents/embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
@@ -12,7 +18,9 @@ import {
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
+import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 const directiveApplyMocks = vi.hoisted(() => ({
   apply: vi.fn(),
@@ -90,6 +98,8 @@ async function resolveModelDirective(params: {
   authorized?: boolean;
   cfg?: OpenClawConfig;
   surface?: string;
+  agentCfg?: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
+  opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
 }) {
   const authorized = params.authorized ?? true;
   const { body } = params;
@@ -120,7 +130,8 @@ async function resolveModelDirective(params: {
     agentId: "main",
     agentDir: "/tmp/main-agent",
     workspaceDir: "/tmp",
-    agentCfg: {},
+    agentCfg: params.agentCfg ?? {},
+    opts: params.opts,
     sessionCtx,
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },
@@ -142,7 +153,7 @@ async function resolveModelDirective(params: {
   return { result, sessionEntry, sessionCtx };
 }
 
-describe("reply directive aliases", () => {
+describe("reply directive resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -161,6 +172,121 @@ describe("reply directive aliases", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { label: "default off", agentCfg: {}, caption: "Attachment caption" },
+    {
+      label: "explicit off with text-end break",
+      agentCfg: { blockStreamingDefault: "off", blockStreamingBreak: "text_end" },
+      caption: "Attachment caption",
+    },
+    {
+      label: "per-turn disabled despite configured on",
+      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "text_end" },
+      opts: { disableBlockStreaming: true },
+      caption: "Attachment caption",
+    },
+    { label: "captionless default off", agentCfg: {}, caption: "" },
+    {
+      label: "enabled text-end break",
+      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "text_end" },
+      caption: "Attachment caption",
+      separateCaption: true,
+    },
+    {
+      label: "enabled message-end break",
+      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "message_end" },
+      caption: "Attachment caption",
+    },
+    {
+      label: "per-turn enabled despite configured off",
+      agentCfg: { blockStreamingDefault: "off", blockStreamingBreak: "text_end" },
+      opts: { disableBlockStreaming: false },
+      caption: "Attachment caption",
+      separateCaption: true,
+    },
+  ] satisfies Array<{
+    label: string;
+    agentCfg: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
+    opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
+    caption: string;
+    separateCaption?: boolean;
+  }>)("preserves media caption ownership with $label", async (testCase) => {
+    const { result } = await resolveModelDirective({
+      body: "Please send the attachment",
+      agentCfg: testCase.agentCfg,
+      opts: "opts" in testCase ? testCase.opts : undefined,
+    });
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    const delivered: ReplyPayload[] = [];
+    const onPartialReply = vi.fn();
+    const handleBlockReply = createBlockReplyDeliveryHandler({
+      onBlockReply: (payload) => {
+        delivered.push(payload);
+      },
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: createTypingSignaler({
+        typing: makeTypingController(),
+        mode: "never",
+        isHeartbeat: false,
+      }),
+      blockStreamingEnabled: result.result.blockStreamingEnabled,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
+    });
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "media-caption-directives",
+      onBlockReply: handleBlockReply,
+      onPartialReply,
+      blockReplyBreak: result.result.resolvedBlockStreamingBreak,
+    });
+    const mediaUrl = "/tmp/attachment.txt";
+    const text = `${testCase.caption}\nMEDIA:${mediaUrl}`.trimStart();
+    const message = createOpenAiResponsesPartial({
+      text,
+      id: "media-caption",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
+    try {
+      emit({ type: "message_start", message });
+      for (const type of ["text_delta", "text_end"] as const) {
+        emit(
+          createOpenAiResponsesTextEvent({
+            type,
+            text,
+            partial: message,
+            messagePhase: "final_answer",
+          }),
+        );
+        await subscription.waitForPendingEvents();
+      }
+      emit({ type: "message_end", message });
+      await subscription.waitForPendingEvents();
+      const separateCaption = "separateCaption" in testCase && testCase.separateCaption;
+      expect(
+        delivered.map((payload) => ({ text: payload.text ?? "", mediaUrl: payload.mediaUrl })),
+      ).toEqual(
+        separateCaption
+          ? [
+              { text: testCase.caption, mediaUrl: undefined },
+              { text: "", mediaUrl },
+            ]
+          : [{ text: testCase.caption, mediaUrl }],
+      );
+      if (testCase.caption) {
+        expect(onPartialReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: testCase.caption }),
+        );
+      }
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it.each([

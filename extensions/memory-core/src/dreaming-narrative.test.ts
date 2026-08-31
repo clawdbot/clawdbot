@@ -491,6 +491,7 @@ describe("runDreamNarrative", () => {
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
     expect(runOptions.disableTools).toBe(true);
+    expect(runOptions.promptMode).toBe("minimal");
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);

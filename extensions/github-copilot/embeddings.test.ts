@@ -360,6 +360,55 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { remote: undefined, expected: "vscode-chat" },
+    {
+      remote: { headers: { "COPILOT-INTEGRATION-ID": "remote-identity" } },
+      expected: "remote-identity",
+    },
+  ])(
+    "uses the configured integration identity for discovery and embedding requests: $expected",
+    async ({ remote, expected }) => {
+      mockDiscoveryResponse({
+        ok: true,
+        json: buildModelsResponse([{ id: "text-embedding-3-small" }]),
+      });
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        Response.json({
+          data: [{ index: 0, embedding: [1, 0] }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetchImpl);
+      const result = await githubCopilotMemoryEmbeddingProviderAdapter.create({
+        ...defaultCreateOptions(),
+        remote,
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                baseUrl: TEST_BASE_URL,
+                models: [],
+                headers: {
+                  "copilot-integration-id": "vscode-chat",
+                  "X-Private-Header": "not-for-embeddings",
+                },
+              },
+            },
+          },
+        },
+      });
+      await result.provider?.embed("hello", { inputType: "query" });
+      const discoveryHeaders = new Headers(firstDiscoveryRequest().init.headers);
+      const requestHeaders = new Headers(fetchImpl.mock.calls[0]?.[1]?.headers);
+      expect(
+        [discoveryHeaders, requestHeaders].map((headers) => headers.get("copilot-integration-id")),
+      ).toEqual([expected, expected]);
+      expect(
+        [discoveryHeaders, requestHeaders].every((headers) => !headers.has("x-private-header")),
+      ).toBe(true);
+    },
+  );
+
   it("honors remote overrides when creating the provider", async () => {
     mockDiscoveryResponse({
       ok: true,

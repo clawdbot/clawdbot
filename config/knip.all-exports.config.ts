@@ -39,6 +39,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  // The worker-artifact fixture compiles and launches this native child by path.
+  "test/scripts/anthropic-preparation-probe.ts!",
+  // ExecHostTransportProofTests.swift launches this isolated native client by path.
+  "src/infra/exec-host.native.test-support.ts!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",

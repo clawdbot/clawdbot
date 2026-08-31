@@ -309,29 +309,6 @@ describe("channels controller WhatsApp logout", () => {
     expect(channels.state.whatsappBusy).toBe(false);
     channels.dispose();
   });
-
-  it("reports a Gateway failure without discarding login state", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.logout") {
-        throw new Error("credential cleanup failed");
-      }
-      return createChannelsSnapshot("refreshed");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
-    channels.state.whatsappLoginConnected = true;
-
-    await channels.logoutWhatsApp();
-
-    expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
-    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
-    expect(channels.state.whatsappLoginConnected).toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(0);
-    channels.dispose();
-  });
 });
 
 describe("channels controller WhatsApp mutation failures", () => {
@@ -342,22 +319,25 @@ describe("channels controller WhatsApp mutation failures", () => {
       invoke: (channels: ReturnType<typeof createChannelCapability>) =>
         channels.startWhatsApp(false),
       preservesQr: false,
+      connected: null,
     },
     {
       operation: "scan wait",
       method: "web.login.wait",
       invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.waitWhatsApp(),
       preservesQr: true,
+      connected: null,
     },
     {
       operation: "logout",
       method: "channels.logout",
       invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
       preservesQr: true,
+      connected: true,
     },
   ])(
     "publishes a rejected $operation without probing channel status",
-    async ({ method, invoke, preservesQr }) => {
+    async ({ method, invoke, preservesQr, connected }) => {
       const request = vi.fn(async (requestedMethod: string) => {
         if (requestedMethod === method) {
           throw new Error("WhatsApp request rejected");
@@ -384,6 +364,7 @@ describe("channels controller WhatsApp mutation failures", () => {
       expect(channels.state.whatsappLoginQrDataUrl).toBe(
         preservesQr ? "data:image/png;base64,current-qr" : null,
       );
+      expect(channels.state.whatsappLoginConnected).toBe(connected);
       channels.dispose();
     },
   );

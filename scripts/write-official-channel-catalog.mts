@@ -19,11 +19,12 @@ type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind"
   name: string;
   openclaw: {
     plugin?: Record<string, unknown>;
+    setupFeatures?: Record<string, unknown>;
     catalog?: Record<string, unknown>;
     contracts?: Record<string, string[] | undefined>;
     channel: Record<string, unknown>;
     channelHostConfig?: Record<string, unknown>;
-    channelConfigs?: Record<string, { schema?: unknown }>;
+    channelConfigs?: Record<string, { schema?: unknown; label?: string }>;
     providerEndpoints?: Array<Record<string, unknown>>;
     install: CatalogInstall;
   };

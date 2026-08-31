@@ -149,6 +149,10 @@ describe("isTransientSqliteBackupPath", () => {
   it.each([
     "memory/main.sqlite.reindex-lock.sqlite",
     "memory/main.sqlite.reindex-lock.sqlite-shm",
+    "memory/main.sqlite.generation-writer.sqlite",
+    "memory/main.sqlite.generation-writer.sqlite-wal",
+    "memory/main.sqlite.generation-lock.sqlite",
+    "memory/main.sqlite.generation-lock.sqlite-journal",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
   ])("classifies transient reindex state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(true);

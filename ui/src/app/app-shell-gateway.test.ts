@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
@@ -9,10 +10,15 @@ import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 function createProfileAppearanceGateway(profileId: string | null) {
-  const request = vi.fn(async () => ({
-    status: "ok",
-    entries: { "ui.accent": "#336699" },
-  }));
+  const pendingResponses: Array<(accent: string) => void> = [];
+  const request = vi.fn(
+    () =>
+      new Promise<{ status: string; entries: { "ui.accent": string } }>((resolve) => {
+        pendingResponses.push((accent) =>
+          resolve({ status: "ok", entries: { "ui.accent": accent } }),
+        );
+      }),
+  );
   const client = {
     gatewayUrl: "ws://profile.test",
     request,
@@ -60,6 +66,17 @@ function createProfileAppearanceGateway(profileId: string | null) {
     syncSidebarWorkboard: vi.fn(),
   } as unknown as ShellGatewayHost;
   return {
+    completeProfileAppearance(this: void, accent = "#336699") {
+      const respond = pendingResponses.shift();
+      expect(respond, "pending users.prefs.get response").toBeDefined();
+      // Config reconciliation can also refresh the theme. Arm this only when
+      // releasing this request, after any synchronous reconciliation has finished.
+      const refreshed = new Promise<void>((resolve) => {
+        refreshTheme.mockImplementationOnce(resolve);
+      });
+      respond!(accent);
+      return refreshed;
+    },
     context,
     host,
     owner: new ShellGatewayOwner(host),
@@ -95,33 +112,45 @@ describe("ShellGatewayOwner profile appearance integration", () => {
   });
 
   it("loads profile appearance when authenticated presence appears on an existing connection", async () => {
-    const { owner, request, snapshot } = createProfileAppearanceGateway(null);
+    const { completeProfileAppearance, context, owner, refreshTheme, request, snapshot } =
+      createProfileAppearanceGateway(null);
     owner.synchronizeGateway(snapshot);
     snapshot.selfUser = { id: "profile-owner" };
 
     owner.synchronizeGateway(snapshot);
 
-    await vi.waitFor(() => expect(loadSettings().accent).toBe("#336699"));
+    owner.reconcileServerUiPrefs(context.runtimeConfig);
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    expect(loadSettings().accent).toBe("#ff0000");
+    await completeProfileAppearance();
+    expect(refreshTheme).toHaveBeenCalledTimes(2);
+    expect(loadSettings().accent).toBe("#336699");
     expect(request).toHaveBeenCalledOnce();
+    // Derived from the wire contract so new appearance keys extend the
+    // request without silently invalidating this expectation.
     expect(request).toHaveBeenCalledWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent"],
+      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
     });
   });
 
   it("republishes profile provenance even when its appearance matches the browser mirror", async () => {
     patchSettings({ accent: "#336699" });
-    const { owner, refreshTheme, snapshot } = createProfileAppearanceGateway("profile-owner");
+    const { completeProfileAppearance, owner, refreshTheme, snapshot } =
+      createProfileAppearanceGateway("profile-owner");
 
     owner.synchronizeGateway(snapshot);
 
-    await vi.waitFor(() => expect(refreshTheme).toHaveBeenCalledOnce());
+    await completeProfileAppearance();
+    expect(refreshTheme).toHaveBeenCalledOnce();
     expect(loadSettings().accent).toBe("#336699");
   });
 
   it("reuses cached profile preferences across unrelated gateway config snapshots", async () => {
-    const { context, owner, request, snapshot } = createProfileAppearanceGateway("profile-owner");
+    const { completeProfileAppearance, context, owner, request, snapshot } =
+      createProfileAppearanceGateway("profile-owner");
     owner.synchronizeGateway(snapshot);
-    await vi.waitFor(() => expect(loadSettings().accent).toBe("#336699"));
+    await completeProfileAppearance();
+    expect(loadSettings().accent).toBe("#336699");
     request.mockClear();
     const configState = context.runtimeConfig.state as {
       configSnapshot: { config: unknown };
@@ -137,13 +166,13 @@ describe("ShellGatewayOwner profile appearance integration", () => {
   });
 
   it("refreshes only matching profile-change events and republishes the resolved appearance", async () => {
-    const { owner, refreshTheme, request, snapshot } =
+    const { completeProfileAppearance, owner, refreshTheme, request, snapshot } =
       createProfileAppearanceGateway("profile-owner");
     owner.synchronizeGateway(snapshot);
-    await vi.waitFor(() => expect(loadSettings().accent).toBe("#336699"));
+    await completeProfileAppearance();
+    expect(loadSettings().accent).toBe("#336699");
     request.mockClear();
     refreshTheme.mockClear();
-    request.mockResolvedValueOnce({ status: "ok", entries: { "ui.accent": "#224466" } });
 
     owner.handleGatewayEvent({
       type: "event",
@@ -158,7 +187,8 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       payload: { profileId: "profile-owner", keys: ["ui.accent"] },
     });
 
-    await vi.waitFor(() => expect(loadSettings().accent).toBe("#224466"));
+    await completeProfileAppearance("#224466");
+    expect(loadSettings().accent).toBe("#224466");
     expect(request).toHaveBeenCalledOnce();
     expect(refreshTheme).toHaveBeenCalledOnce();
   });

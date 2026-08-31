@@ -2,13 +2,13 @@
  * Provider-entry configuration and stored-profile binding for model auth.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   hashRuntimeConfigValue,
-} from "../config/config.js";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
-import { resolveConfigSecretRef } from "../config/resolution-facts.js";
+} from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -83,17 +83,31 @@ export function resolveProviderConfig(
   return resolveMergedModelProviderEntry(cfg, provider)?.providerConfig;
 }
 
-function resolveProviderConfigSecretInput(cfg: OpenClawConfig | undefined, provider: string) {
-  const entry = resolveMergedModelProviderEntry(cfg, provider);
-  const providerConfig = entry?.providerConfig;
+function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: string) {
+  return providerConfigMatchesRuntimeSnapshot({
+    inputConfig: cfg,
+    runtimeConfig: getRuntimeConfigSnapshot(),
+    provider,
+  })
+    ? (getRuntimeConfigSourceSnapshot() ?? cfg)
+    : cfg;
+}
+
+/** Keeps authored references distinct from opaque bytes in a matching runtime provider. */
+export function resolveProviderConfigSecretInput(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+) {
+  const sourceConfig = resolveProviderSourceConfig(cfg, provider);
+  const entry = resolveMergedModelProviderEntry(sourceConfig, provider);
   return {
-    providerConfig,
+    providerConfig: resolveProviderConfig(cfg, provider),
     ref: entry
       ? resolveConfigSecretRef({
-          config: cfg,
+          config: sourceConfig,
           path: `models.providers.${entry.providerKey}.apiKey`,
-          value: providerConfig?.apiKey,
-          defaults: cfg?.secrets?.defaults,
+          value: entry.providerConfig.apiKey,
+          defaults: sourceConfig?.secrets?.defaults,
         })
       : null,
   };
@@ -318,7 +332,7 @@ type ProviderEntryApiKeyProfileReference =
       credentialType: AuthProfileCredential["type"];
       reason: "credential-class" | "provider-binding";
     }
-  | { kind: "marker" };
+  | { kind: "marker"; evidence: "environment" | "synthetic" };
 
 export type ProviderEntryApiKeyBindingResolution =
   | { kind: "none" }
@@ -415,7 +429,10 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     return { kind: "none" };
   }
   if (isNonSecretApiKeyMarker(perEntryRawKey)) {
-    return { kind: "marker" };
+    return {
+      kind: "marker",
+      evidence: isKnownEnvApiKeyMarker(perEntryRawKey) ? "environment" : "synthetic",
+    };
   }
   const credential = params.store.profiles[perEntryRawKey];
   if (!credential) {
@@ -551,11 +568,11 @@ export function isConfigBackedInlineProviderApiKey(params: {
   if (isInlineProviderApiKeySource(params.source)) {
     return true;
   }
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
   if (!providerConfig || !hasExplicitProviderApiKeyConfig(providerConfig)) {
     return false;
   }
-  if (coerceSecretRef(providerConfig.apiKey)) {
+  if (ref) {
     return true;
   }
   const perEntryRawKey = normalizeOptionalSecretInput(providerConfig.apiKey);
@@ -654,15 +671,7 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
   if (!params.enabled) {
     return params.apiKey;
   }
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  const sourceConfig = providerConfigMatchesRuntimeSnapshot({
-    inputConfig: params.cfg,
-    runtimeConfig,
-    provider: params.provider,
-  })
-    ? (runtimeSourceConfig ?? params.cfg)
-    : params.cfg;
+  const sourceConfig = resolveProviderSourceConfig(params.cfg, params.provider);
   const configured = resolveProviderConfig(sourceConfig, params.provider)?.apiKey;
   const ref = coerceSecretRef(configured);
   const envId =
@@ -677,13 +686,25 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
     : params.apiKey;
 }
 
-export function resolveLiteralProviderConfigApiKeyAuth(params: {
-  cfg: OpenClawConfig | undefined;
+export function resolveRuntimeProviderConfigApiKeyAuth(params: {
+  cfg: OpenClawConfig;
+  sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
-  const apiKey = ref ? undefined : normalizeOptionalSecretInput(providerConfig?.apiKey);
-  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+  const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
+  // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
+  // Legacy metadata markers without a source Ref still use literal validation.
+  const apiKey = sourceRef
+    ? providerConfig?.apiKey
+    : ref
+      ? undefined
+      : normalizeOptionalSecretInput(providerConfig?.apiKey);
+  if (
+    typeof apiKey !== "string" ||
+    !apiKey.trim() ||
+    (!sourceRef && isNonSecretApiKeyMarker(apiKey))
+  ) {
     return undefined;
   }
   return {

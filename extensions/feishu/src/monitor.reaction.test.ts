@@ -154,6 +154,7 @@ function createTextEvent(params: {
   text: string;
   senderId?: string;
   mentions?: FeishuMention[];
+  threadId?: string;
 }): FeishuMessageEvent {
   const senderId = params.senderId ?? "ou_sender";
   return {
@@ -168,6 +169,7 @@ function createTextEvent(params: {
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
       mentions: params.mentions,
+      ...(params.threadId ? { thread_id: params.threadId } : {}),
     },
   };
 }
@@ -599,6 +601,43 @@ describe("Feishu inbound debounce regressions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("keeps root-less topic threads in separate debounce buckets", async () => {
+    setDedupPassThroughMocks();
+    const onMessage = await setupDebounceMonitor();
+
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_topic_a",
+        text: "topic alpha",
+        threadId: "omt_topic_a",
+      }),
+    );
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_topic_b",
+        text: "topic beta",
+        threadId: "omt_topic_b",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+    const dispatched = handleFeishuMessageMock.mock.calls.map(
+      ([params]) => params.event as FeishuMessageEvent,
+    );
+    expect(
+      dispatched.map((event) => ({
+        threadId: event.message.thread_id,
+        text: JSON.parse(event.message.content).text,
+      })),
+    ).toEqual([
+      { threadId: "omt_topic_a", text: "topic alpha" },
+      { threadId: "omt_topic_b", text: "topic beta" },
+    ]);
   });
 
   it("releases pending text before a bare abort trigger instead of debouncing it", async () => {

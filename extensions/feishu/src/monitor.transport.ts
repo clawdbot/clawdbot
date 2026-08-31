@@ -396,8 +396,12 @@ export async function monitorWebhook({
       return;
     }
 
-    res.on("finish", () => {
+    // Transport-owned rejections close without finish. Anomaly counts describe
+    // selected error outcomes, not successful delivery to the client.
+    res.once("close", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
+    });
+    res.once("finish", () => {
       // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
       // response so the gateway health monitor sees inbound activity. Non-2xx
       // (e.g. 401 invalid signature, 400 invalid JSON, 429 rate-limited) is

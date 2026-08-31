@@ -112,6 +112,7 @@ function createIngressLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    deferredHeartbeat: vi.fn(),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -119,6 +120,7 @@ function createIngressLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onDeferredHeartbeat: calls.deferredHeartbeat,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -950,7 +952,10 @@ describe("broadcast dispatch", () => {
             : broadcastClaim,
     }));
     let deferredLifecycle:
-      | Pick<FeishuIngressLifecycle, "onAdopted" | "onDeferred" | "onAbandoned">
+      | Pick<
+          FeishuIngressLifecycle,
+          "onAdopted" | "onDeferred" | "onDeferredHeartbeat" | "onAbandoned"
+        >
       | undefined;
     mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
       if (String(ctx.SessionKey).startsWith("agent:susan:")) {
@@ -976,6 +981,8 @@ describe("broadcast dispatch", () => {
 
     expect(transport.calls.deferred).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted).not.toHaveBeenCalled();
+    deferredLifecycle?.onDeferredHeartbeat?.();
+    expect(transport.calls.deferredHeartbeat).toHaveBeenCalledOnce();
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(mainClaim.commit).toHaveBeenCalledTimes(1);
     expect(susanClaim.commit).not.toHaveBeenCalled();

@@ -79,6 +79,14 @@ function testModelDefinition(id: string): Model {
 vi.mock("../plugins/setup-registry.js", async () => {
   const { readFileSync } = await import("node:fs");
   return {
+    resolvePluginSetupCliBackend: () => undefined,
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
     resolvePluginSetupProviderCore: ({
       provider,
     }: {
@@ -218,6 +226,10 @@ const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
   ),
 );
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
     provider: string;
@@ -252,7 +264,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       mode: "api-key" as const,
     };
   },
-  resolveExternalAuthProfilesWithPlugins: () => [],
   shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
     provider: string;
     context: { resolvedApiKey?: string };

@@ -26,10 +26,12 @@ export function applyProviderConfigDefaultsForConfig(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 }): OpenClawConfig {
   return (
     resolveBundledProviderPolicySurface(params.provider, {
       manifestRegistry: params.manifestRegistry,
+      loadManifestRegistry: params.loadManifestRegistry,
     })?.applyConfigDefaults?.({
       provider: params.provider,
       config: params.config,

@@ -449,6 +449,46 @@ describe("Signal durable ingress", () => {
     },
   );
 
+  it("keeps a pending dual-identity message dispatchable through redelivery", async () => {
+    await withQueue(async (queue) => {
+      const sender = {
+        senderNumber: "+15550002222",
+        senderUuid: "123e4567-e89b-12d3-a456-426614174000",
+      };
+      const first = signalEvent({ ...sender, timestamp: 1_700_000_000_001, message: "first" });
+      const second = signalEvent({ ...sender, timestamp: 1_700_000_000_002, message: "second" });
+      let adoptFirst: (() => void | Promise<void>) | undefined;
+      const dispatch = vi.fn<SignalIngressDispatch>((_event, lifecycle, payload) => {
+        if (payload.envelope?.dataMessage?.message === "first") {
+          adoptFirst = lifecycle.onAdopted;
+          lifecycle.onDeferred();
+          return { kind: "deferred" } as const;
+        }
+        return undefined;
+      });
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(first);
+        await started.monitor.receive(second);
+        await started.waitForIdle();
+        expect(await queue.listPending()).toHaveLength(1);
+
+        await started.monitor.receive(second);
+        await started.waitForIdle();
+        expect(await queue.listPending()).toHaveLength(1);
+
+        await adoptFirst?.();
+        await started.waitForIdle();
+        expect(dispatch.mock.calls.map((call) => call[2].envelope?.dataMessage?.message)).toEqual([
+          "first",
+          "second",
+        ]);
+      } finally {
+        await started.monitor.stop();
+      }
+    });
+  });
+
   it("keeps identity-alias tombstones scoped to their Signal account", async () => {
     await withQueue(async (queue, stateDir) => {
       const otherQueue = createChannelIngressQueueForTests<SignalIngressPayload>({
