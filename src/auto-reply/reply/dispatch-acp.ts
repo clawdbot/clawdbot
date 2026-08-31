@@ -23,7 +23,11 @@ import {
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
@@ -484,6 +488,11 @@ export async function tryDispatchAcpReplyCore(params: {
   const acpResolution = acpManager.resolveSession({
     cfg: params.cfg,
     sessionKey,
+    agentId: resolveSessionAgentId({
+      config: params.cfg,
+      sessionKey,
+      fallbackAgentId: params.ctx.AgentId,
+    }),
   });
   if (acpResolution.kind === "none") {
     return null;
@@ -491,7 +500,7 @@ export async function tryDispatchAcpReplyCore(params: {
   const canonicalSessionKey = acpResolution.sessionKey;
   const transcriptSessionId =
     acpResolution.kind === "ready" ? acpResolution.entry?.sessionId : undefined;
-  const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const acpAgentId = acpResolution.agentId;
   const participantTarget = {
     agentId: acpAgentId,
     sessionKey: canonicalSessionKey,
@@ -722,6 +731,7 @@ export async function tryDispatchAcpReplyCore(params: {
     assistantTranscript = await persistAcpDispatchTranscript({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
       expectedSessionId: transcriptSessionId,
       promptText: transcriptPromptText,
       finalText,
@@ -930,6 +940,7 @@ export async function tryDispatchAcpReplyCore(params: {
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
       provenance: classifySessionStateActor({
         inputProvenance: params.ctx.InputProvenance,
         sessionEffects: params.ctx.InboundEventKind === "room_event" ? "internal" : "visible",

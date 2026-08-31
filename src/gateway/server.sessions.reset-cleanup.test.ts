@@ -175,7 +175,12 @@ test("sessions.reset aborts active runs and clears queues", async () => {
       status: "pending",
     },
   });
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup(
+    "agent:main:main",
+    ["main", "agent:main:main", "sess-main"],
+    "sess-main",
+    "main",
+  );
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
   expect(peekSystemEvents("sess-main")).toStrictEqual([]);
@@ -515,16 +520,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
         },
       ]
     | undefined;
-  const closeSessionParams = closeSessionCall?.[0] as
-    | {
-        allowBackendUnavailable?: boolean;
-        cfg?: unknown;
-        discardPersistentState?: boolean;
-        requireAcpSession?: boolean;
-        reason?: string;
-        sessionKey?: string;
-      }
-    | undefined;
+  const closeSessionParams = closeSessionCall?.[0];
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
   if (!closeSessionParams?.cfg) {
     throw new Error("expected closeSession config");
@@ -535,6 +531,15 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(closeSessionParams?.sessionKey).toBe("agent:main:main");
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
+    agentId: "main",
+    persistedHandle: {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      backend: "acpx",
+      runtimeSessionName: "runtime:reset",
+      cwd: "/tmp/acp-session",
+      acpxRecordId: "agent:main:main",
+    },
   });
   expect(
     loadSessionEntry({

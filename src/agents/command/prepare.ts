@@ -363,7 +363,9 @@ export async function prepareAgentCommandExecution(
     const runId = opts.runId?.trim() || sessionId;
     const { getAcpSessionManager } = await loadAcpManagerRuntime();
     const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
+    const acpResolution = sessionKey
+      ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+      : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {

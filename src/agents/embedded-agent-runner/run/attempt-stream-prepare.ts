@@ -598,7 +598,13 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  setActiveEmbeddedRun(
+    attempt.sessionId,
+    queueHandle,
+    attempt.sessionKey,
+    attempt.sessionFile,
+    input.hookAgentId,
+  );
   if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,

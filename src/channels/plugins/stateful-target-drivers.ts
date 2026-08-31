@@ -32,6 +32,7 @@ export type StatefulBindingTargetDriver = {
   resolveTargetBySessionKey?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    agentId?: string;
   }) => StatefulBindingTargetDescriptor | null;
   resetInPlace?: (params: {
     cfg: OpenClawConfig;
@@ -85,6 +86,7 @@ export function getStatefulBindingTargetDriver(id: string): StatefulBindingTarge
 export function resolveStatefulBindingTargetBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
 }): { driver: StatefulBindingTargetDriver; bindingTarget: StatefulBindingTargetDescriptor } | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -96,6 +98,7 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
     const bindingTarget = driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,
       sessionKey,
+      agentId: params.agentId,
     });
     if (bindingTarget) {
       return {

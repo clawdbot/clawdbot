@@ -22,6 +22,7 @@ export type SubagentAdminKillResult =
 /** Admin cancellation hook for ACP sessions owned by task records. */
 type CancelAcpSessionAdmin = (params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   reason: string;
   expectedRunId?: string;

@@ -1,4 +1,6 @@
 import os from "node:os";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -52,6 +54,9 @@ export async function collectPluginDoctorStateMigrationPlans(
     try {
       detected = await entry.migration.detectLegacyState({
         ...input,
+        serviceWorkspaceDir:
+          tryResolveConfiguredAgentWorkspaceDir(config, env) ??
+          resolveDefaultAgentWorkspaceDir(env),
         context: createPluginDoctorStateMigrationContext({
           pluginId: entry.pluginId,
           env,
@@ -155,6 +160,9 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         const result = await plan.migration.migrateLegacyState({
           ...input,
+          serviceWorkspaceDir:
+            tryResolveConfiguredAgentWorkspaceDir(input.config, input.env) ??
+            resolveDefaultAgentWorkspaceDir(input.env),
           context: createPluginDoctorStateMigrationContext({
             pluginId: plan.pluginId,
             env: input.env,

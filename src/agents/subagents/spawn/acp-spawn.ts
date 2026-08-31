@@ -193,17 +193,15 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
   requesterSandboxed?: boolean;
   sandbox?: SpawnAcpSandboxMode;
 }): string | undefined {
-  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,
   });
-  const requesterSandboxed = params.requesterSandboxed === true || requesterRuntime.sandboxed;
   return resolveSpawnSandboxError({
     backend: "acp",
-    requesterSandboxed,
-    sandbox: sandboxMode,
+    requesterSandboxed: params.requesterSandboxed === true || requesterRuntime.sandboxed,
+    sandbox: params.sandbox === "require" ? "require" : "inherit",
   });
 }
 
@@ -511,7 +509,7 @@ export async function spawnAcpDirect(
         : {};
       childCreationEntry =
         (await upsertSessionEntryCore(
-          { storePath, sessionKey },
+          { storePath, sessionKey, agentId: targetAgentId },
           {
             ...creationStamp,
             spawnedBy: requesterInternalKey,
@@ -632,6 +630,7 @@ export async function spawnAcpDirect(
       await cleanupFailedAcpSpawn({
         cfg,
         sessionKey,
+        agentId: targetAgentId,
         shouldDeleteSession: sessionCreated,
         deleteTranscript: true,
         runtimeCloseHandle: initializedRuntime,
