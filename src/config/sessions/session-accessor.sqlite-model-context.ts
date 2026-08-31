@@ -45,8 +45,6 @@ export function readSessionTranscriptModelContext(
             .selectFrom("transcript_events")
             .where("session_id", "=", resolved.sessionId)
             .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq));
-          /* kysely-allow-raw: canonical JSON column used by the query-time projection owner. */
-          const eventJson = sql<string>`event_json`;
           const header = executeSqliteQueryTakeFirstSync(
             database.db,
             base
@@ -65,9 +63,9 @@ export function readSessionTranscriptModelContext(
               for (const row of iterateSqliteQuerySync(
                 database.db,
                 base
-                  .select([
+                  .select((eb) => [
                     "seq",
-                    projectModelContextNavigationSql(eventJson).as("navigation_json"),
+                    projectModelContextNavigationSql(eb.ref("event_json")).as("navigation_json"),
                   ])
                   .orderBy("seq", "asc"),
               )) {
@@ -90,9 +88,9 @@ export function readSessionTranscriptModelContext(
             { event_json: string }
           >(database.db, (parameter) =>
             base
-              .select(
+              .select((eb) =>
                 projectModelContextEventSql(
-                  eventJson,
+                  eb.ref("event_json"),
                   parameter((row) => row.omitCheckpoint),
                 ).as("event_json"),
               )

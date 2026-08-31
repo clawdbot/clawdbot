@@ -238,10 +238,9 @@ function findLatestResetMessageWindow(
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           )
-          .select([
+          .select((eb) => [
             "active.message_position",
-            /* kysely-allow-raw: private native payloads never cross the retained-tail read boundary. */
-            projectModelContextNavigationSql(sql<string>`event.event_json`).as("event_json"),
+            projectModelContextNavigationSql(eb.ref("event.event_json")).as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
           ])

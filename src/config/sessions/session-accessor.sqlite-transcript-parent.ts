@@ -1,5 +1,4 @@
 /** Resolves the effective parent for a transcript message append inside the write transaction. */
-import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -75,10 +74,9 @@ function readActiveTranscriptAppendParentId(
       .innerJoin("transcript_events as te", (join) =>
         join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
       )
-      .select([
+      .select((eb) => [
         "ti.event_type",
-        /* kysely-allow-raw: append-parent resolution consumes navigation, never native replay bodies. */
-        projectTranscriptNavigationSql(sql<string>`te.event_json`).as("event_json"),
+        projectTranscriptNavigationSql(eb.ref("te.event_json")).as("event_json"),
       ])
       .where("ti.session_id", "=", sessionId)
       .orderBy("ti.seq", "desc")
@@ -94,8 +92,7 @@ function readActiveTranscriptAppendParentId(
           database.db,
           db
             .selectFrom("transcript_events")
-            /* kysely-allow-raw: tolerant tree reconstruction retains only navigation fields. */
-            .select(projectTranscriptNavigationSql(sql<string>`event_json`).as("event_json"))
+            .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
             .where("session_id", "=", sessionId)
             .orderBy("seq", "asc"),
         ),
