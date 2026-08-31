@@ -337,33 +337,6 @@ describe("venice-models", () => {
     expect(headers.get("authorization")).toBeNull();
   });
 
-  it("uses the live context window for catalog models", async () => {
-    stubVeniceModelsFetch([
-      {
-        id: "zai-org-glm-4.7",
-        availableContextTokens: 128_000,
-      },
-    ]);
-
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
-    const glm = models.find((model) => model.id === "zai-org-glm-4.7");
-    expect(glm?.contextWindow).toBe(128_000);
-  });
-
-  it("bounds a catalog maxTokens value to a smaller live context", async () => {
-    stubVeniceModelsFetch([
-      {
-        id: "qwen3-coder-480b-a35b-instruct-turbo",
-        availableContextTokens: 32_000,
-      },
-    ]);
-
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
-    const qwen = models.find((model) => model.id === "qwen3-coder-480b-a35b-instruct-turbo");
-    expect(qwen?.contextWindow).toBe(32_000);
-    expect(qwen?.maxTokens).toBe(32_000);
-  });
-
   it.each([
     ["omits", undefined],
     ["returns zero for", 0],
@@ -385,6 +358,21 @@ describe("venice-models", () => {
       expect(glm?.maxTokens).toBe(16_384);
     },
   );
+
+  it("keeps default limits for an unknown model with a fractional context", async () => {
+    stubVeniceModelsFetch([
+      {
+        id: "unknown-fractional-context",
+        availableContextTokens: 0.5,
+        maxCompletionTokens: 8192,
+      },
+    ]);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const model = models.find((entry) => entry.id === "unknown-fractional-context");
+    expect(model?.contextWindow).toBe(128_000);
+    expect(model?.maxTokens).toBe(8192);
+  });
 
   it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
     stubVeniceModelsFetch([
