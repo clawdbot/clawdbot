@@ -9,12 +9,52 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
+
+type CompletionProfileEncoding = "utf8" | "utf16le" | "utf16be";
+
+function decodeCompletionProfile(
+  buffer: Buffer,
+  shell: CompletionShell,
+): { content: string; encoding: CompletionProfileEncoding } {
+  if (shell !== "powershell" || process.platform !== "win32") {
+    return { content: buffer.toString("utf8"), encoding: "utf8" };
+  }
+
+  const [first, second] = buffer;
+  if (first === 0xff && second === 0xfe) {
+    return { content: decodeWindowsTextFileBuffer({ buffer }), encoding: "utf16le" };
+  }
+  if (first === 0xfe && second === 0xff) {
+    return { content: decodeWindowsTextFileBuffer({ buffer }), encoding: "utf16be" };
+  }
+  return { content: buffer.toString("utf8"), encoding: "utf8" };
+}
+
+function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
+  if (encoding === "utf16le") {
+    return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, "utf16le")]);
+  }
+  if (encoding === "utf16be") {
+    const body = Buffer.from(content, "utf16le");
+    body.swap16();
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), body]);
+  }
+  return Buffer.from(content, "utf8");
+}
+
+async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
+  const buffer = await fs.readFile(profilePath);
+  // Windows PowerShell uses BOM-declared UTF-16 profiles; preserve that declaration
+  // so installing completion cannot turn unrelated non-ASCII profile code into mojibake.
+  return decodeCompletionProfile(buffer, shell);
+}
 
 /** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
@@ -391,7 +431,7 @@ export async function isCompletionInstalled(
     return false;
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const content = await fs.readFile(profilePath, "utf-8");
+  const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
   return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
@@ -412,7 +452,7 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const content = await fs.readFile(profilePath, "utf-8");
+  const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
 
   for (const line of lines) {
@@ -451,8 +491,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
   try {
     let content: string;
+    let encoding: CompletionProfileEncoding = "utf8";
     try {
-      content = await fs.readFile(profilePath, "utf-8");
+      ({ content, encoding } = await readCompletionProfile(profilePath, shell));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -481,7 +522,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, update.next, { encoding: "utf-8", flag: "wx" });
+        await fs.writeFile(tempPath, encodeCompletionProfile(update.next, encoding), {
+          flag: "wx",
+        });
       },
     });
     if (!yes) {

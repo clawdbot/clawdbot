@@ -645,6 +645,50 @@ describe("completion-runtime", () => {
     });
   });
 
+  it.skipIf(process.platform !== "win32").each([
+    {
+      name: "UTF-16LE",
+      bom: Buffer.from([0xff, 0xfe]),
+      encode: (content: string) => Buffer.from(content, "utf16le"),
+      decode: (buffer: Buffer) => new TextDecoder("utf-16le").decode(buffer),
+    },
+    {
+      name: "UTF-16BE",
+      bom: Buffer.from([0xfe, 0xff]),
+      encode: (content: string) => Buffer.from(content, "utf16le").swap16(),
+      decode: (buffer: Buffer) => new TextDecoder("utf-16be").decode(buffer),
+    },
+  ])(
+    "preserves a $name PowerShell profile while installing cached completion",
+    async ({ bom, encode, decode }) => {
+      await withBashCompletionHome(async () => {
+        const cachePath = resolveCompletionCachePath("powershell", "openclaw");
+        const profilePath = resolveCompletionProfilePath("powershell");
+        const dynamicLine =
+          "openclaw completion --shell powershell | Out-String | Invoke-Expression";
+        const userLine = "$greeting = 'café €'";
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "# PowerShell completion\n", "utf-8");
+        await fs.mkdir(path.dirname(profilePath), { recursive: true });
+        await fs.writeFile(
+          profilePath,
+          Buffer.concat([bom, encode(`${dynamicLine}\r\n${userLine}\r\n`)]),
+        );
+
+        await expect(usesSlowDynamicCompletion("powershell", "openclaw")).resolves.toBe(true);
+        await installCompletion("powershell", true, "openclaw");
+
+        const profileBytes = await fs.readFile(profilePath);
+        expect(profileBytes.subarray(0, 2)).toEqual(bom);
+        const profile = decode(profileBytes);
+        expect(profile).not.toContain(dynamicLine);
+        expect(profile).toContain(userLine);
+        expect(profile).toContain(cachePath);
+        await expect(isCompletionInstalled("powershell", "openclaw")).resolves.toBe(true);
+      });
+    },
+  );
+
   it.each([
     "openclaw completion --shell powershell | Out-String | Invoke-Expression; $env:IMPORTANT = 'keep'",
     'openclaw completion --shell powershell | Tee-Object "$HOME/generated.ps1" | Out-String | Invoke-Expression',
