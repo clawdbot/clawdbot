@@ -11,6 +11,7 @@ import {
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -409,6 +410,30 @@ export async function runDoctorConfigPreflight(
       ));
     if (gatewayStartupCheckpointRequired && !freshConfigGuardAllowed) {
       throwStartupMigrationGuardRejected();
+    }
+    if (
+      stateDirMigrations &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      options.doctorOnlyStateMigrations === true
+    ) {
+      const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
+        await import("../infra/state-migrations.exec-approvals.js");
+      const stateDir = resolveStateDir(process.env);
+      // Exec approvals are state-root policy. Repair them before config validity
+      // decides which config-dependent migration graph is safe to run.
+      noteStartupStateMigrationResult(
+        await measurePreflightStep("exec-approvals-migration", () =>
+          migrateLegacyExecApprovals({
+            detected: detectLegacyExecApprovals({
+              stateDir,
+              doctorOnlyStateMigrations: true,
+            }),
+            stateDir,
+            env: process.env,
+          }),
+        ),
+      );
     }
     if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
       if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticStartupRepair)) {
