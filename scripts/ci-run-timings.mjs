@@ -294,6 +294,14 @@ function getLatestMainPushCiRunId() {
   return String(databaseId);
 }
 
+export function selectRecentMainPushCiRuns(runs, limit) {
+  return runs
+    .filter(
+      (run) => run.event === "push" && run.status === "completed" && run.conclusion === "success",
+    )
+    .slice(0, limit);
+}
+
 function listRecentSuccessfulCiRuns(limit) {
   const raw = execPlainGh(
     [
@@ -301,18 +309,18 @@ function listRecentSuccessfulCiRuns(limit) {
       "list",
       "--branch",
       "main",
+      "--event",
+      "push",
       "--workflow",
       "CI",
       "--limit",
       String(Math.max(limit * 4, limit)),
       "--json",
-      "databaseId,headSha,status,conclusion",
+      "databaseId,headSha,event,status,conclusion",
     ],
     { encoding: "utf8" },
   );
-  return JSON.parse(raw)
-    .filter((run) => run.status === "completed" && run.conclusion === "success")
-    .slice(0, limit);
+  return selectRecentMainPushCiRuns(JSON.parse(raw), limit);
 }
 
 /**

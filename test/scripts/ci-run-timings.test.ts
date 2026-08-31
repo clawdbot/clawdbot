@@ -9,6 +9,7 @@ import {
   collectRunJobsFromPages,
   isRetryableGhJsonErrorMessage,
   parseRunTimingArgs,
+  selectRecentMainPushCiRuns,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
   summarizeRunTimings,
@@ -99,6 +100,20 @@ describe("scripts/ci-run-timings.mjs", () => {
       event: "push",
       headSha: "current",
     });
+  });
+
+  it("keeps recent timing comparisons on successful main pushes", () => {
+    expect(
+      selectRecentMainPushCiRuns(
+        [
+          { databaseId: 4, event: "workflow_dispatch", status: "completed", conclusion: "success" },
+          { databaseId: 3, event: "push", status: "in_progress", conclusion: null },
+          { databaseId: 2, event: "push", status: "completed", conclusion: "failure" },
+          { databaseId: 1, event: "push", status: "completed", conclusion: "success" },
+        ],
+        10,
+      ),
+    ).toEqual([{ databaseId: 1, event: "push", status: "completed", conclusion: "success" }]);
   });
 
   it("normalizes paginated GitHub Actions job payloads", () => {
