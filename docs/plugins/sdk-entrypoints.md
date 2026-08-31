@@ -45,8 +45,11 @@ built entries:
   entry; OpenClaw does not silently fall back to source.
 - Without an explicit runtime entry, package discovery through
   `plugins.load.paths` or global roots looks for matching JavaScript peers under
-  `dist/` first, then beside the TypeScript source entry, trying `.js`, `.mjs`,
-  and `.cjs` in that order at each location.
+  `dist/` first, then beside the TypeScript source entry. For `src/` entries,
+  it checks both flattened `dist/` output and output retaining `dist/src/`.
+  At each location, `.mts` prefers `.mjs` and `.cts` prefers `.cjs`; `.ts` and
+  `.tsx` try `.js`, `.mjs`, then `.cjs`. Installation, discovery, setup, runtime
+  loading, and published-package verification use the same candidate order.
 - A `plugins.load.paths` entry that resolves inside the host's own bundled
   plugin tree is discovered as that bundled plugin, so it keeps the bundled
   entry point and bundled provenance whether or not compiled output exists

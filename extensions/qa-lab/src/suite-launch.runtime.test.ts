@@ -933,43 +933,47 @@ describe("qa suite runtime launcher", () => {
     expect(maxActive()).toBe(2);
   });
 
-  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
-    const maxActive = trackMaxActiveFlowRuns();
+  it.each([false, true])(
+    "runs isolated same-channel adapter instances within the suite budget (fail-fast=%s)",
+    async (failFast) => {
+      const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+      const maxActive = trackMaxActiveFlowRuns();
 
-    const isolatedScenarioId = "matrix-approval-channel-target-both";
-    const sharedScenarioIds = [
-      "matrix-approval-deny-reaction",
-      "matrix-approval-exec-metadata-chunked",
-      "matrix-approval-exec-metadata-single-event",
-      "matrix-approval-plugin-metadata-single-event",
-      "matrix-approval-thread-target",
-    ];
-    const scenarioIds = [isolatedScenarioId, ...sharedScenarioIds];
-    await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
-      providerMode: "mock-openai",
-      channelDriver: "live",
-      adapterFactories: [
-        {
-          id: "matrix",
-          isolatesInstances: true,
-          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
-          create: vi.fn(),
-        },
-      ],
-      concurrency: 6,
-      scenarioIds,
-    });
+      const isolatedScenarioId = "matrix-approval-channel-target-both";
+      const sharedScenarioIds = [
+        "matrix-approval-deny-reaction",
+        "matrix-approval-exec-metadata-chunked",
+        "matrix-approval-exec-metadata-single-event",
+        "matrix-approval-plugin-metadata-single-event",
+        "matrix-approval-thread-target",
+      ];
+      const scenarioIds = [isolatedScenarioId, ...sharedScenarioIds];
+      await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+        providerMode: "mock-openai",
+        channelDriver: "live",
+        adapterFactories: [
+          {
+            id: "matrix",
+            isolatesInstances: true,
+            matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+            create: vi.fn(),
+          },
+        ],
+        concurrency: 6,
+        failFast,
+        scenarioIds,
+      });
 
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
-    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
-      ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
-      [isolatedScenarioId],
-    ]);
-    expect(maxActive()).toBe(6);
-  });
+      expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+      expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+        ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
+        [isolatedScenarioId],
+      ]);
+      expect(maxActive()).toBe(failFast ? 1 : 6);
+    },
+  );
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [

@@ -81,6 +81,7 @@ function isEnabledLegacySurfaceOwner(params: {
     !shouldIncludeChannelSetupFeatureForConfig({
       plugin: params.record,
       config: params.config,
+      normalizedConfig: params.normalizedConfig,
     })
   ) {
     return false;

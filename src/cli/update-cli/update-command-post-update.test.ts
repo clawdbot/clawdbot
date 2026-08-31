@@ -104,6 +104,7 @@ type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   if (stdinIsTTYDescriptor) {
     Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
@@ -164,18 +165,24 @@ function createManagedServiceIdentityFixture() {
   };
 }
 
-async function finishSuccessfulPackageSwitch(params: {
-  previousRoot: string;
-  packageRoot: string;
-  restartEnvironment?: NodeJS.ProcessEnv;
-  json?: boolean;
-  sealed?: boolean;
-  updateMode?: UpdateRunResult["mode"];
-  stoppedForUpdate?: boolean;
-  windowsTaskAutoStartRecovery?: NonNullable<
-    FinishUpdateParams["preManagedServiceStop"]
-  >["windowsTaskAutoStartRecovery"];
-}): Promise<void> {
+async function finishSuccessfulPackageSwitch(
+  params: {
+    previousRoot: string;
+    packageRoot: string;
+    restartEnvironment?: NodeJS.ProcessEnv;
+    json?: boolean;
+    sealed?: boolean;
+    updateMode?: UpdateRunResult["mode"];
+    stoppedForUpdate?: boolean;
+    windowsTaskAutoStartRecovery?: NonNullable<
+      FinishUpdateParams["preManagedServiceStop"]
+    >["windowsTaskAutoStartRecovery"];
+  } = {
+    previousRoot: "/tmp/openclaw-update",
+    packageRoot: "/tmp/openclaw-update",
+    restartEnvironment: process.env,
+  },
+): Promise<void> {
   await finishUpdate({
     result: {
       status: "ok",
@@ -258,11 +265,7 @@ describe("successful update finalization ordering", () => {
 
     let failure: unknown;
     try {
-      await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
-        restartEnvironment: process.env,
-      });
+      await finishSuccessfulPackageSwitch();
     } catch (err) {
       failure = err;
     }
@@ -312,11 +315,7 @@ describe("successful update finalization ordering", () => {
     });
     mocks.ensureCompletionCache.mockResolvedValueOnce(false);
 
-    await finishSuccessfulPackageSwitch({
-      previousRoot: "/tmp/openclaw-update",
-      packageRoot: "/tmp/openclaw-update",
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch();
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
@@ -348,11 +347,7 @@ describe("successful update finalization ordering", () => {
   it("skips interactive completion in non-TTY mode", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
 
-    await finishSuccessfulPackageSwitch({
-      previousRoot: "/tmp/openclaw-update",
-      packageRoot: "/tmp/openclaw-update",
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch();
 
     expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
     expect(mocks.ensureCompletionCache).not.toHaveBeenCalled();
@@ -363,11 +358,7 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockResolvedValueOnce(false);
 
-    await finishSuccessfulPackageSwitch({
-      previousRoot: "/tmp/openclaw-update",
-      packageRoot: "/tmp/openclaw-update",
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch();
 
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expect(mocks.printResult).toHaveBeenCalledWith(
@@ -383,7 +374,7 @@ describe("successful update finalization ordering", () => {
 
   it("reports elapsed time through restart and shell completion refresh", async () => {
     let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockImplementationOnce(async () => {
       now += 200;
@@ -393,21 +384,18 @@ describe("successful update finalization ordering", () => {
       now += 300;
       return { shell: "zsh", profileInstalled: true, cacheExists: true, usesSlowPattern: false };
     });
-    try {
-      await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
-        restartEnvironment: process.env,
+    mocks.writeSentinel
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(async () => {
+        now += 100;
       });
+    await finishSuccessfulPackageSwitch();
 
-      expect(mocks.printResult).toHaveBeenCalledOnce();
-      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok", durationMs: 500 });
-      expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
-        mocks.printResult.mock.lastCall?.[0],
-      );
-    } finally {
-      clock.mockRestore();
-    }
+    expect(mocks.printResult).toHaveBeenCalledOnce();
+    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok", durationMs: 500 });
+    expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
+      mocks.printResult.mock.lastCall?.[0],
+    );
   });
 
   it("reports Windows autostart recovery failure before exiting", async () => {
@@ -702,11 +690,7 @@ describe("successful update finalization ordering", () => {
         },
       });
 
-      await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
-        restartEnvironment: process.env,
-      });
+      await finishSuccessfulPackageSwitch();
 
       expect(mocks.restartService).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -780,6 +764,11 @@ describe("successful update finalization ordering", () => {
     it.each(["inspection", "revalidation"] as const)(
       "does not restart a stopped sealed service when fresh %s fails",
       async (failure) => {
+        let now = 1_000;
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        mocks.writeSentinel.mockImplementationOnce(async () => {
+          now += 100;
+        });
         const error = new Error("inspection-secret-canary");
         mocks.readServiceState.mockResolvedValue({
           installed: true,
@@ -965,19 +954,17 @@ describe("skipped update exit status", () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
 
-  it("exits nonzero when local changes block a Git update", async () => {
-    await finishSkippedUpdate("dirty");
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Update blocked: local files are edited"),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("keeps a non-Git install skip successful", async () => {
-    await finishSkippedUpdate("not-git-install");
-
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+  it.each([
+    ["dirty", 1],
+    ["not-git-install", 0],
+  ] as const)("handles %s with exit %i", async (reason, exitCode) => {
+    await finishSkippedUpdate(reason);
+    if (reason === "dirty") {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Update blocked: local files are edited"),
+      );
+    }
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
   });
 });
 
@@ -990,16 +977,22 @@ describe("failed Git update recovery restart", () => {
   it.each(["error", "skipped"] as const)(
     "records the %s outcome before recovery starts the Gateway",
     async (status) => {
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
       mocks.restart.mockImplementationOnce(async () => {
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toMatchObject({ status });
+        expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
         expect(mocks.printResult).not.toHaveBeenCalled();
+        now += 200;
       });
 
       await finishFailedUpdate({ ...failedResult({ serviceRestartSafe: true }), status });
 
       expect(mocks.restart).toHaveBeenCalledWith(expect.objectContaining({ root: "/repo" }));
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
+      expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
       expect(mocks.printResult).toHaveBeenCalledOnce();
+      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status, durationMs: 200 });
     },
   );
 
