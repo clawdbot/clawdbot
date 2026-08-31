@@ -2,7 +2,11 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mountChatPaneHeader, type ChatPaneHeaderProps } from "./chat-pane-header.test-support.ts";
+import {
+  describeFetchCalls,
+  mountChatPaneHeader,
+  type ChatPaneHeaderProps,
+} from "./chat-pane-header.test-support.ts";
 import { renderChatPaneHeader } from "./chat-pane-header.ts";
 
 const containers: HTMLElement[] = [];
@@ -53,7 +57,7 @@ describe("chat pane workspace chip icon", () => {
     expect(element).not.toBeNull();
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).not.toHaveBeenCalled();
   });
 
   it("keeps the folder glyph when the icon route fails", async () => {
@@ -66,7 +70,7 @@ describe("chat pane workspace chip icon", () => {
       authReady: true,
     });
     await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledWith(
+    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledWith(
       "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
       expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
     );
@@ -97,7 +101,7 @@ describe("chat pane workspace chip icon", () => {
         authReady: true,
       });
       await Promise.resolve();
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledOnce();
       expect(container.querySelector(".workspace-icon")).toBeNull();
       expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
 
@@ -112,7 +116,7 @@ describe("chat pane workspace chip icon", () => {
       await Promise.resolve();
       await element?.updateComplete;
 
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2);
       expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
       expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
         "blob:recovered-workspace-icon",
@@ -138,7 +142,9 @@ describe("chat pane workspace chip icon", () => {
       | (HTMLElement & { updateComplete?: Promise<unknown> })
       | null;
 
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(1),
+    );
     await element?.updateComplete;
     render(
       html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
@@ -147,7 +153,7 @@ describe("chat pane workspace chip icon", () => {
     await element?.updateComplete;
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(1);
     render(
       html`${renderChatPaneHeader({
         ...mounted.props,
@@ -155,7 +161,9 @@ describe("chat pane workspace chip icon", () => {
       })}`,
       mounted.container,
     );
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2),
+    );
   });
 
   it("retries the next credential when a stale token is rejected", async () => {
@@ -177,7 +185,7 @@ describe("chat pane workspace chip icon", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer session-password" },
     });
