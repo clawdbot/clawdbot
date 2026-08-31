@@ -278,9 +278,7 @@ async function shouldProcessLineEvent(
         activation: {
           requireMention: isGroup && event.type === "message" && requireMention,
           allowTextCommands: true,
-          // A quote of the bot is the one implicit mention LINE produces. Carry the
-          // configured policy so turning that fact off actually stops it from
-          // bypassing the group's mention requirement.
+          // Apply quote policy in the shared gate, preserving explicit mentions.
           implicitMentions: resolveChannelImplicitMentions({
             cfg,
             channel: "line",
