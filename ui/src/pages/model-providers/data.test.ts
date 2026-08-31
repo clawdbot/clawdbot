@@ -339,6 +339,63 @@ describe("buildModelProviderCards", () => {
       profiles: [],
     });
   });
+
+  it("does not count tool-only API key auth rows as configured model providers", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      models: [
+        catalogEntry({
+          provider: "custom-chat-provider",
+          id: "custom-chat-provider/primary",
+          available: true,
+        }),
+      ],
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Anthropic",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "ANTHROPIC_API_KEY" },
+        },
+        {
+          provider: "anthropic-openai",
+          displayName: "Anthropic",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "ANTHROPIC_API_KEY" },
+        },
+        {
+          provider: "brave",
+          displayName: "Brave",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "BRAVE_API_KEY" },
+        },
+        {
+          provider: "firecrawl",
+          displayName: "Firecrawl",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "FIRECRAWL_API_KEY" },
+        },
+        {
+          provider: "custom-chat-provider",
+          displayName: "Custom Chat Provider",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "config" },
+        },
+      ]),
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "custom-chat-provider",
+      credentialProviderIds: ["custom-chat-provider"],
+      modelCount: 1,
+    });
+  });
 });
 
 describe("model provider configuration data", () => {

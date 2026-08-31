@@ -158,14 +158,21 @@ function addLogoutTarget(
 
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
- * has an auth row, catalog models (the default models.list view only contains
- * configured or auth-backed entries), a live usage snapshot, or recorded
- * local spend. Model presence alone is enough: a configured API-key provider
- * with a broken credential reports available=false and no auth row, and the
- * page must surface that state rather than hide the provider.
+ * has config, refreshable auth state, catalog models (the default models.list
+ * view only contains configured or auth-backed entries), a live usage snapshot,
+ * or recorded local spend. Model presence alone is enough: a configured
+ * API-key provider with a broken credential reports available=false and no auth
+ * row, and the page must surface that state rather than hide the provider.
  */
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
+  const configuredProviderIds = new Set(
+    [
+      ...(input.configProviderIds ?? []),
+      ...(input.configApiKeyProviderIds ?? []),
+      ...Object.keys(input.configProviderAuthModes ?? {}),
+    ].map(canonicalProviderId),
+  );
   const apiKeyCapabilities = new Map<string, boolean>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
@@ -321,8 +328,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   return drafts
     .filter(
       (draft) =>
-        draft.hasAuthRow ||
-        (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
+        configuredProviderIds.has(draft.card.id) ||
+        (draft.hasAuthRow && draft.card.auth?.kind !== "api-key") ||
         draft.hasUsageSnapshot ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
