@@ -204,7 +204,7 @@ usage endpoint failed or returned no usable usage data.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | Deprecated broad command authorization surface (`resolveControlCommandGate`, command registry helpers including dynamic argument menu formatting, sender-authorization helpers); use channel ingress/runtime authorization or command-status helpers |
-    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage`, plus bounded SDK-owned status projections (`StatusSessionRow`, `StatusSessionsProjection`, `StatusHeartbeat`) for plugins that read gateway `/status` session and heartbeat data |
+    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage`, plus bounded SDK-owned status projections (`StatusSessionRow`, `StatusSessionsProjection`, `StatusHeartbeat`) typing the session and heartbeat portions of the Gateway `status` method result. Plugins obtain that data by dispatching the `status` Gateway method from an authenticated HTTP route entitled with `contracts.gatewayMethodDispatch: ["authenticated-request"]` — a reviewed bundled/operator surface, not a general plugin capability; see [Admin HTTP RPC](/plugins/admin-http-rpc) |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
