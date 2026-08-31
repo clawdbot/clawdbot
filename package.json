@@ -87,6 +87,7 @@
     "!dist/plugin-sdk/concurrency-runtime.d.ts",
     "!dist/plugin-sdk/continuation-test-runtime.js",
     "!dist/plugin-sdk/continuation-test-runtime.d.ts",
+    "!dist/test-runtime/**",
     "!dist/plugin-sdk/context-visibility-runtime.d.ts",
     "!dist/plugin-sdk/conversation-binding-runtime.d.ts",
     "!dist/plugin-sdk/cron-store-runtime.d.ts",

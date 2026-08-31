@@ -1,5 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
 import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sqlite-recover-report.js";
@@ -14,6 +12,7 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { stageRecipientAuthorityV18Fixture } from "./openclaw-agent-recipient-authority-fixture.test-support.js";
 import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -22,16 +21,6 @@ import {
 } from "./sqlite-schema-shape.test-support.js";
 
 const sessionKey = "agent:main:participant-migration";
-
-function readSessionEntryJson(database: DatabaseSync, key: string): string {
-  const row = database
-    .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-    .get(key) as { entry_json?: unknown } | undefined;
-  if (typeof row?.entry_json !== "string") {
-    throw new Error(`Missing session entry JSON for ${key}`);
-  }
-  return row.entry_json;
-}
 
 describe("participant identity migration", () => {
   it("creates the exact fresh-install v19 schema", async () => {
@@ -445,63 +434,15 @@ describe("participant identity migration", () => {
         );
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const databasePath = initial.path;
-        const originalValidEntryJson = readSessionEntryJson(initial.db, validKey);
-        const originalMalformedEntryJson = readSessionEntryJson(initial.db, malformedKey);
-        if (lineage === "covenant") {
-          initial.db.exec("DROP TABLE session_participants;");
-          initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
-          initial.db
-            .prepare(
-              `INSERT INTO session_participants (
-                 session_key, actor_type, actor_id, actor_source,
-                 contribution_count, first_prompted_at, last_prompted_at
-               ) VALUES (?, 'human', 'profile-a', 'profile', 3, 30, 50)`,
-            )
-            .run(validKey);
-          initial.db
-            .prepare(
-              `INSERT INTO session_recipient_authority (
-                 session_key, epoch, created_at, updated_at
-               ) VALUES (?, ?, 1, 1)`,
-            )
-            .run(validKey, retainedEpoch);
-        } else {
-          const validEntry = safeParseJsonRecord(originalValidEntryJson);
-          const malformedEntry = safeParseJsonRecord(originalMalformedEntryJson);
-          if (!validEntry || !malformedEntry) {
-            throw new Error("Current session fixture contains malformed entry JSON");
-          }
-          initial.db
-            .prepare(
-              `INSERT INTO session_participants (
-                 session_key, identity_namespace, actor_id, contribution_count,
-                 first_prompted_at, last_prompted_at
-               ) VALUES (?, '{"type":"profile"}', 'profile-a', 3, NULL, NULL)`,
-            )
-            .run(validKey);
-          initial.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-            JSON.stringify({
-              ...validEntry,
-              recipientAuthorityEpoch: importedEpoch,
-            }),
-            validKey,
-          );
-          initial.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-            JSON.stringify({
-              ...malformedEntry,
-              recipientAuthorityEpoch: "not-an-epoch",
-            }),
-            malformedKey,
-          );
-          initial.db
-            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key IN (?, ?)")
-            .run(validKey, malformedKey);
-          initial.db.exec("DROP TABLE session_recipient_authority;");
-        }
-        initial.db.exec(`
-          PRAGMA user_version = 18;
-          UPDATE schema_meta SET schema_version = 18 WHERE meta_key = 'primary';
-        `);
+        const { expectedEpoch, originalMalformedEntryJson, originalValidEntryJson } =
+          stageRecipientAuthorityV18Fixture({
+            database: initial.db,
+            importedEpoch,
+            lineage,
+            malformedSessionKey: malformedKey,
+            retainedEpoch,
+            validSessionKey: validKey,
+          });
         closeOpenClawAgentDatabasesForTest();
 
         const database = openNodeSqliteDatabase(databasePath);
@@ -564,7 +505,7 @@ describe("participant identity migration", () => {
               .all(),
           ).toContainEqual({
             session_key: validKey,
-            epoch: lineage === "covenant" ? retainedEpoch : importedEpoch,
+            epoch: expectedEpoch,
           });
           expect(
             database
@@ -610,7 +551,7 @@ describe("participant identity migration", () => {
           reopened.db
             .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
             .get(validKey),
-        ).toEqual({ epoch: lineage === "covenant" ? retainedEpoch : importedEpoch });
+        ).toEqual({ epoch: expectedEpoch });
       });
     },
   );
