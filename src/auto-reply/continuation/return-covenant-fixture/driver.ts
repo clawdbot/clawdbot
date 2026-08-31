@@ -2,10 +2,8 @@ import { realpath } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
-import {
-  resetConfigRuntimeState,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resetConfigRuntimeState } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readReturnCovenantJsonFile, writeReturnCovenantJsonFile } from "./control-file.js";
 import { ProductReturnCovenantGatewayControl } from "./gateway.js";
@@ -23,7 +21,6 @@ import {
   type ReturnCovenantDriverAttestation,
   type ReturnCovenantPlan,
 } from "./protocol.js";
-import { ReturnCovenantFixtureRun } from "./run.js";
 import { projectReturnCovenantRuntimeConfig } from "./runtime-config.js";
 
 const FORBIDDEN_AMBIENT_ENV = [
@@ -53,23 +50,6 @@ type ReturnCovenantLaunchEnvironment = {
   productTreeSha?: string;
   runtimeArtifactManifestSha256?: string;
 };
-
-function fixtureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        continuation: {
-          ...config.agents?.defaults?.continuation,
-          enabled: true,
-          crossSessionTargeting: "disabled",
-        },
-      },
-    },
-  };
-}
 
 async function validateIsolatedRuntime(params: {
   launchEnvironment: ReturnCovenantLaunchEnvironment;
@@ -257,12 +237,11 @@ export async function runReturnCovenantFixtureDriver(
     throw new Error("return-covenant launcher challenge environment is incomplete");
   }
 
-  const config = fixtureRuntimeConfig(runtime.config);
-  setRuntimeConfigSnapshot(config, runtime.config);
   const gateway = new ProductReturnCovenantGatewayControl({
+    configPath: runtime.configPath,
     cwd: process.cwd(),
+    gatewayToken,
     isolation: {
-      configPath: runtime.configPath,
       homePath: runtime.homePath,
       statePath: runtime.statePath,
     },
@@ -272,7 +251,6 @@ export async function runReturnCovenantFixtureDriver(
     plan,
     runtimeConfig: runtime.config,
   });
-  let fixtureRun: ReturnCovenantFixtureRun | undefined;
   let server: http.Server | undefined;
   let attestation: ReturnCovenantDriverAttestation | undefined;
   let finalizing = false;
@@ -297,30 +275,28 @@ export async function runReturnCovenantFixtureDriver(
     }
     finalizing = true;
     const failures: unknown[] = [];
+    let claims: Record<string, unknown> | undefined;
+    try {
+      claims = await gateway.finalizeRun();
+    } catch (error) {
+      failures.push(error);
+    }
     try {
       await gateway.stopAll();
     } catch (error) {
       failures.push(error);
     }
-    let claims: Record<string, unknown> | undefined;
-    if (failures.length === 0 && fixtureRun) {
-      try {
-        claims = await fixtureRun.buildCleanupClaims();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (fixtureRun) {
-      try {
-        await fixtureRun.close();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
     resetConfigRuntimeState();
-    if (claims) {
+    if (claims && failures.length === 0) {
       try {
-        await writeReturnCovenantJsonFile(args.cleanupDraftPath, claims);
+        await writeReturnCovenantJsonFile(args.cleanupDraftPath, {
+          ...claims,
+          retained: {
+            ...(isRecord(claims.retained) ? claims.retained : {}),
+            gateways: 0,
+            fixtureProcesses: 0,
+          },
+        });
       } catch (error) {
         failures.push(error);
       }
@@ -341,12 +317,6 @@ export async function runReturnCovenantFixtureDriver(
   };
 
   try {
-    fixtureRun = await ReturnCovenantFixtureRun.create({
-      config,
-      env: process.env,
-      gateway,
-      plan,
-    });
     const gatewayBinding = await gateway.start();
     server = http.createServer((request, response) => {
       void (async () => {
@@ -379,18 +349,18 @@ export async function runReturnCovenantFixtureDriver(
             request: phaseRequest,
             seenRequestNonces,
           });
-          const payload = await fixtureRun!.handle(phaseRequest, trustedAttestation);
+          const gatewayResult = await gateway.invokePhase(phaseRequest, trustedAttestation);
           sendJson(
             response,
             200,
             buildSignedReturnCovenantPhaseResponse({
               attestation: trustedAttestation,
-              payload,
+              payload: gatewayResult.payload,
               phaseSigningKey,
               request: phaseRequest,
             }),
           );
-          if (fixtureRun!.finalizeRequested) {
+          if (gatewayResult.finalizeRequested) {
             setImmediate(() => void finalize());
           }
         } catch (error) {
@@ -445,13 +415,6 @@ export async function runReturnCovenantFixtureDriver(
       await gateway.stopAll();
     } catch (cleanupError) {
       failures.push(cleanupError);
-    }
-    if (fixtureRun) {
-      try {
-        await fixtureRun.close();
-      } catch (cleanupError) {
-        failures.push(cleanupError);
-      }
     }
     resetConfigRuntimeState();
     if (failures.length === 1) {

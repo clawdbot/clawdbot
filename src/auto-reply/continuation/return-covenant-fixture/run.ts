@@ -1,4 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   resetHeartbeatWakeStateForTests,
@@ -22,14 +23,19 @@ import {
   type ReturnCovenantCaseState,
   type ReturnCovenantClock,
   type ReturnCovenantFixtureContext,
+  type ReturnCovenantFixtureFaults,
+  type ReturnCovenantGatewayInvocation,
   type ReturnCovenantRunCleanupReceipt,
 } from "./case-state.js";
 import {
-  closeReturnCovenantProductStores,
-  openReturnCovenantProductStores,
+  closeReturnCovenantGlobalStore,
   prepareReturnCovenantDatabaseProfiles,
+  restoreReturnCovenantDatabaseProfiles,
 } from "./database.js";
-import type { ReturnCovenantGatewayControl } from "./gateway.js";
+import {
+  assertReturnCovenantGatewayBinding,
+  returnCovenantGatewayBindingsEqual,
+} from "./gateway-generation.js";
 import {
   ReturnCovenantProtocolError,
   sha256ReturnCovenant,
@@ -38,13 +44,25 @@ import {
   type ReturnCovenantPhaseRequest,
   type ReturnCovenantPlan,
 } from "./protocol.js";
+import {
+  RETURN_COVENANT_RUN_SNAPSHOT_SCHEMA,
+  restoreReturnCovenantActiveState,
+  type CompletedReturnCovenantCase,
+  type ReturnCovenantFixtureRunSnapshot,
+} from "./run-snapshot.js";
+
+export type { ReturnCovenantFixtureRunSnapshot } from "./run-snapshot.js";
 
 export class ReturnCovenantFixtureRun {
+  readonly #caseHandles = new Set<string>();
+  readonly #closedCaseHandles = new Set<string>();
+  readonly #completed = new Map<string, CompletedReturnCovenantCase>();
   readonly #context: ReturnCovenantFixtureContext;
   readonly #disposeHeartbeatHandler: () => void;
   readonly #states = new Map<string, ReturnCovenantCaseState>();
   readonly #statesByHandle = new Map<string, ReturnCovenantCaseState>();
   #cleanupRun: ReturnCovenantRunCleanupReceipt | undefined;
+  #closed = false;
   #finalizeRequested = false;
 
   private constructor(context: ReturnCovenantFixtureContext) {
@@ -66,23 +84,92 @@ export class ReturnCovenantFixtureRun {
     clock?: ReturnCovenantClock;
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
-    gateway: ReturnCovenantGatewayControl;
+    faults?: ReturnCovenantFixtureFaults;
     plan: ReturnCovenantPlan;
   }): Promise<ReturnCovenantFixtureRun> {
     const profiles = await prepareReturnCovenantDatabaseProfiles({
       env: params.env,
       plan: params.plan,
     });
-    const stores = openReturnCovenantProductStores(params.env);
     return new ReturnCovenantFixtureRun({
       clock: params.clock ?? systemReturnCovenantClock,
       config: params.config,
       env: params.env,
-      gateway: params.gateway,
+      ...(params.faults ? { faults: params.faults } : {}),
       plan: params.plan,
       profiles,
-      storePath: stores.agentDatabasePath,
     });
+  }
+
+  static async restore(params: {
+    clock?: ReturnCovenantClock;
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    faults?: ReturnCovenantFixtureFaults;
+    plan: ReturnCovenantPlan;
+    snapshot: ReturnCovenantFixtureRunSnapshot;
+  }): Promise<ReturnCovenantFixtureRun> {
+    const { snapshot } = params;
+    if (
+      snapshot.schema !== RETURN_COVENANT_RUN_SNAPSHOT_SCHEMA ||
+      snapshot.runId !== params.plan.runId
+    ) {
+      throw new Error("return-covenant run snapshot identity mismatch");
+    }
+    const profiles = await restoreReturnCovenantDatabaseProfiles({
+      env: params.env,
+      plan: params.plan,
+      snapshot: snapshot.profiles,
+    });
+    const run = new ReturnCovenantFixtureRun({
+      clock: params.clock ?? systemReturnCovenantClock,
+      config: params.config,
+      env: params.env,
+      ...(params.faults ? { faults: params.faults } : {}),
+      plan: params.plan,
+      profiles,
+    });
+    for (const caseHandle of snapshot.caseHandles) {
+      run.#caseHandles.add(caseHandle);
+    }
+    for (const caseHandle of snapshot.closedCaseHandles) {
+      if (!run.#caseHandles.has(caseHandle)) {
+        throw new Error("return-covenant snapshot closed an unknown case handle");
+      }
+      run.#closedCaseHandles.add(caseHandle);
+    }
+    for (const [key, completed] of snapshot.completed) {
+      if (
+        run.#completed.has(key) ||
+        !run.#closedCaseHandles.has(completed.caseHandle) ||
+        !isRecord(completed.observation)
+      ) {
+        throw new Error("return-covenant snapshot has invalid completed observations");
+      }
+      run.#completed.set(key, {
+        caseHandle: completed.caseHandle,
+        observation: completed.observation,
+      });
+    }
+    if (snapshot.activeState) {
+      const state = await restoreReturnCovenantActiveState({
+        context: run.#context,
+        plan: params.plan,
+        snapshot: snapshot.activeState,
+      });
+      const key = returnCovenantExecutionKey(state.casePlan.id, state.form);
+      if (
+        run.#states.has(key) ||
+        run.#statesByHandle.has(state.caseHandle) ||
+        !run.#caseHandles.has(state.caseHandle) ||
+        run.#closedCaseHandles.has(state.caseHandle)
+      ) {
+        throw new Error("return-covenant restart snapshot duplicates active case state");
+      }
+      run.#states.set(key, state);
+      run.#statesByHandle.set(state.caseHandle, state);
+    }
+    return run;
   }
 
   get finalizeRequested(): boolean {
@@ -96,32 +183,67 @@ export class ReturnCovenantFixtureRun {
   async handle(
     request: ReturnCovenantPhaseRequest,
     attestation: ReturnCovenantDriverAttestation,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
+    if (this.#closed) {
+      throw new ReturnCovenantProtocolError(
+        "stale-gateway-generation",
+        "return-covenant run belongs to a closed gateway generation",
+        409,
+      );
+    }
     switch (request.phase) {
       case "prepare":
-        return await this.#prepare(request);
+        return await this.#prepare(request, invocation);
       case "dispatch":
-        return await this.#dispatch(request);
+        return await this.#dispatch(request, invocation);
       case "transition":
-        return await this.#transition(request, attestation);
+        return await this.#transition(request, attestation, invocation);
       case "release":
-        return await this.#release(request);
+        return await this.#release(request, invocation);
       case "observe":
-        return await this.#observe(request);
+        return await this.#observe(request, invocation);
       case "cleanup":
-        return await this.#cleanup(request);
+        return await this.#cleanup(request, invocation);
       case "cleanup-run":
-        return await this.#cleanupWholeRun(request, attestation);
+        return await this.#cleanupWholeRun(request, attestation, invocation);
       default:
         return request satisfies never;
     }
   }
 
-  async close(): Promise<void> {
+  async snapshotForGatewayRestart(): Promise<ReturnCovenantFixtureRunSnapshot> {
+    const activeStates = [...this.#states.values()];
+    if (
+      activeStates.length !== 1 ||
+      activeStates[0]?.phase !== "dispatched" ||
+      activeStates[0].casePlan.restartBetweenAcceptanceAndRelease !== true
+    ) {
+      throw new Error("return-covenant restart snapshot requires one dispatched restart case");
+    }
+    const snapshot: ReturnCovenantFixtureRunSnapshot = {
+      schema: RETURN_COVENANT_RUN_SNAPSHOT_SCHEMA,
+      runId: this.#context.plan.runId,
+      activeState: structuredClone(activeStates[0]),
+      caseHandles: [...this.#caseHandles],
+      closedCaseHandles: [...this.#closedCaseHandles],
+      completed: [...this.#completed].map(([key, completed]) => [key, structuredClone(completed)]),
+      profiles: this.#context.profiles.snapshot(),
+    };
+    await this.close({ preserveProfiles: true });
+    return snapshot;
+  }
+
+  async close(options: { preserveProfiles?: boolean } = {}): Promise<void> {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
     this.#disposeHeartbeatHandler();
     resetHeartbeatWakeStateForTests();
     resetSystemEventsForTest();
-    closeReturnCovenantProductStores();
+    await this.#context.profiles.close({ preserveActive: options.preserveProfiles });
+    closeReturnCovenantGlobalStore();
   }
 
   async buildCleanupClaims(): Promise<Record<string, unknown>> {
@@ -131,17 +253,15 @@ export class ReturnCovenantFixtureRun {
     });
     const cleanupRun =
       this.#cleanupRun ??
-      this.#fallbackCleanupReceipt("0".repeat(64), "0".repeat(64), "0".repeat(64));
+      this.#fallbackCleanupReceipt("0".repeat(64), "0".repeat(64), "0".repeat(64), undefined);
     return {
       startedAt,
       endedAt: new Date(this.#context.clock.wallNow()).toISOString(),
-      retained: {
-        ...retained,
-        gateways: 0,
-        fixtureProcesses: 0,
-      },
-      allCaseHandlesClosed: [...this.#states.values()].every((state) => state.closed),
-      caseHandles: [...this.#statesByHandle.keys()],
+      retained,
+      allCaseHandlesClosed: [...this.#caseHandles].every((caseHandle) =>
+        this.#closedCaseHandles.has(caseHandle),
+      ),
+      caseHandles: [...this.#caseHandles],
       observationSetSha256: cleanupRun.observationSetSha256,
       phaseChainSha256: cleanupRun.phaseChainSha256,
       driverAttestationSha256: cleanupRun.driverAttestationSha256,
@@ -151,21 +271,37 @@ export class ReturnCovenantFixtureRun {
 
   async #prepare(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "prepare" }>,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const key = returnCovenantExecutionKey(request.caseId, request.form);
-    if (this.#states.has(key)) {
+    if (this.#states.has(key) || this.#completed.has(key)) {
       throw new ReturnCovenantProtocolError(
         "phase-replay",
         `case ${request.caseId}/${request.form} was already prepared`,
         409,
       );
     }
-    const state = await createPreparedReturnCovenantCase({
-      context: this.#context,
-      request,
+    await this.#context.profiles.activate({
+      caseId: request.caseId,
+      form: request.form,
+      onActivated: this.#context.faults?.afterProfileActivated,
     });
+    let state: ReturnCovenantCaseState;
+    try {
+      state = await createPreparedReturnCovenantCase({
+        context: this.#context,
+        gateway: invocation.gateway,
+        request,
+      });
+    } catch (error) {
+      await this.#context.profiles
+        .deactivate({ caseId: request.caseId, form: request.form })
+        .catch(() => undefined);
+      throw error;
+    }
     this.#states.set(key, state);
     this.#statesByHandle.set(state.caseHandle, state);
+    this.#caseHandles.add(state.caseHandle);
     return {
       caseHandle: state.caseHandle,
       prepare: {
@@ -177,9 +313,11 @@ export class ReturnCovenantFixtureRun {
 
   async #dispatch(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "dispatch" }>,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
     requireReturnCovenantCasePhase(state, "prepared");
+    this.#recordGatewayPhase(state, "dispatch", invocation);
     const acceptance = await dispatchReturnCovenantCase({
       context: this.#context,
       state,
@@ -191,14 +329,17 @@ export class ReturnCovenantFixtureRun {
   async #transition(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "transition" }>,
     attestation: ReturnCovenantDriverAttestation,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
     requireReturnCovenantCasePhase(state, "dispatched");
     this.#assertAcceptanceBinding(state, request);
+    this.#recordGatewayPhase(state, "transition", invocation);
     const transition = await transitionReturnCovenantCase({
       attestation,
       context: this.#context,
       request,
+      ...(invocation.restart ? { restart: invocation.restart } : {}),
       state,
     });
     state.phase = "transitioned";
@@ -207,10 +348,12 @@ export class ReturnCovenantFixtureRun {
 
   async #release(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "release" }>,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
     requireReturnCovenantCasePhase(state, "transitioned");
     this.#assertAcceptanceBinding(state, request);
+    this.#recordGatewayPhase(state, "release", invocation);
     if (
       request.transitionReceiptId !== state.lifecycle?.receiptId ||
       request.heldResultId !== state.acceptance?.heldResultId ||
@@ -233,6 +376,7 @@ export class ReturnCovenantFixtureRun {
 
   async #observe(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "observe" }>,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
     if ((state.phase !== "released" && state.phase !== "observed") || state.closed) {
@@ -242,6 +386,7 @@ export class ReturnCovenantFixtureRun {
         409,
       );
     }
+    this.#recordGatewayPhase(state, "observe", invocation);
     if (request.settlementWindowMs !== state.request.settlementWindowMs) {
       throw new ReturnCovenantProtocolError(
         "settlement-mismatch",
@@ -253,6 +398,10 @@ export class ReturnCovenantFixtureRun {
     if (elapsed < request.settlementWindowMs) {
       return { settled: false, observation: null };
     }
+    if (!state.observationFaultApplied) {
+      state.observationFaultApplied = true;
+      await this.#context.faults?.beforeObserve?.({ context: this.#context, state });
+    }
     state.observation ??= await observeReturnCovenantCase({
       context: this.#context,
       state,
@@ -263,9 +412,11 @@ export class ReturnCovenantFixtureRun {
 
   async #cleanup(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "cleanup" }>,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     const state = this.#stateFor(request);
     requireReturnCovenantCasePhase(state, "observed");
+    this.#recordGatewayPhase(state, "cleanup", invocation);
     if (!state.observation) {
       throw new ReturnCovenantProtocolError(
         "phase-order",
@@ -280,11 +431,27 @@ export class ReturnCovenantFixtureRun {
       );
     }
     await cleanupReturnCovenantCase({ context: this.#context, state });
+    await this.#context.profiles.deactivate({
+      caseId: state.casePlan.id,
+      form: state.form,
+    });
+    state.closed = true;
+    const key = returnCovenantExecutionKey(state.casePlan.id, state.form);
+    this.#completed.set(key, {
+      caseHandle: state.caseHandle,
+      observation: state.observation,
+    });
+    this.#closedCaseHandles.add(state.caseHandle);
+    this.#states.delete(key);
+    this.#statesByHandle.delete(state.caseHandle);
     return {
       cleanup: {
         caseHandle: state.caseHandle,
         closed: true,
-        receiptId: returnCovenantReceiptId("case-cleanup", state.caseHandle),
+        receiptId: returnCovenantReceiptId("case-cleanup", {
+          caseHandle: state.caseHandle,
+          gateway: invocation.gateway,
+        }),
       },
     };
   }
@@ -292,20 +459,28 @@ export class ReturnCovenantFixtureRun {
   async #cleanupWholeRun(
     request: Extract<ReturnCovenantPhaseRequest, { phase: "cleanup-run" }>,
     attestation: ReturnCovenantDriverAttestation,
+    invocation: ReturnCovenantGatewayInvocation,
   ): Promise<Record<string, unknown>> {
     if (request.fallback === true) {
-      for (const state of this.#states.values()) {
-        if (!state.closed) {
-          await cleanupReturnCovenantCase({
-            context: this.#context,
-            state,
-          });
-        }
+      for (const state of [...this.#states.values()]) {
+        await cleanupReturnCovenantCase({
+          context: this.#context,
+          state,
+        });
+        await this.#context.profiles.deactivate({
+          caseId: state.casePlan.id,
+          form: state.form,
+        });
+        state.closed = true;
+        this.#closedCaseHandles.add(state.caseHandle);
+        this.#states.delete(returnCovenantExecutionKey(state.casePlan.id, state.form));
+        this.#statesByHandle.delete(state.caseHandle);
       }
       this.#cleanupRun ??= this.#fallbackCleanupReceipt(
         "0".repeat(64),
         "0".repeat(64),
         attestation.attestationSha256,
+        invocation.gateway,
       );
       this.#finalizeRequested = true;
       return { cleanupRun: this.#cleanupRun };
@@ -314,10 +489,7 @@ export class ReturnCovenantFixtureRun {
       throw new ReturnCovenantProtocolError("phase-replay", "run cleanup already completed", 409);
     }
     const expectedExecutions = this.#context.plan.cases.length * 2;
-    if (
-      this.#states.size !== expectedExecutions ||
-      [...this.#states.values()].some((state) => !state.closed)
-    ) {
+    if (this.#completed.size !== expectedExecutions || this.#states.size !== 0) {
       throw new ReturnCovenantProtocolError(
         "incomplete-cleanup",
         "run cleanup requires every planned case/form handle to be closed",
@@ -352,15 +524,13 @@ export class ReturnCovenantFixtureRun {
         409,
       );
     }
-    // The accepted harness chain includes harness-owned monotonic timing that is
-    // not sent to the product. Challenge authorization binds that opaque digest;
-    // docs validates the chain and owns the eventual PASS decision.
     this.#cleanupRun = {
       completed: true,
       receiptId: returnCovenantReceiptId("run-cleanup", {
+        driverAttestationSha256: attestation.attestationSha256,
+        gateway: invocation.gateway,
         observationSetSha256: productObservationSetSha256,
         phaseChainSha256,
-        driverAttestationSha256: attestation.attestationSha256,
       }),
       observationSetSha256: productObservationSetSha256,
       phaseChainSha256,
@@ -388,6 +558,7 @@ export class ReturnCovenantFixtureRun {
         409,
       );
     }
+    this.#context.profiles.assertActive(state.casePlan.id, state.form);
     return state;
   }
 
@@ -410,19 +581,75 @@ export class ReturnCovenantFixtureRun {
     }
   }
 
+  #recordGatewayPhase(
+    state: ReturnCovenantCaseState,
+    phase: "dispatch" | "transition" | "release" | "observe" | "cleanup",
+    invocation: ReturnCovenantGatewayInvocation,
+  ): void {
+    const existing = state.gatewayPhases[phase];
+    if (existing) {
+      assertReturnCovenantGatewayBinding(
+        invocation.gateway,
+        existing,
+        "return-covenant phase changed gateway generation during replay",
+      );
+      return;
+    }
+    const previousPhase = {
+      dispatch: "prepare",
+      transition: "dispatch",
+      release: "transition",
+      observe: "release",
+      cleanup: "observe",
+    } as const;
+    const previous = state.gatewayPhases[previousPhase[phase]];
+    if (!previous) {
+      throw new ReturnCovenantProtocolError(
+        "stale-gateway-generation",
+        "return-covenant phase lacks its prior gateway generation",
+        409,
+      );
+    }
+    const expectsRestart =
+      phase === "transition" && state.casePlan.restartBetweenAcceptanceAndRelease;
+    if (expectsRestart) {
+      if (
+        !invocation.restart ||
+        !returnCovenantGatewayBindingsEqual(invocation.restart.original, previous) ||
+        !returnCovenantGatewayBindingsEqual(invocation.restart.replacement, invocation.gateway)
+      ) {
+        throw new ReturnCovenantProtocolError(
+          "stale-gateway-generation",
+          "return-covenant restart is not bound to the replaced and current gateway generations",
+          409,
+        );
+      }
+    } else if (
+      invocation.restart ||
+      !returnCovenantGatewayBindingsEqual(previous, invocation.gateway)
+    ) {
+      throw new ReturnCovenantProtocolError(
+        "stale-gateway-generation",
+        "return-covenant phase used a replaced gateway generation",
+        409,
+      );
+    }
+    state.gatewayPhases[phase] = invocation.gateway;
+  }
+
   #productObservationSetSha256(): string {
     const observations: Record<string, unknown>[] = [];
     for (const casePlan of this.#context.plan.cases) {
       for (const form of casePlan.forms) {
-        const state = this.#states.get(returnCovenantExecutionKey(casePlan.id, form));
-        if (!state?.closed || state.phase !== "observed" || !state.observation) {
+        const completed = this.#completed.get(returnCovenantExecutionKey(casePlan.id, form));
+        if (!completed) {
           throw new ReturnCovenantProtocolError(
             "incomplete-cleanup",
             "run cleanup requires every planned case/form observation",
             409,
           );
         }
-        observations.push(state.observation);
+        observations.push(completed.observation);
       }
     }
     return sha256ReturnCovenant(stableStringify(observations));
@@ -432,10 +659,14 @@ export class ReturnCovenantFixtureRun {
     observationSetSha256: string,
     phaseChainSha256: string,
     driverAttestationSha256: string,
+    gateway: ReturnCovenantGatewayInvocation["gateway"] | undefined,
   ): ReturnCovenantRunCleanupReceipt {
     return {
       completed: true,
-      receiptId: returnCovenantReceiptId("run-cleanup-fallback", this.#context.plan.runId),
+      receiptId: returnCovenantReceiptId("run-cleanup-fallback", {
+        gateway,
+        runId: this.#context.plan.runId,
+      }),
       observationSetSha256,
       phaseChainSha256,
       driverAttestationSha256,

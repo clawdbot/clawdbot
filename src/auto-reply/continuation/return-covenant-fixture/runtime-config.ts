@@ -22,6 +22,23 @@ const runtimeConfigSchema = z
   })
   .passthrough();
 
+export function createReturnCovenantFixtureConfig(config: OpenClawConfig): OpenClawConfig {
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        continuation: {
+          ...config.agents?.defaults?.continuation,
+          enabled: true,
+          crossSessionTargeting: "disabled",
+        },
+      },
+    },
+  };
+}
+
 /**
  * Project only the fields the fixture process consumes. The trusted launcher
  * binds the full config bytes; compatibility and plugin fields remain owned by

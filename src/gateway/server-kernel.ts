@@ -6,6 +6,7 @@ import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycl
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { readGatewayServerExtraHandlers } from "./server-extra-handlers.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -166,6 +167,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     }
     const coreRuntime = await startGatewayCoreRuntime({
       lifecycleRuntime,
+      serverExtraHandlers: readGatewayServerExtraHandlers(opts),
       port,
       log,
       logDiscovery,

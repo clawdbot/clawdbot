@@ -5,8 +5,12 @@ import type { PendingContinuationDelegate } from "../types.js";
 import type {
   PreparedReturnCovenantDatabaseProfiles,
   ReturnCovenantDatabaseReceipt,
+  ReturnCovenantProfileActivation,
 } from "./database.js";
-import type { ReturnCovenantGatewayControl } from "./gateway.js";
+import type {
+  ReturnCovenantGatewayBinding,
+  ReturnCovenantGatewayRestart,
+} from "./gateway-generation.js";
 import {
   ReturnCovenantProtocolError,
   sha256ReturnCovenant,
@@ -100,8 +104,15 @@ export type ReturnCovenantCaseState = {
   delegate?: PendingContinuationDelegate;
   deliveryId?: string;
   form: ReturnCovenantForm;
+  gatewayPhases: Partial<
+    Record<
+      "prepare" | "dispatch" | "transition" | "release" | "observe" | "cleanup",
+      ReturnCovenantGatewayBinding
+    >
+  >;
   lifecycle?: ReturnCovenantLifecycleReceipt;
   observation?: Record<string, unknown>;
+  observationFaultApplied?: boolean;
   phase: "prepared" | "dispatched" | "transitioned" | "released" | "observed";
   postSessionId: string;
   preSessionId: string | null;
@@ -109,6 +120,7 @@ export type ReturnCovenantCaseState = {
   releasedAtMonotonic?: number;
   releasedAtWall?: number;
   request: Extract<ReturnCovenantPhaseRequest, { phase: "prepare" }>;
+  resultMarker: string;
   resultText: string;
   startedAt: string;
   wakeCount: number;
@@ -128,10 +140,22 @@ export type ReturnCovenantFixtureContext = {
   clock: ReturnCovenantClock;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  gateway: ReturnCovenantGatewayControl;
+  faults?: ReturnCovenantFixtureFaults;
   plan: ReturnCovenantPlan;
   profiles: PreparedReturnCovenantDatabaseProfiles;
-  storePath: string;
+};
+
+export type ReturnCovenantFixtureFaults = {
+  afterProfileActivated?: (activation: ReturnCovenantProfileActivation) => Promise<void> | void;
+  beforeObserve?: (params: {
+    context: ReturnCovenantFixtureContext;
+    state: ReturnCovenantCaseState;
+  }) => Promise<void> | void;
+};
+
+export type ReturnCovenantGatewayInvocation = {
+  gateway: ReturnCovenantGatewayBinding;
+  restart?: ReturnCovenantGatewayRestart;
 };
 
 export const returnCovenantOwnerA = {

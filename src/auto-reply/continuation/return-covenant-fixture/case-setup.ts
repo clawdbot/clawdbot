@@ -15,8 +15,12 @@ import {
   type ReturnCovenantCaseState,
   type ReturnCovenantFixtureContext,
 } from "./case-state.js";
-import { bindReturnCovenantDatabaseReceipt } from "./database.js";
+import type { ReturnCovenantGatewayBinding } from "./gateway-generation.js";
 import { sha256ReturnCovenant, type ReturnCovenantPhaseRequest } from "./protocol.js";
+import {
+  createReturnCovenantResultMarker,
+  formatReturnCovenantResultText,
+} from "./result-marker.js";
 
 export function returnCovenantCaseScope(
   state: ReturnCovenantCaseState,
@@ -26,7 +30,7 @@ export function returnCovenantCaseScope(
     agentId: "proof",
     env: context.env,
     sessionKey: state.casePlan.logicalSessionKey,
-    storePath: context.storePath,
+    storePath: context.profiles.canonicalDatabasePath,
   };
 }
 
@@ -102,7 +106,7 @@ export async function materializeReturnCovenantChild(params: {
       agentId: "proof",
       env: context.env,
       sessionKey: childSessionKey,
-      storePath: context.storePath,
+      storePath: context.profiles.canonicalDatabasePath,
     },
     {
       sessionId: returnCovenantReceiptId("child-session", flowId),
@@ -119,9 +123,10 @@ export async function materializeReturnCovenantChild(params: {
 
 export async function createPreparedReturnCovenantCase(params: {
   context: ReturnCovenantFixtureContext;
+  gateway: ReturnCovenantGatewayBinding;
   request: Extract<ReturnCovenantPhaseRequest, { phase: "prepare" }>;
 }): Promise<ReturnCovenantCaseState> {
-  const { context, request } = params;
+  const { context, gateway, request } = params;
   const casePlan = context.plan.cases.find((entry) => entry.id === request.caseId);
   if (!casePlan) {
     throw new Error(`planned return-covenant case is missing: ${request.caseId}`);
@@ -134,22 +139,26 @@ export async function createPreparedReturnCovenantCase(params: {
     request.caseId === "allowed-late-materialization"
       ? null
       : returnCovenantReceiptId("session-before", { caseHandle });
+  const resultMarker = createReturnCovenantResultMarker();
   const state: ReturnCovenantCaseState = {
     caseHandle,
     casePlan,
     closed: false,
-    database: bindReturnCovenantDatabaseReceipt({
+    database: context.profiles.receiptFor({
       caseHandle,
-      profiles: context.profiles,
-      profile: request.databaseProfile,
+      caseId: request.caseId,
+      form: request.form,
+      gateway,
       runId: context.plan.runId,
     }),
     form: request.form,
+    gatewayPhases: { prepare: gateway },
     phase: "prepared",
     postSessionId: returnCovenantReceiptId("session-after", { caseHandle }),
     preSessionId,
     request,
-    resultText: `[Internal task completion event] Return-covenant result for ${key}.`,
+    resultMarker,
+    resultText: formatReturnCovenantResultText(key, resultMarker),
     startedAt: new Date(context.clock.wallNow()).toISOString(),
     wakeCount: 0,
   };

@@ -1,4 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core";
 import { createDefaultDeps } from "../../../cli/deps.js";
 import {
   appendTranscriptMessage,
@@ -6,7 +5,6 @@ import {
   captureSessionRecipientAuthority,
   deleteSessionEntryLifecycle,
   isSessionRecipientAuthorityCurrent,
-  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
@@ -27,7 +25,10 @@ import {
 } from "../../../infra/session-delivery-queue-storage.js";
 import { peekSystemEventEntries, removeSystemEvents } from "../../../infra/system-events.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.message.js";
-import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../../../state/openclaw-agent-db.js";
 import {
   resolveFinalSystemEventAdoption,
   settleManagedSystemEventsAfterTurnAdoption,
@@ -56,8 +57,12 @@ import {
   type ReturnCovenantLifecycleReceipt,
   type ReturnCovenantReleaseReceipt,
 } from "./case-state.js";
-import { closeReturnCovenantProductStores, openReturnCovenantProductStores } from "./database.js";
+import type { ReturnCovenantGatewayRestart } from "./gateway-generation.js";
 import type { ReturnCovenantDriverAttestation, ReturnCovenantPhaseRequest } from "./protocol.js";
+import {
+  assertReturnCovenantPromptMarker,
+  inspectReturnCovenantDurableMarkers,
+} from "./result-marker.js";
 
 function stateDirectory(context: ReturnCovenantFixtureContext): string {
   const stateDir = context.env.OPENCLAW_STATE_DIR;
@@ -77,7 +82,7 @@ function currentAuthority(
 function restartReceipt(params: {
   attestation: ReturnCovenantDriverAttestation;
   context: ReturnCovenantFixtureContext;
-  lineage: Awaited<ReturnType<ReturnCovenantFixtureContext["gateway"]["restart"]>>;
+  lineage: ReturnCovenantGatewayRestart;
 }): NonNullable<ReturnCovenantLifecycleReceipt["restart"]> {
   const { attestation, context, lineage } = params;
   return {
@@ -100,9 +105,10 @@ export async function transitionReturnCovenantCase(params: {
   attestation: ReturnCovenantDriverAttestation;
   context: ReturnCovenantFixtureContext;
   request: Extract<ReturnCovenantPhaseRequest, { phase: "transition" }>;
+  restart?: ReturnCovenantGatewayRestart;
   state: ReturnCovenantCaseState;
 }): Promise<Record<string, unknown>> {
-  const { attestation, context, request, state } = params;
+  const { attestation, context, request, restart: restartLineage, state } = params;
   let restart: ReturnCovenantLifecycleReceipt["restart"];
   let operations: ReturnCovenantLifecycleReceipt["operations"];
   const sessionKey = state.casePlan.logicalSessionKey;
@@ -111,7 +117,7 @@ export async function transitionReturnCovenantCase(params: {
     case "allowed-ordinary-reset":
       await resetSessionEntryLifecycle({
         agentId: "proof",
-        storePath: context.storePath,
+        storePath: context.profiles.canonicalDatabasePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
         resetBoundary: {
           context: "clear",
@@ -138,16 +144,16 @@ export async function transitionReturnCovenantCase(params: {
       await acceptPostCompactionReturnCovenantCase({ context, state });
       break;
     case "allowed-gateway-restart-replay": {
-      closeReturnCovenantProductStores();
-      const lineage = await context.gateway.restart();
-      openReturnCovenantProductStores(context.env);
+      if (!restartLineage) {
+        throw new Error("gateway restart transition is missing its replacement lineage");
+      }
       const queueStillHeld =
         state.deliveryId &&
         (await loadPendingSessionDelivery(state.deliveryId, stateDirectory(context)));
       if (!queueStillHeld || !delegateFlowRecords.get(state.delegate?.flowId ?? "")) {
         throw new Error("gateway restart did not preserve accepted delegate state");
       }
-      restart = restartReceipt({ attestation, context, lineage });
+      restart = restartReceipt({ attestation, context, lineage: restartLineage });
       break;
     }
     case "allowed-session-id-rollover":
@@ -169,7 +175,7 @@ export async function transitionReturnCovenantCase(params: {
       const deleted = await deleteSessionEntryLifecycle({
         agentId: "proof",
         archiveTranscript: false,
-        storePath: context.storePath,
+        storePath: context.profiles.canonicalDatabasePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
       if (!deleted.deleted) {
@@ -217,7 +223,11 @@ export async function transitionReturnCovenantCase(params: {
     case "forbidden-explicit-revocation":
       runOpenClawAgentWriteTransaction(
         (database) => advanceSessionRecipientAuthorityInTransaction(database, sessionKey),
-        { agentId: "proof", env: context.env },
+        {
+          agentId: "proof",
+          env: context.env,
+          path: context.profiles.canonicalDatabasePath,
+        },
         { operationLabel: "return-covenant.explicit-revocation" },
       );
       break;
@@ -257,6 +267,7 @@ export async function transitionReturnCovenantCase(params: {
     receiptId: returnCovenantReceiptId("transition", {
       caseHandle: state.caseHandle,
       current: current.epoch,
+      gateway: state.gatewayPhases.transition,
     }),
     acceptedDispatchReceiptId: request.acceptedDispatchReceiptId,
     generationAdvanced: !authorityUnchanged,
@@ -293,7 +304,10 @@ export async function releaseReturnCovenantCase(params: {
   const release: ReturnCovenantReleaseReceipt = {
     caseHandle: state.caseHandle,
     released: true,
-    receiptId: returnCovenantReceiptId("release", state.caseHandle),
+    receiptId: returnCovenantReceiptId("release", {
+      caseHandle: state.caseHandle,
+      gateway: state.gatewayPhases.release,
+    }),
     transitionReceiptId: request.transitionReceiptId,
     acceptedDispatchReceiptId: request.acceptedDispatchReceiptId,
     heldResultId: request.heldResultId,
@@ -347,8 +361,13 @@ export async function observeReturnCovenantCase(params: {
   }
   const deliveryIds = [...adoption.managedDeliveries.keys()];
   const promptText = adoption.blocks.map((block) => block.text).join("\n");
-  const promptAdoptions = promptText.includes(state.resultText) ? 1 : 0;
-  if (promptAdoptions > 0) {
+  const allowed = state.casePlan.kind === "allowed";
+  assertReturnCovenantPromptMarker({
+    allowed,
+    marker: state.resultMarker,
+    promptText,
+  });
+  if (allowed) {
     const message = buildPersistedUserTurnMessage({
       text: promptText,
       timestamp: context.clock.wallNow(),
@@ -373,7 +392,7 @@ export async function observeReturnCovenantCase(params: {
     }
   }
   const channelDeliveries =
-    promptAdoptions === 1 &&
+    allowed &&
     state.casePlan.returnMode === "normal" &&
     resolveGenericCurrentConversationBinding(returnCovenantConversation(state, context))
       ?.targetSessionKey === state.casePlan.logicalSessionKey
@@ -382,20 +401,20 @@ export async function observeReturnCovenantCase(params: {
 
   // Reopen the physical owner before scanning so this receipt covers durable
   // transcript recovery rather than the writer's in-process projection.
-  closeReturnCovenantProductStores();
-  openReturnCovenantProductStores(context.env);
+  closeOpenClawAgentDatabasesForTest();
   const transcript = await loadTranscriptEvents({
     ...returnCovenantCaseScope(state, context),
     sessionId: returnCovenantCurrentSessionId(state),
   });
-  const marker = state.acceptance?.resultMarker ?? "";
-  const transcriptMatches = stableStringify(transcript).split(marker).length - 1;
-  const systemEventMatches =
-    stableStringify(peekSystemEventEntries(state.casePlan.logicalSessionKey)).split(marker).length -
-    1;
+  const systemEvents = peekSystemEventEntries(state.casePlan.logicalSessionKey);
+  const markerObservation = inspectReturnCovenantDurableMarkers({
+    allowed,
+    marker: state.resultMarker,
+    systemEvents,
+    transcript,
+  });
   const current = currentAuthority(state, context);
   const captured = state.acceptance?.capturedAuthorityGeneration;
-  const allowed = state.casePlan.kind === "allowed";
   const admission = allowed
     ? "adopted"
     : state.casePlan.id === "forbidden-delete-recreate"
@@ -458,7 +477,11 @@ export async function observeReturnCovenantCase(params: {
         channelDeliveries: "product-observer/channel-delivery",
       },
       expected: state.request.expectedEffects,
-      observed: returnCovenantObservedEffects(state, promptAdoptions, channelDeliveries),
+      observed: returnCovenantObservedEffects(
+        state,
+        markerObservation.promptAdoptions,
+        channelDeliveries,
+      ),
     },
     settlement: {
       bounded: true,
@@ -470,21 +493,29 @@ export async function observeReturnCovenantCase(params: {
       monotonicElapsedMs: elapsedMonotonic,
     },
     scans: {
-      resultMarker: marker,
+      resultMarker: state.resultMarker,
       successorTranscript: {
         source: "product-owned",
-        marker,
-        matches: transcriptMatches,
-        receiptId: returnCovenantReceiptId("transcript-scan", state.caseHandle),
+        marker: state.resultMarker,
+        matches: markerObservation.successorTranscriptResidualMatches,
+        receiptId: returnCovenantReceiptId("transcript-scan", {
+          caseHandle: state.caseHandle,
+          gateway: state.gatewayPhases.observe,
+          promptAdoptions: markerObservation.promptAdoptions,
+        }),
       },
       trustedSystemEvents: {
         source: "product-owned",
-        marker,
-        matches: systemEventMatches,
-        receiptId: returnCovenantReceiptId("system-event-scan", state.caseHandle),
+        marker: state.resultMarker,
+        matches: markerObservation.trustedSystemEventResidualMatches,
+        receiptId: returnCovenantReceiptId("system-event-scan", {
+          caseHandle: state.caseHandle,
+          gateway: state.gatewayPhases.observe,
+          promptAdoptions: markerObservation.promptAdoptions,
+        }),
       },
     },
-    resultMarker: marker,
+    resultMarker: state.resultMarker,
   };
 }
 
@@ -506,7 +537,7 @@ export async function cleanupReturnCovenantCase(params: {
       agentId: "proof",
       archiveTranscript: false,
       deleteTranscriptWithoutArchive: true,
-      storePath: context.storePath,
+      storePath: context.profiles.canonicalDatabasePath,
       target: {
         canonicalKey: state.childSessionKey,
         storeKeys: [state.childSessionKey],
@@ -517,7 +548,7 @@ export async function cleanupReturnCovenantCase(params: {
     await deleteSessionEntryLifecycle({
       agentId: "proof",
       archiveTranscript: false,
-      storePath: context.storePath,
+      storePath: context.profiles.canonicalDatabasePath,
       target: {
         canonicalKey: state.casePlan.logicalSessionKey,
         storeKeys: [state.casePlan.logicalSessionKey],
@@ -529,11 +560,14 @@ export async function cleanupReturnCovenantCase(params: {
     runOpenClawAgentWriteTransaction(
       (database) =>
         advanceSessionRecipientAuthorityInTransaction(database, state.casePlan.logicalSessionKey),
-      { agentId: "proof", env: context.env },
+      {
+        agentId: "proof",
+        env: context.env,
+        path: context.profiles.canonicalDatabasePath,
+      },
       { operationLabel: "return-covenant.case-isolation" },
     );
   }
-  state.closed = true;
 }
 
 export async function retainedReturnCovenantResources(params: {
@@ -553,15 +587,6 @@ export async function retainedReturnCovenantResources(params: {
         (flow.status === "queued" || flow.status === "running"),
     ).length;
   const queueItems = (await loadPendingSessionDeliveries(stateDirectory(context))).length;
-  const temporarySessions = listSessionEntriesCore({
-    agentId: "proof",
-    env: context.env,
-    storePath: context.storePath,
-  }).filter(
-    ({ entry }) =>
-      entry.createdVia === "spawn" &&
-      (entry.parentSessionKey?.startsWith(runSessionPrefix) ||
-        entry.spawnedBy?.startsWith(runSessionPrefix)),
-  ).length;
+  const temporarySessions = context.profiles.countTemporarySessions(runSessionPrefix);
   return { delegates, queueItems, temporarySessions };
 }

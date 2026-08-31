@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { createContinueDelegateTool } from "../../../agents/tools/continue-delegate-tool.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -116,12 +115,12 @@ async function invokeReturnCovenantDelegateForm(params: {
     agentId: "proof",
     env: context.env,
     sessionKey: state.casePlan.logicalSessionKey,
-    storePath: context.storePath,
+    storePath: context.profiles.canonicalDatabasePath,
   });
   const controller = createReplyContinuationController({
     cfg: context.config,
     sessionKey: state.casePlan.logicalSessionKey,
-    storePath: context.storePath,
+    storePath: context.profiles.canonicalDatabasePath,
     isContinuationWake: false,
     activeSessionStore: undefined,
     getActiveSessionEntry: () => activeEntry,
@@ -233,13 +232,15 @@ export async function dispatchReturnCovenantCase(params: {
     completionHeld: true,
     receiptId: returnCovenantReceiptId("dispatch", {
       flowId: delegate.flowId,
+      gateway: state.gatewayPhases.dispatch,
       key: state.caseHandle,
     }),
     heldResultId: returnCovenantReceiptId("held-result", {
       flowId: delegate.flowId,
+      marker: state.resultMarker,
     }),
     capturedAuthorityGeneration: capturedAuthority.epoch,
-    resultMarker: `RCV-${randomBytes(16).toString("hex")}`,
+    resultMarker: state.resultMarker,
     originEvidence: {
       source: "product-owned",
       observedForm: state.form,

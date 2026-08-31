@@ -2,39 +2,58 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { constants } from "node:fs";
-import { lstat, open, readFile, type FileHandle } from "node:fs/promises";
-import net from "node:net";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { callGateway } from "../../../gateway/call.js";
+import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
+import {
+  assertReturnCovenantGatewayBinding,
+  parseReturnCovenantGatewayBinding,
+  readReturnCovenantProcessStartFingerprint,
+  RETURN_COVENANT_GATEWAY_READY_PREFIX,
+  type ReturnCovenantGatewayBinding,
+  type ReturnCovenantGatewayRestart,
+} from "./gateway-generation.js";
+import { RETURN_COVENANT_GATEWAY_METHOD } from "./gateway-rpc.js";
 import {
   RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
+  type ReturnCovenantDriverAttestation,
+  type ReturnCovenantPhaseRequest,
   type ReturnCovenantPlan,
 } from "./protocol.js";
+import type { ReturnCovenantFixtureRunSnapshot } from "./run.js";
 
-export type ReturnCovenantGatewayBinding = {
-  endpoint: string;
-  pid: number;
-  startFingerprint: string;
-};
+export type { ReturnCovenantGatewayBinding, ReturnCovenantGatewayRestart };
 
-export type ReturnCovenantGatewayRestart = {
-  original: ReturnCovenantGatewayBinding;
-  replacement: ReturnCovenantGatewayBinding;
+export type ReturnCovenantGatewayPhaseResult = {
+  finalizeRequested: boolean;
+  payload: Record<string, unknown>;
 };
 
 export interface ReturnCovenantGatewayControl {
   current(): ReturnCovenantGatewayBinding;
-  restart(): Promise<ReturnCovenantGatewayRestart>;
+  finalizeRun(): Promise<Record<string, unknown>>;
+  invokePhase(
+    request: ReturnCovenantPhaseRequest,
+    attestation: ReturnCovenantDriverAttestation,
+  ): Promise<ReturnCovenantGatewayPhaseResult>;
   start(): Promise<ReturnCovenantGatewayBinding>;
   stopAll(): Promise<void>;
 }
 
-type ManagedGateway = ReturnCovenantGatewayBinding & {
+type ManagedGateway = {
+  binding: ReturnCovenantGatewayBinding;
   child: ChildProcess;
   label: string;
   stderr: string;
   stdout: string;
+};
+
+type StartingGateway = Omit<ManagedGateway, "binding"> & {
+  pid: number;
 };
 
 type GatewayCommandIdentity = {
@@ -47,39 +66,26 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function processStartFingerprint(pid: number): Promise<string> {
-  const raw = await readFile(`/proc/${pid}/stat`, "utf8");
-  const fields = raw
-    .slice(raw.lastIndexOf(")") + 2)
-    .trim()
-    .split(/\s+/u);
-  const startTicks = fields[19];
-  if (!startTicks) {
-    throw new Error(`gateway ${pid} has no kernel start timestamp`);
+function gatewayReadyBinding(stdout: string): ReturnCovenantGatewayBinding | undefined {
+  const line = stdout
+    .split("\n")
+    .find((entry) => entry.startsWith(RETURN_COVENANT_GATEWAY_READY_PREFIX));
+  if (!line) {
+    return undefined;
   }
-  return sha256(`${pid}:${startTicks}`);
+  return parseReturnCovenantGatewayBinding(
+    JSON.parse(line.slice(RETURN_COVENANT_GATEWAY_READY_PREFIX.length)),
+  );
 }
 
-async function probeLoopbackPort(port: number): Promise<boolean> {
-  return await new Promise((resolve) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
-    const finish = (connected: boolean) => {
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(connected);
-    };
-    socket.setTimeout(250);
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-    socket.once("timeout", () => finish(false));
-  });
-}
-
-async function waitForGatewayReady(
-  gateway: Pick<ManagedGateway, "child" | "label" | "pid" | "stderr">,
+export async function waitForGatewayReady(
+  gateway: Pick<StartingGateway, "child" | "label" | "pid" | "stderr" | "stdout">,
   port: number,
-): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  options: { timeoutMs?: number } = {},
+): Promise<ReturnCovenantGatewayBinding> {
+  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+  const expectedStartFingerprint = await readReturnCovenantProcessStartFingerprint(gateway.pid);
+  const expectedEndpoint = `http://127.0.0.1:${port}`;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
       const reason =
@@ -90,12 +96,20 @@ async function waitForGatewayReady(
         `gateway ${gateway.label} stopped before readiness (${reason}): ${gateway.stderr.slice(-2000)}`,
       );
     }
-    if (await probeLoopbackPort(port)) {
-      return;
+    const binding = gatewayReadyBinding(gateway.stdout);
+    if (binding) {
+      if (
+        binding.pid !== gateway.pid ||
+        binding.startFingerprint !== expectedStartFingerprint ||
+        binding.endpoint !== expectedEndpoint
+      ) {
+        throw new Error("spawned child published a mismatched gateway readiness binding");
+      }
+      return binding;
     }
     await delay(25);
   }
-  throw new Error(`gateway ${gateway.label} did not listen on loopback before the deadline`);
+  throw new Error(`spawned child ${gateway.label} did not publish gateway readiness`);
 }
 
 async function stopGateway(gateway: ManagedGateway): Promise<void> {
@@ -118,19 +132,24 @@ async function stopGateway(gateway: ManagedGateway): Promise<void> {
 }
 
 export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewayControl {
+  readonly #config: OpenClawConfig;
+  readonly #configPath: string;
   readonly #cwd: string;
   readonly #gatewayArgs: readonly string[];
   readonly #gatewayEnvironment: NodeJS.ProcessEnv;
   readonly #gatewayExpectedSha256: string;
   readonly #gatewayPath: string;
+  readonly #gatewayToken: string;
   readonly #gateways: ManagedGateway[] = [];
+  readonly #plan: ReturnCovenantPlan;
   readonly #port: number;
   #current: ManagedGateway | undefined;
 
   constructor(params: {
+    configPath: string;
     cwd: string;
+    gatewayToken: string;
     isolation: {
-      configPath: string;
       homePath: string;
       statePath: string;
     };
@@ -138,30 +157,30 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       environment: NodeJS.ProcessEnv;
     };
     plan: ReturnCovenantPlan;
-    runtimeConfig: { gateway?: { port?: number } };
+    runtimeConfig: OpenClawConfig;
   }) {
+    this.#config = params.runtimeConfig;
+    this.#configPath = params.configPath;
     this.#cwd = params.cwd;
     this.#gatewayPath = path.resolve(params.cwd, RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH);
     this.#gatewayArgs = params.plan.driver.gatewayCommand.args;
     this.#gatewayExpectedSha256 = params.plan.driver.gatewayCommand.sha256;
+    this.#gatewayToken = params.gatewayToken;
     this.#gatewayEnvironment = {
       ...params.launchAuthority.environment,
       HOME: params.isolation.homePath,
-      OPENCLAW_CONFIG_PATH: params.isolation.configPath,
+      OPENCLAW_CONFIG_PATH: params.configPath,
       OPENCLAW_STATE_DIR: params.isolation.statePath,
     };
-    this.#port = params.runtimeConfig.gateway?.port ?? DEFAULT_GATEWAY_PORT;
+    this.#plan = params.plan;
+    this.#port = params.runtimeConfig.gateway?.port ?? 18_789;
   }
 
   current(): ReturnCovenantGatewayBinding {
     if (!this.#current) {
       throw new Error("return-covenant gateway is not running");
     }
-    return {
-      endpoint: this.#current.endpoint,
-      pid: this.#current.pid,
-      startFingerprint: this.#current.startFingerprint,
-    };
+    return this.#current.binding;
   }
 
   async start(): Promise<ReturnCovenantGatewayBinding> {
@@ -172,23 +191,37 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     return this.current();
   }
 
-  async restart(): Promise<ReturnCovenantGatewayRestart> {
-    const original = this.#current;
-    if (!original) {
-      throw new Error("cannot restart a return-covenant gateway before startup");
+  async invokePhase(
+    request: ReturnCovenantPhaseRequest,
+    attestation: ReturnCovenantDriverAttestation,
+  ): Promise<ReturnCovenantGatewayPhaseResult> {
+    let restart: ReturnCovenantGatewayRestart | undefined;
+    if (request.phase === "transition" && request.restartBetweenAcceptanceAndRelease) {
+      restart = await this.#restartForTransition();
     }
-    await stopGateway(original);
-    this.#current = undefined;
-    const replacement = await this.#spawnGateway(`replacement-${this.#gateways.length}`);
-    this.#current = replacement;
+    const response = await this.#request(this.#requireCurrent(), {
+      operation: "phase",
+      phaseRequest: request,
+      attestation,
+      ...(restart ? { restart } : {}),
+    });
+    if (!isRecord(response.payload)) {
+      throw new Error("return-covenant gateway phase returned no payload");
+    }
     return {
-      original: {
-        endpoint: original.endpoint,
-        pid: original.pid,
-        startFingerprint: original.startFingerprint,
-      },
-      replacement: this.current(),
+      finalizeRequested: response.finalizeRequested === true,
+      payload: response.payload,
     };
+  }
+
+  async finalizeRun(): Promise<Record<string, unknown>> {
+    const response = await this.#request(this.#requireCurrent(), {
+      operation: "finalize",
+    });
+    if (!isRecord(response.claims)) {
+      throw new Error("return-covenant gateway finalization returned no cleanup claims");
+    }
+    return response.claims;
   }
 
   async stopAll(): Promise<void> {
@@ -206,15 +239,41 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     }
   }
 
-  async #spawnGateway(label: string): Promise<ManagedGateway> {
-    // Hold the verified inode through spawn and recheck its pathname before
-    // releasing it, so command substitution around the spawn fails closed.
+  #requireCurrent(): ManagedGateway {
+    if (!this.#current) {
+      throw new Error("return-covenant gateway is not running");
+    }
+    return this.#current;
+  }
+
+  async #restartForTransition(): Promise<ReturnCovenantGatewayRestart> {
+    const original = this.#requireCurrent();
+    const snapshotResponse = await this.#request(original, { operation: "snapshot" });
+    const snapshot = snapshotResponse.snapshot as ReturnCovenantFixtureRunSnapshot | undefined;
+    if (!snapshot) {
+      throw new Error("return-covenant gateway restart returned no run snapshot");
+    }
+    await stopGateway(original);
+    this.#current = undefined;
+    const replacement = await this.#spawnGateway(`replacement-${this.#gateways.length}`, snapshot);
+    this.#current = replacement;
+    return {
+      original: original.binding,
+      replacement: replacement.binding,
+    };
+  }
+
+  async #spawnGateway(
+    label: string,
+    snapshot?: ReturnCovenantFixtureRunSnapshot,
+  ): Promise<ManagedGateway> {
     const verified = await this.#openVerifiedGatewayCommand();
     const port = this.#port + this.#gateways.length;
     if (port > 65_535) {
       await verified.handle.close();
       throw new Error("return-covenant gateway replacement port exceeds TCP range");
     }
+    let starting: StartingGateway | undefined;
     let managed: ManagedGateway | undefined;
     try {
       const child = spawn(process.execPath, [this.#gatewayPath, ...this.#gatewayArgs], {
@@ -228,34 +287,100 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       if (!child.pid) {
         throw new Error(`gateway ${label} did not receive a process id`);
       }
-      const activeGateway: ManagedGateway = {
+      starting = {
         child,
-        endpoint: `http://127.0.0.1:${port}`,
         label,
         pid: child.pid,
-        startFingerprint: "",
         stderr: "",
         stdout: "",
       };
-      managed = activeGateway;
       const append = (field: "stderr" | "stdout", chunk: Buffer | string) => {
-        activeGateway[field] = `${activeGateway[field]}${chunk.toString()}`.slice(-1_000_000);
+        starting![field] = `${starting![field]}${chunk.toString()}`.slice(-1_000_000);
       };
       child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
       child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
-      this.#gateways.push(activeGateway);
       await this.#assertGatewayCommandIdentity(verified.identity);
-      activeGateway.startFingerprint = await processStartFingerprint(activeGateway.pid);
-      await waitForGatewayReady(activeGateway, port);
-      return activeGateway;
+      const binding = await waitForGatewayReady(starting, port);
+      managed = {
+        binding,
+        child,
+        label,
+        stderr: starting.stderr,
+        stdout: starting.stdout,
+      };
+      this.#gateways.push(managed);
+      await this.#request(managed, {
+        operation: "initialize",
+        plan: this.#plan,
+        ...(snapshot ? { snapshot } : {}),
+      });
+      return managed;
     } catch (error) {
       if (managed) {
         await stopGateway(managed).catch(() => undefined);
+      } else if (starting) {
+        await stopGateway({
+          binding: {
+            bootId: "starting",
+            endpoint: `http://127.0.0.1:${port}`,
+            pid: starting.pid,
+            startFingerprint: "0".repeat(64),
+          },
+          child: starting.child,
+          label: starting.label,
+          stderr: starting.stderr,
+          stdout: starting.stdout,
+        }).catch(() => undefined);
       }
       throw error;
     } finally {
       await verified.handle.close();
     }
+  }
+
+  async #request(
+    gateway: ManagedGateway,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
+      throw new Error("return-covenant request targets a stopped gateway generation");
+    }
+    let helloBootId: string | undefined;
+    const response = await callGateway<Record<string, unknown>>({
+      clientDisplayName: "return-covenant-fixture",
+      config: this.#config,
+      configPath: this.#configPath,
+      deviceIdentity: null,
+      ignoreEnvUrlOverride: true,
+      method: RETURN_COVENANT_GATEWAY_METHOD,
+      onHelloOk: (hello) => {
+        helloBootId = hello.server.bootId;
+      },
+      params: {
+        ...params,
+        expectedGateway: gateway.binding,
+      },
+      requiredMethods: [RETURN_COVENANT_GATEWAY_METHOD],
+      scopes: [ADMIN_SCOPE],
+      sharedStateMode: "read-only",
+      timeoutMs: 120_000,
+      token: this.#gatewayToken,
+      url: gateway.binding.endpoint.replace(/^http:/u, "ws:"),
+      useStoredDeviceAuth: false,
+    });
+    if (helloBootId !== gateway.binding.bootId) {
+      throw new Error("return-covenant gateway hello reported a stale boot generation");
+    }
+    const responseBinding = parseReturnCovenantGatewayBinding(response.gateway);
+    assertReturnCovenantGatewayBinding(
+      responseBinding,
+      gateway.binding,
+      "return-covenant gateway response came from a stale generation",
+    );
+    if (gateway !== this.#current && params.operation !== "initialize") {
+      throw new Error("return-covenant gateway generation was replaced during request");
+    }
+    return response;
   }
 
   async #openVerifiedGatewayCommand(): Promise<{
