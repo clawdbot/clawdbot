@@ -6,13 +6,13 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 export default definePluginEntry({
   id: "canvas",
   name: "Canvas",
-  description: "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
+  description: "Presents hosted widget documents on paired macOS panels.",
   register(api) {
     api.registerNodeCliFeature(() => {}, {
       descriptors: [
         {
           name: "canvas",
-          description: "Capture or render canvas content from a paired node",
+          description: "Present widget documents on a paired macOS panel",
           hasSubcommands: true,
         },
       ],

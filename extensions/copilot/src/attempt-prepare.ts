@@ -2,10 +2,12 @@ import fsp from "node:fs/promises";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  buildEmbeddedForegroundPromptContext,
   isHostScopedAgentToolActive,
+  resolveAgentDir,
   resolveSandboxContext as defaultResolveSandboxContext,
-  resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readNonEmptyString, readResolvedAttemptPath, resolveModelRef } from "./attempt-config.js";
 import type {
   AttemptParamsLike,
@@ -61,7 +63,7 @@ export function prepareCopilotAttemptContext(
     readNonEmptyString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readNonEmptyString((input as { sessionKey?: unknown }).sessionKey) ??
     readNonEmptyString(input.sessionId);
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
     agentId: readNonEmptyString(params.agentId),
@@ -89,6 +91,10 @@ export function prepareCopilotAttemptContext(
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+      { ...input, agentId: sessionAgentId },
+      input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),
+    ),
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),

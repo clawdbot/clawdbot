@@ -110,7 +110,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(childEnv.IGNORED).toBeUndefined();
     expect(childEnv.OPENCLAW_VITEST_SHARD_NAME).toBe("g");
     expect(childEnv.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
-    expect(childEnv.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD).toBe("1");
     expect(childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       path.join(scratchDir, "vitest-cache-3"),
     );
@@ -389,12 +388,59 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(started).toEqual(["a", "b"]);
   });
 
-  it("fails plans that carry no configs", async () => {
-    const scratchDir = makeScratchDir();
+  it("continues through failed plans only when explicitly requested", async () => {
+    const started: string[] = [];
     const exitCode = await runShardPlans(
-      [{ kind: "group" as const, name: "broken", plan: { configs: [] } }],
-      { concurrency: 1, env: {}, runChild: async () => 0, scratchDir },
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        continueOnFailure: true,
+        env: {},
+        runChild: async (_args, _env, label) => {
+          started.push(label);
+          return label === "b" ? 7 : label === "d" ? 9 : 0;
+        },
+        scratchDir: makeScratchDir(),
+      },
     );
-    expect(exitCode).toBe(1);
+
+    expect(started).toEqual(["a", "b", "c", "d"]);
+    expect(exitCode).toBe(7);
   });
+
+  it.each([
+    { continueOnFailure: false, expectedStarted: [] },
+    { continueOnFailure: true, expectedStarted: ["next"] },
+  ])(
+    "fails a malformed plan with continuation=$continueOnFailure",
+    async ({ continueOnFailure, expectedStarted }) => {
+      const started: string[] = [];
+      const exitCode = await runShardPlans(
+        [
+          { kind: "group" as const, name: "broken", plan: { configs: [] } },
+          { kind: "group" as const, name: "next", plan: { configs: ["next.config.ts"] } },
+        ],
+        {
+          concurrency: 1,
+          continueOnFailure,
+          env: {},
+          runChild: async (_args, _env, label) => {
+            started.push(label);
+            return 0;
+          },
+          scratchDir: makeScratchDir(),
+        },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(started).toEqual(expectedStarted);
+    },
+  );
 });

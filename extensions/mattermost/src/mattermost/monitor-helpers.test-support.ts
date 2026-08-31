@@ -1,6 +1,49 @@
 // Mattermost test support covers monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMention, shouldDropEmptyMattermostBody } from "./monitor-helpers.js";
+import {
+  matchesMattermostBotMention,
+  normalizeMention,
+  shouldDropEmptyMattermostBody,
+} from "./monitor-helpers.js";
+
+describe("matchesMattermostBotMention", () => {
+  it.each([
+    "@echobot hello",
+    "hey @echobot check this",
+    "(@echobot)",
+    "hello.@echobot",
+    "hello-@echobot",
+    "hello:@echobot",
+    "@echobot.",
+    "@echobot...",
+    "@echobot-",
+    "thanks @echobot: run it",
+    "thanks @echobot:",
+    "team:@echobot hello",
+    "@EchoBot hello",
+    "@echobot",
+  ])("matches a real bot mention: %j", (text) => {
+    expect(matchesMattermostBotMention(text, "echobot")).toBe(true);
+  });
+
+  // Mattermost usernames allow [a-z0-9._-]; these are mentions of other users.
+  it.each([
+    "@echobotdia hello",
+    "@echobot.dia hello",
+    "@echobot-ops please review",
+    "@echobot_2 ping",
+    "@echobot:remote hello",
+    "@echobot:remote.example hello",
+    "@echobot::remote hello",
+    "mail me at bob@echobot later",
+  ])("does not match a longer username or embedded handle: %j", (text) => {
+    expect(matchesMattermostBotMention(text, "echobot")).toBe(false);
+  });
+
+  it("returns false without a bot username", () => {
+    expect(matchesMattermostBotMention("@echobot hello", undefined)).toBe(false);
+  });
+});
 
 describe("normalizeMention", () => {
   it("returns trimmed text when no mention provided", () => {
@@ -79,6 +122,42 @@ describe("normalizeMention", () => {
     const input = "@echobot\n    code line 1\n    code line 2";
     const result = normalizeMention(input, "echobot");
     expect(result).toBe("    code line 1\n    code line 2");
+  });
+
+  it.each([
+    "@echobot.dia hello",
+    "@echobot-ops please review",
+    "@echobotdia hello",
+    "@echobot:remote hello",
+    "@echobot:remote.example hello",
+    "mail me at bob@echobot later",
+  ])("leaves other users' handles intact: %j", (input) => {
+    expect(normalizeMention(input, "echobot")).toBe(input);
+  });
+
+  it.each([
+    { input: "hello.@echobot", expected: "hello." },
+    { input: "hello-@echobot", expected: "hello-" },
+    { input: "hello:@echobot", expected: "hello:" },
+    { input: "@echobot.", expected: "." },
+    { input: "@echobot-", expected: "-" },
+    { input: "@echobot: hello", expected: ": hello" },
+  ])("preserves punctuation around a real mention: $input", ({ input, expected }) => {
+    expect(normalizeMention(input, "echobot")).toBe(expected);
+  });
+
+  it("preserves table padding on lines without the mention", () => {
+    const input = "@echobot see table\n| a | b |\n| aaa    | bbb |";
+    expect(normalizeMention(input, "echobot")).toBe("see table\n| a | b |\n| aaa    | bbb |");
+  });
+
+  it("preserves code-fence alignment on lines without the mention", () => {
+    const input = "@echobot look\n```\nx = 1    # aligned\n```";
+    expect(normalizeMention(input, "echobot")).toBe("look\n```\nx = 1    # aligned\n```");
+  });
+
+  it("still collapses doubled spaces on the line the mention was removed from", () => {
+    expect(normalizeMention("hey  @echobot  check", "echobot")).toBe("hey check");
   });
 });
 

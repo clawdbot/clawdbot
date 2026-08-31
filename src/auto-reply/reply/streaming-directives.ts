@@ -1,7 +1,9 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -26,6 +28,9 @@ type ConsumeOptions = {
   silentToken?: string;
 };
 
+// TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
+// live drafts still carry inline markers mid-run. Delete alongside the marker
+// parser when the visibleReplies default flips to "message_tool".
 // Holds back incomplete inline directive tails so parseChunk only ever sees
 // complete reply/audio tags.
 export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
@@ -56,12 +61,11 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
     }
   }
 
-  const prefixMatch = text.match(/(?:^|\n)(MEDIA|MEDI|MED|ME|M)$/i);
+  const prefixMatch = lastLine.match(/^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i);
   if (prefixMatch) {
-    const prefixStart =
-      text.length - expectDefined(prefixMatch[1], "prefix match capture group 1").length;
-    if (prefixStart < bufferStart) {
-      bufferStart = prefixStart;
+    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
+    if (mediaLineStart < bufferStart) {
+      bufferStart = mediaLineStart;
     }
   }
 
@@ -77,12 +81,10 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 
 const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
   let text = raw ?? "";
-
   const replyParsed = parseInlineDirectives(text, {
     stripAudioTag: true,
     stripReplyTags: true,
   });
-
   if (replyParsed.hasReplyTag || replyParsed.hasAudioTag) {
     text = replyParsed.text;
   }
@@ -115,12 +117,14 @@ export function createStreamingDirectiveAccumulator() {
   let pendingSeparator = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let hasReturnedText = false;
 
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
+    hasReturnedText = false;
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
@@ -151,6 +155,11 @@ export function createStreamingDirectiveAccumulator() {
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
     if (hadPendingTail && heldSeparator && parsed.text.startsWith("[")) {
       parsed.text = `${heldSeparator}${parsed.text}`;
+    }
+    // Only a message-leading malformed marker is delivery control. Once text has
+    // streamed, a later marker is literal content whose Markdown opener may be gone.
+    if (options.final && !hasReturnedText) {
+      parsed.text = stripInlineDirectiveTagsForDelivery(parsed.text).text;
     }
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent =
@@ -184,6 +193,7 @@ export function createStreamingDirectiveAccumulator() {
       hasTag,
     };
     pendingReply = { sawCurrent: false, hasTag: false };
+    hasReturnedText ||= Boolean(combinedResult.text);
     return combinedResult;
   };
 

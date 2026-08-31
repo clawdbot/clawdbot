@@ -1,7 +1,6 @@
 /** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { getClaudeGeneration } from "./cli-runner/claude-live-registry.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -39,16 +38,6 @@ setCliRunnerPrepareTestDeps({
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
   resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
 });
-
-/** Restore prepare-time CLI runner test dependencies after a test overrides them. */
-export function restoreCliRunnerPrepareTestDeps() {
-  setCliRunnerPrepareTestDeps({
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    getClaudeGeneration,
-  });
-}
 
 beforeEach(() => {
   vi.unstubAllEnvs();

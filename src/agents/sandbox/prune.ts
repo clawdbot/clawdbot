@@ -86,8 +86,14 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
     read: readRegistry,
     remove: removeRegistryEntry,
     removeRuntime: async (entry) => {
-      const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-      await manager?.removeRuntime({
+      const backendId = entry.backendId ?? "docker";
+      const manager = getSandboxBackendManager(backendId);
+      if (!manager) {
+        throw new Error(
+          `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
+        );
+      }
+      await manager.removeRuntime({
         entry,
         config,
       });

@@ -1,4 +1,5 @@
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -45,6 +46,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
+    abortCleanup: Promise.resolve(),
+    // SAFETY: Unset is valid; only completed native cleanup can advance this closed state to confirmed.
+    permissionChangeRestart: undefined as "requested" | "confirmed" | undefined,
     localCompletionRequested: false,
     terminalTurnNotificationQueued: false,
     // App-server collapses user interrupts and replacements to "interrupted";
@@ -81,10 +85,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     terminalDynamicToolReleaseCheckScheduled: false,
     currentTurnHadNonTerminalDynamicToolResult: false,
   };
-  let resolveCompletion!: () => void;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
+  const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );

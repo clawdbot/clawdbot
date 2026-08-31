@@ -139,6 +139,21 @@ describe("CDP screenshot params", () => {
     requireSentMessage("Page.captureScreenshot");
   });
 
+  it.each([
+    { name: "headed managed browser", headless: false, activates: false },
+    { name: "headless managed browser", headless: true, activates: true },
+  ])("activates only when needed for a $name", async ({ headless, activates }) => {
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods.includes("Page.bringToFront")).toBe(activates);
+    expect(methods).toContain("Page.captureScreenshot");
+  });
+
   it("uses the requested timeout as the raw CDP command timeout", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",

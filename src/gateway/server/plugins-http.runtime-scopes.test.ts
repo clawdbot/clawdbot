@@ -243,6 +243,82 @@ describe("plugin HTTP route runtime scopes", () => {
     });
   });
 
+  it("preserves the verified person on gateway-authenticated plugin runtime clients", async () => {
+    const authenticatedUserProfile = {
+      profileId: "profile-guest",
+      displayName: "Guest",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    let observedProfile: AuthorizedGatewayHttpRequest["authenticatedUserProfile"];
+    const handler = createPluginRequestHandler({
+      routes: [
+        createRoute({
+          path: SECURE_HOOK_PATH,
+          auth: "gateway",
+          handler: async () => {
+            observedProfile =
+              getPluginRuntimeGatewayRequestScope()?.client?.authenticatedUserProfile;
+            return true;
+          },
+        }),
+      ],
+    });
+
+    const { handled } = await dispatchPluginRequest(handler, {
+      path: SECURE_HOOK_PATH,
+      authContext: {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: {
+          authMethod: "trusted-proxy",
+          trustDeclaredOperatorScopes: true,
+          authenticatedUserProfile,
+        },
+        gatewayRequestOperatorScopes: ["operator.read"],
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(observedProfile).toEqual(authenticatedUserProfile);
+  });
+
+  it.each([
+    { auth: "gateway" as const, authMethod: "token" as const, systemActor: true },
+    { auth: "gateway" as const, authMethod: "password" as const, systemActor: true },
+    { auth: "gateway" as const, authMethod: "trusted-proxy" as const, systemActor: false },
+    { auth: "plugin" as const, authMethod: "token" as const, systemActor: false },
+  ])(
+    "mints system authority only for authenticated shared-secret gateway routes ($auth/$authMethod)",
+    async ({ auth, authMethod, systemActor }) => {
+      let observedActor: unknown;
+      const handler = createPluginRequestHandler({
+        routes: [
+          createRoute({
+            path: SECURE_HOOK_PATH,
+            auth,
+            handler: async () => {
+              observedActor =
+                getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRoleActor;
+              return true;
+            },
+          }),
+        ],
+      });
+
+      const { handled } = await dispatchPluginRequest(handler, {
+        path: SECURE_HOOK_PATH,
+        authContext: {
+          gatewayAuthSatisfied: true,
+          gatewayRequestAuth: { authMethod, trustDeclaredOperatorScopes: false },
+          gatewayRequestOperatorScopes: ["operator.write"],
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(observedActor).toEqual(systemActor ? { kind: "system" } : undefined);
+    },
+  );
+
   it("uses server-local routes and gateway context when the active registry belongs to another gateway", async () => {
     const serverAContext = { label: "server-a" } as unknown as GatewayRequestContext;
     const serverBContext = { label: "server-b" } as unknown as GatewayRequestContext;

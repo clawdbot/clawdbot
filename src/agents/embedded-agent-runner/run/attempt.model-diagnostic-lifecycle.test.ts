@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -172,7 +173,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(events[0]?.status).toBeUndefined();
   });
 
-  it("records provider response status and preserves the original response callback", async () => {
+  it("records legacy response status without inferring provider acceptance", async () => {
     const originalOnResponse = vi.fn(async () => undefined);
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
@@ -212,7 +213,42 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       type: "provider.request",
       ok: true,
       status: 200,
+      attributes: {
+        providerAccepted: false,
+      },
     });
+  });
+
+  it("records provider acceptance when an SDK hides HTTP metadata", async () => {
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        _model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => notifyProviderStreamOpened({ options, cancelStream: vi.fn() })) as unknown as StreamFn,
+      {
+        runId: "run-timeline-accepted",
+        provider: "google",
+        model: "gemini-2.5-pro",
+        api: "google-generative-ai",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-accepted",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      await wrapped({ id: "gemini-2.5-pro" } as never, {} as never, {});
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      ok: true,
+      attributes: {
+        providerAccepted: true,
+        providerAcceptanceKind: "provider_stream_opened",
+      },
+    });
+    expect(events[0]?.status).toBeUndefined();
   });
 
   it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
@@ -514,7 +550,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
         api: "openai-responses",
         transport: "http",
         contextTokenBudget: 150_000,
-        contextWindowSource: "agentContextTokens",
+        contextWindowSource: "modelsConfig",
         contextWindowReferenceTokens: 200_000,
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-hook",
@@ -542,7 +578,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
     expect(startedEvent.contextTokenBudget).toBe(150_000);
-    expect(startedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(startedEvent.contextWindowSource).toBe("modelsConfig");
     expect(startedEvent.contextWindowReferenceTokens).toBe(200_000);
     const startedCtx = requireMockRecordArg(started, 0, 1, "started hook context");
     expect(startedCtx.runId).toBe("run-1");
@@ -551,14 +587,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(startedCtx.modelProviderId).toBe("openai");
     expect(startedCtx.modelId).toBe("gpt-5.4");
     expect(startedCtx.contextTokenBudget).toBe(150_000);
-    expect(startedCtx.contextWindowSource).toBe("agentContextTokens");
+    expect(startedCtx.contextWindowSource).toBe("modelsConfig");
     expect(startedCtx.contextWindowReferenceTokens).toBe(200_000);
     const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
     expect(endedEvent.runId).toBe("run-1");
     expect(endedEvent.callId).toBe("call-hook");
     expect(endedEvent.outcome).toBe("completed");
     expect(endedEvent.contextTokenBudget).toBe(150_000);
-    expect(endedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(endedEvent.contextWindowSource).toBe("modelsConfig");
     expect(endedEvent.contextWindowReferenceTokens).toBe(200_000);
     expectNumberField(endedEvent, "durationMs");
     expectNumberField(endedEvent, "responseStreamBytes");

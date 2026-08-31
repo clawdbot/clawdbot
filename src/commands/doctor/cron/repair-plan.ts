@@ -1,11 +1,8 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeCronJobInput } from "../../../cron/normalize.js";
-import type { CronJob } from "../../../cron/types.js";
 import {
-  LEGACY_TASK_SUGGESTION_TOOL_NAME,
-  TASK_SUGGESTION_TOOL_NAME,
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
@@ -83,6 +80,18 @@ export function formatScheduledToolPolicyAdvisory(params: {
   return lines.join("\n");
 }
 
+/** Advisory for alias-only jobs whose original exec authority cannot be proven from storage. */
+export function formatLegacyGatewayExecAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  return [
+    `${pluralize(names.length, "automation")} ${names.length === 1 ? "grants" : "grant"} the retired \`gateway_exec\` alias${formatJobNameList(names)}.`,
+    "- Doctor will not convert this alias to `exec` because the stored name does not prove its original producer or approval restrictions.",
+    "- Recreate the automation from a fresh authenticated creator turn, or explicitly reauthorize its complete tool cap from a trusted operator shell.",
+  ].join("\n");
+}
+
 /** Advisory for legacy default caps that were captured before configured MCP was final. */
 export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): string | null {
   if (names.length === 0) {
@@ -125,7 +134,12 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   }
   if (issues.legacyTaskSuggestionToolName) {
     lines.push(
-      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${LEGACY_TASK_SUGGESTION_TOOL_NAME}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME}\``,
+      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,
+    );
+  }
+  if (issues.legacyImageInspectionToolName) {
+    lines.push(
+      `- ${pluralize(issues.legacyImageInspectionToolName, "job")} still relies on legacy \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName}\` coverage; doctor will preserve equivalent \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.canonicalName}\` access`,
     );
   }
   if (issues.legacyAgentTurnCommandPayload) {
@@ -217,39 +231,4 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
       : {}),
     ...(params.runtimeEntry?.state ? { state: structuredClone(params.runtimeEntry.state) } : {}),
   };
-}
-
-/** Return true when a SQLite cron projection row no longer matches config JSON. */
-export function needsSqliteProjectionBackfill(params: {
-  configJob: Record<string, unknown>;
-  projectedJob?: CronJob;
-}): boolean {
-  if (!params.projectedJob) {
-    return true;
-  }
-  const normalizedConfig = normalizeCronJobInput(params.configJob, { applyDefaults: true });
-  if (!normalizedConfig) {
-    return true;
-  }
-  const projected = params.projectedJob as unknown as Record<string, unknown>;
-  for (const field of [
-    "agentId",
-    "deleteAfterRun",
-    "delivery",
-    "description",
-    "enabled",
-    "failureAlert",
-    "name",
-    "payload",
-    "schedule",
-    "scheduledToolPolicy",
-    "sessionKey",
-    "sessionTarget",
-    "wakeMode",
-  ] as const) {
-    if (!isDeepStrictEqual(normalizedConfig[field], projected[field])) {
-      return true;
-    }
-  }
-  return false;
 }

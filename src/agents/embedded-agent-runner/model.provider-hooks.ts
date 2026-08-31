@@ -13,7 +13,7 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
-import { inheritModelProviderMetadataOwners } from "../provider-request-config.js";
+import { inheritModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import {
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -29,7 +29,7 @@ export type ProviderRuntimeHooks = {
   ) => string | undefined;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => Promise<void>;
+  ) => ReturnType<typeof prepareProviderDynamicModel>;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
   shouldPreferProviderRuntimeResolvedModel?: (
     params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
@@ -233,7 +233,7 @@ export function normalizeResolvedModel(params: {
     normalizedInputModel.requestTimeoutMs !== undefined
       ? { ...normalizedModel, requestTimeoutMs: normalizedInputModel.requestTimeoutMs }
       : normalizedModel;
-  return inheritModelProviderMetadataOwners(
+  return inheritModelProviderRequestRouteFacts(
     params.model,
     canonicalizeLegacyResolvedModel({
       provider: params.provider,

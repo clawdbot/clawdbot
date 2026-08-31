@@ -34,11 +34,17 @@ export const slackChannelConfigUiHints = {
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+      "progress.style":
+        'Slack progress presentation: "card" (default) uses structured task/session cards; "compact" keeps one editable text draft that the final answer replaces in place when Slack can safely edit it.',
       "progress.nativeTaskCards":
-        'Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
+        'Slack native task-card progress updates when channels.slack.streaming.mode="progress", progress.style="card", and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
     },
     progress: { labels: "openclaw" },
   }),
+  joinIntro: {
+    label: "Slack Channel Join Introduction",
+    help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",
+  },
   allowBots: {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",
@@ -97,7 +103,7 @@ export const slackChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Slack Exec Approvals",
-    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this Slack account.",
+    help: 'Slack-native exec approval routing and approver authorization. Set enabled to "auto" or true to enable DM-first native approvals when approvers can be resolved for this Slack account; unset or false disables them.',
   },
   presenceEvents: {
     label: "Slack Presence Events",
@@ -107,13 +113,21 @@ export const slackChannelConfigUiHints = {
     label: "Slack Presence Event Mode",
     help: '"off" disables polling; "auto" covers DMs, MPIMs, and recent threads with up to 8 observed people; "on" also covers larger threads and top-level channels.',
   },
+  "presenceEvents.prompt": {
+    label: "Slack Presence Event Prompt",
+    help: "Replace the default greeting guidance appended after presence facts. Use an empty string to omit event-specific guidance and let workspace instructions such as AGENTS.md govern behavior. Maximum: 20,000 characters.",
+  },
   "channels.*.presenceEvents.mode": {
     label: "Slack Channel Presence Event Mode",
     help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
   },
+  "channels.*.presenceEvents.prompt": {
+    label: "Slack Channel Presence Event Prompt",
+    help: "Override the account-level presence-event prompt for one Slack channel. Maximum: 20,000 characters.",
+  },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
-    help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
+    help: 'Controls Slack native exec approvals for this account: "auto" or true enables DM-first native approvals when approvers can be resolved; unset or false disables them.',
   },
   "execApprovals.approvers": {
     label: "Slack Exec Approval Approvers",

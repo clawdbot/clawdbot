@@ -122,16 +122,6 @@ describe("image-generation provider registry", () => {
 });
 
 describe("video-generation provider registry", () => {
-  it("delegates provider resolution to the capability provider boundary", async () => {
-    const { listVideoGenerationProviders } = await loadProviderRegistry();
-
-    expect(listVideoGenerationProviders()).toStrictEqual([]);
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "videoGenerationProviders",
-      cfg: undefined,
-    });
-  });
-
   it("uses active plugin providers without loading from disk", async () => {
     resolvePluginCapabilityProvidersMock.mockReturnValue([
       createVideoProvider({ id: "custom-video" }),

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   addSubagentRunForTests,
@@ -10,6 +11,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
@@ -18,12 +20,14 @@ import {
 } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentCommandCall,
@@ -40,6 +44,7 @@ import {
   operatorWriteGatewayClient,
   resetAgentTaskRegistryForTests,
   waitForAgentCommandCall,
+  waitForAgentCommandCallAfter,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
@@ -108,8 +113,8 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    expectStringFieldContains(error, "message", "ended during restart recovery");
   });
 
   it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
@@ -189,6 +194,7 @@ describe("gateway agent handler", () => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -198,6 +204,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run"), {
@@ -232,7 +239,7 @@ describe("gateway agent handler", () => {
           },
           list: [{ id: "main", default: true }, { id: "work" }],
         },
-      };
+      } satisfies typeof mocks.loadConfigReturn;
       mocks.listAgentIds.mockReturnValue(["main", "work"]);
       mocks.loadConfigReturn = cfg;
       mocks.loadSessionEntry.mockReturnValue({
@@ -267,6 +274,7 @@ describe("gateway agent handler", () => {
           pluginRuntimeOwnerId: "memory-core",
         },
       };
+      const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
 
       const respond = await invokeAgent(
         {
@@ -280,6 +288,7 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+      await waitForAgentCommandCallAfter(initialCommandCallCount);
 
       const acceptedPayload = respond.mock.calls.find(
         ([ok, payload]) =>
@@ -520,8 +529,9 @@ describe("gateway agent handler", () => {
         resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         const persistSubagentRunsToDiskOrThrow = vi.fn();
+        const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
         persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-          throw new Error("disk full");
+          throw persistenceError;
         });
         applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow,
@@ -530,7 +540,7 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:subagent:registry-fail";
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
-        };
+        } satisfies typeof mocks.loadConfigReturn;
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
@@ -583,8 +593,11 @@ describe("gateway agent handler", () => {
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(findTaskByRunId(runId)).toBeUndefined();
-        const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-        expectStringFieldContains(error, "message", "run was not started");
+        expectRespondError(respond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full | SQLITE_FULL",
+        });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
           expect.stringContaining("rejecting untracked dispatch"),
         );
@@ -633,8 +646,11 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
         });
         expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
-        const adoptionError = expectRespondError(adoptionRespond, { code: ErrorCodes.UNAVAILABLE });
-        expectStringFieldContains(adoptionError, "message", "run was not started");
+        expectRespondError(adoptionRespond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full during paused-run adoption",
+        });
 
         resetSubagentRegistryForTests({ persist: false });
         const retryRunId = "plugin-subagent-registry-retry";
@@ -677,6 +693,7 @@ describe("gateway agent handler", () => {
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -686,13 +703,14 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run-error" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "failed",
-          error: "Error: agent unavailable",
+          error: "agent unavailable",
         });
       });
     });
@@ -708,6 +726,7 @@ describe("gateway agent handler", () => {
         meta: { durationMs: 100, aborted: true },
       });
       const context = makeContext();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -717,6 +736,7 @@ describe("gateway agent handler", () => {
         },
         { context, reqId: "task-registry-agent-run-aborted" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
@@ -909,6 +929,55 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("projects a recorded failed dispatch outcome through agent.wait", async () => {
+    mocks.agentCommand.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Device worker unavailable.", isError: true }],
+          meta: {},
+        },
+        "failed",
+      ),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+    const runId = "agent-run-recorded-dispatch-failure";
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run on the unavailable device",
+        sessionKey: "agent:main:main",
+        timeout: "600",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(respond),
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "error", summary: "failed" }),
+        undefined,
+        { runId },
+      );
+    });
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+    });
+  });
+
   it.each([
     {
       label: "tool use past the nominal deadline without an abort signal",
@@ -1026,7 +1095,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "cancelled",
-          error: "AbortError: This operation was aborted",
+          error: "This operation was aborted",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
@@ -1044,7 +1113,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies an unsignaled AbortError task as cancelled without changing the error wire", async () => {
+  it("classifies an unsignaled AbortError task as cancelled without changing failure status", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-task-plain-abort-" }, async (root) => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
@@ -1069,12 +1138,12 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "cancelled",
-          error: "AbortError: This operation was aborted",
+          error: "This operation was aborted",
         });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "error",
-          summary: "AbortError: This operation was aborted",
+          summary: "This operation was aborted",
         });
         expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(false);
       });
@@ -1150,7 +1219,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: chat run timed out",
+          error: "chat run timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
@@ -1200,7 +1269,7 @@ describe("gateway agent handler", () => {
             runtime: "cli",
             childSessionKey: "agent:main:main",
             status: "timed_out",
-            error: "FailoverError: fallback result classified terminal abort",
+            error: "fallback result classified terminal abort",
           });
           expectRecordFields(
             context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.payload,
@@ -1243,14 +1312,14 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: provider request timed out",
+          error: "provider request timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.payload,
           {
             runId: "task-registry-agent-run-provider-timeout",
             status: "error",
-            summary: "TimeoutError: provider request timed out",
+            summary: "provider request timed out",
           },
         );
         expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
@@ -1391,11 +1460,51 @@ describe("gateway agent handler", () => {
         terminalOutcome: {
           reason: "failed",
           status: "error",
-          error: "Error: provider request failed",
+          error: "provider request failed",
         },
         onRecovered: expect.any(Function),
       });
       expect(respond).toHaveBeenCalled();
+    });
+  });
+
+  it("emits provider failure messages without the internal error class name", async () => {
+    const message =
+      "The selected model was not found by the provider. Check the model id or choose a different model.";
+    mocks.agentCommand.mockRejectedValueOnce(
+      new FailoverError(message, {
+        reason: "model_not_found",
+        provider: "ollama",
+        model: "definitely-not-a-real-model:latest",
+      }),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "agent-run-model-not-found";
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "hi",
+        sessionKey: "agent:badmodel:main",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(respond),
+      context,
+      taskTrackingMode: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { runId, status: "error", summary: message },
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+        { runId, error: message },
+      );
+      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
     });
   });
 
@@ -1638,7 +1747,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callValue) => callValue[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -1989,7 +2098,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callLocal) => callLocal[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -2364,7 +2473,7 @@ describe("gateway agent handler", () => {
         context,
         client: {
           connId: "conn-1",
-          connect: { caps: ["tool-events"] },
+          connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
         } as never,
       },
     );
@@ -2454,7 +2563,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves selected-global agent id on cached accepted responses", async () => {
+  it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
@@ -2470,6 +2579,11 @@ describe("gateway agent handler", () => {
         sessionKey: "global",
         agentId: "work",
         status: "accepted",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
       },
     });
     const respond = vi.fn();
@@ -2489,6 +2603,11 @@ describe("gateway agent handler", () => {
       sessionKey: "global",
       agentId: "work",
       status: "in_flight",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });

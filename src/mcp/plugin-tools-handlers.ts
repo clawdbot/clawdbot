@@ -8,6 +8,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
 import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
+import { isToolResultError } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,6 +17,10 @@ import { coerceChatContentText } from "../shared/chat-content.js";
 type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
+};
+
+type ToolWithBeforeToolCallHookContext = AnyAgentTool & {
+  [BEFORE_TOOL_CALL_HOOK_CONTEXT]?: unknown;
 };
 
 function toMcpContentBlock(block: unknown): unknown {
@@ -56,7 +61,7 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
 }
 
 function resolveBeforeToolCallRunId(tool: AnyAgentTool): string | undefined {
-  const context = (tool as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  const context = (tool as ToolWithBeforeToolCallHookContext)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
   return isRecord(context) && typeof context.runId === "string" ? context.runId : undefined;
 }
 
@@ -100,6 +105,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       const toolCallId = `mcp-${randomUUID()}`;
       try {
         const result = await entry.tool.execute(toolCallId, params.arguments ?? {}, signal);
+        const isError = isToolResultError(result);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content
@@ -108,6 +114,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
           content: Array.isArray(rawContent)
             ? rawContent.map(toMcpContentBlock)
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
+          ...(isError ? { isError: true } : {}),
         };
       } catch (err) {
         return {

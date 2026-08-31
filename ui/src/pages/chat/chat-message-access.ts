@@ -16,5 +16,5 @@ export function resolveChatMessageAccess(state: ChatMessageAccessState) {
     fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
     loadFullAssistantMessage: fullMessageLoader,
   };
-  return { catalogKey, fullMessageLoader, chatProps };
+  return { catalogKey, chatProps };
 }

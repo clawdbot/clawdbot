@@ -1,5 +1,6 @@
 // Approval renderer helpers convert approval request data into channel-safe display text.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import {
   buildApprovalButtonPresentation,
   buildTypedApprovalPresentation,
@@ -36,7 +37,7 @@ type BuildApprovalPendingReplyPayloadParams = {
 
 /** Build a shipped command-backed approval payload. */
 export function buildApprovalPendingReplyPayload(
-  params: BuildApprovalPendingReplyPayloadParams & { approvalKind?: "exec" | "plugin" },
+  params: BuildApprovalPendingReplyPayloadParams & { approvalKind?: ChannelApprovalKind },
 ): ReplyPayload {
   // Keep defaults aligned with the generic approval command UI when callers do
   // not provide request-scoped decision restrictions.
@@ -64,7 +65,7 @@ export function buildApprovalPendingReplyPayload(
 
 /** Build a pending approval payload with canonical typed decision actions. */
 export function buildTypedApprovalPendingReplyPayload(
-  params: BuildApprovalPendingReplyPayloadParams & { approvalKind: "exec" | "plugin" },
+  params: BuildApprovalPendingReplyPayloadParams & { approvalKind: ChannelApprovalKind },
 ): ReplyPayload {
   const payload = buildApprovalPendingReplyPayload(params);
   return {

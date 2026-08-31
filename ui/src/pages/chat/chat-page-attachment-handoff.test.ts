@@ -11,7 +11,8 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
-import { insertPane, type ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { insertPane } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -42,7 +43,7 @@ function configure(page: ChatPage) {
   const context = {
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch: vi.fn() },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null } },
+    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
     navigate: vi.fn(),
     replace: vi.fn(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },

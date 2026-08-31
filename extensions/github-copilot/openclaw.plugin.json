@@ -44,7 +44,11 @@
             "contextWindow": 1000000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
-            "compat": { "codeMode": "capable" }
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
+            }
           },
           {
             "id": "claude-sonnet-5",
@@ -93,6 +97,13 @@
           {
             "id": "gemini-3.6-flash",
             "name": "Gemini 3.6 Flash",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "input": ["text", "image"],
             "contextWindow": 1048576,
             "maxTokens": 65536,
@@ -101,6 +112,13 @@
           {
             "id": "gemini-3.1-pro-preview",
             "name": "Gemini 3.1 Pro Preview",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "input": ["text", "image"],
             "contextWindow": 1048576,
             "maxTokens": 65536,
@@ -109,6 +127,13 @@
           {
             "id": "gemini-3.5-flash",
             "name": "Gemini 3.5 Flash",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "status": "deprecated",
             "replacedBy": "gemini-3.6-flash",
             "input": ["text", "image"],
@@ -119,6 +144,13 @@
           {
             "id": "gemini-2.5-pro",
             "name": "Gemini 2.5 Pro",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "status": "deprecated",
             "replacedBy": "gemini-3.1-pro-preview",
             "input": ["text", "image"],
@@ -130,39 +162,44 @@
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.6-terra",
             "name": "GPT-5.6 Terra",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.6-luna",
             "name": "GPT-5.6 Luna",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 1, "output": 6, "cacheRead": 0.1, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.3-codex",
             "name": "GPT-5.3-Codex",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 400000,
             "contextTokens": 272000,
@@ -175,6 +212,8 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-terra",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "maxTokens": 128000,
@@ -186,12 +225,13 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-sol",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 272000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] }
           },
           {
             "id": "gpt-5.4-mini",
@@ -199,6 +239,8 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-luna",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 400000,
             "contextTokens": 272000,
@@ -221,7 +263,7 @@
     }
   },
   "contracts": {
-    "memoryEmbeddingProviders": ["github-copilot"],
+    "embeddingProviders": ["github-copilot"],
     "usageProviders": ["github-copilot"]
   },
   "setup": {

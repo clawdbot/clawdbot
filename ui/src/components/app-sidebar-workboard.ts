@@ -1,3 +1,4 @@
+import type { TemplateResult } from "lit";
 export type SidebarWorkboardBoard = {
   id: string;
   name?: string;
@@ -51,4 +52,3 @@ export const EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT: SidebarWorkboardSnapshot = {
   boards: [],
   ready: false,
 };
-import type { TemplateResult } from "lit";

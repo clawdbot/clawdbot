@@ -1,6 +1,7 @@
 // Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
 
@@ -17,23 +18,9 @@ type UserChatMessageContentBlock = {
   };
 };
 
-type BuildUserChatMessageContentOptions = {
-  renderInlineImageDataUrls?: boolean;
-};
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
-}
-
-export function buildUserChatMessageContentBlocks(
+function buildUserChatMessageContentBlocks(
   message: string,
   attachments?: readonly ChatAttachment[],
-  options: BuildUserChatMessageContentOptions = {},
 ): UserChatMessageContentBlock[] {
   const blocks: UserChatMessageContentBlock[] = [];
   const text = message.trim();
@@ -46,10 +33,6 @@ export function buildUserChatMessageContentBlocks(
       continue;
     }
     if (attachment.mimeType.startsWith("image/")) {
-      if (isInlineDataUrl(previewUrl) && !options.renderInlineImageDataUrls) {
-        blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
-        continue;
-      }
       blocks.push({
         type: "image",
         url: previewUrl,
@@ -73,4 +56,62 @@ export function buildUserChatMessageContentBlocks(
     });
   }
   return blocks;
+}
+
+type LocalUserMessageInput = {
+  attachments?: readonly ChatAttachment[];
+  createdAt: number;
+  pending?: {
+    error?: string;
+    id: string;
+    state?: string;
+  };
+  replyToId?: string;
+  runId?: string;
+  sender?: SenderIdentity;
+  sequence?: number;
+  text: string;
+};
+
+type LocalUserMessage = {
+  role: "user";
+  content: UserChatMessageContentBlock[];
+  timestamp: number;
+  __openclaw: Record<string, unknown> & {
+    idempotencyKey?: string;
+    seq?: number;
+  };
+};
+
+/** Canonical local user-turn projection shared by optimistic and acknowledged sends. */
+export function buildLocalUserMessage(input: LocalUserMessageInput): LocalUserMessage | null {
+  const content = buildUserChatMessageContentBlocks(input.text, input.attachments);
+  if (content.length === 0) {
+    return null;
+  }
+  return {
+    role: "user",
+    content,
+    timestamp: input.createdAt,
+    __openclaw: {
+      ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
+      ...(input.pending
+        ? {
+            kind: "pending-send",
+            id: input.pending.id,
+            ...(input.pending.state ? { state: input.pending.state } : {}),
+            ...(input.pending.error ? { error: input.pending.error } : {}),
+          }
+        : {}),
+      ...(input.replyToId ? { replyToId: input.replyToId } : {}),
+      ...(input.sender?.id ? { senderId: input.sender.id } : {}),
+      ...(input.sender?.identity ? { senderIdentity: input.sender.identity } : {}),
+      ...(input.sender?.name ? { senderName: input.sender.name } : {}),
+      ...(input.sender?.username ? { senderUsername: input.sender.username } : {}),
+      ...(input.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: input.sender.profileAvatarUrl }
+        : {}),
+      ...(input.sequence === undefined ? {} : { seq: input.sequence }),
+    },
+  };
 }

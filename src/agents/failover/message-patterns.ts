@@ -1,5 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
+// First-party model transports use these terminal-contract forms when EOF arrives
+// before a response is complete; keep non-model stream lifecycle errors out.
+export const INCOMPLETE_ASSISTANT_STREAM_RE =
+  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without a terminal finish reason)[.!]?$/i;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -146,6 +150,7 @@ const ERROR_PATTERNS = {
     // Keep them anchored so unrelated local stream failures do not trigger model failover.
     /^stream disconnected before completion(?::[\s\S]*)?$/i,
     /^premature close of server response while trying to fetch\b/i,
+    INCOMPLETE_ASSISTANT_STREAM_RE,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",

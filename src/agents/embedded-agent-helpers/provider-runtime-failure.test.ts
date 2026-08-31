@@ -6,16 +6,6 @@ import {
 } from "../failover/classify.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
-const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
-const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE =
-  PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE + "; code:500";
-
-function expectNotFailoverSample(sample: string) {
-  expect(isTimeoutErrorMessage(sample)).toBe(false);
-  expect(classifyFailoverReason(sample)).toBeNull();
-  expect(isFailoverErrorMessage(sample)).toBe(false);
-}
-
 describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies complete HTML after an HTTP reason phrase as upstream_html", () => {
     const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
@@ -258,13 +248,5 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(isTimeoutErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
     expect(isFailoverErrorMessage(sample)).toBe(false);
-  });
-
-  it("does not classify plain status text with internal server error wording as timeout", () => {
-    expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
-  });
-
-  it("classifies internal server error status prose with code 500 as timeout", () => {
-    expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -10,12 +11,13 @@ import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
-  readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
+import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -48,6 +50,12 @@ const LEGACY_LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{
 // CHAT WINDOW: `${label} (untrusted, <order>, <relation>):` (338-360).
 
 function applyLegacyInboundLabelRewrites(text: string): string {
+  // Every legacy rule contains one of these spellings. Check decoded content so
+  // Unicode-escaped labels still reach their rewrite.
+  if (!text.includes("untrusted") && !text.includes("Untrusted")) {
+    return text;
+  }
+
   // Peel the timestamp envelope so the anchored (`^`) rules see the first header at column 0, exactly
   // as the runtime stripper does. Without this, "[Wed …] Conversation info (…):" stays unmarked and the
   // marker-only strippers expose its JSON. Reattached verbatim below.
@@ -190,30 +198,26 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedSessions = 0;
   let repairedEvents = 0;
 
-  const targetsBySqlitePath = new Map<string, { agentId: string; storePath: string }>();
+  const seenPaths = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (!targetsBySqlitePath.has(sqlitePath)) {
-      targetsBySqlitePath.set(sqlitePath, target);
-    }
-  }
-
-  for (const [sqlitePath, target] of targetsBySqlitePath) {
-    if (!fs.existsSync(sqlitePath)) {
+    const databaseOptions = resolveTargetSqliteOptions(target, env);
+    const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       continue;
     }
-
+    seenPaths.add(sqlitePath);
     const { agentId } = target;
-    const databaseOptions = { agentId, env, path: sqlitePath };
 
+    let readDatabase: DatabaseSync | undefined;
     try {
+      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
       // Detect read-only, then repair each session in its own transaction as it is found, so a large
       // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
       // latter gained its columns post-ship and is not safe to assume on old databases.
-      const sessionIds = readOnlySqliteTranscriptSessionIds(sqlitePath);
-      for (const sessionId of sessionIds) {
+      for (const sessionId of reader.sessionIds()) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, sessionId);
+        const readResult = reader.repairSnapshot(sessionId, normalizeLegacyInboundContextLabels);
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(
@@ -226,12 +230,14 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // Build per-row change list keyed by seq. Parse each row individually so unparseable
         // rows (with corrupted eventJson) don't break the whole session.
         const updates: Array<{ seq: number; eventJson: string }> = [];
+        let hasMalformedRow = false;
         for (const row of readResult.rows) {
           let event: TranscriptEvent;
           try {
             event = JSON.parse(row.eventJson) as TranscriptEvent;
           } catch {
-            // Skip rows with unparseable eventJson (corrupted data).
+            // A malformed sibling cannot produce a valid deferred projection after repair.
+            hasMalformedRow = true;
             continue;
           }
           if (normalizeLegacyInboundContextLabels(event)) {
@@ -249,6 +255,9 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // REPAIR PHASE (if --fix): process immediately, don't buffer.
         if (params.shouldRepair) {
           try {
+            if (hasMalformedRow) {
+              throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
+            }
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
                 // Use rows-only guard (tolerant of malformed JSON in sibling rows).
@@ -279,6 +288,8 @@ export async function noteSessionTranscriptLabelHealth(params: {
         `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
         NOTE_TITLE,
       );
+    } finally {
+      readDatabase?.close();
     }
   }
 

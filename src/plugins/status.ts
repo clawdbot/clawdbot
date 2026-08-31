@@ -10,7 +10,6 @@ import {
   inspectNativePluginMcpRuntimeSupport,
 } from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
-import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
@@ -22,7 +21,6 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
@@ -33,15 +31,18 @@ import {
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import {
+  formatPluginCompatibilityNotice,
+  type PluginCompatibilityNotice,
+} from "./status-compatibility.js";
 import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -57,21 +58,14 @@ export {
 } from "./status-snapshot.js";
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
-export type PluginCompatibilityNotice = {
-  pluginId: string;
-  code:
-    | "hook-only"
-    | "deprecated-memory-embedding-provider-api"
-    | "removed-session-transcript-file-api";
-  compatCode: PluginCompatCode;
-  severity: "warn" | "info";
-  message: string;
-};
-
-export type PluginCompatibilitySummary = {
-  noticeCount: number;
-  pluginCount: number;
-};
+export {
+  formatPluginCompatibilityNotice,
+  summarizePluginCompatibility,
+} from "./status-compatibility.js";
+export type {
+  PluginCompatibilityNotice,
+  PluginCompatibilitySummary,
+} from "./status-compatibility.js";
 
 export type PluginInspectReport = {
   workspaceDir?: string;
@@ -124,7 +118,6 @@ export type PluginInspectReport = {
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape"> & {
     diagnostics: readonly PluginDiagnostic[];
-    hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
@@ -136,20 +129,6 @@ function buildCompatibilityNoticesForInspect(
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
-    });
-  }
-  const usesMemoryEmbeddingProviderApi =
-    inspect.plugin.memoryEmbeddingProviderIds.length > 0 ||
-    (inspect.plugin.contracts?.memoryEmbeddingProviders?.length ?? 0) > 0 ||
-    inspect.hasRuntimeMemoryEmbeddingProviderRegistration;
-  if (usesMemoryEmbeddingProviderApi && inspect.plugin.origin !== "bundled") {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "deprecated-memory-embedding-provider-api",
-      compatCode: "deprecated-memory-embedding-provider-api",
-      severity: "warn",
-      message:
-        "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.",
     });
   }
   if (usesRemovedSessionTranscriptFileApi(inspect)) {
@@ -209,6 +188,8 @@ type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
   onlyPluginIds?: readonly string[];
+  /** Capture full registrations without starting channel runtime sidecars. */
+  runtimeInspection?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -235,17 +216,14 @@ function buildPluginReport(
       workspaceDir: initialWorkspaceDir,
       ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
     });
-  const baseContext = {
-    ...resolvePluginRuntimeLoadContext({
-      config: rawConfig,
-      env: params?.env,
-      logger: params?.logger,
-      workspaceDir: initialWorkspaceDir,
-      onlyPluginIds: params?.onlyPluginIds,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-    }),
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-  };
+  const baseContext = resolvePluginRuntimeLoadContext({
+    config: rawConfig,
+    env: params?.env,
+    logger: params?.logger,
+    workspaceDir: initialWorkspaceDir,
+    onlyPluginIds: params?.onlyPluginIds,
+    metadataSnapshot,
+  });
   const workspaceDir = baseContext.workspaceDir ?? initialWorkspaceDir;
   const context =
     workspaceDir === baseContext.workspaceDir
@@ -294,6 +272,7 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              toolDiscovery: params?.runtimeInspection,
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -328,7 +307,16 @@ function buildPluginReport(
     workspaceDir,
     workspaceScope: workspace.workspaceScope,
     ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(registry.diagnostics, workspace),
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      [
+        ...registry.diagnostics,
+        ...collectPluginCapabilityConsentDiagnostics({
+          index: metadataSnapshot.index,
+          manifests: manifestByPluginId,
+        }),
+      ],
+      workspace,
+    ),
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
@@ -382,7 +370,9 @@ export function buildPluginInspectReport(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
-  const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
+  const plugin =
+    report.plugins.find((entry) => entry.id === params.id) ??
+    report.plugins.find((entry) => entry.name === params.id);
   if (!plugin) {
     return null;
   }
@@ -469,14 +459,10 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
-    (entry) => entry.pluginId === plugin.id,
-  );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
     diagnostics,
-    hasRuntimeMemoryEmbeddingProviderRegistration,
   });
   return {
     workspaceDir: report.workspaceDir,
@@ -598,17 +584,4 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
     ...params,
     report: registrationReport,
   });
-}
-
-export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
-  return `${notice.pluginId} ${notice.message}`;
-}
-
-export function summarizePluginCompatibility(
-  notices: PluginCompatibilityNotice[],
-): PluginCompatibilitySummary {
-  return {
-    noticeCount: notices.length,
-    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
-  };
 }

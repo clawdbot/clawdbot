@@ -36,7 +36,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, { sessionKey: "main" });
         const startedAt = Date.now();
 
-        await page.goto(`${suite.server.baseUrl}activity`);
+        await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.getByText("No activity yet.", { exact: true }).waitFor();
 
         await gateway.emitGatewayEvent("agent", {

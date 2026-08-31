@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -52,8 +53,23 @@ export function readConfigMutationFileSync(
 ): string {
   // These explicit CLI file flags have historically followed user-provided
   // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
-  const fd = fs.openSync(filePath, "r");
+  let fd: number;
   try {
+    fd = fs.openSync(filePath, "r");
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new Error(`${sourceLabel} not found: ${filePath}. Check the path and try again.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) {
+      throw new Error(
+        `${sourceLabel} must be a regular file: ${filePath}. Choose a JSON5 input file and try again.`,
+      );
+    }
     try {
       return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
     } catch (error) {
@@ -100,11 +116,14 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
+  let parsed: unknown;
   try {
-    return JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
   } catch (err) {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {
@@ -163,14 +182,6 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  let raw: string;
-  try {
-    raw = readConfigMutationFileSync(pathname, "--batch-file");
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
-    }
-    throw err;
-  }
+  const raw = readConfigMutationFileSync(pathname, "--batch-file");
   return parseBatchEntries(raw, "--batch-file");
 }

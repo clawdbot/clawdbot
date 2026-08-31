@@ -10,7 +10,7 @@ const draftStream = vi.hoisted(() => ({
   seal: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
   retarget: vi.fn(async () => {}),
-  cleanupRetargeted: vi.fn(async () => {}),
+  cleanupPendingMessages: vi.fn(async () => {}),
   forceNewMessage: vi.fn(),
 }));
 
@@ -33,7 +33,7 @@ describe("Discord progress visibility", () => {
     vi.useRealTimers();
   });
 
-  it("retries identical progress until Discord acknowledges a draft message", async () => {
+  it("retries a quiet summary until Discord acknowledges a draft message", async () => {
     const controller = createDiscordDraftPreviewController({
       cfg: {},
       discordConfig: { streaming: { mode: "progress" } },
@@ -53,6 +53,7 @@ describe("Discord progress visibility", () => {
     expect(await controller.pushItemEvent(progress)).toBe(false);
     await vi.advanceTimersByTimeAsync(1_500);
     expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenLastCalledWith("Working");
 
     expect(await controller.pushItemEvent(progress)).toBe(false);
     expect(draftStream.update).toHaveBeenCalledTimes(2);

@@ -9,19 +9,11 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type PluginUpdateOptions = {
   all?: boolean;
-  acknowledgeClawhubRisk?: boolean;
+  acceptCapabilities?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
-
-type CommanderClawHubRiskOptions = Record<string, unknown> & {
-  acknowledgeClawHubRisk?: boolean;
-  acknowledgeClawhubRisk?: boolean;
-};
-
-function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
-  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -141,9 +133,10 @@ export function registerPluginsCli(program: Command) {
     .command("enable")
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
+    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
+    .action(async (id: string, opts: { acceptCapabilities?: boolean }) => {
       const { runPluginsEnableCommand } = await loadPluginsRuntime();
-      await runPluginsEnableCommand(id);
+      await runPluginsEnableCommand(id, opts);
     });
 
   plugins
@@ -184,14 +177,15 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -201,7 +195,9 @@ export function registerPluginsCli(program: Command) {
     .action(
       async (
         raw: string,
-        opts: CommanderClawHubRiskOptions & {
+        opts: {
+          acceptCapabilities?: boolean;
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -210,10 +206,7 @@ export function registerPluginsCli(program: Command) {
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        });
+        await runPluginsInstallAction(raw, opts);
       },
     );
 
@@ -223,25 +216,20 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({
-        id,
-        opts: {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        },
-      });
+      await runPluginUpdateCommand({ id, opts });
     });
 
   plugins

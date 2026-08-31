@@ -750,7 +750,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+      expect(result.error).toContain("Install blocked by policy");
+      expect(result.error).toContain("Reason: blocked installed package tree");
     }
     const projectRoot = pluginNpmProjectRoot(npmRoot, blockedPlugin);
     try {
@@ -839,7 +840,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+      expect(result.error).toContain("Install blocked by policy");
+      expect(result.error).toContain("Reason: blocked installed package tree");
     }
     const rootManifest = await readJson<{
       dependencies?: Record<string, string>;

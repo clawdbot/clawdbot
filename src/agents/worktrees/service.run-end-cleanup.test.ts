@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,20 +62,28 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
   }
 
   it("removes an allocated worktree when its commit guard closes during setup", async () => {
-    let checks = 0;
+    const setup = path.join(repo, ".openclaw");
+    await fs.mkdir(setup);
+    const closed = path.join(setup, "authority-closed");
+    await fs.writeFile(
+      path.join(setup, "worktree-setup.sh"),
+      '#!/bin/sh\ntouch "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/authority-closed"\n',
+      { mode: 0o755 },
+    );
     await expect(
       service.create({
         repoRoot: repo,
         name: "closed-authority",
         baseRef: "HEAD",
         commitGuard: () => {
-          checks += 1;
-          if (checks === 2) {
+          if (existsSync(closed)) {
             throw new TypeError("authority closed");
           }
         },
       }),
     ).rejects.toThrow("authority closed");
+
+    expect(existsSync(closed)).toBe(true);
 
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("closed-authority");
     expect(await git(repo, "branch", "--list", "openclaw/closed-authority")).toBe("");
@@ -106,7 +115,6 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       claimWorktreeRemoval(env, {
         worktreeId: staleRecord.id,
         token: "late-remover",
-        force: false,
       });
     } catch (error) {
       contention = error;
@@ -200,6 +208,43 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
     expect(retained?.removedAt).toBeUndefined();
     await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("retain me\n");
+  });
+
+  it.each([
+    { kind: "independent", linked: false },
+    { kind: "same-repository linked", linked: true },
+  ])("retains an ignored nested $kind repository at run end", async ({ linked }) => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "nested/\n");
+    await git(repo, "add", ".gitignore");
+    await git(repo, "commit", "-m", "ignore nested checkout state");
+    await git(repo, "push", "origin", "main");
+
+    const created = await materialize(linked ? "nested-linked" : "nested-independent");
+    const nested = path.join(created.path, "nested", "checkout");
+    await fs.mkdir(linked ? path.dirname(nested) : nested, { recursive: true });
+    if (linked) {
+      await git(repo, "worktree", "add", "--detach", nested, "HEAD");
+    } else {
+      await git(nested, "init", "-b", "main");
+    }
+    const localState = path.join(nested, "local.txt");
+    await fs.writeFile(localState, "keep nested checkout state\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    expect(await git(created.path, "log", "HEAD", "--not", "--remotes", "--oneline")).toBe("");
+    await service.acquire(created.id);
+
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
+
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      runEndCleanup: { outcome: "retained-dirty", at: now },
+    });
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(await fs.readFile(localState, "utf8")).toBe("keep nested checkout state\n");
+    if (linked) {
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
+    } else {
+      expect((await fs.stat(path.join(nested, ".git"))).isDirectory()).toBe(true);
+    }
   });
 
   it("records unpushed retention", async () => {

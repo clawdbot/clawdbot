@@ -28,6 +28,7 @@ const zaloAccountSchema = z.object({
   responsePrefix: z.string().optional(),
 });
 
-export const ZaloConfigSchema = buildMultiAccountChannelSchema(zaloAccountSchema, {
-  accountsMode: "catchall",
-});
+export const ZaloConfigSchema = buildMultiAccountChannelSchema(
+  zaloAccountSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: zaloAccountSchema, accountsMode: "catchall" },
+);

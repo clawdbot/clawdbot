@@ -5,6 +5,7 @@ import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
+  collectAllResolvedPackagesFromLockfile,
   collectProdResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
@@ -17,6 +18,49 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 describe("pnpm-audit-prod", () => {
+  it("keeps toolchain snapshots separate from production while auditing both documents", () => {
+    const lockfile = `---
+lockfileVersion: '9.0'
+importers:
+  .:
+    packageManagerDependencies:
+      pnpm: {specifier: 12.0.0, version: 12.0.0}
+snapshots:
+  pnpm@12.0.0:
+    optionalDependencies:
+      native: 2.0.0
+  native@2.0.0: {}
+  shared@1.0.0:
+    dependencies:
+      tool-only: 1.0.0
+  tool-only@1.0.0: {}
+---
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      shared: {version: 1.0.0}
+snapshots:
+  shared@1.0.0: {}
+`;
+    expect(createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfile))).toEqual({
+      shared: ["1.0.0"],
+    });
+    expect(createBulkAdvisoryPayload(collectAllResolvedPackagesFromLockfile(lockfile))).toEqual({
+      native: ["2.0.0"],
+      pnpm: ["12.0.0"],
+      shared: ["1.0.0"],
+      "tool-only": ["1.0.0"],
+    });
+    expect(() => collectAllResolvedPackagesFromLockfile(`${lockfile}\n---\n`)).toThrow();
+    const brokenApplication = lockfile.replace(
+      "  shared@1.0.0: {}",
+      "  shared@1.0.0:\n    dependencies:\n      native: 2.0.0",
+    );
+    expect(() => collectProdResolvedPackagesFromLockfile(brokenApplication)).toThrow(
+      "Unable to resolve pnpm snapshot",
+    );
+  });
   it("parses explicit audit severity flags", () => {
     expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
     expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });

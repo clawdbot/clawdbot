@@ -1,6 +1,6 @@
 // Cron scratch register tests cover cron scratch command option validation.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 
 const callGatewayFromCli = vi.fn();
@@ -38,6 +38,38 @@ describe("cron scratch command", () => {
     });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["without --json", ["--set", "new note"]],
+    ["with --json", ["--unset", "--json"]],
+  ])("prints the write result as JSON %s", async (_label, args) => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+    await createCronProgram().parseAsync(["scratch", "job-1", ...args], { from: "user" });
+
+    expect(writeJson).toHaveBeenCalledWith({
+      ok: true,
+      scratch: null,
+      currentRevision: 3,
+      maxBytes: 1024,
+    });
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
+  it("documents the read/write JSON split", () => {
+    const scratch = createCronProgram().commands.find((command) => command.name() === "scratch");
+    const jsonOption = scratch?.options.find((option) => option.long === "--json");
+
+    expect(jsonOption?.description).toBe(
+      "Output scratch plus revision metadata as JSON; writes return JSON by default",
+    );
+    expect(jsonOption?.defaultValue).toBeUndefined();
+  });
+
   it.each(["0x2", "1e2", "2.5", "-1", "2a"])(
     "rejects non-decimal --expected-revision %j",
     async (revision) => {
@@ -72,6 +104,7 @@ describe("cron scratch command", () => {
   ])(
     "passes decimal --expected-revision %j through to the CAS write",
     async (revision, expectedRevision) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       await createCronProgram().parseAsync(
         ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
         { from: "user" },

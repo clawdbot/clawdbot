@@ -1,5 +1,11 @@
 // Slack tests cover message action dispatch plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
@@ -83,7 +89,20 @@ function largeTablePresentation() {
   };
 }
 
+const paddedMarkdownTable = [
+  `| ${"H".repeat(200)} | Value |`,
+  "| --- | --- |",
+  ...Array.from({ length: 20 }, () => "| x | 2 |"),
+].join("\n");
+
 describe("handleSlackMessageAction", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
   it("defaults reactions to the current inbound Slack message", async () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentMessageId: "171234.567" };
@@ -261,6 +280,100 @@ describe("handleSlackMessageAction", () => {
     expect(message.text).toBe(
       "Pipeline summary\n\nPipeline (table)\nAccount\tARR\nAcme\t125000\nGlobex\t82000",
     );
+  });
+
+  it.each([
+    { name: "ASCII", message: `${"x".repeat(4_000)}TAIL` },
+    { name: "multibyte", message: `${"😀".repeat(1_000)}TAIL` },
+    { name: "expanded Slack markdown", message: `${"&".repeat(801)}TAIL` },
+    {
+      name: "padded Markdown table",
+      message: paddedMarkdownTable,
+    },
+  ])("rejects oversized $name text-only edits before sending", async ({ message }) => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: { channelId: "C1", messageId: "171234.567", message },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("Slack edit exceeds the 4000-byte edit limit. Send a new message instead.");
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(["off", "bullets"] as const)(
+    "measures the account's %s table rendering before rejecting an edit",
+    async (tables) => {
+      const invoke = createInvokeSpy();
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {
+            channels: {
+              slack: {
+                defaultAccount: "work",
+                markdown: { tables: "code" },
+                accounts: { work: { markdown: { tables } } },
+              },
+            },
+          },
+          params: { channelId: "C1", messageId: "171234.567", message: paddedMarkdownTable },
+        } as never,
+        invoke: invoke as never,
+      });
+      expect(firstAction(invoke)).toMatchObject({
+        action: "editMessage",
+        content: paddedMarkdownTable,
+      });
+    },
+  );
+
+  it("accepts a text-only edit at Slack's exact byte limit", async () => {
+    const invoke = createInvokeSpy();
+    const message = "x".repeat(4_000);
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: { channelId: "C1", messageId: "171234.567", message },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
+  });
+
+  it("keeps oversized notification fallback for visibly rendered block edits", async () => {
+    const invoke = createInvokeSpy();
+    const message = "x".repeat(4_001);
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          message,
+          presentation: { blocks: [{ type: "text", text: "Visible block content" }] },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
+    expect(blockAt(firstAction(invoke), 0)).toMatchObject({ type: "section" });
   });
 
   it("edits native tables with a complete accessible text representation", async () => {
@@ -533,6 +646,59 @@ describe("handleSlackMessageAction", () => {
     expect(firstAction(invoke)).toMatchObject({ content: `- ${label}`, blocks: undefined });
   });
 
+  it.each(["text", "context"] as const)(
+    "keeps a complete oversized %s presentation in one text-only edit",
+    async (type) => {
+      const invoke = createInvokeSpy();
+      const text = "x".repeat(3_001);
+
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "171234.567",
+            presentation: { blocks: [{ type, text }] },
+          },
+        } as never,
+        invoke: invoke as never,
+      });
+
+      expect(firstAction(invoke)).toMatchObject({ content: text, blocks: undefined });
+    },
+  );
+
+  it.each([
+    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
+  ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "171234.567",
+            presentation: {
+              blocks: [{ type: "text", text }],
+            },
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow(
+      "Slack presentation fallback exceeds the 4000-byte edit limit. Send a new message instead.",
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("uses complete text-only fallback when an edit exceeds fifty blocks", async () => {
     const invoke = createInvokeSpy();
     const presentation = {
@@ -644,6 +810,26 @@ describe("handleSlackMessageAction", () => {
 
   it.each([
     {
+      name: "prefers an explicit reply target over an inherited Slack thread",
+      params: {
+        to: "channel:C1",
+        message: "Reply to the requested message",
+        threadId: "111.222",
+        replyTo: "999.000",
+      },
+      expected: { content: "Reply to the requested message", threadTs: "999.000" },
+    },
+    {
+      name: "falls back to the Slack thread when the reply target is not a timestamp",
+      params: {
+        to: "channel:C1",
+        message: "Reply in the current thread",
+        threadId: "111.222",
+        replyTo: "msg-internal-1",
+      },
+      expected: { content: "Reply in the current thread", threadTs: "111.222" },
+    },
+    {
       name: "passes replyBroadcast through for Slack thread sends",
       params: {
         to: "channel:C1",
@@ -736,6 +922,32 @@ describe("handleSlackMessageAction", () => {
         to: "channel:C1",
         filePath: "/tmp/report.txt",
         initialComment: "path alias",
+      },
+    },
+    {
+      name: "maps an upload-file caption to the upload's initial comment",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        caption: "chart attached",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "chart attached",
+      },
+    },
+    {
+      name: "prefers an explicit upload-file initial comment over message and caption",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        initialComment: "",
+        message: "message text",
+        caption: "caption text",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "",
       },
     },
   ])("$name", async ({ params, expected }) => {

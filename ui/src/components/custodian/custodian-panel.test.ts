@@ -5,6 +5,7 @@ import { createContext } from "../../pages/custodian/custodian-page.test-harness
 import { CustodianSessionStore } from "../../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "./custodian-panel.ts";
 
 type TestCustodianPanel = HTMLElement & {
@@ -108,6 +109,81 @@ describe("custodian panel", () => {
 
     panel.suppressed = true;
     await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("opens and closes from the global toggle event", async () => {
+    const { panel, store } = await mountPanel();
+    const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(true);
+    expect(refresh).toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it.each(["right", "bottom"])("drags only passive header chrome when docked %s", async (dock) => {
+    const { panel } = await mountPanel();
+    panel.suppressed = false;
+    await panel.updateComplete;
+    window.dispatchEvent(
+      new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true, dock } }),
+    );
+    await panel.updateComplete;
+
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
+    const cases = [
+      [".cp-header", true],
+      [".cp-title", true],
+      [".cp-actions", true],
+      [".cp-actions button:first-child", false],
+      [".cp-actions button:first-child svg", false],
+      [".cp-actions button:last-child", false],
+      [".cp-actions button:last-child svg", false],
+      ["openclaw-custodian-surface", false],
+    ] as const;
+    for (const [selector, draggable] of cases) {
+      postMessage.mockClear();
+      const target = panel.querySelector(selector);
+      expect(target, selector).not.toBeNull();
+      const event = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+      });
+      target!.dispatchEvent(event);
+      expect(postMessage, selector).toHaveBeenCalledTimes(draggable ? 1 : 0);
+      if (draggable) {
+        expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
+      }
+      expect(event.defaultPrevented, selector).toBe(draggable);
+    }
+
+    panel.querySelector<HTMLButtonElement>(".cp-actions button:first-child")!.click();
+    await panel.updateComplete;
+    expect(panel.querySelector(`.cp--${dock === "right" ? "bottom" : "right"}`)).not.toBeNull();
+    panel.querySelector<HTMLButtonElement>(".cp-actions button:last-child")!.click();
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("ignores toggle requests while unavailable", async () => {
+    const { panel } = await mountPanel();
+    panel.available = false;
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    await panel.updateComplete;
+
     expect(panel.custodianPanelOpen).toBe(false);
   });
 

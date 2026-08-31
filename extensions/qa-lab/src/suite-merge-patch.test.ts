@@ -56,6 +56,15 @@ describe("applyQaMergePatch", () => {
     });
   });
 
+  it("deletes keys the patch nulls out", () => {
+    expect(
+      applyQaMergePatch(
+        { messages: { groupChat: { mentionPatterns: ["openclaw"], visibleReplies: "automatic" } } },
+        { messages: { groupChat: { mentionPatterns: null } } },
+      ),
+    ).toEqual({ messages: { groupChat: { visibleReplies: "automatic" } } });
+  });
+
   it("ignores prototype-mutating object keys", () => {
     const patch = JSON.parse(
       `{"plugins":{"entries":{}},"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}}}`,

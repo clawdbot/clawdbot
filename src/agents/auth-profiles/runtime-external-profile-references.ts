@@ -2,11 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
-type RuntimeExternalCliStore = AuthProfileStore &
-  Pick<RuntimeAuthProfileStore, "runtimeExternalCliProfileIds">;
-
 export function getRuntimeExternalCliProfileIds(store: AuthProfileStore): readonly string[] {
-  return (store as RuntimeExternalCliStore).runtimeExternalCliProfileIds ?? [];
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  return runtimeStore.runtimeExternalCliProfileIds ?? [];
 }
 
 export function setRuntimeExternalCliProfileIds(
@@ -14,8 +12,22 @@ export function setRuntimeExternalCliProfileIds(
   profileIds: Iterable<string>,
 ): void {
   const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
-  (store as RuntimeExternalCliStore).runtimeExternalCliProfileIds =
-    ids.length > 0 ? ids : undefined;
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  runtimeStore.runtimeExternalCliProfileIds = ids.length > 0 ? ids : undefined;
+}
+
+export function getRuntimeLocalProfileIds(store: AuthProfileStore): readonly string[] {
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  return runtimeStore.runtimeLocalProfileIds ?? [];
+}
+
+export function setRuntimeLocalProfileIds(
+  store: AuthProfileStore,
+  profileIds: Iterable<string>,
+): void {
+  const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  runtimeStore.runtimeLocalProfileIds = ids.length > 0 ? ids : undefined;
 }
 
 export function removeRuntimeExternalProfileReferences(params: {
@@ -61,6 +73,10 @@ export function removeRuntimeExternalProfileReferences(params: {
   if (next.runtimePersistedProfileIds?.length === 0) {
     next.runtimePersistedProfileIds = undefined;
   }
+  setRuntimeLocalProfileIds(
+    next,
+    getRuntimeLocalProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
+  );
   next.runtimeExternalProfileIds = next.runtimeExternalProfileIds?.filter(
     (profileId) => !params.profileIds.has(profileId),
   );

@@ -44,7 +44,6 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
-  listAmbientGroupWatchTargets: () => new Set<string>(),
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
 }));
 
@@ -59,6 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
@@ -187,7 +187,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("single-flights identical concurrent lists and fans progress to active followers", async () => {
+  it("single-flights identical concurrent lists for one caller and fans progress to active followers", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -208,18 +208,19 @@ describe("session catalog Gateway methods", () => {
     const config = { agents: { list: [{ id: "main" }, { id: "research" }] } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
+    const sharedClient = { connId: "requester" };
     const leader = startCall(
       "sessions.catalog.list",
       { progressId: "leader-progress", agentId: "main" },
       config,
-      { connId: "leader" },
+      sharedClient,
       { broadcastToConnIds: leaderBroadcast },
     );
     const follower = startCall(
       "sessions.catalog.list",
       { progressId: "follower-progress", agentId: "main" },
       config,
-      { connId: "follower" },
+      sharedClient,
       { broadcastToConnIds: followerBroadcast },
     );
     const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
@@ -245,6 +246,55 @@ describe("session catalog Gateway methods", () => {
         catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
       });
     }
+  });
+
+  it("forwards one explicit multi-agent owner through list, read, continue, and archive", async () => {
+    const host = {
+      hostId: "gateway:local",
+      label: "Local Codex",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [
+        {
+          threadId: "thread-beta",
+          status: "stored",
+          archived: false,
+          canContinue: true,
+          canArchive: true,
+        },
+      ],
+    };
+    const list = vi.fn(async (_request: { agentId?: string }) => [host]);
+    const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
+    const continueSession = vi.fn(async () => ({ sessionKey: "agent:beta:continued" }));
+    const archive = vi.fn(async () => ({ ok: true as const }));
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("codex", { list, read, continueSession, archive }) },
+    ];
+    const config = {
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    };
+    const locator = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-beta",
+      agentId: "beta",
+    };
+
+    await call("sessions.catalog.list", { catalogId: "codex", agentId: "beta" }, config);
+    await call("sessions.catalog.read", locator, config);
+    await call("sessions.catalog.continue", locator, config);
+    await call("sessions.catalog.archive", { ...locator, confirmNoOtherRunner: true }, config);
+
+    for (const [request] of list.mock.calls) {
+      expect(request).toEqual(expect.objectContaining({ agentId: "beta" }));
+    }
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ agentId: "beta" }));
+    expect(continueSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: "beta" }));
+    expect(archive).toHaveBeenCalledWith(expect.objectContaining({ agentId: "beta" }));
   });
 
   it("keeps differently ordered host filters distinct when sharing lists", async () => {
@@ -352,7 +402,11 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
-        createdActor: { type: "agent", id: "worker-1" },
+        createdActor: {
+          type: "agent",
+          id: "worker-1",
+          identity: { type: "agent", id: "worker-1" },
+        },
       }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
@@ -375,7 +429,8 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    // One frozen adoption index, then one current index for each progress/final delivery.
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(3);
     expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({
       agentId: "main",
       clone: false,
@@ -428,7 +483,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const catalogUsingNodes = (id: string) =>
@@ -455,7 +514,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const selectedList = vi.fn(async () => []);
@@ -818,6 +881,7 @@ describe("session catalog Gateway methods", () => {
       { connect: { scopes: ["operator.write", "operator.admin"] } },
     );
     expect(continueSession).toHaveBeenCalledWith({
+      agentId: "main",
       allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",
@@ -835,6 +899,7 @@ describe("session catalog Gateway methods", () => {
       threadId: "thread-1",
     });
     expect(continueSession).toHaveBeenCalledWith({
+      agentId: "main",
       allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",

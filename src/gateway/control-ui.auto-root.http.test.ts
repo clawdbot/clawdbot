@@ -65,7 +65,7 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
+        '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
       );
     });
   });

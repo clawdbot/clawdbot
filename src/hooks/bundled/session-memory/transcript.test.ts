@@ -1,6 +1,13 @@
 // Session-memory transcript extraction strips model/runtime artifacts before persistence.
 import { describe, expect, it } from "vitest";
-import { getRecentSessionContentFromEvents } from "./transcript.js";
+import { getRecentSessionProjectionFromEvents } from "./transcript.js";
+
+function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount?: number,
+): string | null {
+  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
+}
 
 function message(role: "user" | "assistant", content: unknown) {
   return {
@@ -183,6 +190,59 @@ describe("session-memory transcript extraction", () => {
     expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 8"));
     expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 9"));
     expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 10"));
+  });
+
+  it("collapses only the retained transcript tail to its least-trusted origin", () => {
+    const projection = getRecentSessionProjectionFromEvents(
+      [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "Earlier restricted request",
+            __openclaw: { senderIsOwner: false },
+          },
+        },
+        message("assistant", "Earlier restricted response"),
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "Current owner request",
+            __openclaw: { senderIsOwner: true },
+          },
+        },
+        message("assistant", "Current owner response"),
+      ],
+      2,
+    );
+
+    expect(projection).toEqual({
+      content: [
+        sessionMemoryRecord("user", "Current owner request"),
+        sessionMemoryRecord("assistant", "Current owner response"),
+      ].join("\n"),
+      originClass: "agent",
+    });
+  });
+
+  it("carries an omitted inter-session turn's restriction into its assistant response", () => {
+    const projection = getRecentSessionProjectionFromEvents([
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Forwarded internal instruction",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      },
+      message("assistant", "Response derived from omitted input"),
+    ]);
+
+    expect(projection).toEqual({
+      content: sessionMemoryRecord("assistant", "Response derived from omitted input"),
+      originClass: "untrusted",
+    });
   });
 
   it("filters messages before slicing (fix for #2681)", () => {

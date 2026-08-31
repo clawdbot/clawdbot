@@ -77,6 +77,37 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
+  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
+    const payloads = buildPayloads({
+      provider: "openai",
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        content: [],
+      }),
+    });
+
+    expect(payloads).toEqual([
+      {
+        text: expect.stringContaining("/login codex"),
+        isError: true,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
@@ -256,6 +287,58 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
   });
 
+  it("surfaces actionable numeric provider limits without replaying the raw error", () => {
+    const rawError =
+      "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
+  });
+
+  it("keeps numeric limits generic for non-token parameters", () => {
+    const rawError = "400 account_id (1234567890123456) exceeds maximum length (8)";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "1234567890123456");
+  });
+
+  it("does not infer a token maximum from unrelated trailing digits", () => {
+    const rawError = "400 max_tokens 384000 exceeds maximum for model gpt-5";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "provider maximum of 5");
+  });
+
   it("surfaces /new guidance for terminal thinking-signature replay failures", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}';
@@ -352,6 +435,59 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "Need answer concise");
     expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
   });
+
+  it.each(["request timed out", "LLM request timed out."])(
+    "defers assistant timeout %j to its terminal owner without changing tool-warning policy",
+    (errorMessage) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage,
+          content: [],
+        }),
+        lastToolError: {
+          toolName: "exec",
+          error: "command exited with code 1",
+          middlewareError: true,
+        },
+      });
+
+      expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      label: "connection failures",
+      rawError: "connect ECONNREFUSED 127.0.0.1:443",
+      visibleError: "connection refused",
+    },
+    {
+      label: "authentication refresh timeouts",
+      rawError:
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+      visibleError: "Authentication refresh timed out",
+    },
+  ])(
+    "preserves $label while terminal timeout handling is deferred",
+    ({ rawError, visibleError }) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage: rawError,
+          content: [],
+        }),
+      });
+
+      expect(payloads).toEqual([{ text: expect.stringContaining(visibleError), isError: true }]);
+    },
+  );
 
   it("suppresses raw aborted assistant error messages in user-facing reply payloads", () => {
     const payloads = buildPayloads({

@@ -1,4 +1,5 @@
 /** Sanitizes replayed tool calls and provider-specific transcript structure. */
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -8,7 +9,11 @@ import {
   validateGeminiTurns,
 } from "../../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  sanitizeToolUseResultPairing,
+  sanitizeToolUseResultPairingForModel,
+} from "../../session-transcript-repair.js";
+import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
@@ -42,14 +47,6 @@ type AnthropicToolResultContentBlock = {
   tool_use_id?: unknown;
   tool_call_id?: unknown;
 };
-
-function isThinkingLikeReplayBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
-}
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
   const seenToolCallIds = new Set<string>();
@@ -160,7 +157,7 @@ function sanitizeReplayToolCallInputs(
     }
     if (
       allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
+      message.content.some((block) => isThinkingLikeBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
@@ -223,7 +220,7 @@ function sanitizeReplayToolCallInputs(
     if (messageChanged) {
       changed = true;
       if (nextContent.length > 0) {
-        const nextMessage = { ...message, content: nextContent };
+        const nextMessage = replaceCompactionReplayOwnerContent(message, nextContent);
         for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
           priorToolCallIds.add(toolCall.id);
         }
@@ -270,7 +267,7 @@ function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined):
     return false;
   }
   return (
-    content.some((block) => isThinkingLikeReplayBlock(block)) &&
+    content.some((block) => isThinkingLikeBlock(block)) &&
     content.some((block) => isReplayToolCallBlock(block))
   );
 }
@@ -428,10 +425,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
-  const repaired = sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
-    missingToolResultText: "aborted",
-  });
+  const repaired = sanitizeToolUseResultPairingForModel(messages, true);
   return downgradeOpenAIFunctionCallReasoningPairs(
     normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
   );
@@ -453,8 +447,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const ctx = context as unknown as { messages?: unknown };
-    const messages = ctx?.messages;
+    const messages = context?.messages;
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
@@ -478,10 +471,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
-      ? sanitizeToolUseResultPairing(sanitized.messages, {
-          erroredAssistantResultPolicy: "drop",
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
         : sanitized.messages;
@@ -511,10 +501,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         nextMessages = validateAnthropicTurns(nextMessages);
       }
     }
-    const nextContext = {
-      ...(context as unknown as Record<string, unknown>),
-      messages: nextMessages,
-    } as unknown;
-    return baseFn(model, nextContext as typeof context, options);
+    const nextContext: typeof context = {
+      ...context,
+      messages: nextMessages as typeof context.messages,
+    };
+    return baseFn(model, nextContext, options);
   };
 }

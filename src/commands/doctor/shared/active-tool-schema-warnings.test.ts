@@ -2,10 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 
 const toolState = vi.hoisted(() => ({
   tools: [] as AnyAgentTool[],
-  pluginIds: {} as Record<string, string | undefined>,
   throwError: null as Error | null,
   runtimeModel: null as {
     id: string;
@@ -37,13 +37,6 @@ vi.mock("../../../agents/agent-tools.js", () => ({
   },
 }));
 
-vi.mock("../../../plugins/tools.js", () => ({
-  getPluginToolMeta: (toolLocal: { name: string }) => {
-    const pluginId = toolState.pluginIds[toolLocal.name];
-    return pluginId ? { pluginId, optional: false } : undefined;
-  },
-}));
-
 vi.mock("../../../agents/runtime-plan/tools.js", () => ({
   normalizeAgentRuntimeTools: (options: { tools: AnyAgentTool[] }) =>
     toolState.normalizeTools(options),
@@ -52,20 +45,23 @@ vi.mock("../../../agents/runtime-plan/tools.js", () => ({
 const { collectActiveToolSchemaProjectionWarnings } =
   await import("./active-tool-schema-warnings.js");
 
-function tool(name: string, parameters: unknown): AnyAgentTool {
-  return {
+function tool(name: string, parameters: unknown, pluginId?: string): AnyAgentTool {
+  const result = {
     name,
     label: name,
     description: name,
     parameters,
     execute: async () => ({ text: "ok" }),
   } as unknown as AnyAgentTool;
+  if (pluginId) {
+    setPluginToolMeta(result, { pluginId, optional: false });
+  }
+  return result;
 }
 
 describe("active tool schema doctor warnings", () => {
   beforeEach(() => {
     toolState.tools = [];
-    toolState.pluginIds = {};
     toolState.throwError = null;
     toolState.runtimeModel = null;
     toolState.resolveModelError = null;
@@ -86,9 +82,8 @@ describe("active tool schema doctor warnings", () => {
   it("warns with plugin ownership for active tools blocked by runtime projection", async () => {
     toolState.tools = [
       tool("message", { type: "object", properties: {} }),
-      tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } }),
+      tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } }, "fuzzplugin"),
     ];
-    toolState.pluginIds = { fuzzplugin_move_angles: "fuzzplugin" };
 
     expect(
       await collectActiveToolSchemaProjectionWarnings({
@@ -104,9 +99,6 @@ describe("active tool schema doctor warnings", () => {
     ).toEqual([
       '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object"). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
-    expect(toolState.createTools).toHaveBeenCalledWith(
-      expect.objectContaining({ toolPolicyAuditLogLevel: "debug" }),
-    );
   });
 
   it("warns about unreadable active tool entries without crashing", async () => {
@@ -138,9 +130,8 @@ describe("active tool schema doctor warnings", () => {
 
   it("does not validate disabled plugin mode", async () => {
     toolState.tools = [
-      tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } }),
+      tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } }, "fuzzplugin"),
     ];
-    toolState.pluginIds = { fuzzplugin_move_angles: "fuzzplugin" };
 
     expect(
       await collectActiveToolSchemaProjectionWarnings({
@@ -197,7 +188,11 @@ describe("active tool schema doctor warnings", () => {
 
   it("validates provider-normalized runtime schemas before reporting doctor health", async () => {
     const healthyTool = tool("message", { type: "object", properties: {} });
-    const dynamicTool = tool("fuzzplugin_move_angles", { type: "object", properties: {} });
+    const dynamicTool = tool(
+      "fuzzplugin_move_angles",
+      { type: "object", properties: {} },
+      "fuzzplugin",
+    );
     toolState.runtimeModel = {
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -207,7 +202,6 @@ describe("active tool schema doctor warnings", () => {
       compat: { unsupportedToolSchemaKeywords: ["$dynamicRef"] },
     };
     toolState.tools = [healthyTool, dynamicTool];
-    toolState.pluginIds = { fuzzplugin_move_angles: "fuzzplugin" };
     toolState.normalizeTools.mockImplementation(({ tools, modelApi, model }) => {
       if (
         modelApi !== "openai-responses" ||

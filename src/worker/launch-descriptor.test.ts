@@ -6,12 +6,14 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 3,
+    version: 4,
     connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
     admission: {
       environmentId: "environment-1",
@@ -34,6 +36,8 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       prompt: "Inspect the workspace.",
       suppressPromptTranscript: false,
       workspaceDir: "/tmp/openclaw-worker/workspace",
+      permissionMode: "workspace",
+      workerContainmentRoot: "/tmp/openclaw-worker/workspace",
       modelRef: { provider: "provider-1", model: "model-1" },
       inferenceOptions: { reasoning: "medium", maxTokens: 512 },
       initialMessages: [
@@ -51,6 +55,46 @@ function launchDescriptor(): WorkerLaunchDescriptor {
 }
 
 describe("worker launch descriptor", () => {
+  it("admits bounded image-only input and replay without raising the text budget", () => {
+    const descriptor = launchDescriptor();
+    const image = {
+      type: "image" as const,
+      data: createNoisyPngBuffer(256, 256).toString("base64"),
+      mimeType: "image/png",
+    };
+    expect(image.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+    descriptor.assignment.prompt = [image];
+    descriptor.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+    for (const suppressPromptTranscript of [false, true]) {
+      descriptor.assignment.suppressPromptTranscript = suppressPromptTranscript;
+      expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    }
+    for (const invalidImage of [
+      { ...image, data: "" },
+      { ...image, type: "text" },
+      { ...image, extra: true },
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, prompt: [invalidImage] },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+    descriptor.assignment.prompt = [
+      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+      image,
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.prompt = [
+      { ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
   it("accepts the exact admitted single-session launch shape", () => {
     const descriptor = launchDescriptor();
 
@@ -62,6 +106,40 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it("rejects a launch version inherited from the prototype", () => {
+    const descriptor = launchDescriptor();
+    const { version, ...ownFields } = descriptor;
+    const candidate = Object.assign(
+      Object.create({ version }) as Record<string, unknown>,
+      ownFields,
+    );
+
+    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
+
+  it("accepts the permission context pair only when both fields are present", () => {
+    const descriptor = launchDescriptor();
+    const {
+      permissionMode: _permissionMode,
+      workerContainmentRoot: _root,
+      ...withoutContext
+    } = descriptor.assignment;
+    expect(
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: withoutContext }).assignment,
+    ).toEqual(withoutContext);
+
+    for (const assignment of [
+      { ...withoutContext, permissionMode: "workspace" },
+      { ...withoutContext, workerContainmentRoot: "/tmp/openclaw-worker/workspace" },
+    ]) {
+      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, assignment })).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
+  });
+
   it("accepts only closed Unix or public WebSocket connection endpoints", () => {
     const descriptor = launchDescriptor();
     descriptor.connectionEndpoint = {
@@ -69,7 +147,13 @@ describe("worker launch descriptor", () => {
       url: "wss://gateway.example/tenant/__openclaw__/worker",
       tlsFingerprint: "ab:".repeat(31) + "ab",
     };
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual({
+      ...descriptor,
+      connectionEndpoint: {
+        ...descriptor.connectionEndpoint,
+        tlsFingerprint: "ab".repeat(32),
+      },
+    });
 
     const invalidEndpoints: unknown[] = [
       { kind: "unix", socketPath: "gateway.sock" },
@@ -85,8 +169,26 @@ describe("worker launch descriptor", () => {
       },
       {
         kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        cloudflareAccess: {
+          clientId: "cf-worker-plaintext-id",
+          clientSecret: "cf-worker-plaintext-secret",
+        },
+      },
+      {
+        kind: "websocket",
         url: "wss://gateway.example/__openclaw__/worker",
         tlsFingerprint: "",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "ab:cd:ef",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "g".repeat(64),
       },
       { ...descriptor.connectionEndpoint, unexpected: true },
     ];
@@ -164,7 +266,7 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 2 },
+      { ...descriptor, version: 3 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
@@ -191,8 +293,10 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
-    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser", "github_publish"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    expect(JSON.stringify(descriptor.assignment)).not.toContain("GH_CONFIG_DIR");
+    expect(JSON.stringify(descriptor.assignment)).not.toContain("GITHUB_TOKEN");
   });
 
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {
@@ -217,6 +321,54 @@ describe("worker launch descriptor", () => {
         parseWorkerLaunchDescriptor({
           ...descriptor,
           assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("requires a computer descriptor and grant together and rejects target substitution fields", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
+    descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
+    const { nodeId, ...computerFields } = descriptor.assignment.computer;
+    const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
+    for (const candidateComputer of [
+      undefined,
+      { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
+      { ...descriptor.assignment.computer, nodeId: "" },
+      inheritedNodeIdComputer,
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }
@@ -262,6 +414,10 @@ describe("worker launch descriptor", () => {
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, workspaceDir: "workspace" },
+      },
+      {
+        ...descriptor,
+        assignment: { ...descriptor.assignment, workerContainmentRoot: "workspace" },
       },
       {
         ...descriptor,

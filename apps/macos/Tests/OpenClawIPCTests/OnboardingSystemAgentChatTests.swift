@@ -202,18 +202,86 @@ struct OnboardingSystemAgentChatTests {
     @Test func `fresh inference connection finishes onboarding once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
-        var dashboardOpenCount = 0
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: state,
-            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
+            dashboardHandoffOpener: { handoffs.append($0) })
 
         view.prepareSystemAgentHandoff()
         view.aiSetup.onConnected?()
 
         #expect(view.finishState.didFinish)
-        #expect(dashboardOpenCount == 1)
+        // Fresh connections own the remaining first-run steps via the custodian.
+        #expect(handoffs == [.custodianOnboarding])
         #expect(!view.finish())
-        #expect(dashboardOpenCount == 1)
+        #expect(handoffs == [.custodianOnboarding])
+    }
+
+    @Test(arguments: [false, true])
+    func `first run effective model is live verified before handoff`(receiptDuringVerification: Bool) async throws {
+        let suiteName = "OnboardingFirstRunEffectiveModelTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let methods = SystemAgentMethodRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message),
+                      let method = systemAgentRequestMethod(from: message)
+                else { return }
+                await methods.record(method)
+                if respondToSystemAgentHealth(task: task, id: id, method: method) { return }
+                switch method {
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
+                case "openclaw.setup.verify":
+                    if receiptDuringVerification {
+                        let callbackDefaults = try #require(UserDefaults(suiteName: suiteName))
+                        // An expired ownerless marker can arrive during an existing-model probe.
+                        // Completing it does not turn that probe into a fresh activation.
+                        OnboardingSystemAgentResumeStore.markPending(
+                            routeIdentity: "local", activationTimeoutMs: 0,
+                            defaults: callbackDefaults, now: Date(timeIntervalSinceNow: -10))
+                    }
+                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
+                default:
+                    break
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
+
+        let initialProbe = try #require(view.onboardingDidAppear())
+        await initialProbe.value
+        for _ in 0..<200 {
+            if view.aiSetup.connected {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(view.aiSetup.connected)
+        #expect(view.finishState.didFinish)
+        // A live-verified pre-existing setup reopens the normal dashboard.
+        #expect(handoffs == [.dashboard])
+        #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
+        #expect(await methods.snapshot() == [
+            "agents.list",
+            "health",
+            "openclaw.setup.verify",
+        ])
     }
 
     @Test func `relaunch with pending inference resumes OpenClaw`() async throws {
@@ -249,13 +317,13 @@ struct OnboardingSystemAgentChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
-        var dashboardOpenCount = 0
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
-            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
+            dashboardHandoffOpener: { handoffs.append($0) })
 
         let task = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await task.value
@@ -263,7 +331,7 @@ struct OnboardingSystemAgentChatTests {
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "existing-model")
         #expect(view.finishState.didFinish)
-        #expect(dashboardOpenCount == 1)
+        #expect(handoffs == [.dashboard])
         #expect(!view.finish())
 
         let repeatedResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
@@ -271,7 +339,7 @@ struct OnboardingSystemAgentChatTests {
 
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "existing-model")
-        #expect(dashboardOpenCount == 1)
+        #expect(handoffs == [.dashboard])
         #expect(await methods.snapshot() == [
             "health",
             "openclaw.setup.verify",
@@ -394,7 +462,7 @@ struct OnboardingSystemAgentChatTests {
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
-            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
+            dashboardHandoffOpener: { _ in dashboardOpenCount += 1 })
 
         let staleResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         for _ in 0..<200 {
@@ -462,13 +530,13 @@ struct OnboardingSystemAgentChatTests {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: defaults)
-        var dashboardOpenCount = 0
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { routeIdentity },
-            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
+            dashboardHandoffOpener: { handoffs.append($0) })
         let aiSetup = view.aiSetup
 
         let initialProbe = try #require(view.onboardingDidAppear())
@@ -482,7 +550,7 @@ struct OnboardingSystemAgentChatTests {
 
         #expect(aiSetup.connected)
         #expect(view.finishState.didFinish)
-        #expect(dashboardOpenCount == 1)
+        #expect(handoffs == [.custodianOnboarding])
         #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: defaults) == .none)

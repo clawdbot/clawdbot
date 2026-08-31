@@ -5,7 +5,9 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
@@ -17,12 +19,16 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import type { MintedWorkerCredential } from "./credential.js";
+import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerTurnLauncherOptions = Parameters<
   typeof createRawWorkerSessionTurnPlacementProvider
@@ -37,6 +43,16 @@ export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
+
+export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
+  measureNodeWorkerLaunchBytes("fixture-node", {
+    environmentSession: 1,
+    launchId: plan.assignment.turnId,
+    gatewayNamespace: "fixture-gateway",
+    expectedBundleHash: plan.admission.handshake.bundleHash,
+    placementGeneration: claim.placementGeneration,
+    descriptor: plan,
+  });
 
 let testState: OpenClawTestState;
 let database: OpenClawStateDatabase;
@@ -77,6 +93,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
 export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
+  clearRuntimeConfigSnapshot();
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();
@@ -92,12 +109,25 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
   return target;
 }
 
+type DefaultedWorkerTurnLauncherOption =
+  | "reconcileActivePlacement"
+  | "redispatchReclaimed"
+  | "resolveWorkspacePath"
+  | "workspaceOperations";
+
 export function createWorkerSessionTurnPlacementProvider(
-  options: Omit<WorkerTurnLauncherOptions, "resolveWorkspacePath"> &
-    Partial<Pick<WorkerTurnLauncherOptions, "resolveWorkspacePath">>,
+  options: Omit<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption> &
+    Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
+    reconcileActivePlacement: async () => {
+      throw new Error("unexpected active placement reconciliation");
+    },
+    redispatchReclaimed: async () => {
+      throw new Error("unexpected reclaimed placement redispatch");
+    },
     resolveWorkspacePath: async () => root,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
 }
@@ -106,11 +136,15 @@ export function openSessionManager(): SessionManager {
   return SessionManager.open(sessionTarget);
 }
 
-export function seedActivePlacement(): void {
+export function seedActivePlacement(
+  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
+  remoteWorkspaceDir = "/worker/workspace",
+): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
     sessionKey: sessionTarget.sessionKey,
     agentId: sessionTarget.agentId,
+    executionMode,
   });
   placement = placements.transition({
     sessionId: SESSION_ID,
@@ -132,7 +166,7 @@ export function seedActivePlacement(): void {
     to: "starting",
     expectedGeneration: placement.generation,
     patch: {
-      remoteWorkspaceDir: "/worker/workspace",
+      remoteWorkspaceDir,
       workspaceBaseManifestRef: MANIFEST_REF,
     },
   });
@@ -182,6 +216,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     profileId: "development",
     profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
@@ -233,6 +269,21 @@ export function browserEnvironment(): WorkerTurnEnvironmentRecord {
   };
 }
 
+export function computerDescriptor(nodeId: string): WorkerComputerLaunchDescriptor {
+  return {
+    nodeId,
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["screenshot"],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
 export function credential(deliveryId = "c".repeat(43)): MintedWorkerCredential {
   return {
     credential: ["worker", "turn", "credential"].join("-"),
@@ -250,6 +301,9 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
+    resolveSshIdentity: vi.fn(async () => {
+      throw unexpected();
+    }),
     acquireTurnCredential: vi.fn(async () => {
       throw unexpected();
     }),
@@ -301,13 +355,85 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     sessionFile,
     sessionTarget,
     workspaceDir: root,
+    permissionMode: "workspace" as const,
+    sessionRoot: root,
     prompt: "Inspect this workspace",
     timeoutMs: 5_000,
     runId,
     provider: "openai",
     model: "gpt-test",
+    modelHasVision: true,
     config,
   };
+}
+
+export async function withWorkerCompactionAdoption<T>(
+  runId: string,
+  task: (
+    adopt: (sessionId: string) => Promise<string | undefined>,
+    turn: SessionPlacementTurnParams,
+  ) => Promise<T>,
+): Promise<T> {
+  const { createEmbeddedRunCompactionRuntime } =
+    await import("../../agents/embedded-agent-runner/run/compaction-runtime.js");
+  const { createEmbeddedRunSessionPromptState } =
+    await import("../../agents/embedded-agent-runner/run/session-prompt-state.js");
+  const { claimAgentSessionWriter } =
+    await import("../../agents/embedded-agent-runner/run/session-bootstrap.js");
+  const { getAgentRunLifecycleGeneration } = await import("../../infra/agent-run-registry.js");
+  const { preparedRunAdmission, ...params } = turn(runId);
+  try {
+    const admittedRunContext = await preparedRunAdmission.admit("embedded");
+    const writerFence = await claimAgentSessionWriter(params);
+    const runParams = {
+      ...params,
+      admittedRunContext,
+      sessionTarget: { ...sessionTarget, ...writerFence },
+    };
+    const sessionPromptState = createEmbeddedRunSessionPromptState({
+      runParams,
+      sessionAgentId: sessionTarget.agentId,
+      resolvedSessionKey: sessionTarget.sessionKey,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+    });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("unexpected context-engine execution during successor acceptance");
+    };
+    const runtime = createEmbeddedRunCompactionRuntime({
+      runParams,
+      contextEngine: {
+        info: { id: "worker-successor-fixture", name: "Worker successor fixture" },
+        ingest: unexpected,
+        assemble: unexpected,
+        compact: unexpected,
+      },
+      hookRunner: null,
+      hookContext: {
+        agentId: sessionTarget.agentId,
+        sessionId: SESSION_ID,
+        sessionKey: sessionTarget.sessionKey,
+        workspaceDir: params.workspaceDir,
+      },
+      sessionPromptState,
+    });
+    return await task(
+      (sessionId) =>
+        runtime.adoptCompactionTranscript({
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "Engine-owned successor context",
+            tokensBefore: 4_096,
+            tokensAfter: 2_048,
+            sessionId,
+            sessionTarget: { ...sessionTarget, sessionId },
+          },
+        }),
+      runParams,
+    );
+  } finally {
+    preparedRunAdmission.close();
+  }
 }
 
 export function hasLoneSurrogate(value: string): boolean {

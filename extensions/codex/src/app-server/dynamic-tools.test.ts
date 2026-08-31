@@ -5,11 +5,18 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
+  getPluginToolMeta,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createTerminalPresentationContractTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+  createOwnerBackedContractTool,
+  createTerminalPresentationContractTool,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -31,6 +38,10 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  handleDynamicToolCallWithTimeout,
+  toCodexDynamicToolProtocolResponse,
+} from "./dynamic-tool-execution.js";
+import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
@@ -41,8 +52,14 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+const MEMORY_STORE_ARGS: JsonValue = { text: "Tuesday 09:00 release window" };
+const MEMORY_FORGET_ARGS: JsonValue = {
+  memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d",
+};
 
 const COMPUTER_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -59,7 +76,7 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   return {
     name: "tts",
     description: "Convert text to speech.",
-    parameters: { type: "object", properties: {} },
+    parameters: { type: "object", properties: {}, additionalProperties: true },
     execute: vi.fn(),
     ...overrides,
   } as unknown as AnyAgentTool;
@@ -193,12 +210,488 @@ async function handleMessageToolCall(
   });
 }
 
+const STRICT_INSTRUCTION_SCHEMA = {
+  type: "object",
+  properties: { instruction: { type: "string" } },
+  required: ["instruction"],
+  additionalProperties: false,
+} as const;
+
+type SchemaToolNamespace =
+  | null
+  | typeof CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE
+  | typeof CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE;
+
+async function runSchemaToolCall(params: {
+  arguments: JsonValue;
+  callId: string;
+  name?: string;
+  namespace?: SchemaToolNamespace;
+  parameters?: AnyAgentTool["parameters"];
+  prepareArguments?: AnyAgentTool["prepareArguments"];
+}) {
+  const name = params.name ?? "strict_tool";
+  const namespace = params.namespace ?? null;
+  const execute = vi.fn(async () => textToolResult("done"));
+  const tool = createTool({
+    name,
+    parameters: params.parameters ?? STRICT_INSTRUCTION_SCHEMA,
+    prepareArguments: params.prepareArguments,
+    execute,
+  });
+  const bridge = createCodexDynamicToolBridge({
+    tools: [tool],
+    signal: new AbortController().signal,
+    loading: namespace === CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE ? "searchable" : undefined,
+    directToolNames:
+      namespace === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE ? [name] : undefined,
+  });
+  const response = await bridge.handleToolCall({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    callId: params.callId,
+    namespace,
+    tool: name,
+    arguments: params.arguments,
+  });
+  return { bridge, execute, response, tool };
+}
+
+function expectSchemaRejection(
+  response: Awaited<ReturnType<typeof runSchemaToolCall>>["response"],
+  execute: ReturnType<typeof vi.fn>,
+  message: string,
+) {
+  expect(execute).not.toHaveBeenCalled();
+  expect(response).toMatchObject({
+    success: false,
+    executionStarted: false,
+    contentItems: [{ type: "inputText", text: expect.stringContaining(message) }],
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("rejects invalid deferred-tool arguments before execution", async () => {
+    const { execute, response } = await runSchemaToolCall({
+      arguments: { instruction: 47 },
+      callId: "call-deferred-invalid",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expectSchemaRejection(response, execute, "instruction: must be string");
+  });
+
+  it("rejects the beta.2 session_status wrong-type regression before execution", async () => {
+    const { execute, response } = await runSchemaToolCall({
+      arguments: { sessionKey: 47 },
+      callId: "call-session-status",
+      name: "session_status",
+      parameters: {
+        type: "object",
+        properties: { sessionKey: { type: "string" } },
+        additionalProperties: false,
+      },
+      namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expectSchemaRejection(response, execute, "sessionKey: must be string");
+  });
+
+  it("bounds high-cardinality validation errors returned to Codex", async () => {
+    const propertyNames = Array.from({ length: 10 }, (_, index) => `field${index}`);
+    const invalidArguments = Object.fromEntries(propertyNames.map((name) => [name, 47]));
+    const { execute, response } = await runSchemaToolCall({
+      arguments: invalidArguments,
+      callId: "call-many-invalid-fields",
+      name: "bounded_validation_tool",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(propertyNames.map((name) => [name, { type: "string" }])),
+        required: propertyNames,
+        additionalProperties: false,
+      },
+    });
+
+    expectSchemaRejection(response, execute, "more violation(s) omitted");
+    const contentItem = requireRecord(response.contentItems[0], "validation response");
+    expect(contentItem.text).toEqual(expect.any(String));
+    expect((contentItem.text as string).length).toBeLessThanOrEqual(800);
+  });
+
+  it("bounds aggregated unexpected-property details returned to Codex", async () => {
+    const invalidArguments = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`unexpected_property_${index}`, true]),
+    );
+    const { execute, response } = await runSchemaToolCall({
+      arguments: invalidArguments,
+      callId: "call-many-unexpected-fields",
+      name: "bounded_additional_properties_tool",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    });
+
+    expectSchemaRejection(response, execute, "[detail truncated]");
+    const contentItem = requireRecord(response.contentItems[0], "validation response");
+    expect(contentItem.text).toEqual(expect.any(String));
+    expect((contentItem.text as string).length).toBeLessThanOrEqual(260);
+  });
+
+  it("prepares raw null arguments before native Codex schema validation", async () => {
+    const prepareArguments = vi.fn(function (this: AnyAgentTool, arguments_: unknown) {
+      return arguments_ === null ? { preparedBy: this.name } : arguments_;
+    });
+    const { execute, response } = await runSchemaToolCall({
+      arguments: null,
+      callId: "call-null-compatibility",
+      name: "optional_object_tool",
+      parameters: {
+        type: "object",
+        properties: { preparedBy: { type: "string" } },
+        additionalProperties: false,
+      },
+      prepareArguments,
+      namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expect(prepareArguments).toHaveBeenCalledWith(null);
+    expect(response).toEqual(expectInputText("done"));
+    expectExecuteCall(execute, {
+      callId: "call-null-compatibility",
+      args: { preparedBy: "optional_object_tool" },
+    });
+  });
+
+  it.each([
+    {
+      label: "repairs primitive input",
+      initial: 47,
+      adjusted: { instruction: "repaired" },
+      executes: true,
+    },
+    {
+      label: "repairs invalid input",
+      initial: { instruction: 47 },
+      adjusted: { instruction: "repaired" },
+      executes: true,
+    },
+    {
+      label: "rejects invalid rewritten input",
+      initial: { instruction: "inspect" },
+      adjusted: { instruction: 47 },
+      executes: false,
+    },
+  ])("validates final arguments after a hook $label", async (testCase) => {
+    const beforeToolCall = vi.fn(async () => ({ params: testCase.adjusted }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const callId = `call-hook-schema-${testCase.executes}`;
+    const { execute, response } = await runSchemaToolCall({
+      arguments: testCase.initial,
+      callId,
+      name: "hook_schema_tool",
+    });
+
+    if (testCase.executes) {
+      expect(response).toEqual(expectInputText("done"));
+      expectExecuteCall(execute, {
+        callId,
+        args: { instruction: "repaired" },
+      });
+    } else {
+      expectSchemaRejection(response, execute, "instruction: must be string");
+    }
+  });
+
+  it("leaves external MCP tool argument validation to the MCP bridge", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "mcp-bridge",
+      name: "external_mcp_tool",
+      result: textToolResult("mcp handled"),
+    });
+    tool.parameters = {
+      type: "object",
+      properties: { instruction: { type: "string" } },
+      required: ["instruction"],
+      additionalProperties: false,
+    };
+    const meta = getPluginToolMeta(tool);
+    expect(meta).toBeDefined();
+    Object.assign(meta ?? {}, {
+      mcp: {
+        serverName: "external",
+        safeServerName: "external",
+        toolName: tool.name,
+        operation: "tool",
+      },
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-external-mcp",
+      namespace: null,
+      tool: tool.name,
+      arguments: { instruction: 47 },
+    });
+
+    expect(response).toEqual(expectInputText("mcp handled"));
+  });
+
+  it("scopes normalized input validation to the projected Codex wrapper", async () => {
+    const execute = vi.fn(async () => textToolResult("done"));
+    const source = wrapToolWithBeforeToolCallHook(
+      createTool({
+        name: "provider_scoped_tool",
+        parameters: {
+          type: "object",
+          properties: { instruction: { type: "string" } },
+          required: ["instruction"],
+          additionalProperties: false,
+        },
+        execute,
+      }),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [source],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-provider-scoped-codex",
+      namespace: null,
+      tool: source.name,
+      arguments: { instruction: 47 },
+    });
+
+    expect(response.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+
+    await source.execute?.("call-provider-scoped-source", { instruction: 47 });
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("isolates cached validators for same-name tools with different schemas", async () => {
+    const call = (instructionType: "string" | "number", callId: string) =>
+      runSchemaToolCall({
+        arguments: { instruction: "inspect" },
+        callId,
+        name: "schema_cache_tool",
+        parameters: {
+          type: "object",
+          properties: { instruction: { type: instructionType } },
+          required: ["instruction"],
+          additionalProperties: false,
+        },
+      });
+    const stringCase = await call("string", "call-cache-string");
+    const numberCase = await call("number", "call-cache-number");
+
+    expect(stringCase.response).toEqual(expectInputText("done"));
+    expectSchemaRejection(numberCase.response, numberCase.execute, "instruction: must be number");
+  });
+
+  it("surfaces a rejected owner-backed memory write before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_store",
+      result: textToolResult("Memory storage is disabled in incognito mode.", {
+        status: "blocked",
+        error: "incognito mode",
+      }),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-memory-store",
+      namespace: null,
+      tool: "memory_store",
+      arguments: { text: "Tuesday 09:00 release window" },
+    } as const;
+
+    const response = await handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-codex-memory"),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Got it - I'll remember the Tuesday release window.",
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({
+      mutatingAction: true,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("I'll remember");
+    expect(JSON.stringify(response)).not.toContain("memory-lancedb");
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
+      "memory-lancedb",
+    );
+  });
+
+  it("surfaces a rejected owner-backed memory delete before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    tool.execute = vi.fn(async () => {
+      throw new Error("memory delete failed");
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-memory-forget",
+        namespace: null,
+        tool: "memory_forget",
+        arguments: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-codex-forget"),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Done - I forgot that memory.",
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({
+      mutatingAction: true,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("I forgot");
+    expect(JSON.stringify(response)).not.toContain("memory-lancedb");
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
+      "memory-lancedb",
+    );
+  });
+
+  it.each([
+    {
+      name: "memory_store",
+      args: MEMORY_STORE_ARGS,
+      assistantText: "Got it - I'll remember the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: MEMORY_FORGET_ARGS,
+      assistantText: "Done - I forgot that memory.",
+    },
+  ])("leaves unowned same-name Codex tool $name outside correction", async (testCase) => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: testCase.name,
+          execute: vi.fn(async () =>
+            textToolResult("Mutation unavailable.", {
+              status: "blocked",
+              error: "unavailable",
+            }),
+          ),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-unowned-${testCase.name}`,
+        namespace: null,
+        tool: testCase.name,
+        arguments: testCase.args,
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver(`run-unowned-${testCase.name}`),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: testCase.assistantText,
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({ mutatingAction: false });
+    expect(response.terminalResolution?.lastToolError).not.toHaveProperty("ownerKey");
+    expect(payloads).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "memory_store",
+      args: MEMORY_STORE_ARGS,
+      result: textToolResult("Stored memory.", { action: "created" }),
+      assistantText: "Stored the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: MEMORY_FORGET_ARGS,
+      result: textToolResult("Forgotten memory.", { action: "deleted" }),
+      assistantText: "Forgot that memory.",
+    },
+  ])("does not warn after a successful owner-backed Codex $name", async (testCase) => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createOwnerBackedContractTool({
+          pluginId: "memory-lancedb",
+          name: testCase.name,
+          result: testCase.result,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-successful-${testCase.name}`,
+        namespace: null,
+        tool: testCase.name,
+        arguments: testCase.args,
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver(`run-successful-${testCase.name}`),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: testCase.assistantText,
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.success).toBe(true);
+    expect(response.terminalResolution?.lastToolError).toBeUndefined();
+    expect(payloads).toHaveLength(1);
+  });
+
   it("keeps OpenClaw control-path tools direct while deferring broad tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -264,6 +757,25 @@ describe("createCodexDynamicToolBridge", () => {
       },
     );
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
+  });
+
+  it("keeps progress_card direct when searchable loading defers broad tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "progress_card" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      loading: "searchable",
+      directToolNames: resolveCodexDynamicToolDirectNames({} as EmbeddedRunAttemptParams),
+    });
+
+    const specs = flattenSpecsWithNamespace(bridge.specs);
+    const progressCard = specs.find((tool) => tool.name === "progress_card");
+    const webSearch = specs.find((tool) => tool.name === "web_search");
+    expectNoNamespace(progressCard);
+    expectDynamicSpec(webSearch, {
+      name: "web_search",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
   });
 
   it("isolates direct-only tools in Codex's model-only namespace", () => {
@@ -490,7 +1002,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+  it("retains all sanitized details for OpenClaw transcript projection", async () => {
     const mcpAppPreview = {
       kind: "canvas",
       view: { id: "mcp-app-view-1", title: "Nearby food" },
@@ -520,7 +1032,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { limit: 4 },
     });
 
-    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
+    expect(result.transcriptDetails).toEqual({
+      mcpAppPreview,
+      structuredContent: { privateModelPayload: true },
+    });
     expect(Object.keys(result)).not.toContain("transcriptDetails");
     expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
     expect(JSON.stringify(result)).not.toContain("privateModelPayload");
@@ -706,29 +1221,44 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("repairs a null dynamic-tool schema type before Codex registration", () => {
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        createTool({
-          name: "codex_app__automation_update",
-          parameters: {
-            type: null,
-            properties: {
-              action: { type: "string", description: null },
-            },
-          } as never,
-        }),
-      ],
-      signal: new AbortController().signal,
+  it("validates execution against the repaired schema published to Codex", async () => {
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: { action: "inspect" },
+      callId: "call-repaired-schema",
+      name: "codex_app__automation_update",
+      parameters: {
+        type: null,
+        properties: { action: { type: "string", description: null } },
+      } as never,
     });
 
     expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
       type: "object",
-      properties: {
-        action: { type: "string" },
-      },
+      properties: { action: { type: "string" } },
     });
     expect(bridge.telemetry.quarantinedTools).toEqual([]);
+    expect(response).toEqual(expectInputText("done"));
+    expectExecuteCall(execute, {
+      callId: "call-repaired-schema",
+      args: { action: "inspect" },
+    });
+  });
+
+  it("enforces the strict empty-object schema published to Codex", async () => {
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: { unexpected: true },
+      callId: "call-strict-empty-schema",
+      name: "strict_empty_tool",
+      parameters: {},
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expectSchemaRejection(response, execute, 'must not have additional properties: "unexpected"');
   });
 
   it("quarantines dynamic tools with unsupported input schemas", async () => {
@@ -814,6 +1344,177 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
     expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "punctuation in direct mode",
+      name: "bad.name",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "bad.name",
+    },
+    {
+      label: "leading whitespace in searchable mode",
+      name: " bad",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: " bad",
+    },
+    {
+      label: "trailing whitespace in a direct-only tool",
+      name: "bad ",
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "bad ",
+    },
+    {
+      label: "whitespace-only name",
+      name: "   ",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "   ",
+    },
+    {
+      label: "Unicode in searchable mode",
+      name: "mémoire",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: "mémoire",
+    },
+    {
+      label: "129 characters in a direct-only tool",
+      name: "a".repeat(129),
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "a".repeat(129),
+    },
+    {
+      label: "reserved mcp name",
+      name: "mcp",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp",
+    },
+    {
+      label: "reserved mcp namespace prefix",
+      name: "mcp__read",
+      placement: "searchable" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp__read",
+    },
+  ])("quarantines Codex-invalid dynamic tool names: $label", async (testCase) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const execute = vi.fn(async () => textToolResult("healthy sibling executed"));
+    const placement =
+      testCase.placement === "direct-only" ? { catalogMode: "direct-only" as const } : {};
+    const invalidTool = createTool({ name: testCase.name, ...placement });
+    const sibling = createTool({ name: "valid_sibling", execute, ...placement });
+    const registeredOnly = createTool({ name: "registered_sibling", ...placement });
+    const tools = [sibling, ...(testCase.source === "registered" ? [] : [invalidTool])];
+    const registeredTools = [
+      sibling,
+      registeredOnly,
+      ...(testCase.source === "available" ? [] : [invalidTool]),
+    ];
+    const bridgeOptions = {
+      tools,
+      registeredTools,
+      signal: new AbortController().signal,
+      ...(testCase.placement === "direct" ? { loading: "direct" as const } : {}),
+    };
+    const bridge = createCodexDynamicToolBridge(bridgeOptions);
+    const healthyBridge = createCodexDynamicToolBridge({
+      ...bridgeOptions,
+      tools: [sibling],
+      registeredTools: [sibling, registeredOnly],
+    });
+
+    expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["valid_sibling"]);
+    expect(bridge.availableSpecs).toEqual(healthyBridge.availableSpecs);
+    expect(bridge.specs).toEqual(healthyBridge.specs);
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(healthyBridge.specs),
+    );
+    expect(specNames(bridge.availableSpecs)).toEqual(["valid_sibling"]);
+    expect(specNames(bridge.specs).toSorted()).toEqual(["registered_sibling", "valid_sibling"]);
+    const siblingSpec = flattenSpecsWithNamespace(bridge.availableSpecs)[0];
+    if (testCase.placement === "searchable") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      });
+    } else if (testCase.placement === "direct-only") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      });
+      expect(siblingSpec).not.toHaveProperty("deferLoading");
+    } else {
+      expectDynamicSpec(siblingSpec, { name: "valid_sibling" });
+      expectNoNamespace(siblingSpec);
+    }
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      expect.objectContaining({ tool: testCase.diagnosticTool }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 1 available and 2 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 1,
+        registeredToolCount: 2,
+      }),
+    );
+
+    const validResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-valid",
+      namespace: null,
+      tool: "valid_sibling",
+      arguments: {},
+    });
+    expect(validResult.success).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+
+    const invalidResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-invalid",
+      namespace: null,
+      tool: testCase.name,
+      arguments: {},
+    });
+    expect(invalidResult).toMatchObject({
+      success: false,
+      executionStarted: false,
+    });
+    expect(invalidResult.contentItems).toEqual([
+      {
+        type: "inputText",
+        text: `Unknown OpenClaw tool: ${testCase.name}`,
+      },
+    ]);
+  });
+
+  it("reports an empty final surface when all dynamic tool names are invalid", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "bad.name" }), createTool({ name: "mcp" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableTools).toEqual([]);
+    expect(bridge.availableSpecs).toEqual([]);
+    expect(bridge.specs).toEqual([]);
+    expect(bridge.telemetry.quarantinedTools.map((tool) => tool.tool)).toEqual(["bad.name", "mcp"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 0 available and 0 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 0,
+        registeredToolCount: 0,
+      }),
+    );
   });
 
   it("uses the bridge's executable projection for authority snapshots", () => {
@@ -1733,6 +2434,12 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "imessage-6264",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         receipt: {
           primaryPlatformMessageId: "imessage-6264",
           platformMessageIds: ["imessage-6264"],
@@ -2345,11 +3052,11 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
   });
 
-  it("records heartbeat response tool outcomes", async () => {
+  it("accepts heartbeat response tool outcomes", async () => {
     const bridge = createBridgeWithToolResult(
       HEARTBEAT_RESPONSE_TOOL_NAME,
-      textToolResult("Recorded.", {
-        status: "recorded",
+      textToolResult("Accepted.", {
+        status: "accepted",
         outcome: "needs_attention",
         notify: true,
         summary: "Build is blocked.",
@@ -2367,7 +3074,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual(expectInputText("Recorded."));
+    expect(result).toEqual(expectInputText("Accepted."));
     expect(bridge.telemetry.heartbeatToolResponse).toEqual({
       outcome: "needs_attention",
       notify: true,
@@ -4198,7 +4905,7 @@ describe("createCodexDynamicToolBridge", () => {
       callId: "call-terminal-middleware",
       namespace: null,
       tool: "web_fetch",
-      arguments: { url: "https://private.example" },
+      arguments: {},
     });
 
     expect(onToolOutcome).toHaveBeenLastCalledWith(
@@ -4254,7 +4961,7 @@ describe("createCodexDynamicToolBridge", () => {
       callId: "call-terminal-middleware-error",
       namespace: null,
       tool: "web_fetch",
-      arguments: { url: "https://private.example" },
+      arguments: {},
     });
 
     expect(onToolOutcome).toHaveBeenLastCalledWith(

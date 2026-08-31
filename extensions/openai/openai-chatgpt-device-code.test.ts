@@ -1,6 +1,6 @@
 // Openai tests cover openai chatgpt device code plugin behavior.
+import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -449,7 +449,7 @@ describe("loginOpenAICodexDeviceCode", () => {
         chatgpt_account_id: "acct_123",
       },
     });
-    const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+    const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -530,7 +530,7 @@ describe("loginOpenAICodexDeviceCode", () => {
           chatgpt_account_id: "acct_123",
         },
       });
-      const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+      const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockResolvedValueOnce(

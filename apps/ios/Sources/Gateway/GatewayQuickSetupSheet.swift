@@ -516,7 +516,6 @@ extension GatewayDiscoveryModel.DiscoveredGateway {
         lanHost: "openclaw.local",
         tailnetDns: nil,
         gatewayPort: 18789,
-        canvasPort: 18789,
         tlsEnabled: true,
         tlsFingerprintSha256: "preview",
         cliPath: "/opt/homebrew/bin/openclaw")

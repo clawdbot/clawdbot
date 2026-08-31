@@ -68,6 +68,15 @@ describe("scanNodeHostedSkills", () => {
     ]);
   });
 
+  it("treats a missing skills directory as an empty fresh-node inventory", () => {
+    const warn = vi.fn();
+
+    expect(scanNodeHostedSkills({ skillsDir: path.join(createRoot(), "missing"), warn })).toEqual(
+      [],
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("loads descriptors and preserves the full SKILL.md content", () => {
     const root = createRoot();
     const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");
@@ -128,7 +137,7 @@ metadata:
     const skills = scanNodeHostedSkills({ skillsDir: root, warn });
 
     expect(skills.map((skill) => skill.name)).toEqual(["valid-skill"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid or missing frontmatter"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("description is required"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(malformedFile));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("BAD_INDENT"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeds 65536 bytes"));
@@ -148,7 +157,7 @@ metadata:
     expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(nestedFile));
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(`${candidateFile}): has invalid or missing frontmatter`),
+      expect.stringContaining(`${candidateFile}): description is required`),
     );
   });
 

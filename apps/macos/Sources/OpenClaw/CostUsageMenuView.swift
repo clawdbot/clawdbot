@@ -3,7 +3,6 @@ import SwiftUI
 
 struct CostUsageHistoryMenuView: View {
     let summary: GatewayCostUsageSummary
-    let width: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -13,7 +12,7 @@ struct CostUsageHistoryMenuView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {

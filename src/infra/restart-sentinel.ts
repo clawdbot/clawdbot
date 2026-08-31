@@ -3,13 +3,13 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveCommitHash } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
@@ -96,7 +96,7 @@ function commitsMatch(expected: string, actual: string): boolean {
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
-  commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  commit = resolveRuntimeServiceCommit(),
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const snapshot = await readRestartSentinel(env);
@@ -249,6 +249,29 @@ export async function readRestartSentinel(
       return null;
     }
     return current.kind === "valid" ? current.sentinel : null;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    return null;
+  }
+}
+
+/** Read the restart sentinel without creating or mutating shared state. */
+export async function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  try {
+    const current = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readRestartSentinelRowSync(db),
+      { env },
+    );
+    if (!current || current.kind === "missing") {
+      return null;
+    }
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
+      return null;
+    }
+    return current.sentinel;
   } catch (err) {
     sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
     return null;

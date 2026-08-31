@@ -107,7 +107,7 @@ function createSharedLiveTransportQaCliRegistration(
         .option("--model <ref>", "Primary provider/model ref")
         .option("--alt-model <ref>", "Alternate provider/model ref")
         .option("--scenario <id>", params.scenarioHelp, collectStringOption, [])
-        .option("--fast", "Enable provider fast mode where supported", false);
+        .option("--fast", "Enable provider fast mode where supported");
 
       if (params.allowFailuresHelp) {
         command.option("--allow-failures", params.allowFailuresHelp, false);

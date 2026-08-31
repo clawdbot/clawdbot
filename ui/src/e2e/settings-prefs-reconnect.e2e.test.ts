@@ -44,8 +44,9 @@ function patchPrefs(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(ui.prefs, "config.patch ui.prefs");
 }
 
-async function createContext(): Promise<BrowserContext> {
+async function createContext(colorScheme?: "dark" | "light"): Promise<BrowserContext> {
   return suite.browser.newContext({
+    ...(colorScheme ? { colorScheme } : {}),
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -135,6 +136,54 @@ function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
 }
 
 suite.define(() => {
+  it("preserves a profile's explicit light theme while reconnecting", async () => {
+    const context = await createContext("dark");
+    const page = await context.newPage();
+    const initial = configResponse({}, "prefs-profile-light-1");
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": initial,
+        "users.prefs.get": {
+          entries: { "ui.theme": "claw", "ui.themeMode": "light" },
+          status: "ok",
+        },
+      },
+      presenceUsers: [{ id: "profile-theme-light", self: true }],
+    });
+
+    try {
+      const response = await page.goto(`${suite.server.baseUrl}chat`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("config.get");
+      await gateway.waitForRequest("users.prefs.get");
+      await gateway.waitForRequest("chat.startup");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+      await expect
+        .poll(() => page.locator("html").getAttribute("data-theme-resolved"))
+        .toBe("light");
+      await expect
+        .poll(() => readSettingsMirror(page))
+        .toMatchObject({ theme: "claw", themeMode: "light" });
+
+      await gateway.setOnline(false);
+      await page.locator(".sidebar-footer-bar__status").filter({ hasText: "Offline" }).waitFor();
+      await page
+        .locator(".agent-chat__composer-status-band")
+        .filter({ hasText: "Offline" })
+        .waitFor();
+
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+      await expect
+        .poll(() => page.locator("html").getAttribute("data-theme-resolved"))
+        .toBe("light");
+      await expect
+        .poll(() => readSettingsMirror(page))
+        .toMatchObject({ theme: "claw", themeMode: "light" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("replays an offline theme edit after a same-client reconnect", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -159,11 +208,12 @@ suite.define(() => {
 
       const patch = await gateway.waitForRequest("config.patch");
       expect(patchPrefs(patch)).toEqual({ theme: "knot" });
-      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit);
+      // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
       await expectThemeActive(page, "knot");
     } finally {
       await context.close();

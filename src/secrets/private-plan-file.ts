@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import {
+  buildEncodedPowerShellArgs,
+  buildPowerShellFailureCause,
+  WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+} from "../infra/windows-powershell-spawn.js";
 import { runExec } from "../process/exec.js";
 import {
   resolveTrustedPlanDirectoryPath,
@@ -301,35 +306,28 @@ export async function createPrivateWindowsPlanFile(
     "utf8",
   ).toString("base64");
   try {
-    await run(
-      powershell,
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        Buffer.from(command, "utf16le").toString("base64"),
-      ],
-      {
-        baseEnv: {},
-        env: {
-          SYSTEMROOT: systemRoot,
-          TEMP: compilerTempDir,
-          TMP: compilerTempDir,
-          WINDIR: systemRoot,
-        },
-        input,
-        logOutput: false,
-        maxBuffer: 64 * 1024,
-        timeoutMs: 10_000,
+    await run(powershell, buildEncodedPowerShellArgs(command), {
+      baseEnv: {},
+      env: {
+        SYSTEMROOT: systemRoot,
+        TEMP: compilerTempDir,
+        TMP: compilerTempDir,
+        WINDIR: systemRoot,
       },
-    );
+      input,
+      logOutput: false,
+      maxBuffer: 64 * 1024,
+      timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+    });
   } catch (error) {
     if (String(error).includes(WINDOWS_PLAN_FILE_EXISTS_MARKER)) {
       const existsError = new Error(`Private plan file already exists: ${filePath}`);
       (existsError as NodeJS.ErrnoException).code = "EEXIST";
       throw existsError;
     }
-    throw new Error(`Unable to create private Windows plan file: ${filePath}`, { cause: error });
+    // oxlint-disable-next-line preserve-caught-error -- The raw error carries the -EncodedCommand argv; only the sanitized bounded diagnostic may escape.
+    throw new Error(`Unable to create private Windows plan file: ${filePath}`, {
+      cause: buildPowerShellFailureCause(error),
+    });
   }
 }

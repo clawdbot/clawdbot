@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
@@ -100,6 +102,22 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("renders post-compaction context after dispatcher normalization", async () => {
+    const dispatchParams = createVisibleDispatchParams(async () =>
+      setReplyPayloadMetadata(
+        { text: formatBillingErrorMessage(), isError: true },
+        { postCompactionModelFailure: true },
+      ),
+    );
+
+    await dispatchReplyFromConfig(dispatchParams);
+
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: `⚠️ Context compaction succeeded, but the later model request still failed. ${formatBillingErrorMessage().replace(/^⚠️\s*/u, "")}`,
+      isError: true,
+    });
+  });
+
   it("records a failed reply operation when recovering a visible partial", async () => {
     const resolverError = new Error("provider failed after partial");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
@@ -140,5 +158,54 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Something went wrong") }),
     );
+  });
+
+  it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
+    const resolverError = new Error("final delivery failed after completion");
+    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+      _ctx,
+      options,
+    ) => {
+      options?.onAgentRunTerminalOutcome?.("completed");
+      throw resolverError;
+    };
+
+    await expect(dispatchReplyFromConfig(createVisibleDispatchParams(replyResolver))).rejects.toBe(
+      resolverError,
+    );
+  });
+
+  it("records a terminal agent failure before the first visible reply", async () => {
+    const resolverError = new Error("provider failed before output");
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+      _ctx,
+      options,
+    ) => {
+      if (!options) {
+        throw new Error("reply options required for terminal failure");
+      }
+      replyOperation = options.replyOperation;
+      options.onAgentRunTerminalOutcome?.("failed");
+      throw resolverError;
+    };
+    const dispatchParams = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" as const },
+    };
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+
+    expect(replyOperation?.result).toEqual({
+      kind: "failed",
+      code: "run_failed",
+      cause: resolverError,
+    });
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 });

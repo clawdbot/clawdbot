@@ -280,6 +280,9 @@ describe("pnpm 11 global install discovery", () => {
         if (command === "npm root -g") {
           return { stdout: `${npmGlobalRoot}\n`, stderr: "", code: 0 };
         }
+        if (command === "npm --version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
+        }
         if (command === "pnpm root -g") {
           return {
             stdout: `${path.join(base, "pnpm-home", "global", "v11")}\n`,
@@ -307,6 +310,10 @@ describe("pnpm 11 global install discovery", () => {
         command: "npm",
         globalRoot: npmGlobalRoot,
         packageRoot,
+        npmOwner: {
+          version: "12.0.0",
+          lifecyclePolicy: "allow-scripts",
+        },
       });
     });
   });

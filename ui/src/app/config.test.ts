@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function bootstrapResponse(serverVersion: string): Response {
+function bootstrapResponse(serverVersion: string, automaticallyFetchFavicons = false): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
     assistantName: "Assistant",
@@ -19,6 +19,7 @@ function bootstrapResponse(serverVersion: string): Response {
     serverVersion,
     terminalEnabled: false,
     cliAgentsEnabled: true,
+    automaticallyFetchFavicons,
     pluginFrameGrants: [],
   };
   return new Response(JSON.stringify(payload), {
@@ -32,6 +33,17 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("test", true));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "/openclaw" });
+
+    expect(config.current.automaticallyFetchFavicons).toBe(false);
+    await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
+    expect(config.current.automaticallyFetchFavicons).toBe(true);
+  });
+
   it("returns null for a superseded bootstrap response", async () => {
     const firstResponse = deferred<Response>();
     const secondResponse = deferred<Response>();
@@ -40,7 +52,7 @@ describe("createApplicationConfigCapability", () => {
       .mockImplementationOnce(() => firstResponse.promise)
       .mockImplementationOnce(() => secondResponse.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ basePath: "" });
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
 
     const firstRefresh = config.refresh();
     const secondRefresh = config.refresh();

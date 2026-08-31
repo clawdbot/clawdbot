@@ -57,7 +57,7 @@ function failOneShotExecution(
 export async function runSystemAgentWithInference(
   opts: SystemAgentCommandOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
-  onboardingOptions: Pick<OnboardOptions, "workspace" | "acceptRisk"> = {},
+  onboardingOptions: Pick<OnboardOptions, "workspace" | "agentName" | "acceptRisk"> = {},
   deps: SystemAgentWithInferenceDeps = {},
 ): Promise<void> {
   if (opts.yes && !opts.message?.trim()) {
@@ -130,5 +130,5 @@ export async function runSystemAgentWithInference(
   runtime.log("OpenClaw requires working inference. Starting guided AI setup…");
   const runGuidedOnboarding =
     deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
-  await runGuidedOnboarding(onboardingOptions, runtime);
+  await runGuidedOnboarding(onboardingOptions, runtime, { handoffMode: "chat" });
 }

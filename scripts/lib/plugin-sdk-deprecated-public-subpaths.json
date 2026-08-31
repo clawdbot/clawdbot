@@ -8,6 +8,5 @@
   "discord",
   "inbound-reply-dispatch",
   "infra-runtime",
-  "messaging-targets",
   "telegram-account"
 ]

@@ -61,6 +61,7 @@ function createPlan(): NonNullable<MemoryImportProps["plan"]> {
 function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportProps {
   return {
     connected: true,
+    canAdmin: true,
     agents: [{ id: "research", name: "Research" }],
     selectedAgentId: "research",
     plan: createPlan(),
@@ -102,6 +103,15 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
 }
 
 describe("renderMemoryImport", () => {
+  it("renders shared skeletons while the import plan is loading", () => {
+    const container = document.createElement("div");
+    render(renderMemoryImport(createProps({ loading: true, plan: null })), container);
+
+    const blocks = container.querySelectorAll(".memory-import__skeleton");
+    expect(blocks).toHaveLength(2);
+    expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("en");

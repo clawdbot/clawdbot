@@ -19,9 +19,9 @@ import {
   type PreparedOutboundBatch,
   type PreparedOutboundBatchEntry,
 } from "./prepared-batch.js";
-import { createReplyToDeliveryPolicy } from "./reply-policy.js";
+import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
 
-export class OutboundPayloadPreparationError extends Error {
+class OutboundPayloadPreparationError extends Error {
   readonly sourceIndex: number;
   readonly payload: ReplyPayload;
 
@@ -46,6 +46,7 @@ function throwIfPreparationAborted(
 }
 
 async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
+  const reply = normalizeOutboundReplyFacts(params);
   return await createChannelHandler({
     cfg: params.cfg,
     agentId: params.session?.agentId,
@@ -53,8 +54,8 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     to: params.to,
     deps: params.deps,
     accountId: params.accountId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    replyToId: reply?.replyToId,
+    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
     formatting: params.formatting,
     threadId: params.threadId,
     identity: params.identity,
@@ -148,10 +149,7 @@ export async function prepareOutboundPayloadBatch(
     (hookRunner?.hasHooks("reply_payload_sending") ?? false);
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
-  const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy({
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-  });
+  const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
   const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
   let modifierBoundaryEntered = false;
 
@@ -259,8 +257,11 @@ export async function prepareOutboundPayloadBatch(
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
     channelNormalized: true,
-    ...(params.replyPayloadSendingHook?.runId
-      ? { runId: params.replyPayloadSendingHook.runId }
+    ...((params.runId ?? params.replyPayloadSendingHook?.runId)
+      ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
+      : {}),
+    ...(params.executionIdentityToken
+      ? { executionIdentityToken: params.executionIdentityToken }
       : {}),
     entries,
   };

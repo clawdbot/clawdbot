@@ -13,3 +13,15 @@ export function messageToolOwnsVisibleReply(params: {
 }): boolean {
   return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
 }
+
+export function buildHarnessVisibleReplyGuidance(params: {
+  sourceReplyDeliveryMode?: string;
+  messageToolAvailable: boolean;
+}): string {
+  if (messageToolOwnsVisibleReply(params) && params.messageToolAvailable) {
+    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.";
+  }
+  return params.messageToolAvailable
+    ? "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically."
+    : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+}

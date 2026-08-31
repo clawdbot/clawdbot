@@ -95,8 +95,8 @@ bundled, official external, and source-only plugins, see
     openclaw gateway restart
     ```
 
-    Enable/disable update config and the cold registry. A runtime inspect is
-    still the clearest proof of live runtime surfaces.
+    Enable/disable update config and the cold registry. Inspect registration
+    next, then verify the running Gateway with an actual hook event or tool call.
 
   </Step>
 
@@ -105,9 +105,11 @@ bundled, official external, and source-only plugins, see
     openclaw plugins inspect <plugin-id> --runtime --json
     ```
 
-    Use `--runtime` to prove registered tools, hooks, services, Gateway
-    methods, or plugin-owned CLI commands. Plain `inspect` is a cold manifest
-    and registry check only.
+    `--runtime` loads the plugin in the inspecting CLI process and reports
+    registered tools, hooks, services, Gateway methods, and plugin-owned CLI
+    commands. Plain `inspect` is a cold manifest and registry check only.
+    Neither proves an already-running Gateway has loaded the same code. After
+    restarting it, trigger the hook or capability and verify its actual effect.
 
   </Step>
 </Steps>
@@ -146,13 +148,28 @@ and fail when incompatible.
 
 Configure `security.installPolicy` to run a trusted local policy command
 before a plugin install or update proceeds. The policy receives metadata plus
-the staged source path and can allow or block the install. It covers both CLI
-and Gateway-backed install/update paths. Plugin `before_install` hooks run
-later, and only in OpenClaw processes where plugin hooks are loaded, so use
-`security.installPolicy` for operator-owned install decisions instead. The
-deprecated `--dangerously-force-unsafe-install` flag is accepted for
-compatibility but is a no-op: it does not bypass install policy or
-`before_install` hook blocks.
+the staged source path and can allow, warn, or block the install. It covers both CLI
+and Gateway-backed install/update paths. CLI plugin and skill commands can
+acknowledge a warning interactively by typing the target name with the same
+copy as suspicious ClawHub releases; policy is then re-evaluated. Reviewed
+non-interactive direct CLI commands can use `--acknowledge-install-policy-warning`.
+That flag approves every warning for the command invocation; each warning is
+still re-evaluated before the install continues.
+The Control UI shows the structured warning and offers **Install anyway**. That
+action resends the same plugin request with `acknowledgeInstallPolicyWarning:
+true`, approving every warning encountered during that install invocation;
+each warning is still re-evaluated before installation continues. Other
+Gateway-backed and automatic installs remain blocked when they have no
+operator-confirmation flow. When an equivalent direct plugin or skill command
+exists, use that command to review and approve the warning. Otherwise, change
+`security.installPolicy` to return `allow` for the reviewed request, then retry
+the managed flow. Neither `--force` nor the deprecated plugin
+install/update flag `--dangerously-force-unsafe-install` approves a policy
+warning. Plugin
+`before_install` hooks run later, and only in OpenClaw processes where plugin
+hooks are loaded, so use `security.installPolicy` for operator-owned install
+decisions instead. The flag does not override a block or policy failure.
+It also does not bypass `before_install` hook blocks.
 
 See [Skills config](/tools/skills-config#operator-install-policy-security-installpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and
@@ -268,8 +285,9 @@ An explicit hook policy is also startup intent. For example,
 `plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
 non-bundled conversation hooks and selects that configured plugin for Gateway
 startup; normal plugin policy still applies. After changing manifest or hook
-policy, restart the Gateway and verify the registration with
-`openclaw plugins inspect <id> --runtime --json`.
+policy, inspect registration with `openclaw plugins inspect <id> --runtime --json`,
+restart the Gateway, and trigger an event to verify the running process. See
+[Plugin hooks](/plugins/hooks#quick-start) for a complete example.
 
 ## Verify the active Gateway
 

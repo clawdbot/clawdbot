@@ -1,6 +1,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../format-error.ts";
 import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 export const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
@@ -227,6 +228,6 @@ export async function patchMcpServers(
     await runtimeConfig.refresh();
     return { ok: true };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: formatUiError(error) };
   }
 }

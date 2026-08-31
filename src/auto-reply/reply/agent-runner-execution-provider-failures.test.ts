@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -15,6 +15,7 @@ import {
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
@@ -75,6 +76,17 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it("reports the terminal provider failure to the dispatch owner", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("provider returned HTTP 500"));
+
+    const result = await executeTestTurn({ opts: { onAgentRunTerminalOutcome } });
+
+    expect(result.kind).toBe("final");
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledOnce();
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+  });
+
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps raw runner failure boilerplate out of $label chats",
     async (testCase) => {
@@ -90,6 +102,48 @@ describe("executeAgentTurn: provider failures", () => {
       if (result.kind === "final") {
         expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
       }
+    },
+  );
+
+  it.each(
+    NON_DIRECT_FAILURE_SURFACE_CASES.flatMap((surface) =>
+      ["provider", "live model switch"].map((failure) => ({ surface, failure })),
+    ),
+  )(
+    "surfaces $failure failure after an accepted partial in $surface.label chats",
+    async ({ surface: testCase, failure }) => {
+      let partialDelivered = false;
+      state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        throw failure === "provider"
+          ? new Error("model stream failed")
+          : new LiveSessionModelSwitchError({ provider: "openai", model: "gpt-5.4" });
+      });
+
+      const result = await executeTestTurn(
+        {
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+          opts: {
+            onPartialReply: () => {
+              partialDelivered = true;
+              return true;
+            },
+          },
+        },
+        { resolveVisibleReplyDelivery: async () => partialDelivered },
+      );
+
+      expect(result).toMatchObject({
+        kind: "final",
+        payload: {
+          text:
+            failure === "provider"
+              ? GENERIC_RUN_FAILURE_TEXT
+              : expect.stringContaining("Model switch could not be completed"),
+          isError: true,
+        },
+      });
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(failure === "provider" ? 1 : 3);
     },
   );
 
@@ -547,7 +601,11 @@ describe("executeAgentTurn: provider failures", () => {
     });
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-8"),
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-8",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "claude-cli",
       model: "claude-opus-4-8",
       attempts: [],
@@ -702,10 +760,11 @@ describe("executeAgentTurn: provider failures", () => {
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
     const onBlockReply = vi.fn();
+    const onAgentRunTerminalOutcome = vi.fn();
 
     const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
-        opts: { onBlockReply },
+        opts: { onAgentRunTerminalOutcome, onBlockReply },
         replyOperation,
       }),
     );
@@ -716,6 +775,7 @@ describe("executeAgentTurn: provider failures", () => {
       payload: { text: SILENT_REPLY_TOKEN },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(onBlockReply).not.toHaveBeenCalled();
     const agentEvents = await import("../../infra/agent-events.js");
@@ -909,6 +969,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     const result = await executeTestTurn({
       sessionCtx: createDirectFailureSessionCtx("telegram"),
+      opts: { runId: "direct-provider-request-error" },
     });
 
     expect(result.kind).toBe("final");
@@ -917,6 +978,17 @@ describe("executeAgentTurn: provider failures", () => {
       expect(result.payload.text).not.toContain("/new");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+    const terminal = emitAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (event) =>
+          event.runId === "direct-provider-request-error" &&
+          event.stream === "lifecycle" &&
+          event.data.phase === "error",
+      );
+    expect(terminal).toBeDefined();
+    expect(terminal?.data.fallbackExhaustedFailure).not.toBe(true);
   });
 
   it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
@@ -930,7 +1002,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });

@@ -48,7 +48,8 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.147.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -353,7 +354,7 @@ describe("codex web search provider", () => {
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
-    expect(result?.model).toBe("available-default-wire");
+    expect(result?.model).toBe("available-default");
     expect(requests[1]?.params).toEqual(
       expect.objectContaining({ model: "available-default-wire" }),
     );

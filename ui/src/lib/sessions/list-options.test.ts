@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
@@ -23,7 +23,7 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-function createSessions(client: GatewayBrowserClient, key: string) {
+function createSessions(client: GatewayBrowserClient, key: string, ownerId?: string) {
   return createSessionCapability({
     snapshot: {
       client,
@@ -31,6 +31,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
       sessionKey: key,
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -38,6 +39,31 @@ function createSessions(client: GatewayBrowserClient, key: string) {
 }
 
 describe("session list replacement options", () => {
+  it.each([
+    { filter: "owner", options: { ownerId: "profile-bob" } },
+    { filter: "involving me", options: { involvingMe: true } },
+    { filter: "search", options: { search: "release" } },
+  ])("keeps an explicit $filter query single-phase", async ({ options }) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createSessions(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "profile-ada",
+    );
+
+    await sessions.refresh({ agentId: "main", ...options, force: true });
+
+    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
+    sessions.dispose();
+  });
+
   it("preserves sidebar metadata hydration when refreshing after session patches", async () => {
     const key = "agent:main:untitled";
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -336,12 +362,14 @@ describe("session list replacement options", () => {
       archived: false,
     });
     expect(sessions.state.result?.sessions[0]?.sessionId).toBeUndefined();
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
 
     await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({
       sessionId: "replacement-session",
       archived: false,
     });
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
 
     await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions[0]?.archived).toBe(false);
@@ -385,6 +413,68 @@ describe("session list replacement options", () => {
       derivedTitle: "Readable planning title",
       lastMessagePreview: "Latest visible reply",
     });
+    sessions.dispose();
+  });
+
+  it("does not preserve another agent's raw-global row through background hydration", async () => {
+    const opsGoal: SessionGoal = {
+      schemaVersion: 1,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    };
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        listCallCount === 1
+          ? [
+              {
+                key: "global",
+                kind: "global",
+                updatedAt: 1,
+                owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+                goal: opsGoal,
+                status: "running",
+              },
+            ]
+          : [],
+        listCallCount,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected" as const,
+      sessionKey: "global",
+      assistantAgentId: "ops",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.refresh({ agentId: "ops", force: true });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key: "global",
+      goal: opsGoal,
+    });
+
+    snapshot.assistantAgentId = "research";
+    await sessions.refresh({ agentId: "research", backgroundHydrate: true, force: true });
+
+    expect(sessions.state.agentId).toBe("research");
+    expect(sessions.state.result?.sessions).toEqual([]);
     sessions.dispose();
   });
 
@@ -604,7 +694,7 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
-  it("defers model override publication when the caller owns lifecycle validation", async () => {
+  it("does not publish a model override when the captured UI owner is already retired", async () => {
     const pendingPatch = deferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
@@ -614,18 +704,17 @@ describe("session list replacement options", () => {
     });
     const key = "global";
     const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
-    sessions.setModelOverride(key, "openai/gpt-old");
 
     const operation = sessions.patch(
       key,
       { model: "openai/gpt-new" },
-      { deferListRefresh: true, deferModelOverride: true },
+      { deferListRefresh: true, ownsModelOverride: () => false },
     );
 
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     pendingPatch.resolve({ ok: true, path: "", key, entry: {} });
     await expect(operation).resolves.toMatchObject({ ok: true, key });
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     sessions.dispose();
   });
 
@@ -642,7 +731,6 @@ describe("session list replacement options", () => {
       const key = "global";
       const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
       let ownsModelOverride = true;
-      sessions.setModelOverride(key, "openai/gpt-old");
 
       const operation = sessions.patch(
         key,
@@ -669,13 +757,20 @@ describe("session list replacement options", () => {
     },
   );
 
-  it.each(["resolve", "reject"] as const)(
-    "preserves a replacement owner's equal-value model claim when an older request %s",
-    async (outcome) => {
+  it.each([
+    ["resolve", false],
+    ["reject", false],
+    ["resolve", true],
+    ["reject", true],
+  ] as const)(
+    "preserves a newer equal-value model claim when an older request %s (owner active: %s)",
+    async (outcome, ownerActive) => {
       const pendingPatch = deferred<unknown>();
+      const replacementPatch = deferred<unknown>();
+      let patchCount = 0;
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.patch") {
-          return await pendingPatch.promise;
+          return await (++patchCount === 1 ? pendingPatch.promise : replacementPatch.promise);
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -693,8 +788,12 @@ describe("session list replacement options", () => {
       );
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-shared");
 
-      ownsModelOverride = false;
-      sessions.setModelOverride(key, "openai/gpt-shared");
+      ownsModelOverride = ownerActive;
+      const replacement = sessions.patch(
+        key,
+        { model: "openai/gpt-shared" },
+        { deferListRefresh: true },
+      );
       if (outcome === "resolve") {
         pendingPatch.resolve({ ok: true, path: "", key, entry: {} });
         await expect(operation).resolves.toMatchObject({ ok: true, key });
@@ -704,7 +803,11 @@ describe("session list replacement options", () => {
       }
 
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-shared");
-      expect(sessions.state.error).toBeNull();
+      expect(sessions.state.error).toBe(
+        ownerActive && outcome === "reject" ? "agent A patch failed" : null,
+      );
+      replacementPatch.resolve({ ok: true, key, entry: {} });
+      await replacement;
       sessions.dispose();
     },
   );
@@ -722,7 +825,6 @@ describe("session list replacement options", () => {
     });
     const key = "global";
     const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
-    sessions.setModelOverride(key, "openai/gpt-agent-a-old");
 
     const agentAOperation = sessions.patch(
       key,

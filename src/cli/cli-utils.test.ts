@@ -1,9 +1,13 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import {
@@ -36,7 +40,34 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it("surfaces cause chains and error codes through the default runtime", async () => {
+  it.each(
+    [0, 1, 2].flatMap((code) =>
+      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
+    ),
+  )(
+    "preserves completed exit $code with custom error handler $customErrorHandler",
+    async ({ code, customErrorHandler }) => {
+      const runtime = { error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn();
+      const outcome = new ExitError(code);
+
+      await expect(
+        runCommandWithRuntime(
+          runtime,
+          async () => {
+            throw outcome;
+          },
+          customErrorHandler ? onError : undefined,
+        ),
+      ).rejects.toBe(outcome);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];
     const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -44,21 +75,57 @@ describe("runCommandWithRuntime", () => {
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
 
-    await runCommandWithRuntime(
-      {
-        error: (message) => messages.push(message),
-        exit: (code) => exits.push(code),
-      },
-      async () => {
-        throw fetchError;
-      },
-    );
+    const run = async () =>
+      await runCommandWithRuntime(
+        {
+          error: (message) => messages.push(message),
+          exit: (code) => exits.push(code),
+        },
+        async () => {
+          throw fetchError;
+        },
+      );
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("TypeError: fetch failed");
-    expect(messages[0]).toContain("invalid onRequestStart method");
-    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
-    expect(exits).toEqual([1]);
+    const originalDebug = process.env.OPENCLAW_DEBUG;
+    delete process.env.OPENCLAW_DEBUG;
+    try {
+      await run();
+      process.env.OPENCLAW_DEBUG = "1";
+      await run();
+    } finally {
+      if (originalDebug === undefined) {
+        delete process.env.OPENCLAW_DEBUG;
+      } else {
+        process.env.OPENCLAW_DEBUG = originalDebug;
+      }
+    }
+
+    expect(messages).toEqual([
+      "fetch failed",
+      "fetch failed | invalid onRequestStart method | UND_ERR_INVALID_ARG",
+    ]);
+    expect(exits).toEqual([1, 1]);
+  });
+
+  it("bubbles JSON-mode failures to the process-level owner", async () => {
+    const originalArgv = process.argv;
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(
+          runCommandWithRuntime(runtime, async () => {
+            throw new Error("archive missing");
+          }),
+        ).rejects.toThrow("archive missing");
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -73,8 +140,12 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "status"] },
     {
       argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+    },
+    {
+      argv: ["node", "openclaw", "--profile", "server", "gateway", "status", "--json"],
     },
   ] as const)("skips respawn for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
@@ -82,7 +153,6 @@ describe("shouldSkipRespawnForArgv", () => {
 
   it.each([
     { argv: ["node", "openclaw", "status"] },
-    { argv: ["node", "openclaw", "gateway", "status"] },
     { argv: ["node", "openclaw", "gateway", "call", "health"] },
   ] as const)("keeps respawn path for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);

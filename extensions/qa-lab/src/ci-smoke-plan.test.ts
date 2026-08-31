@@ -125,30 +125,25 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    const primaryRunCosts = primaryScenarioIds.map((ids) =>
-      ids.reduce(
-        (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
-        0,
-      ),
+    const scenarioCostsByPart = primaryScenarioIds.map((ids) =>
+      ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
     );
-    const largestScenarioCost = Math.max(
-      ...primaryScenarioIds.flatMap((ids) =>
-        ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
-      ),
+    // The separate Matrix run reserves three flow-cost points during packing.
+    const partCosts = scenarioCostsByPart.map(
+      (costs, index) =>
+        costs.reduce((total, cost) => total + cost, 0) +
+        (parts[index]?.runs.some((run) => run.slug === "matrix") ? 3 : 0),
     );
-    const heaviestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => right - left)[0],
-      "heaviest QA smoke run cost",
-    );
-    const lightestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => left - right)[0],
-      "lightest QA smoke run cost",
-    );
-    expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
+    const lightestPartCost = Math.min(...partCosts);
+    for (const [index, scenarioCosts] of scenarioCostsByPart.entries()) {
+      // Mixed-cost parts must stay within one indivisible scenario of the lightest part.
+      const partCost = expectDefined(partCosts[index], "QA smoke part cost");
+      expect(partCost - lightestPartCost).toBeLessThanOrEqual(Math.min(...scenarioCosts));
+    }
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
-  it("keeps real Gateway-hosted proof outside the Crabline smoke profile", () => {
+  it("keeps real Gateway-hosted proof outside the Crabline channel-driver profile", () => {
     const coverageId = "control-ui.gateway-hosted-ui-control";
     const smokeSelection = resolveQaProfileScenarios({
       profile: "smoke-ci",

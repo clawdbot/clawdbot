@@ -1,5 +1,6 @@
 // Delivery result tests cover channel turn delivery result normalization.
 import { describe, expect, it } from "vitest";
+import type { MessageReceipt } from "../message/types.js";
 import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
@@ -7,7 +8,7 @@ import {
 } from "./delivery-result.js";
 import {
   hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 
@@ -17,13 +18,14 @@ describe("createChannelDeliveryResultFromReceipt", () => {
       primaryPlatformMessageId: "m1",
       platformMessageIds: ["m1", "m2"],
       parts: [],
+      threadId: "canonical-thread",
       sentAt: 123,
     };
 
     expect(
       createChannelDeliveryResultFromReceipt({
         receipt,
-        threadId: "thread-1",
+        threadId: "requested-thread",
         replyToId: "reply-1",
         visibleReplySent: true,
         deliveryIntent: {
@@ -35,7 +37,7 @@ describe("createChannelDeliveryResultFromReceipt", () => {
     ).toEqual({
       messageIds: ["m1", "m2"],
       receipt,
-      threadId: "thread-1",
+      threadId: "canonical-thread",
       replyToId: "reply-1",
       visibleReplySent: true,
       deliveryIntent: {
@@ -44,6 +46,26 @@ describe("createChannelDeliveryResultFromReceipt", () => {
         queuePolicy: "required",
       },
     });
+  });
+
+  it("does not restore the requested route when provider receipt parts conflict", () => {
+    const receipt: MessageReceipt = {
+      platformMessageIds: ["m1", "m2"],
+      parts: [
+        { platformMessageId: "m1", kind: "text", index: 0, threadId: "thread-1" },
+        { platformMessageId: "m2", kind: "text", index: 1, threadId: "thread-2" },
+      ],
+      sentAt: 123,
+    };
+
+    const result = createChannelDeliveryResultFromReceipt({
+      receipt,
+      threadId: "requested-thread",
+      visibleReplySent: true,
+    });
+
+    expect(result).not.toHaveProperty("threadId");
+    expect(result.receipt).toBe(receipt);
   });
 
   it("preserves suppressed receipt results without synthetic message ids", () => {
@@ -112,6 +134,14 @@ describe("channel turn dispatch results", () => {
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
       }),
+    ).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
+      }),
     ).toBe(true);
     expect(
       hasVisibleChannelTurnDispatch(undefined, {
@@ -120,8 +150,10 @@ describe("channel turn dispatch results", () => {
     ).toBe(true);
     expect(
       hasFinalChannelTurnDispatch({
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
       }),
     ).toBe(false);
     expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({

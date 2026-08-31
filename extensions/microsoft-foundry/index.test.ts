@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -375,6 +375,17 @@ describe("microsoft-foundry plugin", () => {
 
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
+    );
+  });
+
+  it("hard-stops a synchronous Azure CLI command at its timeout", () => {
+    execFileSyncMock.mockReturnValue("ok");
+    execAz(["version", "--output", "none"]);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "az",
+      ["version", "--output", "none"],
+      expect.objectContaining({ timeout: 30_000, killSignal: "SIGKILL" }),
     );
   });
 
@@ -1547,7 +1558,6 @@ describe("microsoft-foundry plugin", () => {
     ).toMatchObject({
       defaultLevel: "high",
       levels: [
-        { id: "off" },
         { id: "minimal" },
         { id: "low" },
         { id: "medium" },

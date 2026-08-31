@@ -268,6 +268,8 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientDisplayName?: string;
+  scopes?: string[];
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
   const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
@@ -289,12 +291,15 @@ export async function startGatewayWithClient(params: {
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
       clientDisplayName: params.clientDisplayName,
+      scopes: params.scopes,
+      onEvent: params.onEvent,
     });
 
     return {
       port,
       client,
       server: {
+        startupSettled: startedServer.startupSettled,
         close: async (...args: Parameters<typeof startedServer.close>) => {
           try {
             await startedServer.close(...args);

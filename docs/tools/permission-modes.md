@@ -63,7 +63,10 @@ For app-server setup, auth order, and native Codex runtime details, see [Codex h
 
 ## ACPX harness permissions
 
-ACPX sessions are non-interactive, so they cannot click a TTY permission prompt. ACPX uses separate harness-level settings under `plugins.entries.acpx.config`:
+ACPX sessions have no interactive TTY for permission prompts. Supported ACP
+form and URL requests can still reach the operator as Gateway questions during
+a channel-delivered turn; those are separate from permission approval. ACPX
+uses separate harness-level settings under `plugins.entries.acpx.config`:
 
 | Setting                     | Values          | Meaning                                     |
 | --------------------------- | --------------- | ------------------------------------------- |

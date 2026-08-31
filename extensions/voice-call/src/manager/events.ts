@@ -31,10 +31,13 @@ type EventContext = Pick<
   | "rejectedProviderCallIds"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
   | "onCallAnswered"
+  | "onCallerSpeech"
   | "streamSessionIssuer"
 >;
 
@@ -104,6 +107,7 @@ function createWebhookCall(params: {
       config: effectiveConfig,
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
+      coreSession: params.ctx.coreSession,
     }),
     agentId: normalizeAgentId(effectiveConfig.agentId),
     startedAt: Date.now(),
@@ -242,9 +246,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     startMaxDurationTimer({
       ctx,
       callId: activeCall.callId,
-      onTimeout: async (callId) => {
-        await endCall(ctx, callId, { reason: "timeout" });
-      },
+      onTimeout: (callId) => endCall(ctx, callId, { reason: "timeout" }),
     });
   };
   const prepareLiveDurationTimer = () => {
@@ -338,7 +340,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         break;
 
       case "call.speech":
-        if (event.isFinal) {
+        if (event.isFinal && event.transcript.trim()) {
           const waiter = ctx.transcriptWaiters.get(activeCall.callId);
           if (waiter?.turnToken && waiter.turnToken !== event.turnToken) {
             log.warn(`Ignoring speech event with mismatched turn token for ${activeCall.callId}`);
@@ -357,6 +359,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
               resolveTranscriptWaiter(ctx, activeCall.callId, event.transcript, event.turnToken);
             });
           }
+        }
+        if (event.transcript.trim()) {
+          effects.push(() => ctx.onCallerSpeech?.(activeCall));
         }
         prepareLiveDurationTimer();
         transitionState(activeCall, "listening");

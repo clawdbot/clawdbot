@@ -100,16 +100,14 @@ describe("collectRegisteredEmbeddingProviderIds", () => {
   // Boot-equivalence: the shared helper unions the same three sources the gateway
   // startup "configured but unregistered" warning uses, so the /status drift line and
   // the boot warning agree on what counts as "registered".
-  it("unions registry memory + general embedding providers with the global registry", () => {
+  it("unions registry embedding providers with the global registry", () => {
     registerEmbeddingProvider(createAdapter("global-embed"), { ownerPluginId: "p" });
     const registry = {
-      memoryEmbeddingProviders: [{ provider: { id: "mem-embed" } }],
       embeddingProviders: [{ provider: { id: "gen-embed" } }],
     } as never;
 
     const ids = collectRegisteredEmbeddingProviderIds(registry);
 
-    expect(ids.has("mem-embed")).toBe(true);
     expect(ids.has("gen-embed")).toBe(true);
     expect(ids.has("global-embed")).toBe(true);
     // Every globally registered provider (core + plugin-registered) is always included.

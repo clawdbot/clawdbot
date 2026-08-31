@@ -93,10 +93,12 @@ Set `SEARXNG_BASE_URL` as an alternative to config:
 export SEARXNG_BASE_URL="http://localhost:8888"
 ```
 
-Resolution order: configured `baseUrl` string, then an inline env SecretRef on
-`baseUrl`, then `SEARXNG_BASE_URL`. When none of the config paths are set and
-`SEARXNG_BASE_URL` is present with no explicit provider chosen, auto-detection
-picks SearXNG.
+Resolution order: configured `baseUrl` (a string or an allowed env SecretRef),
+then `SEARXNG_BASE_URL` only when `baseUrl` is missing. An explicit SecretRef
+that read-only config inspection blocks does not fall through to the ambient
+environment; fix its provider, default-provider, or env allowlist policy
+instead. When none of the config paths are set and `SEARXNG_BASE_URL` is
+present with no explicit provider chosen, auto-detection picks SearXNG.
 
 ## Plugin config reference
 

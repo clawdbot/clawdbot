@@ -3,21 +3,46 @@
  * Strict JSON stays the fast path; JSON5 is only the authored/legacy fallback.
  */
 import { createRequire } from "node:module";
+import { getWorkerDeployJson5 } from "../worker/worker-deploy-runtime-registry.js";
 
 type Json5Parser = { parse: (value: string) => unknown };
-let lazyJson5Parser: Json5Parser | undefined;
+let json5Runtime: Json5Parser | undefined;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
-function loadJson5Parser(): Json5Parser {
-  if (lazyJson5Parser) {
-    return lazyJson5Parser;
-  }
-  const loaded = createRequire(import.meta.url)("json5") as Json5Parser | { default?: Json5Parser };
-  const parser = "parse" in loaded ? loaded : loaded.default;
-  if (!parser) {
+function isJson5Parser(value: unknown): value is Json5Parser {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "parse" in value &&
+    typeof value.parse === "function"
+  );
+}
+
+function setJson5Runtime(runtime: unknown): Json5Parser {
+  const parser = isJson5Parser(runtime)
+    ? runtime
+    : typeof runtime === "object" && runtime !== null && "default" in runtime
+      ? runtime.default
+      : undefined;
+  if (!isJson5Parser(parser)) {
     throw new Error("json5 parser unavailable");
   }
-  lazyJson5Parser = parser;
+  json5Runtime = parser;
   return parser;
+}
+
+function loadJson5Parser(): Json5Parser {
+  if (json5Runtime) {
+    return json5Runtime;
+  }
+  const injected = getWorkerDeployJson5();
+  if (injected !== undefined) {
+    return setJson5Runtime(injected);
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    throw new Error("worker JSON5 runtime was not registered before use");
+  }
+  return setJson5Runtime(createRequire(import.meta.url)("json5"));
 }
 
 /** Parses strict JSON first, then accepts JSON5 syntax such as comments and trailing commas. */

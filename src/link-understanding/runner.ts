@@ -4,14 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 // Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
-import { resolveTimeoutMs } from "../media-understanding/resolve.js";
-import {
-  normalizeMediaUnderstandingChatType,
-  resolveMediaUnderstandingScope,
-} from "../media-understanding/scope.js";
+import { resolveScopeDecision, resolveTimeoutMs } from "../media-understanding/resolve.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";
@@ -20,18 +16,6 @@ type LinkUnderstandingResult = {
   urls: string[];
   outputs: string[];
 };
-
-function resolveScopeDecision(params: {
-  config?: LinkToolsConfig;
-  ctx: MsgContext;
-}): "allow" | "deny" {
-  return resolveMediaUnderstandingScope({
-    scope: params.config?.scope,
-    sessionKey: params.ctx.SessionKey,
-    channel: params.ctx.Surface ?? params.ctx.Provider,
-    chatType: normalizeMediaUnderstandingChatType(params.ctx.ChatType),
-  });
-}
 
 function resolveTimeoutMsFromConfig(params: {
   config?: LinkToolsConfig;
@@ -102,6 +86,8 @@ async function fetchLinkContent(params: {
   });
   try {
     if (!response.ok) {
+      // Do not await: a debug-capture tee settles only after its sibling branch cancels.
+      void cancelUnreadResponseBody(response);
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
@@ -215,7 +201,7 @@ export async function runLinkUnderstanding(params: {
     return { urls: [], outputs: [] };
   }
 
-  const scopeDecision = resolveScopeDecision({ config, ctx: params.ctx });
+  const scopeDecision = resolveScopeDecision({ scope: config.scope, ctx: params.ctx });
   if (scopeDecision === "deny") {
     if (shouldLogVerbose()) {
       logVerbose("Link understanding disabled by scope policy.");

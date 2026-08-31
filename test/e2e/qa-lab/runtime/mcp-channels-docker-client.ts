@@ -233,6 +233,21 @@ async function main() {
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
       "expected one seeded attachment",
     );
+    assert(
+      JSON.stringify(attachments.structuredContent?.attachments?.[0]) ===
+        JSON.stringify({
+          type: "openclaw_media",
+          media: {
+            url: "media://inbound/seeded-image.png",
+            contentType: "image/png",
+            kind: "image",
+            fileName: "seeded-image.png",
+            sizeBytes: 3,
+            transcribed: false,
+          },
+        }),
+      `expected canonical persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
+    );
 
     let waitCursor = 0;
     let lastWaitEvent: Record<string, unknown> | undefined;
@@ -498,6 +513,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
+          canonicalMediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

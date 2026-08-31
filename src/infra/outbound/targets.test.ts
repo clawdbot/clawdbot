@@ -310,63 +310,6 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
-  it("keeps parser-only explicit target compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      requestedChannel: "alpha",
-      explicitTo: "alpha:room-a:topic:77",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
-  });
-
-  it("keeps parser-only session target thread compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-parser",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "alpha:room-a:topic:77",
-      },
-      requestedChannel: "last",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
-  });
-
   it("uses an explicit provider-prefixed target before last-session channel fallback", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {

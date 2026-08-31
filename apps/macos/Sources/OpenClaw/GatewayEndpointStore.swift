@@ -448,11 +448,9 @@ actor GatewayEndpointStore {
         self.state
     }
 
-    func setLocalUnavailableReason(_ reason: String?) {
+    func setLocalUnavailableReason(_ reason: String?) async {
         self.localUnavailableReason = reason
-        if let reason {
-            self.setState(.unavailable(mode: .local, reason: reason))
-        }
+        await self.refresh()
     }
 
     func refresh() async {

@@ -268,8 +268,12 @@ export function createXaiRealtimeVoiceProviderMetadata() {
       supportsSessionResumption: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig, cfg }) =>
-      hasXaiRealtimeApiKeyInput(normalizeXaiRealtimeProviderConfig(providerConfig).apiKey, cfg),
+    isConfigured: ({ providerConfig, cfg, agentId }) =>
+      hasXaiRealtimeApiKeyInput(
+        normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
+        cfg,
+        agentId,
+      ),
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
 }
 

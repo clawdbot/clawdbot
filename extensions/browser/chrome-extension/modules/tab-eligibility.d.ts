@@ -2,6 +2,7 @@ export type BrowserTabSnapshot = {
   id?: number;
   url?: string;
   pendingUrl?: string;
+  status?: string;
   title?: string;
   active?: boolean;
   incognito?: boolean;
@@ -21,5 +22,5 @@ export function effectiveTabUrl(tab: BrowserTabSnapshot | null | undefined): str
 
 export function tabEligibility(
   tab: BrowserTabSnapshot | null | undefined,
-  options?: { fileAccessAllowed?: boolean },
+  options?: { fileAccessAllowed?: boolean; controlledBlank?: boolean },
 ): TabEligibilityResult;

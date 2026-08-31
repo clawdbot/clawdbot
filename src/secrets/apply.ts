@@ -68,6 +68,7 @@ type AuthStoreSnapshot = {
 };
 
 type ProjectedState = {
+  authStoreEnv: NodeJS.ProcessEnv;
   nextConfig: OpenClawConfig;
   configSnapshot: ConfigFileSnapshot;
   configPath: string;
@@ -293,6 +294,10 @@ async function projectPlanState(params: {
   const options = normalizeSecretsPlanOptions(params.plan.options);
   const nextConfig = structuredClone(snapshot.config);
   const stateDir = resolveStateDir(params.env, os.homedir);
+  const authStoreEnv = {
+    ...params.env,
+    OPENCLAW_STATE_DIR: stateDir,
+  };
   const changedFiles = new Set<string>();
   const warnings: string[] = [];
   const configPath = resolveUserPath(snapshot.path);
@@ -353,6 +358,7 @@ async function projectPlanState(params: {
 
   return {
     nextConfig,
+    authStoreEnv,
     configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
@@ -385,7 +391,7 @@ function applyConfigTargetMutations(params: {
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === "auth-profile-store") {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
         resolved,
@@ -420,11 +426,11 @@ function applyConfigTargetMutations(params: {
       if (isNonEmptyString(previous)) {
         scrubbedValues.add(previous.trim());
       }
-      const refPathSegments = resolved.refPathSegments;
-      if (!refPathSegments) {
+      const refPathTokens = resolved.refPathTokens;
+      if (!refPathTokens) {
         throw new Error(`Missing sibling ref path for target ${target.type}.`);
       }
-      const wroteRef = setPathCreateStrict(params.nextConfig, refPathSegments, target.ref);
+      const wroteRef = setPathCreateStrict(params.nextConfig, refPathTokens, target.ref);
       const deletedLegacy = deletePathStrict(params.nextConfig, targetPathSegments);
       if (wroteRef || deletedLegacy) {
         configChanged = true;
@@ -436,7 +442,7 @@ function applyConfigTargetMutations(params: {
     if (isNonEmptyString(previous)) {
       scrubbedValues.add(previous.trim());
     }
-    const wroteRef = setPathCreateStrict(params.nextConfig, targetPathSegments, target.ref);
+    const wroteRef = setPathCreateStrict(params.nextConfig, resolved.pathTokens, target.ref);
     if (wroteRef) {
       configChanged = true;
     }
@@ -655,7 +661,7 @@ function applyAuthProfileTargetMutation(params: {
   authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
   scrubbedValues: Set<string>;
 }): boolean {
-  if (params.resolved.entry.configFile !== "auth-profiles.json") {
+  if (params.resolved.entry.configFile !== "auth-profile-store") {
     return false;
   }
   const { store } = resolveAuthStoreForTarget({
@@ -678,11 +684,11 @@ function applyAuthProfileTargetMutation(params: {
     if (isNonEmptyString(previous)) {
       params.scrubbedValues.add(previous.trim());
     }
-    const refPathSegments = params.resolved.refPathSegments;
-    if (!refPathSegments) {
+    const refPathTokens = params.resolved.refPathTokens;
+    if (!refPathTokens) {
       throw new Error(`Missing sibling ref path for auth-profiles target ${params.target.path}.`);
     }
-    const wroteRef = setPathCreateStrict(store, refPathSegments, params.target.ref);
+    const wroteRef = setPathCreateStrict(store, refPathTokens, params.target.ref);
     const deletedPlaintext = deletePathStrict(store, targetPathSegments);
     changed = changed || wroteRef || deletedPlaintext;
     return changed;
@@ -691,7 +697,7 @@ function applyAuthProfileTargetMutation(params: {
   if (isNonEmptyString(previous)) {
     params.scrubbedValues.add(previous.trim());
   }
-  const wroteRef = setPathCreateStrict(store, targetPathSegments, params.target.ref);
+  const wroteRef = setPathCreateStrict(store, params.resolved.pathTokens, params.target.ref);
   changed = changed || wroteRef;
   return changed;
 }
@@ -894,7 +900,9 @@ export async function runSecretsApply(params: {
         target,
         persistence: captureAuthProfileStorePersistenceSnapshot(
           target.kind === "agent" ? target.agentDir : undefined,
-          target.kind === "shared" ? { stateDir: target.stateDir } : {},
+          {
+            env: target.kind === "shared" ? target.env : projected.authStoreEnv,
+          },
         ),
       });
     }

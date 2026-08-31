@@ -49,6 +49,7 @@ function createExplicitDownloadCapture(params: {
   timeoutMs: number;
   outPath?: string;
   rootDir?: string;
+  signal?: AbortSignal;
 }) {
   params.state.armIdDownload = bumpDownloadArmId();
   const armId = params.state.armIdDownload;
@@ -56,6 +57,7 @@ function createExplicitDownloadCapture(params: {
     mode: "explicit",
     outputPath: params.outPath,
     outputRoot: params.rootDir,
+    signal: params.signal,
     beforeSave: () => {
       if (params.state.armIdDownload !== armId) {
         throw new Error("Download was superseded by another waiter");
@@ -374,6 +376,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   targetId?: string;
   path?: string;
   rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
@@ -386,13 +389,9 @@ export async function waitForDownloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath: opts.path,
     rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
+    signal: opts.signal,
   });
-  try {
-    return await capture.promise;
-  } catch (err) {
-    capture.cancel();
-    throw err;
-  }
+  return await capture.promise;
 }
 
 /** Clicks an element ref and saves the download triggered by that click. */
@@ -402,6 +401,7 @@ export async function downloadViaPlaywright(opts: {
   ref: string;
   path: string;
   rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
@@ -421,17 +421,17 @@ export async function downloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath,
     rootDir: opts.rootDir,
+    signal: opts.signal,
   });
+  void capture.promise.catch(() => {});
   try {
     const locator = refLocator(page, ref);
-    try {
-      await locator.click({ timeout });
-    } catch (err) {
-      throw toAIFriendlyError(err, ref);
-    }
-    return await capture.promise;
+    await locator.click({ timeout, signal: opts.signal });
   } catch (err) {
     capture.cancel();
-    throw err;
+    throw opts.signal?.aborted && opts.signal.reason instanceof Error
+      ? opts.signal.reason
+      : toAIFriendlyError(err, ref);
   }
+  return await capture.promise;
 }

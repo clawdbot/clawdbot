@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" role="img" aria-label="YAML file overlay">
+  <path d="M4 6.25h5M4 12h7M4 17.75h4" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M13 6.25h7M15 12h5M12 17.75h8" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="11" cy="6.25" r="1.15" fill="currentColor"/>
+  <circle cx="13" cy="12" r="1.15" fill="currentColor"/>
+  <circle cx="10" cy="17.75" r="1.15" fill="currentColor"/>
+</svg>

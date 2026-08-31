@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Imessage tests cover approval native plugin behavior.
 import type {
   ExecApprovalRequest,
@@ -34,7 +35,7 @@ function buildConfig(
 }
 
 function buildTargetModeConfig(
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
   targets: Array<{ channel: string; to: string; accountId?: string }>,
   params: { mode?: "targets" | "both"; imessage?: Partial<IMessageConfig> } = {},
 ) {
@@ -93,7 +94,7 @@ function buildPluginRequest(
 
 function nativeShouldHandle(params: {
   cfg: OpenClawConfig;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   request: ExecApprovalRequest | PluginApprovalRequest;
   accountId?: string | null;
 }) {
@@ -109,7 +110,7 @@ function nativeShouldHandle(params: {
 function getAvailability(
   cfg: OpenClawConfig,
   accountId = DEFAULT_ACCOUNT_ID,
-  approvalKind: "exec" | "plugin" = "exec",
+  approvalKind: ChannelApprovalKind = "exec",
 ) {
   return imessageApprovalCapability.getActionAvailabilityState?.({
     cfg,
@@ -122,7 +123,7 @@ function getAvailability(
 function describeDelivery(
   cfg: OpenClawConfig,
   request: ExecApprovalRequest | PluginApprovalRequest,
-  approvalKind: "exec" | "plugin" = "exec",
+  approvalKind: ChannelApprovalKind = "exec",
 ) {
   return imessageApprovalCapability.native?.describeDeliveryCapabilities({
     cfg,
@@ -166,7 +167,7 @@ function suppressTargetForwarding(
 
 function buildLocalApprovalPayload(
   params: {
-    approvalKind?: "exec" | "plugin";
+    approvalKind?: ChannelApprovalKind;
     agentId?: string | null;
     sessionKey?: string | null;
   } = {},

@@ -1,7 +1,5 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
-import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -18,6 +16,7 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -40,6 +39,18 @@ export type DeliveryTargetResolution =
       mode: "explicit" | "implicit";
       error: Error;
     };
+
+/**
+ * Returns whether a delivery resolution names an external channel route.
+ * Registration is intentionally irrelevant: an unavailable plugin route still
+ * owes delivery. Only webchat/Control UI and an absent route are satisfied by
+ * the durable session commit alone.
+ */
+export function resolvedDeliveryTargetsExternalChannel(
+  resolution: DeliveryTargetResolution,
+): boolean {
+  return resolution.channel !== undefined && resolution.channel !== INTERNAL_MESSAGE_CHANNEL;
+}
 
 const targetsRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/targets.runtime.js"),
@@ -447,17 +458,7 @@ export async function resolveDeliveryTarget(
         })()
       : null;
 
-  const parserExplicitThreadId =
-    explicitThreadId == null && explicitTo
-      ? normalizeOptionalThreadValue(
-          resolveExplicitDeliveryTargetCompat({
-            channel,
-            rawTarget: explicitTo,
-          })?.threadId,
-        )
-      : undefined;
-  // Thread precedence is explicit config, route canonicalization, parser-derived
-  // explicit target, then same-peer session history.
+  // Thread precedence is explicit config, route canonicalization, then same-peer session history.
   const canUseSessionThread =
     options?.inheritSessionThread !== false &&
     shouldCarrySessionThread({
@@ -467,10 +468,7 @@ export async function resolveDeliveryTarget(
       lastRoute,
     });
   const threadId =
-    explicitThreadId ??
-    route?.threadId ??
-    parserExplicitThreadId ??
-    (canUseSessionThread ? resolved.threadId : undefined);
+    explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
   return {
     ok: true,
     channel,

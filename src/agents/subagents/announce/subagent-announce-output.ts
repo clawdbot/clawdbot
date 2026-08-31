@@ -12,12 +12,11 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
-import {
-  isAnnounceSkip,
-  selectDeliverableSessionsReply,
-} from "../../tools/sessions-send-tokens.js";
+import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
+import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
@@ -118,21 +117,6 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function extractSubagentAssistantText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const role = (message as { role?: unknown }).role;
-  if (role !== "assistant") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return sanitizeTextContent(content);
-  }
-  return extractStoredAssistantText(message) ?? "";
-}
-
 function countAssistantToolCalls(message: unknown): number {
   if (!message || typeof message !== "object") {
     return 0;
@@ -185,10 +169,20 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         previousAssistantCalledYield = true;
         continue;
       }
-      const text = extractSubagentAssistantText(message).trim();
+      const toolCallCount = countAssistantToolCalls(message);
+      if (toolCallCount > 0) {
+        // Any assistant tool call proves this was an intermediate turn. Do not
+        // retain commentary from this message or an earlier assistant message
+        // as the run's final result if execution ends before the next reply.
+        snapshot.latestAssistantText = undefined;
+        snapshot.latestSilentText = undefined;
+        snapshot.latestToolCallCount = (snapshot.latestToolCallCount ?? 0) + toolCallCount;
+        snapshot.waitingForContinuation = false;
+        previousAssistantCalledYield = false;
+        continue;
+      }
+      const text = extractStoredAssistantText(message)?.trim();
       if (!text) {
-        snapshot.latestToolCallCount =
-          (snapshot.latestToolCallCount ?? 0) + countAssistantToolCalls(message);
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
@@ -340,23 +334,37 @@ export function applySubagentWaitOutcome(params: {
   const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
   // Capture/announcement callers can pass raw wait snapshots that bypass the
-  // primary normalizers, so preserve the shared timeout/cancel precedence here.
-  if (terminalOutcome?.status === "timeout") {
-    outcome = { status: "timeout" };
-  } else if (
-    terminalOutcome?.reason === "aborted" ||
-    terminalOutcome?.reason === "cancelled" ||
-    terminalOutcome?.reason === "superseded"
-  ) {
-    outcome = { status: "error", error: "subagent run terminated" };
-  } else if (
-    terminalOutcome?.reason === "blocked" ||
-    terminalOutcome?.reason === "abandoned" ||
-    terminalOutcome?.reason === "failed"
-  ) {
-    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
-  } else if (terminalOutcome?.reason === "completed") {
-    outcome = { status: "ok" };
+  // primary normalizers, so apply the canonical classification here instead
+  // of re-enumerating reason groups.
+  if (terminalOutcome) {
+    // Keep main's subagent-specific classifier: it preserves explicit
+    // restart/aborted stop reasons as cancellation while still letting real
+    // provider timeouts through (openclaw#125407).
+    switch (classifySubagentTerminalOutcome(terminalOutcome)) {
+      case "timeout": {
+        // A run that failed inside the lifecycle error retry grace window is
+        // surfaced to waiters as a timeout carrying the failure text and
+        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep
+        // that cause so the announce can report why the child died instead of
+        // a bare "timed out". Genuine budget timeouts have no pendingError and
+        // stay unchanged.
+        const pendingErrorText =
+          params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
+        outcome = pendingErrorText
+          ? { status: "timeout", error: pendingErrorText }
+          : { status: "timeout" };
+        break;
+      }
+      case "cancellation":
+        outcome = { status: "error", error: "subagent run terminated" };
+        break;
+      case "failure":
+        outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+        break;
+      case "success":
+        outcome = { status: "ok" };
+        break;
+    }
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
@@ -389,29 +397,20 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
   if (outcome.status === "ok") {
     return "ok";
   }
-  if (outcome.status === "timeout") {
-    return "timeout";
-  }
-  if (outcome.status === "error") {
-    return outcome.error?.trim() ? `error: ${outcome.error.trim()}` : "error";
+  if (outcome.status === "timeout" || outcome.status === "error") {
+    const error = outcome.error?.trim();
+    return error ? `${outcome.status}: ${error}` : outcome.status;
   }
   return "unknown";
 }
 
 function formatChildResultData(resultText?: string | null): string {
-  const text = resultText?.trim() || "(no output)";
-  const boundedText =
-    text.length > MAX_CHILD_COMPLETION_RESULT_CHARS
-      ? `${truncateUtf16Safe(
-          text,
-          MAX_CHILD_COMPLETION_RESULT_CHARS - CHILD_RESULT_TRUNCATION_NOTICE.length,
-        )}${CHILD_RESULT_TRUNCATION_NOTICE}`
-      : text;
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: boundedText,
-      maxChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      text: resultText?.trim() || "(no output)",
+      maxEscapedChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      truncationMarker: CHILD_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -430,11 +429,7 @@ type ChildCompletionRow = {
   label?: string;
   createdAt: number;
   execution: ChildCompletionExecution;
-  frozenResultText?: string | null;
-  completion?: {
-    resultText?: string | null;
-    fallbackResultText?: string | null;
-  };
+  completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
 
 type ChildCompletionSection = {
@@ -443,21 +438,12 @@ type ChildCompletionSection = {
   actionable: boolean;
 };
 
-function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  const primary = child.completion?.resultText;
-  const fallback = child.completion?.fallbackResultText ?? child.frozenResultText;
-  if (child.execution.outcome?.status === "ok") {
-    return selectDeliverableSessionsReply(primary, fallback);
-  }
-  return (primary ?? fallback)?.trim() || undefined;
-}
-
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return [
-    child.completion?.resultText,
-    child.completion?.fallbackResultText,
-    child.frozenResultText,
-  ].some((value) => Boolean(value?.trim()));
+  return Boolean(
+    child.completion?.terminalReply ||
+    child.completion?.resultText?.trim() ||
+    child.completion?.fallbackResultText?.trim(),
+  );
 }
 
 export function buildChildCompletionFindings(
@@ -485,7 +471,7 @@ export function buildChildCompletionFindings(
 
   const sections: ChildCompletionSection[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = selectChildCompletionResultText(child);
+    const resultText = resolveSubagentCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.execution.outcome);
     if (
       child.execution.outcome?.status === "ok" &&
@@ -558,20 +544,12 @@ export function buildChildCompletionFindings(
 }
 
 export function dedupeLatestChildCompletionRows(
-  children: Array<{
-    runId: string;
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    generation?: number;
-    createdAt: number;
-    execution: ChildCompletionExecution;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-  }>,
+  children: Array<
+    ChildCompletionRow & {
+      runId: string;
+      generation?: number;
+    }
+  >,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
@@ -584,21 +562,13 @@ export function dedupeLatestChildCompletionRows(
 }
 
 export function filterCurrentDirectChildCompletionRows(
-  children: Array<{
-    runId: string;
-    childSessionKey: string;
-    requesterSessionKey: string;
-    requesterAgentId?: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    execution: ChildCompletionExecution;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-  }>,
+  children: Array<
+    ChildCompletionRow & {
+      runId: string;
+      requesterSessionKey: string;
+      requesterAgentId?: string;
+    }
+  >,
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
@@ -660,11 +630,11 @@ export async function buildCompactAnnounceStatsLine(params: {
   let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    const hasTokenData =
+    if (
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined;
-    if (hasTokenData) {
+      resolveFreshSessionTotalTokens(entry) !== undefined
+    ) {
       break;
     }
     if (!isFastTestMode()) {
@@ -675,9 +645,10 @@ export async function buildCompactAnnounceStatsLine(params: {
     entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
-  const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
-  const ioTotal = input + output;
+  const input = entry?.inputTokens;
+  const output = entry?.outputTokens;
+  const hasDirectionalUsage = typeof input === "number" || typeof output === "number";
+  const ioTotal = (input ?? 0) + (output ?? 0);
   const promptCache = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
@@ -686,9 +657,13 @@ export async function buildCompactAnnounceStatsLine(params: {
 
   const parts = [
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
+    hasDirectionalUsage
+      ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+      : promptCache === undefined
+        ? "tokens unknown"
+        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
   ];
-  if (typeof promptCache === "number" && promptCache > ioTotal) {
+  if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
   return `Stats: ${parts.join(" • ")}`;

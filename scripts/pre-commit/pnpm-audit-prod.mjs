@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
@@ -512,7 +513,7 @@ function resolveSnapshot({ dependencyName, reference, snapshots }) {
 }
 
 export function collectProdResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = parsePnpmLockfileSections(lockfileText);
+  const lockfile = parsePnpmLockfileSections(pnpmLockfileDocuments(lockfileText).dependencies);
   if (!lockfile.hasImportersSection) {
     throw new Error("pnpm-lock.yaml is missing the importers section.");
   }
@@ -572,20 +573,25 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
 }
 
 export function collectAllResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = parsePnpmLockfileSections(lockfileText);
-  if (!lockfile.hasSnapshotsSection) {
-    throw new Error("pnpm-lock.yaml is missing the snapshots section.");
-  }
-
   const versionsByPackage = new Map();
-  for (const snapshotKey of Object.keys(lockfile.snapshots)) {
-    const resolved = parseSnapshotKey(snapshotKey);
-    let versions = versionsByPackage.get(resolved.packageName);
-    if (!versions) {
-      versions = new Set();
-      versionsByPackage.set(resolved.packageName, versions);
+  for (const document of Object.values(pnpmLockfileDocuments(lockfileText))) {
+    if (document === null) {
+      continue;
     }
-    versions.add(resolved.version);
+    const lockfile = parsePnpmLockfileSections(document);
+    if (!lockfile.hasSnapshotsSection) {
+      throw new Error("pnpm-lock.yaml is missing the snapshots section.");
+    }
+
+    for (const snapshotKey of Object.keys(lockfile.snapshots)) {
+      const resolved = parseSnapshotKey(snapshotKey);
+      let versions = versionsByPackage.get(resolved.packageName);
+      if (!versions) {
+        versions = new Set();
+        versionsByPackage.set(resolved.packageName, versions);
+      }
+      versions.add(resolved.version);
+    }
   }
 
   return versionsByPackage;

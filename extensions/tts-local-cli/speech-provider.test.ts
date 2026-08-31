@@ -23,6 +23,20 @@ import { buildCliSpeechProvider } from "./speech-provider.js";
 
 const TEST_CFG = {} as OpenClawConfig;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
+const VALID_MPEG_FRAME_HEADER = [0xff, 0xfb, 0x90, 0x64] as const;
+const FREE_FORMAT_MPEG_FRAME_HEADER = [0xff, 0xfb, 0x00, 0x64] as const;
+const EMPTY_ID3V2_HEADER = [...Buffer.from("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+const EMPTY_ID3V24_HEADER_WITH_FOOTER = [
+  ...Buffer.from("ID3"),
+  0x04,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+];
+const EMPTY_ID3V24_FOOTER = [...Buffer.from("3DI"), ...EMPTY_ID3V24_HEADER_WITH_FOOTER.slice(3)];
 
 function createCliFixture(): { dir: string; script: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-test-"));
@@ -42,7 +56,12 @@ const stdin = await new Promise((resolve) => {
   process.stdin.on("data", (chunk) => { data += chunk; });
   process.stdin.on("end", () => resolve(data));
 });
-const payload = Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg }));
+const payload = Buffer.concat([
+  Buffer.from("RIFF"),
+  Buffer.alloc(4),
+  Buffer.from("WAVE"),
+  Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg })),
+]);
 if (outputPath) {
   writeFileSync(outputPath, payload);
 } else {
@@ -51,6 +70,32 @@ if (outputPath) {
 `,
   );
   return { dir, script };
+}
+
+function createRawAudioFixture(audio: readonly number[]): { dir: string; script: string } {
+  const fixture = createCliFixture();
+  writeFileSync(
+    fixture.script,
+    `
+import { writeFileSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+const outputPath = outIndex >= 0 ? process.argv[outIndex + 1] : "";
+const audio = Buffer.from(${JSON.stringify(audio)});
+if (outputPath) {
+  writeFileSync(outputPath, audio);
+} else {
+  process.stdout.write(audio);
+}
+`,
+  );
+  return fixture;
+}
+
+function createOggFirstPage(firstPacket: Buffer): Buffer {
+  const header = Buffer.alloc(27);
+  header.write("OggS");
+  header[26] = 1;
+  return Buffer.concat([header, Buffer.from([firstPacket.length]), firstPacket]);
 }
 
 function baseProviderConfig(
@@ -81,7 +126,8 @@ async function synthesize(params: {
 }
 
 function parseAudioPayload(result: { audioBuffer: Buffer }) {
-  return JSON.parse(result.audioBuffer.toString("utf8")) as {
+  const jsonStart = result.audioBuffer.indexOf("{");
+  return JSON.parse(result.audioBuffer.subarray(jsonStart).toString("utf8")) as {
     stdin?: string;
     textArg?: string;
   };
@@ -154,13 +200,13 @@ describe("buildCliSpeechProvider", () => {
       const result = await synthesize({
         providerConfig: baseProviderConfig(fixture.script, {
           args: [fixture.script, "--out", "{{OutputPath}}"],
-          outputFormat: "mp3",
+          outputFormat: "wav",
         }),
         text: "hello 😀 world",
       });
 
-      expect(result.outputFormat).toBe("mp3");
-      expect(result.fileExtension).toBe(".mp3");
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
       expect(result.voiceCompatible).toBe(false);
       const audioPayload = parseAudioPayload(result);
       expect(audioPayload.stdin).toBe("hello world");
@@ -233,6 +279,167 @@ describe("buildCliSpeechProvider", () => {
         voiceCompatible: false,
       });
       expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libmp3lame", "-b:a", "128k"]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      source: "ID3-tagged stdout",
+      audio: [...EMPTY_ID3V2_HEADER, ...VALID_MPEG_FRAME_HEADER],
+      writeFile: false,
+    },
+    {
+      source: "ID3v2.4 footer stdout",
+      audio: [
+        ...EMPTY_ID3V24_HEADER_WITH_FOOTER,
+        ...EMPTY_ID3V24_FOOTER,
+        ...VALID_MPEG_FRAME_HEADER,
+      ],
+      writeFile: false,
+    },
+    { source: "free-format stdout", audio: FREE_FORMAT_MPEG_FRAME_HEADER, writeFile: false },
+    { source: "untagged frame file", audio: VALID_MPEG_FRAME_HEADER, writeFile: true },
+  ])("converts detected MP3 bytes from $source to configured WAV", async (testCase) => {
+    const fixture = createRawAudioFixture(testCase.audio);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [
+            fixture.script,
+            "--text",
+            "{{Text}}",
+            ...(testCase.writeFile ? ["--out", "{{OutputPath}}"] : []),
+          ],
+          outputFormat: "wav",
+        }),
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.wav"),
+        outputFormat: "wav",
+        fileExtension: ".wav",
+        voiceCompatible: false,
+      });
+      expectArgsContainSequence(requireFfmpegArgs(), ["-f", "wav"]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      codec: "OpusHead",
+      packet: Buffer.from("OpusHeadnative-audio"),
+      transport: "stdout",
+      outputArgs: [],
+    },
+    {
+      codec: "Vorbis",
+      packet: Buffer.from("\x01vorbis-not-OpusHead"),
+      transport: "templated file",
+      outputArgs: ["--out", "{{OutputDir}}/{{OutputBase}}.ogg"],
+    },
+  ])("converts Ogg $codec from $transport to Opus for voice notes", async (testCase) => {
+    const audio = createOggFirstPage(testCase.packet);
+    const fixture = createRawAudioFixture([...audio]);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--text", "{{Text}}", ...testCase.outputArgs],
+          outputFormat: "opus",
+        }),
+        target: "voice-note",
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.opus"),
+        outputFormat: "opus",
+        fileExtension: ".ogg",
+        voiceCompatible: true,
+      });
+      const ffmpegArgs = requireFfmpegArgs();
+      expectArgsContainSequence(ffmpegArgs, ["-c:a", "libopus", "-b:a", "64k"]);
+      expect(ffmpegArgs[ffmpegArgs.indexOf("-i") + 1]).toMatch(/\.ogg$/);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("converts an M4A file to the configured MP3 target", async () => {
+    const fixture = createRawAudioFixture([...Buffer.from("m4a fixture")]);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--out", "{{OutputDir}}/{{OutputBase}}.m4a"],
+          outputFormat: "mp3",
+        }),
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      });
+      const ffmpegArgs = requireFfmpegArgs();
+      expectArgsContainSequence(ffmpegArgs, ["-c:a", "libmp3lame", "-b:a", "128k"]);
+      expect(ffmpegArgs[ffmpegArgs.indexOf("-i") + 1]).toMatch(/\.m4a$/);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { label: "plain bytes", audio: [...Buffer.from("not audio")] },
+    { label: "reserved MP3 layer", audio: [0xff, 0xf1, 0x90, 0x64] },
+    { label: "bare ID3 prefix", audio: [...Buffer.from("ID3audio")] },
+    {
+      label: "ID3 tag with a non-sync-safe size",
+      audio: [
+        ...Buffer.from("ID3"),
+        0x04,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        ...VALID_MPEG_FRAME_HEADER,
+      ],
+    },
+    {
+      label: "ID3 tag followed by a reserved MP3 layer",
+      audio: [...EMPTY_ID3V2_HEADER, 0xff, 0xf1, 0x90, 0x64],
+    },
+  ])("rejects $label on stdout with supported-format guidance", async ({ audio }) => {
+    const fixture = createRawAudioFixture(audio);
+    try {
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--text", "{{Text}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow("stdout audio format is not recognized");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unrecognized bytes written to a recognized audio extension", async () => {
+    const fixture = createRawAudioFixture([...Buffer.from("not audio")]);
+    try {
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "mp3",
+          }),
+        }),
+      ).rejects.toThrow("unknown format");
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }

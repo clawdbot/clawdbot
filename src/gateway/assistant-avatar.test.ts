@@ -189,4 +189,25 @@ describe("resolveGatewayAssistantAvatar", () => {
       }),
     ).toEqual({ avatar: "/openclaw/avatar/main", resolution: null });
   });
+
+  it.each(["/avatar/main/extra", "//evil.example/avatar/main", "//[", "/avatar\\main"])(
+    "rejects non-canonical same-origin avatar path %s",
+    (avatar) => {
+      const { cfg } = createWorkspace();
+
+      expect(
+        resolveGatewayAssistantAvatar({
+          cfg,
+          identity: { agentId: "main", avatar, emoji: "🦞" },
+        }),
+      ).toEqual({
+        avatar: "🦞",
+        resolution: {
+          kind: "none",
+          reason: "outside_workspace",
+          source: avatar,
+        },
+      });
+    },
+  );
 });

@@ -14,16 +14,14 @@ import { withEnvAsync } from "../../test-utils/env.js";
 let capturedPayload: RestartSentinelPayload | undefined;
 let restartSentinelWriteError: Error | null = null;
 
-const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
-type UpdateInstallSurface = Awaited<
-  ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
->;
-const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
-  kind: "git",
-  mode: "git",
-  root: "/tmp/openclaw",
-  packageRoot: "/tmp/openclaw",
-}));
+const runGatewayUpdateMock =
+  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
+const runGatewayUpdatePreflightMock =
+  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
+const resolveUpdateInstallSurfaceMock =
+  vi.fn<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>();
+const initializeGatewayUpdateStatusMock =
+  vi.fn<typeof import("../../infra/update-startup.js").initializeGatewayUpdateStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
@@ -31,7 +29,6 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
-const checkUpdateStatusMock = vi.fn();
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
@@ -47,10 +44,10 @@ const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
 const refreshGatewayUpdateStatusMock = vi.fn(async () => {});
-type UpdateCampaignAdoption = NonNullable<
-  ReturnType<import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]>
+type UpdateCampaignAdoption = ReturnType<
+  import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]
 >;
-const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption | undefined>(() => undefined);
+const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({ status: "absent" }));
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 type ManagedServiceUpdateHandoffResult = Awaited<
   ReturnType<
@@ -58,13 +55,14 @@ type ManagedServiceUpdateHandoffResult = Awaited<
   >
 >;
 const startManagedServiceUpdateHandoffMock = vi.fn<
-  (params?: { handoffId?: string }) => Promise<ManagedServiceUpdateHandoffResult>
+  (params?: { handoffId?: string; root?: string }) => Promise<ManagedServiceUpdateHandoffResult>
 >(async (params) => ({
   status: "started",
   pid: 12345,
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-  handoffId: params?.handoffId,
+  handoffId: params?.handoffId ?? "handoff-default",
+  installRoot: params?.root ?? "/tmp/openclaw",
 }));
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
@@ -91,9 +89,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
-vi.mock("../../config/commands.flags.js", () => ({
-  isRestartEnabled: isRestartEnabledMock,
-}));
+vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEnabledMock }));
 
 vi.mock("../../config/sessions.js", () => ({
   extractDeliveryInfo: (sessionKey: string | undefined) => {
@@ -114,16 +110,6 @@ vi.mock("../../config/sessions.js", () => ({
   },
 }));
 
-vi.mock("../../infra/openclaw-root.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/openclaw-root.js")>(
-    "../../infra/openclaw-root.js",
-  );
-  return {
-    ...actual,
-    resolveOpenClawPackageRoot: async () => "/tmp/openclaw",
-  };
-});
-
 vi.mock("../../infra/restart-sentinel.js", async () => {
   const actual = await vi.importActual("../../infra/restart-sentinel.js");
   return {
@@ -137,23 +123,12 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-      return 300_000;
-    }
-    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
-  },
+vi.mock("../../infra/restart.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
-vi.mock("../../infra/package-json.js", () => ({
-  readPackageVersion: readPackageVersionMock,
-}));
-
-vi.mock("../../infra/update-check.js", () => ({
-  checkUpdateStatus: checkUpdateStatusMock,
-}));
+vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: readPackageVersionMock }));
 
 vi.mock("../../version.js", () => ({
   get VERSION() {
@@ -175,6 +150,7 @@ vi.mock("../../infra/update-channels.js", async () => {
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+  initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -185,6 +161,7 @@ vi.mock("../../infra/update-campaign.js", () => ({
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
   runGatewayUpdate: runGatewayUpdateMock,
+  runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
 // Keep the real `foldPostCoreFinalizeIntoResult` so the restart-gate behavior on
@@ -258,7 +235,7 @@ beforeEach(() => {
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
   adoptUpdateCampaignMock.mockReset();
-  adoptUpdateCampaignMock.mockReturnValue(undefined);
+  adoptUpdateCampaignMock.mockReturnValue({ status: "absent" });
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
@@ -284,12 +261,21 @@ beforeEach(() => {
     steps: [],
     durationMs: 100,
   });
-  resolveUpdateInstallSurfaceMock.mockClear();
-  resolveUpdateInstallSurfaceMock.mockResolvedValue({
-    kind: "git",
-    mode: "git",
+  runGatewayUpdatePreflightMock.mockReset();
+  runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
+  resolveUpdateInstallSurfaceMock.mockReset();
+  resolveUpdateInstallSurfaceMock.mockImplementation(async ({ root, installKind }) =>
+    root && installKind === "git"
+      ? { kind: "git", mode: "git", root, packageRoot: root }
+      : root && installKind === "package"
+        ? { kind: "package-root", mode: "unknown", root, packageRoot: root }
+        : { kind: "missing", mode: "unknown" },
+  );
+  initializeGatewayUpdateStatusMock.mockReset();
+  initializeGatewayUpdateStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    packageRoot: "/tmp/openclaw",
+    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockClear();
@@ -297,12 +283,13 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockImplementation(
-    async (params?: { handoffId?: string }) => ({
+    async (params?: { handoffId?: string; root?: string }) => ({
       status: "started" as const,
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
       logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-      handoffId: params?.handoffId,
+      handoffId: params?.handoffId ?? "handoff-default",
+      installRoot: params?.root ?? "/tmp/openclaw",
     }),
   );
   scheduleGatewaySigusr1RestartMock.mockClear();
@@ -372,6 +359,11 @@ async function withProcessEnv<T>(
 }
 
 function mockGlobalInstallSurface() {
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    root: "/tmp/openclaw-global",
+    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    installReceipt: null,
+  });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
@@ -381,11 +373,10 @@ function mockGlobalInstallSurface() {
 }
 
 function mockGitInstallSurface(root: string) {
-  resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
-    kind: "git",
-    mode: "git",
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
     root,
-    packageRoot: root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
 }
 
@@ -552,8 +543,21 @@ describe("update.run restart scheduling", () => {
     const [restartParams] = firstMockCall(
       scheduleGatewaySigusr1RestartMock,
       "gateway restart schedule",
-    ) as [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }];
+    ) as [
+      {
+        delayMs?: number;
+        reason?: string;
+        successorOwner?: unknown;
+        skipCooldown?: boolean;
+        skipDeferral?: boolean;
+      },
+    ];
     expect(restartParams?.reason).toBe("update.run");
+    expect(restartParams?.successorOwner).toEqual({
+      kind: "managed-update-handoff",
+      handoffId: handoffParams.handoffId,
+      installRoot: "/tmp/openclaw-global",
+    });
     expect(restartParams?.skipCooldown).toBe(true);
     expect(restartParams?.skipDeferral).toBe(true);
     expect(payload?.ok).toBe(true);
@@ -675,6 +679,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "systemd",
+        restartDrainTimeoutMs: 300_000,
         restartDelayMs: 2000,
       }),
     );
@@ -682,11 +687,33 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         delayMs: 2000,
         reason: "update.run",
+        successorOwner: {
+          kind: "managed-update-handoff",
+          handoffId: expect.any(String),
+          installRoot: "/tmp/openclaw-global",
+        },
         skipCooldown: true,
         skipDeferral: true,
       }),
     );
   });
+
+  it.each(["launchd", "systemd"] as const)(
+    "normalizes overflow-sized %s handoff and restart delays together",
+    async (supervisor) => {
+      detectRespawnSupervisorMock.mockReturnValueOnce(supervisor);
+      mockGlobalInstallSurface();
+
+      await invokeUpdateRun({ restartDelayMs: 2_147_153_648 });
+
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+        expect.objectContaining({ supervisor, restartDelayMs: 60_000 }),
+      );
+      expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+        expect.objectContaining({ delayMs: 60_000 }),
+      );
+    },
+  );
 
   it("starts managed package handoff when the gateway cwd is unavailable", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -710,14 +737,18 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("hands supervised git/dev updates to the CLI path instead of rebuilding live dist in-process", async () => {
+  it("preflights supervised git/dev updates before handing them to the CLI path", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-git",
+      undefined,
+      undefined,
+    );
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -743,6 +774,39 @@ describe("update.run restart scheduling", () => {
     expect(readCapturedPayload().status).toBe("skipped");
   });
 
+  it("keeps the serving gateway when managed git target preflight rejects active config", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+    runGatewayUpdatePreflightMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      root: "/tmp/openclaw-git",
+      reason: "preflight-no-good-commit",
+      steps: [
+        {
+          name: "preflight config validate (target)",
+          command: "openclaw config validate --json",
+          cwd: "/tmp/openclaw-candidate",
+          durationMs: 1,
+          exitCode: 1,
+          stderrTail: "target rejected the active config",
+        },
+      ],
+      durationMs: 1,
+    });
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.result).toMatchObject({
+      status: "error",
+      reason: "preflight-no-good-commit",
+    });
+  });
+
   it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("schtasks");
     mockGitInstallSurface("C:\\openclaw");
@@ -755,7 +819,7 @@ describe("update.run restart scheduling", () => {
       () => captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "schtasks",
@@ -852,7 +916,7 @@ describe("update.run restart scheduling", () => {
       () => captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -867,27 +931,29 @@ describe("update.run restart scheduling", () => {
     expect(payload?.handoff?.status).toBe("started");
   });
 
-  it("does not hand off systemd-supervised git/dev updates from generic systemd markers alone", async () => {
+  it("hands marker-only systemd git/dev updates to the helper for exact ownership verification", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
     const payload = await withProcessEnv(
       {
         OPENCLAW_SYSTEMD_UNIT: undefined,
-        INVOCATION_ID: "8a77e69a8f604bf0b7984879b9f17a7c",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
       },
       () => captureUpdateRunPayload(),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(false);
-    expect(payload?.restart).toBeNull();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/tmp/openclaw-git", supervisor: "systemd" }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledOnce();
+    expect(payload?.ok).toBe(true);
     expect(payload?.result?.status).toBe("skipped");
-    expect(payload?.result?.reason).toBe("managed-service-handoff-unavailable");
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
     expect(payload?.result?.mode).toBe("git");
-    expect(payload?.handoff?.status).toBe("unavailable");
+    expect(payload?.handoff?.status).toBe("started");
   });
 
   it("returns a safe command when package updates cannot be handed off", async () => {
@@ -926,11 +992,16 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.mode).toBe("npm");
   });
 
-  it("delegates update.run without mutating or restarting under external supervision", async () => {
+  it("keeps external update supervision authoritative even with native systemd markers", async () => {
     mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
 
-    const payload = await withProcessEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
-      captureUpdateRunPayload(),
+    const payload = await withProcessEnv(
+      {
+        OPENCLAW_SUPERVISOR_MODE: "external",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      },
+      () => captureUpdateRunPayload(),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();

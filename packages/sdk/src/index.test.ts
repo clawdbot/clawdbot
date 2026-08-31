@@ -6,7 +6,6 @@ import type {
   GatewayRequestOptions,
   OpenClawEvent,
   OpenClawTransport,
-  TaskSummary,
 } from "./types.js";
 
 type RequestCall = {
@@ -601,10 +600,6 @@ describe("OpenClaw SDK", () => {
         diffStat: { files: 2, added: 12, removed: 3 },
       },
     ]);
-    const listedTask: TaskSummary | undefined = taskList.tasks[0];
-    expect(listedTask).toBeDefined();
-    expect(listedTask?.lastActivity).toBe("Editing the registry");
-    expect(listedTask?.diffStat).toEqual({ files: 2, added: 12, removed: 3 });
     const taskGet = await oc.tasks.get("task_123");
     expect(taskGet.task).toEqual({
       id: "task_123",

@@ -14,8 +14,11 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
-import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
+import {
+  containsEnvVarReference,
+  type EnvSubstitutionWarning,
+  resolveConfigEnvVars,
+} from "../config/env-substitution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -286,8 +289,14 @@ function resolveCanonicalFallbackRef(
 function hasUnresolvedInheritedFallbackProvider(
   config: OpenClawConfig,
   ref: TouchedModelRef,
+  unresolvedPaths: ReadonlySet<string>,
 ): boolean {
-  if (!ref.fallback || ref.value.includes("/")) {
+  if (
+    !ref.fallback ||
+    ref.value.includes("/") ||
+    (!unresolvedPaths.has("agents.defaults.model") &&
+      !unresolvedPaths.has("agents.defaults.model.primary"))
+  ) {
     return false;
   }
   const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
@@ -349,11 +358,21 @@ function expandInheritedDefaultRefs(
   return expanded;
 }
 
-function validateModelRefSyntax(config: OpenClawConfig, ref: TouchedModelRef): string | undefined {
+function modelRefEnvSourcePath(path: string): string {
+  return path
+    .replace(/\.list\.(\d+)/u, ".list[$1]")
+    .replace(/\.fallbacks\.(\d+)$/u, ".fallbacks[$1]");
+}
+
+function validateModelRefSyntax(
+  config: OpenClawConfig,
+  ref: TouchedModelRef,
+  unresolvedPaths: ReadonlySet<string>,
+): string | undefined {
   if (!ref.value) {
     return "Model reference is empty";
   }
-  if (containsEnvVarReference(ref.value)) {
+  if (unresolvedPaths.has(modelRefEnvSourcePath(ref.path))) {
     return "Model reference contains an unresolved environment variable";
   }
   const resolved = ref.fallback
@@ -367,22 +386,18 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     import("../agents/agent-scope.js"),
     import("../agents/model-selection.js"),
   ]);
-  const preparedByAgent = new Map<
-    string,
-    Awaited<ReturnType<typeof loadPreparedModelCatalogOwnerSnapshot>>
-  >();
   let modelModules:
     | Promise<
         [
           typeof import("../agents/embedded-agent-runner/model.js"),
-          typeof import("../agents/prepared-model-catalog.js"),
+          typeof import("../agents/prepared-model-runtime.js"),
         ]
       >
     | undefined;
   const loadModelModules = () =>
     (modelModules ??= Promise.all([
       import("../agents/embedded-agent-runner/model.js"),
-      import("../agents/prepared-model-catalog.js"),
+      import("../agents/prepared-model-runtime.js"),
     ]));
 
   return async ({ config, ref }) => {
@@ -392,8 +407,9 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
+    const { provider, model } = resolvedRef;
     // CLI backends validate their own ids and do not require a roster-owned catalog.
-    if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
+    if (modelSelection.isCliProvider(provider, config)) {
       return undefined;
     }
     const targetAgentId =
@@ -402,38 +418,33 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       agentScope.resolveDefaultAgentId(config);
     const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
     const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
-    const [modelRuntime, preparedCatalog] = await loadModelModules();
+    const [modelRuntime, preparedRuntime] = await loadModelModules();
 
-    let prepared = preparedByAgent.get(targetAgentId);
-    if (!prepared) {
-      prepared = await preparedCatalog.loadPreparedModelCatalogOwnerSnapshot({
-        agentId: targetAgentId,
-        agentDir,
-        config,
-        readOnly: true,
-        workspaceDir,
-      });
-      preparedByAgent.set(targetAgentId, prepared);
-    }
-    const stores = prepared.createStores();
-    const resolution = await modelRuntime.resolveModelAsync(
-      resolvedRef.provider,
-      resolvedRef.model,
+    // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
+    const lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime({
+      agentId: targetAgentId,
       agentDir,
       config,
-      {
+      workspaceDir,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider, modelId: model, agentId: targetAgentId }],
+    });
+    try {
+      const stores = lease.snapshot.createStores();
+      const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+        ...stores,
         agentId: targetAgentId,
         allowBundledStaticCatalogFallback: true,
-        authStorage: stores.authStorage,
         ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-        modelRegistry: stores.modelRegistry,
-        preparedModelRuntime: prepared,
+        preparedModelRuntime: lease.snapshot,
         workspaceDir,
-      },
-    );
-    return resolution.model
-      ? undefined
-      : (resolution.error ?? `Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+      });
+      return resolution.model
+        ? undefined
+        : (resolution.error ?? `Unknown model: ${provider}/${model}`);
+    } finally {
+      lease.release();
+    }
   };
 }
 
@@ -480,10 +491,11 @@ export async function checkTouchedTextModelRefs(params: {
   );
   let validationConfig: OpenClawConfig;
   let validationPreviousConfig: OpenClawConfig | undefined;
+  const unresolvedPaths = new Set<string>();
   try {
     const env = params.env ?? process.env;
     validationConfig = resolveConfigEnvVars(params.config, env, {
-      onMissing: () => {},
+      onMissing: ({ configPath }: EnvSubstitutionWarning) => unresolvedPaths.add(configPath),
     }) as OpenClawConfig;
     validationPreviousConfig = params.previousConfig
       ? (resolveConfigEnvVars(params.previousConfig, env, {
@@ -555,11 +567,11 @@ export async function checkTouchedTextModelRefs(params: {
   // A bare fallback cannot be accepted while its inherited provider is env-unresolved;
   // leave it unchecked until runtime can determine that provider.
   const refsToValidate = refs.filter(
-    (ref) => !hasUnresolvedInheritedFallbackProvider(validationConfig, ref),
+    (ref) => !hasUnresolvedInheritedFallbackProvider(config, ref, unresolvedPaths),
   );
   const validatedRefs = refsToValidate.map((ref) => ({
     ref,
-    error: validateModelRefSyntax(validationConfig, ref),
+    error: validateModelRefSyntax(validationConfig, ref, unresolvedPaths),
   }));
   const syntaxFailures = validatedRefs.filter(
     (entry): entry is { ref: TouchedModelRef; error: string } => Boolean(entry.error),

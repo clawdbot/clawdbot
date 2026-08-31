@@ -3,7 +3,6 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -29,6 +28,8 @@ class SkillManagementTest {
         GatewayClawHubSkillSummary(
           slug = "alpha",
           installRef = "@alice/alpha",
+          installOnly = null,
+          trustState = null,
           displayName = "Alpha",
           summary = "Useful",
           version = "1.2.3",
@@ -50,11 +51,89 @@ class SkillManagementTest {
   }
 
   @Test
+  fun installOnlyResultsKeepTheirSourceAndExposeNoDetailAction() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","displayName":"Pdf"}]}""",
+        json,
+      )
+
+    val external = results.first()
+    val native = results.last()
+    // Rewriting the external reference to @openai/pdf would install a different skill.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
+    assertFalse(external.canReadDetails)
+    assertTrue(external.isUnscannedSource)
+    assertTrue(native.canReadDetails)
+
+    // Android installs this exact reference directly; it never creates a release review.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
+  }
+
+  @Test
+  fun resultsWithoutTheInstallOnlyFlagKeepTheReviewFlow() {
+    // A Gateway released before the flag existed omits it from every row.
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}""",
+        json,
+      )
+
+    // Treating omission as install-only would bypass the reviewed-version step those Gateways
+    // still expect.
+    assertTrue(results.first().canReadDetails)
+    assertFalse(results.first().isUnscannedSource)
+  }
+
+  @Test
+  fun installOnlyReadbackMatchesTheRecordedReference() {
+    val installed =
+      listOf(
+        GatewaySkillSummary(
+          skillKey = "pdf",
+          name = "pdf",
+          description = null,
+          source = "clawhub",
+          emoji = null,
+          disabled = false,
+          eligible = true,
+          blockedByAllowlist = false,
+          blockedByAgentFilter = false,
+          bundled = false,
+          missingCount = 0,
+          installCount = 0,
+          clawHubSlug = "pdf",
+          clawHubValid = true,
+          clawHubRequestedReference = "skills-sh:openai/skills/pdf",
+        ),
+      )
+
+    // The canonical slug is "pdf", so matching by the sent reference is the only readback that
+    // identifies this install without colliding with a registry skill of the same slug.
+    assertTrue(isClawHubSkillInstalledByReference(installed, "skills-sh:openai/skills/pdf"))
+    assertTrue(
+      isClawHubSkillInstalled(
+        installed,
+        GatewayClawHubSkillSummary(
+          slug = "pdf",
+          installRef = "skills-sh:openai/skills/pdf",
+          installOnly = true,
+          trustState = "not-scanned-by-clawhub",
+          displayName = "Pdf",
+          summary = null,
+          version = null,
+        ),
+      ),
+    )
+    assertFalse(isClawHubSkillInstalledByReference(installed, "skills-sh:other/skills/pdf"))
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha Skill","summary":"Reviewed metadata"},"latestVersion":{"version":"2.0.0"},"owner":{"displayName":"Alice","handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
@@ -75,7 +154,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, "1.9.0"),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, "1.9.0"),
         json,
       )
 
@@ -87,7 +166,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
@@ -96,88 +175,66 @@ class SkillManagementTest {
 
   @Test
   fun installParamsKeepRegistryAndTrustPolicyOnGateway() {
-    val params = json.parseToJsonElement(clawHubInstallParams("alpha", "1.2.3", acknowledgeRisk = true)).jsonObject
+    for ((reference, version) in listOf("@alice/alpha" to " 1.2.3 ", "skills-sh:openai/skills/pdf" to null)) {
+      val params = json.parseToJsonElement(clawHubInstallParams(reference, version)).jsonObject
+      val expectedKeys = setOf("source", "slug", "timeoutMs") + if (version == null) emptySet() else setOf("version")
 
-    assertEquals(setOf("source", "slug", "version", "acknowledgeClawHubRisk", "timeoutMs"), params.keys)
-    assertEquals("clawhub", params.getValue("source").jsonPrimitive.content)
-    assertEquals("alpha", params.getValue("slug").jsonPrimitive.content)
-    assertEquals("1.2.3", params.getValue("version").jsonPrimitive.content)
-    assertTrue(params.getValue("acknowledgeClawHubRisk").jsonPrimitive.boolean)
-    assertEquals(120_000, params.getValue("timeoutMs").jsonPrimitive.int)
+      assertEquals(expectedKeys, params.keys)
+      assertEquals("clawhub", params.getValue("source").jsonPrimitive.content)
+      assertEquals(reference, params.getValue("slug").jsonPrimitive.content)
+      assertEquals(version?.trim(), params["version"]?.jsonPrimitive?.content)
+      assertEquals(120_000, params.getValue("timeoutMs").jsonPrimitive.int)
+    }
   }
 
   @Test
-  fun onlyStructuredReviewRequiredFailureOffersAcknowledgement() {
-    val rejection =
-      clawHubInstallRejection(
-        GatewaySession.ErrorShape(
-          code = "UNAVAILABLE",
-          message = "review required",
-          details =
-            GatewayErrorDetails(
-              code = null,
-              canRetryWithDeviceToken = false,
-              recommendedNextStep = null,
-              clawhubTrustCode = "clawhub_risk_acknowledgement_required",
-              clawhubWarning = "Scanner found elevated permissions.",
-              clawhubVersion = "1.2.3",
-            ),
-        ),
-        attemptedVersion = "1.2.3",
-      )
+  fun rejectionKeepsGatewayMessageAndWarning() {
+    for (message in listOf("review required", "download blocked", "security verification unavailable")) {
+      val rejection =
+        clawHubInstallRejection(
+          GatewaySession.ErrorShape(
+            code = "UNAVAILABLE",
+            message = message,
+            details =
+              GatewayErrorDetails(
+                code = null,
+                canRetryWithDeviceToken = false,
+                recommendedNextStep = null,
+                clawhubWarning = "  ClawHub audit details.\n ",
+              ),
+          ),
+        )
 
-    assertTrue(rejection.requiresAcknowledgement)
-    assertEquals("1.2.3", rejection.acknowledgeVersion)
-    assertEquals("Scanner found elevated permissions.", rejection.warning)
+      assertEquals(message, rejection.message)
+      assertEquals("ClawHub audit details.", rejection.warning)
+      assertEquals("$message\n\nClawHub audit details.", formatClawHubInstallMessage(rejection.message, rejection.warning))
+    }
   }
 
   @Test
-  fun changedGatewayVersionRequiresFreshReview() {
-    val rejection =
-      clawHubInstallRejection(
-        GatewaySession.ErrorShape(
-          code = "UNAVAILABLE",
-          message = "review required",
-          details =
-            GatewayErrorDetails(
-              code = null,
-              canRetryWithDeviceToken = false,
-              recommendedNextStep = null,
-              clawhubTrustCode = "clawhub_risk_acknowledgement_required",
-              clawhubWarning = "Scanner found elevated permissions.",
-              clawhubVersion = "1.2.4",
-            ),
-        ),
-        attemptedVersion = "1.2.3",
-      )
+  fun rejectionFallsBackForBlankMessagesAndOmitsEmptyWarnings() {
+    for (warning in listOf(null, "", " \n ")) {
+      val rejection =
+        clawHubInstallRejection(
+          GatewaySession.ErrorShape(
+            code = "UNAVAILABLE",
+            message = " \n ",
+            details =
+              warning?.let {
+                GatewayErrorDetails(
+                  code = null,
+                  canRetryWithDeviceToken = false,
+                  recommendedNextStep = null,
+                  clawhubWarning = it,
+                )
+              },
+          ),
+        )
 
-    assertFalse(rejection.requiresAcknowledgement)
-    assertNull(rejection.acknowledgeVersion)
-    assertTrue(rejection.message.contains("different ClawHub release"))
-  }
-
-  @Test
-  fun blockedFailureNeverOffersAcknowledgement() {
-    val rejection =
-      clawHubInstallRejection(
-        GatewaySession.ErrorShape(
-          code = "UNAVAILABLE",
-          message = "download blocked",
-          details =
-            GatewayErrorDetails(
-              code = null,
-              canRetryWithDeviceToken = false,
-              recommendedNextStep = null,
-              clawhubTrustCode = "clawhub_download_blocked",
-              clawhubWarning = "ClawHub marked this release malicious.",
-              clawhubVersion = "1.2.3",
-            ),
-        ),
-        attemptedVersion = "1.2.3",
-      )
-
-    assertFalse(rejection.requiresAcknowledgement)
-    assertNull(rejection.acknowledgeVersion)
+      assertEquals("The Gateway rejected this ClawHub install.", rejection.message)
+      assertNull(rejection.warning)
+      assertEquals(rejection.message, formatClawHubInstallMessage(rejection.message, rejection.warning))
+    }
   }
 
   @Test

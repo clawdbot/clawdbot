@@ -33,6 +33,7 @@ const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
 
 const OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS = [
   /input length(?:\s+and\s+max_tokens)?\s+exceed\s+context(?:\s+limit|\s+window)?\s*\(i\.e\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+\)/i,
+  /input length\s+and\s+`max_tokens`\s+exceed\s+context\s+limit:\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+/i,
 ];
 
 export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {

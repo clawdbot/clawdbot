@@ -66,6 +66,38 @@ export type AcpRuntimeTurnAttachment = {
   data: string;
 };
 
+export type AcpJsonRpcId = string | number | null;
+
+export type AcpElicitationMeta = Record<string, unknown> | null;
+
+/** Structural ACP wire boundary; the harness-owned compiler validates concrete modes and schemas. */
+export type AcpElicitationRequest = {
+  mode: string;
+  message: string;
+  [key: string]: unknown;
+};
+
+export type AcpElicitationContentValue = string | number | boolean | string[];
+
+export type AcpElicitationResponse =
+  | {
+      action: "accept";
+      content?: Record<string, AcpElicitationContentValue> | null;
+      _meta?: AcpElicitationMeta;
+    }
+  | { action: "decline"; _meta?: AcpElicitationMeta }
+  | { action: "cancel"; _meta?: AcpElicitationMeta };
+
+export type AcpElicitationContext = {
+  requestId: AcpJsonRpcId;
+  signal: AbortSignal;
+};
+
+export type AcpElicitationHandler = (
+  request: AcpElicitationRequest,
+  context: AcpElicitationContext,
+) => Promise<AcpElicitationResponse>;
+
 /** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
@@ -74,6 +106,8 @@ export type AcpRuntimeTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  /** Handles provider-neutral user input requests owned by this exact turn. */
+  onElicitation?: AcpElicitationHandler;
 };
 
 export type AcpRuntimeCapabilities = {
@@ -83,6 +117,17 @@ export type AcpRuntimeCapabilities = {
    * Empty/undefined means "backend accepts keys, but did not advertise a strict list".
    */
   configOptionKeys?: string[];
+};
+
+/** Complete accepted control snapshot after a successful config-option write. */
+export type AcpRuntimeConfigOptionResult = {
+  configOptions: Array<{
+    id: string;
+    category?: string | null;
+    currentValue: string | boolean;
+    /** Selectable values, flat or grouped as in ACP session config options. */
+    options?: Array<{ value: string }> | Array<{ options: Array<{ value: string }> }>;
+  }>;
 };
 
 export type AcpRuntimeStatus = {
@@ -176,6 +221,8 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /** Resolves when the backend has submitted this prompt; older third-party runtimes may omit it. */
+  readonly promptStarted?: Promise<void>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */
@@ -205,7 +252,12 @@ export interface AcpRuntime {
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
-  setConfigOption?(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
+  /** Older third-party backends may omit the accepted snapshot. Empty options are authoritative. */
+  setConfigOption?(input: {
+    handle: AcpRuntimeHandle;
+    key: string;
+    value: string;
+  }): Promise<AcpRuntimeConfigOptionResult | void>;
 
   doctor?(): Promise<AcpRuntimeDoctorReport>;
 

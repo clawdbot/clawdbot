@@ -27,6 +27,7 @@ scenario:
         - driver
     config:
       conversationId: qa-routing-allowlist
+      blockedMarker: QA-BLOCKED-SENDER-SHOULD-NOT-REPLY
       expectedMarker: QA-ALLOWLIST-OVERRIDE-OK
 
 flow:
@@ -38,9 +39,6 @@ flow:
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
         - resetTransport: true
-        - set: outboundStartIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation:
               id: { ref: config.conversationId }
@@ -48,10 +46,9 @@ flow:
             senderId: observer
             senderName: QA Observer
             text:
-              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+              expr: "`@openclaw reply exactly: ${config.blockedMarker}`"
         - waitForNoOutbound:
             quietMs: 1500
-            sinceIndex: { ref: outboundStartIndex }
         - sendInbound:
             conversation:
               id: { ref: config.conversationId }
@@ -68,4 +65,7 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: outbound
+        - assert:
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.blockedMarker))"
+            message: { expr: "`blocked sender replied: ${recentOutboundSummary(state)}`" }
       detailsExpr: outbound.text

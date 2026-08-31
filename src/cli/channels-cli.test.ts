@@ -17,6 +17,9 @@ const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
 const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsLogsCommandMock = vi.hoisted(() =>
+  vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
+);
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const runtimeMock = vi.hoisted(() => ({
   log: vi.fn(),
@@ -34,6 +37,7 @@ vi.mock("../channels/plugins/catalog.js", () => ({
 
 vi.mock("../commands/channels.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
+  channelsLogsCommand: channelsLogsCommandMock,
   channelsResolveCommand: channelsResolveCommandMock,
 }));
 
@@ -91,6 +95,19 @@ describe("registerChannelsCli", () => {
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
   });
 
+  it.each([
+    ["omitted", ["channels", "logs"], undefined],
+    ["explicit all", ["channels", "logs", "--channel", "all"], "all"],
+  ])("distinguishes an %s channels logs filter", async (_label, args, expectedChannel) => {
+    const program = new Command().name("openclaw").exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    const [options] = channelsLogsCommandMock.mock.calls[0] ?? [];
+    expect(options?.channel).toBe(expectedChannel);
+  });
+
   it.each(["auto", "user", "group", "channel"])(
     "forwards the supported %s resolve target kind",
     async (kind) => {
@@ -106,6 +123,21 @@ describe("registerChannelsCli", () => {
       );
     },
   );
+
+  it.each([
+    ["parent", ["channels", "--agent", "ops", "resolve", "room"]],
+    ["leaf", ["channels", "resolve", "--agent", "ops", "room"]],
+  ])("forwards the %s --agent option to channel resolution", async (_label, args) => {
+    const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    expect(channelsResolveCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "ops", entries: ["room"] }),
+      runtimeMock,
+    );
+  });
 
   it("rejects unsupported resolve target kinds before dispatching", async () => {
     const writeErr = vi.fn();

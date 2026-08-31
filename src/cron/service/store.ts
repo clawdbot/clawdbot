@@ -1,4 +1,5 @@
 /** Loads, normalizes, quarantines, and persists cron service store state. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -134,6 +135,12 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
+function isValidatedCronJob(
+  value: Record<string, unknown>,
+): value is CronJob & Record<string, unknown> {
+  return getInvalidPersistedCronJobReason(value) === null;
+}
+
 /** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
@@ -163,7 +170,7 @@ export async function ensureLoaded(
   const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
+  const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
@@ -190,11 +197,16 @@ export async function ensureLoaded(
     }
     const hydratedRaw = normalized ?? raw;
     let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
-    const hydratedSchedule = (hydratedRaw.schedule ?? {}) as Record<string, unknown>;
-    if (!invalidReason && hydratedRaw.enabled !== false && hydratedSchedule.kind === "every") {
+    const hydratedSchedule = isRecord(hydratedRaw.schedule) ? hydratedRaw.schedule : {};
+    if (
+      !invalidReason &&
+      isValidatedCronJob(hydratedRaw) &&
+      hydratedRaw.enabled &&
+      hydratedSchedule.kind === "every"
+    ) {
       try {
         assertTimeScheduleSatisfiable(
-          { ...(hydratedRaw as unknown as CronJob), state: {} },
+          { ...hydratedRaw, state: {} },
           loadNowMs,
           computeJobNextRunAtMs,
         );
@@ -226,7 +238,10 @@ export async function ensureLoaded(
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
-    const hydrated = hydratedRaw as unknown as CronJob;
+    if (!isValidatedCronJob(hydratedRaw)) {
+      continue;
+    }
+    const hydrated = hydratedRaw;
     jobs.push(hydrated);
     // Capture the value SQLite actually held before schedule-identity repair
     // mutates the runtime view. A later save can then publish that transition.
@@ -242,6 +257,9 @@ export async function ensureLoaded(
   loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
 
   if (quarantinedConfigJobs.length > 0) {
+    // Config decoding and runtime validation reject rows in separate passes;
+    // restore their original durable order before writing operator-visible quarantine.
+    quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     try {
       if (await persist(state)) {

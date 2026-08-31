@@ -330,14 +330,16 @@ describe("accepted context-engine turn finalization", () => {
       ),
     ).toMatchObject({ state: "blocked", failure: "stale" });
 
+    const nextAdmission = {
+      ...admission,
+      logicalTurnId: "logical-turn-next",
+    };
     await drainPendingContextEngineTurnsBeforeRun({
-      admission,
+      admission: nextAdmission,
       lease,
       warn,
     });
-    expect(lease.degradeBeforeStart).toHaveBeenCalledWith(
-      "pending durable turn advancement could not be completed before the next turn",
-    );
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
 
     const sibling = await appendTranscriptMessage(target, {
       message: { role: "assistant", content: "sibling" },
@@ -357,7 +359,7 @@ describe("accepted context-engine turn finalization", () => {
     // to a sibling. Position order alone must not make it an accepted descendant.
     database.db
       .prepare(
-        "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position) VALUES (?, ?, ?, ?)",
+        "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position, context_eligible) VALUES (?, ?, ?, ?, 1)",
       )
       .run(
         target.sessionId,

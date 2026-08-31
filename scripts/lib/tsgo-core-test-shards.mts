@@ -12,6 +12,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
   },
   {
+    name: "agents-tools",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
+  },
+  {
     name: "gateway-root",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.gateway-root.json",
@@ -37,9 +42,14 @@ export const TSGO_CORE_TEST_SHARDS = [
   { name: "services", group: "src", config: "test/tsconfig/tsconfig.core.test.services.json" },
   { name: "other", group: "src", config: "test/tsconfig/tsconfig.core.test.other.json" },
   {
-    name: "ui-pages-e2e",
+    name: "ui-pages",
     group: "ui",
-    config: "test/tsconfig/tsconfig.core.test.ui-pages-e2e.json",
+    config: "test/tsconfig/tsconfig.core.test.ui-pages.json",
+  },
+  {
+    name: "ui-e2e",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e.json",
   },
   { name: "ui-other", group: "ui", config: "test/tsconfig/tsconfig.core.test.ui-other.json" },
   {
@@ -72,6 +82,26 @@ export function selectTsgoCoreTestShards(
   }
   // Targeted aliases historically checked extension declarations as shared ambient input.
   return [...selected, ...TSGO_TARGETED_TEST_SHARED_SHARDS];
+}
+
+/**
+ * Deterministic round-robin stripe over the full shard list for CI-level
+ * parallelism. Shard walls are near-uniform, so index striping stays balanced
+ * as shards are added; the union across stripes is exactly the full list.
+ */
+export function selectTsgoCoreTestStripe(
+  stripeSpec: string,
+): readonly { name: string; config: string }[] | undefined {
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(stripeSpec);
+  if (!match) {
+    return undefined;
+  }
+  const stripe = Number(match[1]);
+  const stripeCount = Number(match[2]);
+  if (stripe > stripeCount) {
+    return undefined;
+  }
+  return TSGO_CORE_TEST_SHARDS.filter((_, index) => index % stripeCount === stripe - 1);
 }
 
 export function findTsgoCoreTestShardViolations(params: {

@@ -11,8 +11,6 @@ import {
 import {
   DM_GROUP_ACCESS_REASON,
   type DmGroupAccessReasonCode,
-} from "../plugin-sdk/channel-access-compat.js";
-import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../plugin-sdk/channel-access-compat.js";

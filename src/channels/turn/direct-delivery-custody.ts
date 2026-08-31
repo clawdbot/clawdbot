@@ -28,23 +28,29 @@ export function createDirectPendingFinalCustody(
     return undefined;
   }
   const { kind: _kind, ...identity } = completion;
-  let admission: Promise<void> | undefined;
+  let firstDispatch = true;
+  let admissionTail = Promise.resolve();
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
         pendingFinalDeliveryCompletion: identity,
       }),
     onPlatformSendDispatch: () => {
-      admission ??= settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]).then(
-        (result) => {
-          if (result.state !== "unknown") {
-            throw new PlatformMessageNotDispatchedError(
-              "Pending final delivery ownership changed before platform dispatch",
-              { cause: new Error(`pending final delivery is ${result.state}`) },
-            );
-          }
-        },
-      );
+      const expectedStates = firstDispatch
+        ? (["prepared", "queued"] as const)
+        : (["unknown"] as const);
+      firstDispatch = false;
+      const admission = admissionTail.then(async () => {
+        const result = await settlePendingFinalDelivery(completion, "unknown", expectedStates);
+        if (result.state !== "unknown") {
+          throw new PlatformMessageNotDispatchedError(
+            "Pending final delivery ownership changed before platform dispatch",
+            { cause: new Error(`pending final delivery is ${result.state}`) },
+          );
+        }
+      });
+      // Every physical post must observe the state left by the prior post's check.
+      admissionTail = admission.catch(() => undefined);
       return admission;
     },
   };

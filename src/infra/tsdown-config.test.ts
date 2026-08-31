@@ -17,6 +17,7 @@ type TsdownConfigEntry = {
   };
   entry?: Record<string, string> | string[];
   inputOptions?: TsdownInputOptions;
+  minify?: unknown;
   outDir?: string;
   plugins?: Array<{ name?: string }>;
 };
@@ -94,6 +95,22 @@ function readAgentAuthDiscoverySource(): string {
 }
 
 describe("tsdown config", () => {
+  it("minifies only the sealed deploy worker while preserving runtime names", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const deployWorker = configs.find((config) => entryKeys(config).includes("worker/worker"));
+    const rsyncReceiver = configs.find((config) =>
+      entryKeys(config).includes("worker/workspace-rsync-receiver"),
+    );
+
+    expect(deployWorker?.minify).toEqual({
+      codegen: true,
+      compress: true,
+      mangle: { keepNames: true },
+    });
+    expect(rsyncReceiver?.minify).toBeUndefined();
+    expect(requireUnifiedDistGraph().minify).toBeUndefined();
+  });
+
   it.each([
     {
       exportName: "OPENCLAW_STATE_SCHEMA_SQL",
@@ -138,9 +155,19 @@ describe("tsdown config", () => {
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
-  it("installs schema inlining only on the unified runtime graph", () => {
+  it("installs schema inlining only on executable runtime graphs", () => {
+    const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = requireUnifiedDistGraph();
-    const inlinePlugins = asConfigArray(tsdownConfig).flatMap(
+    const workerGraph = configs.find((config) => {
+      const entry = config.entry;
+      return (
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
+      );
+    });
+    const inlinePlugins = configs.flatMap(
       (config) =>
         config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
     );
@@ -148,7 +175,10 @@ describe("tsdown config", () => {
     expect(unifiedGraph.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
     );
-    expect(inlinePlugins).toHaveLength(1);
+    expect(workerGraph?.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(2);
   });
 
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
@@ -164,6 +194,7 @@ describe("tsdown config", () => {
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
       "config/sessions/session-accessor.sqlite-archive.worker",
+      "infra/sqlite-readonly-location.worker",
       "state/openclaw-database-verify.worker",
       "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",

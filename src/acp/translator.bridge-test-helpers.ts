@@ -127,8 +127,6 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
   const session = sessionStore.getSession(params.sessionId);
   expect(session?.activeRunId).toBeNull();
   expect(session?.abortController).toBeNull();
-
-  sessionStore.clearAllSessionsForTest();
 }
 
 export type MockCallSource = { mock: { calls: Array<Array<unknown>> } };

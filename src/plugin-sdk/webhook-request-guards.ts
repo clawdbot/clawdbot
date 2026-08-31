@@ -9,11 +9,17 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
+import {
+  isHttpConnectionClosing,
+  sendHttpRequestRejection,
+  waitForHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
 export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
+export { sendHttpRequestRejection } from "../infra/http-request-lifecycle.js";
 
 /** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
@@ -35,6 +41,11 @@ export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   postAuth: {
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
+  },
+  postAuthResponseFirst: {
+    maxBytes: 1024 * 1024,
+    timeoutMs: 30_000,
+    destroyOnLimit: false,
   },
 });
 
@@ -78,20 +89,26 @@ function resolveWebhookBodyReadLimits(params: {
   return { maxBytes, timeoutMs };
 }
 
-function respondWebhookBodyReadError(params: {
+async function respondWebhookBodyReadError(params: {
+  req: IncomingMessage;
   res: ServerResponse;
   code: string;
   invalidMessage?: string;
-}): { ok: false } {
-  const { res, code, invalidMessage } = params;
-  if (code === "PAYLOAD_TOO_LARGE") {
-    res.statusCode = 413;
-    res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
+  invalidStatusCode?: number;
+}): Promise<{ ok: false }> {
+  const { req, res, code, invalidMessage, invalidStatusCode } = params;
+  if (code === "PAYLOAD_TOO_LARGE" || code === "REQUEST_BODY_TIMEOUT") {
+    await sendHttpRequestRejection(
+      req,
+      res,
+      code === "PAYLOAD_TOO_LARGE" ? 413 : 408,
+      requestBodyErrorToText(code),
+    );
     return { ok: false };
   }
-  if (code === "REQUEST_BODY_TIMEOUT") {
-    res.statusCode = 408;
-    res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+  const rejection = waitForHttpRequestRejection(req);
+  if (rejection) {
+    await rejection;
     return { ok: false };
   }
   if (code === "CONNECTION_CLOSED") {
@@ -99,7 +116,7 @@ function respondWebhookBodyReadError(params: {
     res.end(requestBodyErrorToText("CONNECTION_CLOSED"));
     return { ok: false };
   }
-  res.statusCode = 400;
+  res.statusCode = invalidStatusCode ?? 400;
   res.end(invalidMessage ?? "Bad Request");
   return { ok: false };
 }
@@ -184,6 +201,9 @@ export function applyBasicWebhookRequestGuards(params: {
   /** Require JSON content type for POST requests. */
   requireJsonContentType?: boolean;
 }): boolean {
+  if (isHttpConnectionClosing(params.req.socket)) {
+    return false;
+  }
   const allowMethods = params.allowMethods?.length ? params.allowMethods : null;
   if (allowMethods && !allowMethods.includes(params.req.method ?? "")) {
     params.res.statusCode = 405;
@@ -274,7 +294,12 @@ export function beginWebhookRequestPipelineOrReject(params: {
       // Pipeline cleanup may run from multiple exits; release must stay idempotent.
       released = true;
       if (inFlightLimiter && inFlightKey) {
-        inFlightLimiter.release(inFlightKey);
+        const closed = waitForHttpRequestRejection(params.req);
+        if (closed) {
+          void closed.then(() => inFlightLimiter.release(inFlightKey));
+        } else {
+          inFlightLimiter.release(inFlightKey);
+        }
       }
     },
   };
@@ -321,17 +346,22 @@ export async function readWebhookBodyOrReject(params: {
   });
 
   try {
-    const raw = await readRequestBodyWithLimit(params.req, limits);
+    const raw = await readRequestBodyWithLimit(params.req, {
+      ...limits,
+      destroyOnLimit: false,
+    });
     return { ok: true, value: raw };
   } catch (error) {
     if (isRequestBodyLimitError(error)) {
       return respondWebhookBodyReadError({
+        req: params.req,
         res: params.res,
         code: error.code,
         invalidMessage: params.invalidBodyMessage,
       });
     }
     return respondWebhookBodyReadError({
+      req: params.req,
       res: params.res,
       code: "INVALID_BODY",
       invalidMessage: params.invalidBodyMessage ?? formatErrorMessage(error),
@@ -355,6 +385,8 @@ export async function readJsonWebhookBodyOrReject(params: {
   emptyObjectOnEmpty?: boolean;
   /** Response body for malformed JSON. */
   invalidJsonMessage?: string;
+  /** Response status for malformed JSON. */
+  invalidJsonStatusCode?: number;
 }): Promise<{ ok: true; value: unknown } | { ok: false }> {
   const limits = resolveWebhookBodyReadLimits({
     maxBytes: params.maxBytes,
@@ -365,13 +397,16 @@ export async function readJsonWebhookBodyOrReject(params: {
     maxBytes: limits.maxBytes,
     timeoutMs: limits.timeoutMs,
     emptyObjectOnEmpty: params.emptyObjectOnEmpty,
+    destroyOnLimit: false,
   });
   if (body.ok) {
     return { ok: true, value: body.value };
   }
   return respondWebhookBodyReadError({
+    req: params.req,
     res: params.res,
     code: body.code,
     invalidMessage: params.invalidJsonMessage,
+    invalidStatusCode: params.invalidJsonStatusCode,
   });
 }

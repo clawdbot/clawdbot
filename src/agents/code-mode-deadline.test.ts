@@ -10,7 +10,7 @@ describe("Code Mode execution deadlines", () => {
     await expect(
       awaitCodeModeDeadline({
         operation: async () => "prepared",
-        deadlineMs: Date.now() + 1_000,
+        remainingMs: 1_000,
         createTimeoutError: () => new Error("timed out"),
         createAbortError: () => new Error("aborted"),
       }),
@@ -21,7 +21,7 @@ describe("Code Mode execution deadlines", () => {
     vi.useFakeTimers();
     const result = awaitCodeModeDeadline({
       operation: () => new Promise<string>(() => {}),
-      deadlineMs: Date.now() + 100,
+      remainingMs: 100,
       createTimeoutError: () => new Error("timed out"),
       createAbortError: () => new Error("aborted"),
     });
@@ -38,7 +38,7 @@ describe("Code Mode execution deadlines", () => {
     const controller = new AbortController();
     const result = awaitCodeModeDeadline({
       operation: () => new Promise<string>(() => {}),
-      deadlineMs: Date.now() + 30_000,
+      remainingMs: 30_000,
       signal: controller.signal,
       createTimeoutError: () => new Error("timed out"),
       createAbortError: () => new Error("aborted"),
@@ -56,7 +56,7 @@ describe("Code Mode execution deadlines", () => {
     await expect(
       awaitCodeModeDeadline({
         operation,
-        deadlineMs: Date.now() - 1,
+        remainingMs: -1,
         createTimeoutError: () => new Error("timed out"),
         createAbortError: () => new Error("aborted"),
       }),
@@ -73,7 +73,7 @@ describe("Code Mode execution deadlines", () => {
     await expect(
       awaitCodeModeDeadline({
         operation,
-        deadlineMs: Date.now() + 1_000,
+        remainingMs: 1_000,
         signal: controller.signal,
         createTimeoutError: () => new Error("timed out"),
         createAbortError: () => new Error("aborted"),

@@ -2,6 +2,13 @@
   "id": "zoom-meetings",
   "name": "Zoom meetings",
   "description": "Join Zoom meetings as a Chrome browser guest.",
+  "cliCommands": [
+    {
+      "name": "zoommeetings",
+      "description": "Join and manage Zoom meeting guests",
+      "hasSubcommands": true
+    }
+  ],
   "icon": "https://cdn.simpleicons.org/zoom",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "zoommeetings" }],

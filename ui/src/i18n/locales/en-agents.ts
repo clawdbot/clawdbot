@@ -12,8 +12,6 @@ export const agentChip = {
   discord: "Discord community",
   viewChangelog: "View changelog",
   agentSettings: "Agent settings",
-  filterAgents: "Find agent…",
-  noAgentMatches: "No matching agents",
 };
 
 export const agentScope = {

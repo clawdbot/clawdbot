@@ -53,7 +53,7 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   if (!model.baseUrl.trim()) {
     return true;
   }
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
     return true;
   }

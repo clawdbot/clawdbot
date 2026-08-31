@@ -22,6 +22,7 @@ function createTestRegistry() {
 function createWorkerProvider(id: string): WorkerProvider {
   return {
     id,
+    resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
     provision: async () => {
       throw new Error("not called");
     },
@@ -58,18 +59,23 @@ describe("worker provider registry", () => {
     );
   });
 
-  it("rejects incomplete provider contracts", () => {
-    const pluginRegistry = createTestRegistry();
-    const provider = createWorkerProvider("static-ssh");
-    delete (provider as Partial<WorkerProvider>).inspect;
+  it.each(["resolveAllocation", "provision", "inspect", "destroy"] as const)(
+    "rejects a missing %s method",
+    (method) => {
+      const pluginRegistry = createTestRegistry();
+      const provider = createWorkerProvider("static-ssh");
+      delete (provider as Partial<WorkerProvider>)[method];
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+      pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({ message: "worker provider registration missing method: inspect" }),
-    );
-  });
+      expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+      expect(pluginRegistry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          message: `worker provider registration missing method: ${method}`,
+        }),
+      );
+    },
+  );
 
   it("rejects a non-function optional renew hook", () => {
     const pluginRegistry = createTestRegistry();
@@ -88,6 +94,23 @@ describe("worker provider registry", () => {
     );
   });
 
+  it("rejects a non-function optional machine-options hook", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      listMachineOptions: ["standard"],
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration listMachineOptions must be a function",
+      }),
+    );
+  });
+
   it("rejects a non-boolean provision-before-installation declaration", () => {
     const pluginRegistry = createTestRegistry();
     const provider = {
@@ -101,6 +124,47 @@ describe("worker provider registry", () => {
     expect(pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         message: "worker provider registration provisionBeforeInstallation must be a boolean",
+      }),
+    );
+  });
+
+  it("registers both placement modes in canonical order", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: ["worker-turn", "remote-exec"],
+    } satisfies WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
+    expect(pluginRegistry.registry.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    { modes: [], label: "no modes" },
+    { modes: ["remote-exec", "worker-turn"], label: "modes in noncanonical order" },
+    { modes: ["worker-turn", "worker-turn"], label: "duplicate worker-turn modes" },
+    { modes: ["remote-exec", "remote-exec"], label: "duplicate remote-exec modes" },
+    { modes: ["unsupported"], label: "an unknown mode" },
+    { modes: ["worker-turn", "unsupported"], label: "an unknown additional mode" },
+    {
+      modes: ["worker-turn", "remote-exec", "worker-turn"],
+      label: "more than two modes",
+    },
+  ])("rejects $label in a placement declaration", ({ modes }) => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: modes,
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("worker provider registration supportedExecutionModes"),
       }),
     );
   });

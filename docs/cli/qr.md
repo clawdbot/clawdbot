@@ -64,7 +64,13 @@ to get full access.
 
 Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
 
-When the selected Gateway URL comes from `gateway.bind=lan`, OpenClaw also checks persistent `tailscale serve status --json` routes. Any HTTPS Serve root that proxies the active Gateway's loopback port is included as a fallback. The QR command adds this fallback only for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. Current iOS clients probe the advertised routes in order and save the first reachable one; the legacy `url` field remains unchanged for older clients.
+The QR command advertises Tailscale URLs only when OpenClaw owns the route through `gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that target the ordinary Gateway listener are not advertised because that listener rejects Tailscale-shaped proxy ingress.
+
+If an older setup used `gateway.bind=lan` with a persistent default HTTPS Serve
+route, run `openclaw doctor` to preview migration to managed ingress. Apply it
+with `openclaw doctor --fix`, then restart the Gateway. Doctor leaves custom
+Serve ports unchanged. Retired named-Service config is removed with managed
+ingress disabled, and Doctor prints manual route-cleanup guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 

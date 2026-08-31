@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -17,8 +18,8 @@ import {
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
   webPushSubscriptionToRow,
-  webPushVapidKeyPairToRow,
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
+  WEB_PUSH_VAPID_STATE_KEY,
   type VapidKeyPair,
   type WebPushDatabase,
   type WebPushSubscription,
@@ -107,13 +108,7 @@ describe("legacy Web Push Doctor migration", () => {
   }
 
   function seedVapid(value: VapidKeyPair): void {
-    const database = openOpenClawStateDatabase();
-    executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<WebPushDatabase>(database.db)
-        .insertInto("web_push_vapid_keys")
-        .values(webPushVapidKeyPairToRow({ keyPair: value, nowMs: 1 })),
-    );
+    writeConfigMachineState(WEB_PUSH_VAPID_STATE_KEY, value);
   }
 
   it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {

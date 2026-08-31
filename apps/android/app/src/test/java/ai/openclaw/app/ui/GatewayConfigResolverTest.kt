@@ -182,24 +182,6 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsPrivateLanCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://192.168.1.20:18789",
-      host = "192.168.1.20",
-      displayUrl = "http://192.168.1.20:18789",
-    )
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://gateway.local:18789",
-      host = "gateway.local",
-      displayUrl = "http://gateway.local:18789",
-    )
-  }
-
-  @Test
   fun parseGatewayEndpointAllowsNormalizedMdnsCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://GATEWAY.LOCAL.:18789")
 

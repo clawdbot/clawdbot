@@ -1,5 +1,5 @@
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { requireTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -14,7 +14,9 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
   explicitTlsFingerprint?: string;
   loadGatewayTlsRuntime: GatewayTlsRuntimeLoader;
 }): Promise<string | undefined> {
-  const explicitTlsFingerprint = normalizeOptionalString(params.explicitTlsFingerprint);
+  const explicitTlsFingerprint = params.explicitTlsFingerprint
+    ? requireTlsFingerprint(params.explicitTlsFingerprint)
+    : undefined;
   if (explicitTlsFingerprint) {
     return explicitTlsFingerprint;
   }
@@ -25,7 +27,9 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
     params.config.gateway?.mode === "remote" &&
     (params.urlSource === "config gateway.remote.url" ||
       params.urlSource === "env OPENCLAW_GATEWAY_URL")
-      ? normalizeOptionalString(params.config.gateway.remote?.tlsFingerprint)
+      ? params.config.gateway.remote?.tlsFingerprint
+        ? requireTlsFingerprint(params.config.gateway.remote.tlsFingerprint)
+        : undefined
       : undefined;
   if (remoteTlsFingerprint) {
     return remoteTlsFingerprint;

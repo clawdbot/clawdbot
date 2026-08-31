@@ -34,7 +34,7 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
-  it("reuses warmed state for gateway health while isolating first-device samples", () => {
+  it("reuses warm state for gateway health while isolating fresh-state samples", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
     try {
       const fixturePath = path.join(tmpDir, "record-home.mjs");
@@ -84,7 +84,7 @@ describe("CLI startup benchmark script spawners", () => {
         };
       };
 
-      const warmed = runCase("gatewayHealthJsonConnected");
+      const warmed = runCase("gatewayHealthJsonWarmState");
       const warmedHomes = warmed.homes;
       expect(warmedHomes).toHaveLength(3);
       expect(new Set(warmedHomes).size).toBe(1);
@@ -98,7 +98,7 @@ describe("CLI startup benchmark script spawners", () => {
         expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
       }
 
-      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
+      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFreshState"]) {
         const sampleHomes = runCase(caseId).homes;
         expect(sampleHomes).toHaveLength(3);
         expect(new Set(sampleHomes).size).toBe(3);
@@ -109,7 +109,7 @@ describe("CLI startup benchmark script spawners", () => {
     }
   });
 
-  it("requires connected gateway health probes to exit successfully", () => {
+  it("requires authenticated gateway health probes to exit successfully", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
     try {
       const fixturePath = path.join(tmpDir, "transport-error.mjs");
@@ -142,7 +142,7 @@ describe("CLI startup benchmark script spawners", () => {
         );
 
       expect(runCase("gatewayHealthJson").status).toBe(0);
-      for (const caseId of ["gatewayHealthJsonConnected", "gatewayHealthJsonFirstDevice"]) {
+      for (const caseId of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
         const result = runCase(caseId);
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);

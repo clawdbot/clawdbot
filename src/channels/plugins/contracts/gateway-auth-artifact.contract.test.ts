@@ -1,14 +1,13 @@
-// Gateway-auth artifact parity contract for bundled channel plugins.
+// Gateway-auth lightweight artifact contract for bundled channel plugins.
 //
 // Core resolves unauthenticated Gateway callback paths from lightweight
 // `gateway-auth-api` artifacts (src/channels/plugins/gateway-auth-bypass.ts),
-// which invoke the export with a `{ cfg }` params object. This suite pins each
-// artifact export to the exact function the loaded plugin's gateway surface
-// uses and pins the params-object call shape core relies on.
+// which invoke the export with a `{ cfg }` params object. This shard owns
+// inventory, export shape, and that invocation contract; loaded-plugin parity
+// lives in plugin-shape.contract.test.ts.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   getBundledChannelGatewayAuthArtifactAsync,
-  getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
@@ -29,18 +28,10 @@ describe("bundled channel gateway-auth artifact parity", () => {
 
   it("keeps the artifact table in sync with bundled channels that ship one", () => {
     expect([...artifactResolvers.keys()].toSorted()).toEqual([...GATEWAY_AUTH_ARTIFACT_PLUGIN_IDS]);
+    for (const id of GATEWAY_AUTH_ARTIFACT_PLUGIN_IDS) {
+      expect(typeof artifactResolvers.get(id)).toBe("function");
+    }
   });
-
-  it.each(GATEWAY_AUTH_ARTIFACT_PLUGIN_IDS)(
-    "keeps the %s artifact resolver identical to the plugin gateway surface",
-    async (id) => {
-      const resolveGatewayAuthBypassPaths = artifactResolvers.get(id);
-      expect(typeof resolveGatewayAuthBypassPaths).toBe("function");
-
-      const plugin = await getBundledChannelPluginAsync(id);
-      expect(plugin?.gateway?.resolveGatewayAuthBypassPaths).toBe(resolveGatewayAuthBypassPaths);
-    },
-  );
 
   it("resolves mattermost bypass paths through core's { cfg } call shape", () => {
     // Regression pin: the artifact once took `cfg` positionally, so core's

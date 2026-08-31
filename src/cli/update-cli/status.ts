@@ -48,6 +48,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     root,
     timeoutMs: timeoutMs ?? 3500,
     fetchGit: true,
+    useDetachedDevUpstream: configChannel === "dev",
     includeRegistry: true,
     resolveRegistryChannel: ({ installKind, git }) =>
       resolveStatusRegistryUpdateChannel({

@@ -4,7 +4,10 @@ import type {
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  realtimeVoiceAudioDurationMs,
+} from "openclaw/plugin-sdk/realtime-voice";
 import {
   AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
   OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -37,8 +40,6 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected latestOutstandingMarkSequence: number | null = null;
 
-  protected responseStartTimestamp: number | null = null;
-
   protected responseActive = false;
 
   protected responseCreateInFlight = false;
@@ -59,7 +60,11 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected latestMediaTimestamp = 0;
 
-  protected lastAssistantItemId: string | null = null;
+  protected assistantAudioItem: {
+    itemId: string;
+    bytes: number;
+    startTimestamp: number;
+  } | null = null;
 
   protected completedToolCallIds = new Set<string>();
 
@@ -230,22 +235,20 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
-    const assistantItemId = this.lastAssistantItemId;
-    const responseStartTimestamp = this.responseStartTimestamp;
+    const assistantAudioItem = this.assistantAudioItem;
     const force = options?.force === true;
     const shouldInterruptProvider =
-      assistantItemId !== null &&
-      ((responseStartTimestamp !== null &&
-        (this.oldestOutstandingMarkSequence !== null || options?.audioPlaybackActive === true)) ||
+      assistantAudioItem !== null &&
+      (this.oldestOutstandingMarkSequence !== null ||
+        options?.audioPlaybackActive === true ||
         force);
-    const audioEndMs = shouldInterruptProvider
-      ? Math.max(
-          0,
-          responseStartTimestamp === null
-            ? this.latestMediaTimestamp
-            : this.latestMediaTimestamp - responseStartTimestamp,
-        )
-      : null;
+    const audioEndMs =
+      shouldInterruptProvider && assistantAudioItem
+        ? Math.min(
+            Math.floor(realtimeVoiceAudioDurationMs(this.audioFormat, assistantAudioItem.bytes)),
+            Math.max(0, this.latestMediaTimestamp - assistantAudioItem.startTimestamp),
+          )
+        : null;
     const minBargeInAudioEndMs =
       this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
     if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
@@ -266,11 +269,11 @@ export abstract class OpenAIRealtimeProtocol {
       this.sendEvent({ type: "response.cancel", event_id: eventId }, "reason=barge-in");
       this.responseCancelInFlight = true;
     }
-    if (shouldInterruptProvider) {
+    if (shouldInterruptProvider && assistantAudioItem) {
       this.sendEvent(
         {
           type: "conversation.item.truncate",
-          item_id: assistantItemId,
+          item_id: assistantAudioItem.itemId,
           content_index: 0,
           audio_end_ms: audioEndMs,
         },
@@ -278,8 +281,7 @@ export abstract class OpenAIRealtimeProtocol {
       );
       this.config.onClearAudio("barge-in");
       this.clearOutstandingMarks();
-      this.lastAssistantItemId = null;
-      this.responseStartTimestamp = null;
+      this.assistantAudioItem = null;
       return;
     }
     this.config.onClearAudio("barge-in");
@@ -374,7 +376,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected resetRealtimeSessionState(): void {
     this.clearOutstandingMarks();
-    this.responseStartTimestamp = null;
+    this.assistantAudioItem = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.manualResponseCreateEventId = null;
@@ -384,7 +386,6 @@ export abstract class OpenAIRealtimeProtocol {
     this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.pendingToolCallIds.clear();
-    this.lastAssistantItemId = null;
     this.completedToolCallIds.clear();
     this.standaloneSpeechQueue = [];
     this.standaloneSpeechActive = false;

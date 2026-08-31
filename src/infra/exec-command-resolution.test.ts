@@ -242,13 +242,16 @@ describe("exec-command-resolution", () => {
 
   it("exposes canonical trust paths separately from display candidate paths", () => {
     const resolution = {
+      kind: "command" as const,
       execution: {
+        kind: "executable" as const,
         rawExecutable: "rg",
         resolvedPath: "/opt/homebrew/bin/rg",
         resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
         executableName: "rg",
       },
       policy: {
+        kind: "executable" as const,
         rawExecutable: "rg",
         resolvedPath: "/opt/homebrew/bin/rg",
         resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
@@ -401,6 +404,7 @@ describe("exec-command-resolution", () => {
     expect(
       resolveExecutionTargetCandidatePath(
         {
+          kind: "executable",
           rawExecutable: "~/bin/tool",
           executableName: "tool",
         },
@@ -411,6 +415,7 @@ describe("exec-command-resolution", () => {
     expect(
       resolveExecutionTargetCandidatePath(
         {
+          kind: "executable",
           rawExecutable: "./scripts/run.sh",
           executableName: "run.sh",
         },
@@ -421,6 +426,7 @@ describe("exec-command-resolution", () => {
     expect(
       resolveExecutionTargetCandidatePath(
         {
+          kind: "executable",
           rawExecutable: "rg",
           executableName: "rg",
         },
@@ -571,6 +577,7 @@ describe("exec-command-resolution", () => {
       expect(
         resolveAllowlistCandidatePath(
           {
+            kind: "executable",
             rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
             executableName: "openclaw",
           },
@@ -580,6 +587,7 @@ describe("exec-command-resolution", () => {
       expect(
         resolveAllowlistCandidatePath(
           {
+            kind: "executable",
             rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
             executableName: "openclaw",
           },

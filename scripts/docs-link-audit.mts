@@ -22,7 +22,7 @@ const MARKDOWN_PARSER = new MarkdownIt({ html: false });
 const HTML_MARKDOWN_PARSER = new MarkdownIt({ html: true });
 type MarkdownToken = ReturnType<typeof MARKDOWN_PARSER.parse>[number];
 const VERBATIM_MDX_ELEMENTS = new Set(["code", "pre", "script", "style", "textarea"]);
-const MINTLIFY_CLI_VERSION = "4.2.715";
+const MINTLIFY_CLI_VERSION = "4.2.808";
 const MINTLIFY_BROKEN_LINKS_ARGS = [
   "exec",
   "--yes",
@@ -190,12 +190,15 @@ function projectExternalLinkMarkdown(raw: string) {
         }
       }
     }
-    const childUrl = (child: MarkdownToken): string | null | undefined =>
-      child.type === "link_open"
-        ? child.attrGet("href")
-        : child.type === "image"
-          ? child.attrGet("src")
-          : undefined;
+    const childUrl = (child: MarkdownToken): string | undefined => {
+      const value =
+        child.type === "link_open"
+          ? child.attrGet("href")
+          : child.type === "image"
+            ? child.attrGet("src")
+            : undefined;
+      return typeof value === "string" ? value : undefined;
+    };
     const sourceLineForUrl = (token: MarkdownToken, url: string): number => {
       if (!token.map) {
         return 0;
