@@ -275,6 +275,37 @@ function resolveApprovalSessionTarget(
     : undefined;
 }
 
+/** Realtime creates authorize their effective default; transcription stays sessionless. */
+export function resolveTalkSessionTargetInput(
+  method: string,
+  params: unknown,
+): { sessionKey?: string } | undefined {
+  // Only these handlers consume the prepared target. Consult/steer have separate run ownership.
+  if (
+    method !== "talk.client.create" &&
+    method !== "talk.session.create" &&
+    method !== "talk.client.transcript" &&
+    method !== "talk.client.close"
+  ) {
+    return undefined;
+  }
+  const sessionKey = readSessionSharingStringParam(params, "sessionKey");
+  if (sessionKey) {
+    return { sessionKey };
+  }
+  if (method === "talk.client.create") {
+    return {};
+  }
+  if (
+    method === "talk.session.create" &&
+    (readSessionSharingStringParam(params, "mode") ?? "realtime") === "realtime" &&
+    readSessionSharingStringParam(params, "transport") !== "managed-room"
+  ) {
+    return {};
+  }
+  return undefined;
+}
+
 export function resolveSessionMutationTargets(params: {
   method: string;
   requestParams: unknown;

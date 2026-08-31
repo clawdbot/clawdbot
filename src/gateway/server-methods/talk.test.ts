@@ -17,8 +17,10 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -267,7 +269,7 @@ function createTalkConfig(apiKey: unknown): OpenClawConfig {
 
 type TalkHandlerCallOptions = {
   params: Record<string, unknown>;
-  respond: ReturnType<typeof vi.fn>;
+  respond: RespondFn;
   context: unknown;
   client?: unknown;
   id?: string;
@@ -277,6 +279,19 @@ async function callTalkHandler(
   method: keyof typeof talkHandlers,
   { params, respond, context, client = { connId: "conn-1" }, id = "1" }: TalkHandlerCallOptions,
 ) {
+  const admission =
+    method === "talk.client.create" || method === "talk.session.create"
+      ? resolveSessionMutationAuthorization({
+          client: client as GatewayClient,
+          context: context as GatewayRequestContext,
+          method,
+          requestParams: params,
+        })
+      : undefined;
+  if (admission?.error) {
+    respond(false, undefined, admission.error);
+    return;
+  }
   await expectDefined(
     talkHandlers[method],
     `talkHandlers["${method}"] test invariant`,
@@ -285,8 +300,17 @@ async function callTalkHandler(
     params: params as never,
     client: client as never,
     isWebchatConnect: () => false,
-    respond: respond as never,
+    respond,
     context: context as never,
+    // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
+    ...(admission?.authorization
+      ? {
+          sessionMutationAuthorization: {
+            ...admission.authorization,
+            assertTargetCurrent: vi.fn(),
+          },
+        }
+      : {}),
   });
 }
 
@@ -1925,10 +1949,14 @@ describe("talk.session unified handlers", () => {
       defaultModel: "gpt-realtime-default",
       surface: "gateway-relay",
     });
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     const relayCreateInput = mockCallArg(mocks.createTalkRealtimeRelaySession) as Record<
       string,
       unknown
@@ -2173,10 +2201,14 @@ describe("talk.session unified handlers", () => {
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "research",
-      sessionKey: "incident-42",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "research",
+        sessionKey: "agent:research:incident-42",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
   });
 
@@ -2241,6 +2273,7 @@ describe("talk.session unified handlers", () => {
       context: {
         getRuntimeConfig: () =>
           ({
+            agents: { entries: { "voice-agent": {} } },
             talk: {
               realtime: {
                 provider: "openai",
@@ -2258,13 +2291,22 @@ describe("talk.session unified handlers", () => {
         provider,
         providerConfig: { model: "gpt-live-1-codex" },
         model: "gpt-live-1-codex",
-        sessionKey: "agent:voice-agent:main",
+        sessionTarget: expect.objectContaining({
+          agentId: "voice-agent",
+          sessionKey: "agent:voice-agent:main",
+          canonicalKey: "agent:voice-agent:main",
+          storePath: expect.any(String),
+        }),
       }),
     );
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "voice-agent",
-      sessionKey: "agent:voice-agent:main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice-agent",
+        sessionKey: "agent:voice-agent:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expectRespondOk(respond, { relaySessionId: "relay-effective-model" });
   });
 
@@ -2531,6 +2573,7 @@ describe("talk.session unified handlers", () => {
 
   it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
     const createRespond = vi.fn();
+    const config: OpenClawConfig = { agents: { entries: { worker: {} } } };
     await callTalkHandler("talk.session.create", {
       params: {
         mode: "stt-tts",
@@ -2541,7 +2584,7 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       respond: createRespond,
       context: {
-        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        getRuntimeConfig: () => config,
       },
     });
 
@@ -2550,7 +2593,7 @@ describe("talk.session unified handlers", () => {
       brain: "agent-consult",
     });
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      cfg: {},
+      cfg: config,
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
@@ -2600,7 +2643,7 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       respond: createRespond,
       context: {
-        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        getRuntimeConfig: () => ({ agents: { entries: { worker: {} } } }),
       },
     });
 
@@ -3277,15 +3320,20 @@ describe("talk.client.create handler", () => {
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
     expect(createInput).not.toHaveProperty("transport");
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expect(mocks.readSessionPreviewItemsFromTranscript).toHaveBeenCalledWith(
       {
         agentId: "main",
         sessionId: "session-main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
       },
       16,
       800,

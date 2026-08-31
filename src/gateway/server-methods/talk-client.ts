@@ -41,6 +41,7 @@ import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
+import { prepareTalkSessionTarget } from "../talk-session-target.js";
 import { formatForLog } from "../ws-log.js";
 import { createTalkClient } from "./talk-client-create.js";
 import {
@@ -193,7 +194,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "talk.client.transcript": async ({ params, respond, context }) => {
+  "talk.client.transcript": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
       !assertValidParams(
         params,
@@ -206,9 +207,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
     try {
       const config = context.getRuntimeConfig();
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
       await appendClientVoiceTranscript({
-        agentId: resolveTalkSessionAgentId(config, params.sessionKey),
-        sessionKey: params.sessionKey,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
         voiceSessionId: params.voiceSessionId,
         entryId: params.entryId,
         role: params.role,
@@ -221,7 +227,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
     }
   },
-  "talk.client.close": async ({ params, respond, context, client }) => {
+  "talk.client.close": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateTalkClientCloseParams, "talk.client.close", respond)) {
       return;
     }
@@ -237,7 +249,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
-      const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
+      const { agentId } =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,

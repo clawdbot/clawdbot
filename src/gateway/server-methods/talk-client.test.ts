@@ -21,10 +21,13 @@ import {
 } from "../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { closeTalkClientGatewayControlSession } from "../talk-client-gateway-control.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { createTalkClient } from "./talk-client-create.js";
 import { readLegacyVoiceBinding } from "./talk-client-legacy-voice-bindings.js";
 import { talkClientHandlers } from "./talk-client.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const voiceMocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
@@ -103,6 +106,20 @@ function configureDelegatedBrowserProvider(
       broadcastToConnIds: vi.fn(),
     },
   };
+}
+
+async function invokeCreate(options: GatewayRequestHandlerOptions) {
+  const admission = resolveSessionMutationAuthorization({
+    method: "talk.client.create",
+    requestParams: options.params,
+    context: options.context,
+    client: options.client,
+  });
+  if (admission.error) {
+    options.respond(false, undefined, admission.error);
+    return;
+  }
+  await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
 }
 
 async function invokeTranscript(params: Record<string, unknown>) {
@@ -291,7 +308,7 @@ describe("talk.client.transcript", () => {
         .mockResolvedValue({ text: "Late task started" })
         .mockReturnValueOnce(acceptedResult);
       const respond = vi.fn();
-      await talkClientHandlers["talk.client.create"]?.({
+      await invokeCreate({
         params: { sessionKey, provider: "openai", model: "gpt-live-test" },
         respond,
         context,
@@ -351,7 +368,7 @@ describe("talk.client.transcript", () => {
       configureDelegatedBrowserProvider(createBrowserSession);
     const pendingSessionKey = "agent:main:pending-voice";
     const respond = vi.fn();
-    const starting = talkClientHandlers["talk.client.create"]!({
+    const starting = invokeCreate({
       params: { sessionKey: pendingSessionKey, provider: "openai", model: "gpt-live-test" },
       respond,
       context,
@@ -381,7 +398,7 @@ describe("talk.client.transcript", () => {
     const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
     const { client, clients, context } = configureDelegatedBrowserProvider(createBrowserSession);
     const respond = vi.fn();
-    const starting = talkClientHandlers["talk.client.create"]!({
+    const starting = invokeCreate({
       params: { sessionKey, provider: "openai", model: "gpt-live-test" },
       respond,
       context,

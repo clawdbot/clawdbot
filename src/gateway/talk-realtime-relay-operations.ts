@@ -38,13 +38,7 @@ import {
   resolveRelayProviderToolCallId,
   type RelaySession,
 } from "./talk-realtime-relay-state.js";
-import {
-  bindRelaySessionKey,
-  closeRelayVoiceSession,
-  enqueueRelayVoiceTranscript,
-  ensureRelayVoiceSession,
-  resolveRelayAgentId,
-} from "./talk-realtime-relay-voice.js";
+import { closeRelayVoiceSession, ensureRelayVoiceSession } from "./talk-realtime-relay-voice.js";
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
@@ -62,13 +56,11 @@ export function ensureTalkRealtimeRelayVoiceSession(params: {
   sessionKey: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  bindRelaySessionKey(session, params.sessionKey);
+  if (session.sessionTarget.sessionKey !== params.sessionKey.trim()) {
+    throw new Error("Realtime relay session belongs to another agent session");
+  }
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created");
-  }
-  const buffered = session.pendingVoiceTranscripts.splice(0);
-  for (const entry of buffered) {
-    enqueueRelayVoiceTranscript(session, entry.role, entry.text);
   }
 }
 
@@ -385,9 +377,6 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (callId && !session.toolCalls.tryAdmit([callId])) {
     throw new Error("Realtime relay tool-call session limit exceeded");
   }
-  if (!session.sessionKey) {
-    bindRelaySessionKey(session, params.sessionKey);
-  }
   session.activeAgentRuns.set(params.runId, params.sessionKey);
   if (callId) {
     session.activeAgentToolCalls.set(callId, params.runId);
@@ -395,13 +384,10 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created for agent consult");
   }
-  const voiceSessionKey = session.sessionKey;
-  if (!voiceSessionKey) {
-    throw new Error("Realtime relay voice session has no pinned session key");
-  }
+  const { agentId, sessionKey } = session.sessionTarget;
   registerClientVoiceConsultRun({
-    agentId: resolveRelayAgentId(session, voiceSessionKey),
-    sessionKey: voiceSessionKey,
+    agentId,
+    sessionKey,
     voiceSessionId: session.id,
     runId: params.runId,
   });
@@ -479,10 +465,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   mode?: string;
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  const sessionKey = session.sessionKey;
-  if (!sessionKey) {
-    throw new Error("Realtime relay steering requires a session key");
-  }
+  const { sessionKey } = session.sessionTarget;
   const requestedSessionKey = params.sessionKey?.trim();
   if (requestedSessionKey && requestedSessionKey !== sessionKey) {
     throw new Error("Realtime relay steering session key does not match the relay session");
