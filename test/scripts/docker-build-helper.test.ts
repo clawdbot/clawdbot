@@ -3482,6 +3482,7 @@ trap - EXIT ERR INT TERM
 seed_update_restart_probe_device_auth() { :; }
 assert_prepublish_fixture_idle() { :; }
 assert_baseline_state() { :; }
+check_gateway_status() { :; }
 # This fixture chooses an ephemeral port; retain the actual readiness implementation.
 eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
 openclaw_e2e_wait_gateway_ready() {

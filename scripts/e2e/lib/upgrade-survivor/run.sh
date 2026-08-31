@@ -906,6 +906,10 @@ prepare_update_restart_probe() {
     install_update_restart_probe_gateway 18789 "$COMMAND_TIMEOUT" legacy-ready-log-ok || probe_status=$?
   fi
   if [ "$probe_status" -eq 0 ]; then
+    local STATUS_JSON="$ARTIFACT_ROOT/baseline-status.json" STATUS_ERR="$ARTIFACT_ROOT/baseline-status.err"
+    check_gateway_status || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
     assert_prepublish_fixture_idle || probe_status=$?
   fi
   if [ -e "$authored_config" ]; then
@@ -917,6 +921,26 @@ prepare_update_restart_probe() {
   if [ "$probe_status" -ne 0 ]; then
     return "$probe_status"
   fi
+}
+
+stop_update_restart_probe_for_migration() {
+  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || return 0
+  systemctl --user stop openclaw-gateway.service
+  local service_status=0
+  systemctl --user is-active --quiet openclaw-gateway.service || service_status=$?
+  if [ "$service_status" -ne 3 ] || openclaw_e2e_probe_tcp 127.0.0.1 18789 400; then
+    echo "Baseline gateway must be offline before injecting migration specimens." >&2
+    return 1
+  fi
+  gateway_pid=""
+}
+
+start_repaired_update_restart_probe() {
+  systemctl --user start openclaw-gateway.service
+  gateway_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 360 18789
+  local STATUS_JSON="$ARTIFACT_ROOT/repaired-status.json" STATUS_ERR="$ARTIFACT_ROOT/repaired-status.err"
+  check_gateway_status
 }
 
 assert_baseline_state() {
@@ -1107,8 +1131,9 @@ repair_fixture_plugin_consent() {
     assert_survival
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    # Repair never restarts. Prove the candidate's automatic update handoff
-    # separately; a manual service restart cannot substitute for that proof.
+    # Historical update/repair deliberately stays offline. Start the repaired unit
+    # before the candidate update captures the live PID it must replace itself.
+    phase repaired-gateway-start start_repaired_update_restart_probe
     phase recovery-update-restart update_candidate 1
     assert_survival
     if [ "$update_repair_required" = "1" ]; then
@@ -1289,6 +1314,7 @@ phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
 phase configure-clawhub-fixture configure_clawhub_fixture
 phase prepare-update-restart-probe prepare_update_restart_probe
+phase stop-baseline-for-migration stop_update_restart_probe_for_migration
 # Finish baseline config/service setup before injecting migration specimens.
 # Only candidate update/Doctor may repair them; baseline startup must see clean state.
 phase seed-state seed_state

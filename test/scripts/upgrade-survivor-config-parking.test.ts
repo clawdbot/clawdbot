@@ -66,6 +66,7 @@ process.exit(Number(process.env.FIXTURE_INSTALL_STATUS));
 trap - EXIT ERR INT TERM
 install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { :; }
+check_gateway_status() { :; }
 assert_prepublish_fixture_idle() { :; }
 assert_baseline_state() { cmp "$OPENCLAW_CONFIG_PATH" "$FIXTURE_AUTHORED_PATH"; }
 probe_status=0
