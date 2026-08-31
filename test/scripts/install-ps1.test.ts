@@ -1277,6 +1277,33 @@ try {
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
+  runIfPowerShell("collects npm stderr warnings before checking the native exit code", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-stderr-");
+    const fixturePath = join(tempDir, "stderr-warning.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      fixturePath,
+      [
+        "$ErrorActionPreference = 'Stop'",
+        scriptWithoutEntryPoint,
+        `$nodePath = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
+        "$nodeScript = 'console.error(12345); console.log(67890)'",
+        "$output = @(Invoke-NpmCommand -CommandPath $nodePath -Arguments @('-e', $nodeScript) 2>&1 | ForEach-Object { $_.ToString() })",
+        'if ($LASTEXITCODE -ne 0) { throw "Exit=$LASTEXITCODE" }',
+        '$text = $output -join "`n"',
+        "if ($text -notmatch '12345') { throw \"Missing stderr: $text\" }",
+        "if ($text -notmatch '67890') { throw \"Missing stdout: $text\" }",
+      ].join("\n"),
+    );
+
+    for (const engine of bootstrapShells) {
+      const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-File", fixturePath], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+  });
+
   it("discovers a winget Node install before the machine PATH refreshes", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
     const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");

@@ -1021,7 +1021,16 @@ function Invoke-NpmCommand {
     if ([string]::IsNullOrWhiteSpace($CommandPath)) {
         $CommandPath = Get-NpmCommandPath
     }
-    Invoke-CommandFromWindowsSafeDirectory -CommandPath $CommandPath -Arguments $Arguments -WorkingDirectory $WorkingDirectory
+    # Windows PowerShell 5.1 promotes native stderr records through the caller's
+    # Stop preference, so harmless npm warnings can terminate redirection before
+    # the caller inspects npm's authoritative exit code.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        Invoke-CommandFromWindowsSafeDirectory -CommandPath $CommandPath -Arguments $Arguments -WorkingDirectory $WorkingDirectory
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 }
 
 function Get-NpmGlobalBinCandidates {
