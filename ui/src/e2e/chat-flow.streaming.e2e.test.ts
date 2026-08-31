@@ -127,6 +127,9 @@ suite.define(() => {
         stream: "tool",
         ts: Date.now(),
       });
+      // The working indicator predates the tool event; wait for its deferred projection
+      // before scrolling a bubble that the stream-to-tool render may replace.
+      await page.locator('[data-message-id^="tool:assistant:footer-read"]').waitFor();
       await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
       const heldTouch = mobile ? await context.newCDPSession(page) : null;
       if (heldTouch) {
