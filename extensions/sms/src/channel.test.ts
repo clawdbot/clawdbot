@@ -495,6 +495,47 @@ describe("smsPlugin outbound", () => {
     expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("discards staged MMS media when the final Twilio fence blocks dispatch", async () => {
+    sendSmsViaTwilio.mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
+      await onPlatformSendDispatch?.();
+      throw new PlatformMessageNotDispatchedError("credentials changed before Twilio dispatch", {
+        cause: new Error("credentials changed"),
+      });
+    });
+    const ctx = {
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+          },
+        },
+      },
+      to: "+15551234567",
+      text: "caption",
+      kind: "media" as const,
+      mediaUrl: "/tmp/photo.jpg",
+      onPlatformSendDispatch: async () => undefined,
+    };
+    const lifecycle = smsPlugin.message?.send?.lifecycle;
+    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+    const observed = await smsPlugin.message?.send?.media?.(ctx).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    await lifecycle?.afterSendFailure?.({
+      ...ctx,
+      error: observed,
+      attemptToken,
+    });
+
+    expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("discards staged MMS media when core fails before entering the adapter", async () => {
     const ctx = {
       cfg: {

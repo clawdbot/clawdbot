@@ -1,9 +1,11 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { fetchWithSsrFGuard, isLoopbackHost, isPrivateOrLoopbackHost } from "./ssrf-runtime.js";
 
-it("requires synchronous final dispatch callbacks", () => {
+it("accepts synchronous final dispatch callbacks and rejects asynchronous ones", () => {
   type BeforeRequest = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["beforeRequest"]>;
+  type AcceptsSync = (() => void) extends BeforeRequest ? true : false;
   type AcceptsAsync = (() => Promise<void>) extends BeforeRequest ? true : false;
+  expectTypeOf<AcceptsSync>().toEqualTypeOf<true>();
   expectTypeOf<AcceptsAsync>().toEqualTypeOf<false>();
 });
 

@@ -1,5 +1,6 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -509,18 +510,50 @@ describe("Twilio SMS helpers", () => {
       throw new Error("SMS credential owner unavailable");
     });
 
+    const rejection = await sendSmsViaTwilio({
+      account: createAccount(),
+      to: "+15551234567",
+      text: "hello",
+      onPlatformSendDispatch,
+      fetchImpl,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).toHaveProperty(
+      "message",
+      expect.stringContaining("SMS credential owner unavailable"),
+    );
+    if (testCase.unavailableAfterDispatch) {
+      expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    } else {
+      expect(rejection).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    }
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(testCase.dispatches);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("classifies final guarded credential loss as not dispatched", async () => {
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {});
+    fetchWithSsrFGuardMock.mockImplementationOnce(async (params) => {
+      params.beforeRequest?.();
+      throw new Error("unreachable");
+    });
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+
     await expect(
       sendSmsViaTwilio({
         account: createAccount(),
         to: "+15551234567",
         text: "hello",
-        onPlatformSendDispatch,
-        fetchImpl,
+        onPlatformSendDispatch: async () => undefined,
       }),
-    ).rejects.toThrow("SMS credential owner unavailable");
-
-    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(testCase.dispatches);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
   });
 
   it("rejects retained credentials after recovery activates a replacement", async () => {
@@ -1069,3 +1102,5 @@ describe("Twilio SMS helpers", () => {
     ).toBe("https://gateway.example.com:443/webhooks/sms");
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

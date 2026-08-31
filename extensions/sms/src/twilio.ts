@@ -2,6 +2,10 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -370,6 +374,17 @@ function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<strin
   return Object.fromEntries(Object.entries(headers));
 }
 
+function assertTwilioRequestCredentialsAvailable(account: ResolvedSmsAccount): void {
+  try {
+    assertSmsCredentialOwnerAvailable(account);
+  } catch (error) {
+    throw new PlatformMessageNotDispatchedError(
+      `SMS request stopped before Twilio dispatch: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 async function requestTwilioApi(params: {
   url: string;
   account: ResolvedSmsAccount;
@@ -386,7 +401,7 @@ async function requestTwilioApi(params: {
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
-    assertSmsCredentialOwnerAvailable(params.account);
+    assertTwilioRequestCredentialsAvailable(params.account);
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
@@ -399,7 +414,7 @@ async function requestTwilioApi(params: {
     url: params.url,
     init,
     beforeRequest: () => {
-      assertSmsCredentialOwnerAvailable(params.account);
+      assertTwilioRequestCredentialsAvailable(params.account);
     },
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },

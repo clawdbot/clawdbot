@@ -72,7 +72,7 @@ export type GuardedFetchOptions = {
    * physical request, including redirects. Throwing prevents that dispatch and
    * propagates the same error.
    */
-  beforeRequest?: () => undefined;
+  beforeRequest?: () => void | undefined;
   init?: RequestInit;
   capture?:
     | false
