@@ -1598,10 +1598,10 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("carries buffered text in the terminal message when an error classifies as cancellation", () => {
+  it("immediately carries buffered text when a native error definitively cancels the run", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    const { broadcast, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "err-cancel");
 
     emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello" });
@@ -1614,7 +1614,7 @@ describe("agent event handler", () => {
       handler,
       "run-err-cancel",
       "lifecycle",
-      { phase: "error", aborted: true },
+      { phase: "error", aborted: true, stopReason: "aborted" },
       { seq: 2 },
     );
 
@@ -2894,7 +2894,6 @@ describe("agent event handler", () => {
       clientRunId: "completed-during-marker-write",
       sessionKey: "session-recovery",
       sessionId: "session-recovery",
-      observedAt: 2_100,
       persistence: expect.any(Promise),
     });
     await waitForFast(() => {
@@ -4375,6 +4374,50 @@ describe("agent event handler", () => {
     }),
   );
 
+  it.each([
+    { name: "fallback exhaustion", data: { fallbackExhaustedFailure: true }, state: "error" },
+    {
+      name: "native cancellation",
+      data: { aborted: true, stopReason: "aborted" },
+      state: "aborted",
+    },
+    {
+      name: "provider timeout",
+      data: { stopReason: "timeout", timeoutPhase: "provider" },
+      state: "error",
+    },
+  ])("finalizes $name immediately and retires the preceding retryable error", ({ data, state }) => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+    });
+    const runId = "run-terminal-final-failure";
+    registerAgentRunContext(runId, { sessionKey: "session-terminal-error" });
+    emitAgentEvent(handler, runId, "lifecycle", { phase: "error", error: "retryable failure" });
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+
+    emitAgentEvent(
+      handler,
+      runId,
+      "lifecycle",
+      {
+        phase: "error",
+        error: "Terminal failure",
+        ...data,
+      },
+      { seq: 2 },
+    );
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+    expect(chatBroadcastCalls(broadcast)[0]?.[1]).toMatchObject({ runId, state });
+    expect(clearAgentRunContext).toHaveBeenCalledWith(runId);
+    expect(agentRunSeq.has(runId)).toBe(false);
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(15_000);
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
@@ -4451,11 +4494,10 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-late-lifecycle")).toBe(false);
   });
 
-  it("cancels deferred lifecycle-error cleanup when the run restarts", () => {
+  it("cancels default-grace lifecycle-error cleanup when the run restarts", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-terminal-retry",
-      lifecycleErrorRetryGraceMs: 100,
     });
     registerAgentRunContext("run-terminal-retry", {
       sessionKey: "session-terminal-retry",
@@ -4467,7 +4509,7 @@ describe("agent event handler", () => {
       ["lifecycle", { phase: "start" }],
     ]);
 
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(15_000);
 
     expect(
       chatBroadcastCalls(broadcast).some(
@@ -4600,9 +4642,14 @@ describe("agent event handler", () => {
     "projects subscribed provider %s terminals through %s ownership",
     (stopReason, owner) => {
       const runId = `run-provider-${stopReason}`;
-      const { broadcast, nodeSendToSession, handler, chatRunState } = createHarness({
-        lifecycleErrorRetryGraceMs: 0,
-      });
+      // Unowned subscription errors retain legacy grace; outer owners must settle at defaults.
+      const { broadcast, nodeSendToSession, handler, chatRunState } = createHarness(
+        owner === "direct" ? { lifecycleErrorRetryGraceMs: 0 } : undefined,
+      );
+      const chatTerminals = () =>
+        chatBroadcastCalls(broadcast).filter(([, event]) =>
+          ["final", "error", "aborted"].includes(event.state),
+        );
       registerChatRun(chatRunState, runId, "session-provider-detail", runId);
       const state: AgentAttemptLifecycleState = {
         currentTurnUserMessagePersisted: true,
@@ -4647,6 +4694,9 @@ describe("agent event handler", () => {
         };
         emit({ type: "message_end", message });
         emit({ type: "agent_end" });
+        if (owner !== "direct") {
+          expect(chatTerminals()).toHaveLength(0);
+        }
         const terminal = {
           metadata: {},
           outcome: buildAgentRunTerminalOutcome({
@@ -4656,18 +4706,28 @@ describe("agent event handler", () => {
         };
         if (owner === "command") {
           if (stopReason === "error") {
-            command.emitResultError({ payloads: [], meta: { durationMs: 0 } }, true, terminal);
+            command.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
           } else {
             command.emitEnd(terminal);
           }
         }
         if (owner === "reply") {
-          reply.emit(
-            stopReason === "error" ? "error" : "end",
-            stopReason === "error" ? "Provider failed" : { meta: {} },
-          );
+          const phase = stopReason === "error" ? "error" : "end";
+          const result = stopReason === "error" ? "Provider failed" : { meta: {} };
+          reply.capture(phase, result);
+          expect(chatTerminals()).toHaveLength(0);
+          reply.emit(phase, result);
         }
-        const payload = chatBroadcastCalls(broadcast).at(-1)?.[1];
+        expect(chatTerminals()).toHaveLength(1);
+        const payload = chatTerminals()[0]?.[1];
+        const runtimeTerminal = agentBroadcastCalls(broadcast).find(
+          ([, event]) =>
+            event.stream === "lifecycle" &&
+            event.data.phase === (stopReason === "error" ? "error" : "end"),
+        )?.[1];
+        if (owner !== "direct") {
+          expect(runtimeTerminal.data.executionSettled).toBe(true);
+        }
         const serialized = JSON.stringify(payload);
         const wire = JSON.parse(serialized);
         expect(Value.Check(ChatEventSchema, wire)).toBe(true);
@@ -4685,9 +4745,6 @@ describe("agent event handler", () => {
           const callbackTerminal = onAgentEvent.mock.calls.find(
             ([event]) => event.stream === "lifecycle" && event.data.error,
           )?.[0];
-          const runtimeTerminal = agentBroadcastCalls(broadcast).find(
-            ([, event]) => event.stream === "lifecycle" && event.data.phase === "error",
-          )?.[1];
           expect(callbackTerminal.data.errorObservation).toMatchObject({
             provider: "openai",
             model: "gpt-5.6-luna",
@@ -4810,9 +4867,14 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
-  it.each([false, true])(
-    "preserves reply-dispatch completion ownership through error grace (settled=%s)",
-    async (settled) => {
+  it.each([
+    { settled: false, executionSettled: false },
+    { settled: true, executionSettled: false },
+    { settled: false, executionSettled: true },
+    { settled: true, executionSettled: true },
+  ])(
+    "preserves reply-dispatch ownership (delivery=$settled, execution=$executionSettled)",
+    async ({ settled, executionSettled }) => {
       vi.useFakeTimers();
       const settleTrackedTerminal = vi.fn();
       const harness = createHarness({
@@ -4829,7 +4891,11 @@ describe("agent event handler", () => {
         phase: "error",
         error: "ACP turn failed",
         completionSource: "reply-dispatch",
+        ...(executionSettled ? { executionSettled: true } : {}),
       });
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(
+        executionSettled ? 1 : 0,
+      );
       expect.soft(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
       expect(agentRunSeq.get(runId)).toBe(1);
       if (settled) {
@@ -4843,7 +4909,7 @@ describe("agent event handler", () => {
         chatRunState.registry.remove(runId, runId);
       }
 
-      // Run the production grace timer, even after the dispatch owner settled.
+      // Drain pending persistence or legacy grace after the dispatch owner's action.
       await vi.runAllTimersAsync();
 
       const terminals = chatBroadcastCalls(broadcast);

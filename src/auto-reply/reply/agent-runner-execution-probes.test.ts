@@ -22,7 +22,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: primary probe routing", () => {
   it("rechecks queued auto fallback primary probes before running", async () => {
@@ -392,7 +392,7 @@ describe("executeAgentTurn: primary probe routing", () => {
           (event) =>
             event.stream === "lifecycle" &&
             event.data.phase === "error" &&
-            event.data.fallbackExhaustedFailure === true &&
+            event.data.executionSettled === true &&
             event.data.livenessState === "blocked" &&
             event.data.providerStarted === true &&
             event.data.replayInvalid === true &&
@@ -456,6 +456,7 @@ describe("executeAgentTurn: primary probe routing", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),
@@ -529,11 +530,14 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
-  it("reports exhausted CLI results without a success lifecycle terminal", async () => {
+  it.each([
+    { label: "last candidate", attemptedModel: "gpt-5.4" },
+    { label: "preserved earlier candidate", attemptedModel: "gpt-5.5" },
+  ])("reports exhausted CLI $label without a success terminal", async ({ attemptedModel }) => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
+      result: await params.run("codex-cli", attemptedModel, initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.4",
       attempts: [{ provider: "codex-cli", model: "gpt-5.4", error: "incomplete" }],
@@ -578,7 +582,7 @@ describe("executeAgentTurn: primary probe routing", () => {
         expect.objectContaining({
           data: expect.objectContaining({
             phase: "error",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -623,7 +627,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     ).toMatchObject({
       stopReason: "timeout",
       timeoutPhase: "provider",
-      fallbackExhaustedFailure: true,
+      executionSettled: true,
     });
   });
 
