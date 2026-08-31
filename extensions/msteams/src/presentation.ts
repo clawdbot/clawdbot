@@ -58,6 +58,10 @@ export function buildMSTeamsPresentationCard(params: {
     });
   }
   const actions: Record<string, unknown>[] = [];
+  // Teams maps url, web-app, command and callback actions. A control carrying anything
+  // else keeps its label as text, because a control that renders as nothing at all is
+  // worse than one the user has to act on by replying.
+  const unmappedLabels: string[] = [];
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
       body.push({
@@ -101,9 +105,20 @@ export function buildMSTeamsPresentationCard(params: {
             title: button.label,
             data: { value: action.value, label: button.label },
           });
+          continue;
         }
+        unmappedLabels.push(button.label);
       }
     }
+  }
+  if (unmappedLabels.length > 0) {
+    body.push({
+      type: "TextBlock",
+      text: `Actions:\n${unmappedLabels.map((label) => `- ${label}`).join("\n")}`,
+      wrap: true,
+      isSubtle: true,
+      size: "Small",
+    });
   }
   return {
     type: "AdaptiveCard",
@@ -182,27 +197,27 @@ export function prepareMSTeamsReplyPayload(
   ) {
     return rest;
   }
-  const cardPayload = textIsFallback ? { ...rest, text: undefined } : rest;
+  // The gate asks whether this reply fits one activity, so it reads the reply's own text
+  // even when the card will not carry it: fallback prose still holds the mention entity
+  // only the text path can send. A reply that fails it keeps the text path and degrades
+  // its controls to prose - the same trade the media branch makes.
   const cardText =
-    cardPayload.text && options?.renderCardText
-      ? options.renderCardText(cardPayload.text)
-      : cardPayload.text;
-  // A reply the caller will not put in a card keeps the text path and degrades its
-  // controls to prose - the same trade the media branch makes.
-  const rendered =
-    cardPayload.text && cardText === undefined
-      ? null
-      : renderMSTeamsPresentationPayload({
-          payload: { ...cardPayload, ...(cardText ? { text: cardText } : {}) },
-          presentation: adapted,
-        });
-  if (rendered) {
-    return rendered;
+    rest.text && options?.renderCardText ? options.renderCardText(rest.text) : rest.text;
+  if (rest.text && cardText === undefined) {
+    return replyWithControlsAsText();
   }
-  return {
-    ...rest,
-    text: textIsFallback
-      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
-      : renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-  };
+  const rendered = renderMSTeamsPresentationPayload({
+    payload: textIsFallback ? { ...rest, text: undefined } : { ...rest, text: cardText },
+    presentation: adapted,
+  });
+  return rendered ?? replyWithControlsAsText();
+
+  function replyWithControlsAsText(): ReplyPayload {
+    return {
+      ...rest,
+      text: textIsFallback
+        ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
+        : renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    };
+  }
 }

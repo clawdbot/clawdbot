@@ -169,6 +169,42 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
+  it("keeps a control's label as text when Teams cannot render its action", () => {
+    const [message] = renderReply({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: { type: "question", questionId: "deploy-target", optionValue: "Staging" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // ask_user mints `question` actions, which Teams has no card action for. Skipping them
+    // silently left a card offering nothing; the label survives as text instead.
+    expect(message?.card?.actions).toBeUndefined();
+    expect(JSON.stringify(message?.card?.body)).toContain("Staging");
+  });
+
+  it("keeps the text path when a fallback reply mentions someone", () => {
+    // The card replaces fallback prose, so the mention is invisible inside it - and the
+    // gate has to look at the reply's own text to see the mention at all.
+    const messages = renderReply({
+      text: "@[Ada Lovelace](28:abc-def) deploy finished\n\n[Open]",
+      presentationTextMode: "fallback",
+      presentation: PRESENTATION,
+    });
+
+    expect(messages.every((message) => message.card === undefined)).toBe(true);
+    expect(messages.map((message) => message.text ?? "").join("")).toContain("Ada Lovelace");
+  });
+
   it("keeps the text path when a reply mentions someone", () => {
     // A mention only notifies through the activity's entity list, which the text path
     // builds from this syntax; a card body cannot carry it.
@@ -209,7 +245,7 @@ describe("msteams reply presentation", () => {
     expect(prepared.text).toBe("Deploy finished\n\n[Open]");
   });
 
-  it("maps every button action Teams renders natively", () => {
+  it("maps the four button actions Teams renders natively", () => {
     const [message] = renderReply({
       presentation: {
         blocks: [
