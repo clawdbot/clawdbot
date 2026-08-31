@@ -50,9 +50,9 @@ export function observeAgentRunApprovalWait(params: {
       return;
     }
     if (pending) {
-      pausedAtMs = Date.now();
+      pausedAtMs = performance.now();
     } else {
-      state.pausedMs += Date.now() - pausedAtMs;
+      state.pausedMs += Math.max(0, performance.now() - pausedAtMs);
     }
     state.pending = pending;
     state.onChange?.(pending);
