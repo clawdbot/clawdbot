@@ -1,49 +1,59 @@
-// Line tests cover heartbeat typing plugin behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { setLineRuntime } from "./runtime.js";
 
 const userId = `U${"a".repeat(32)}`;
-const groupId = `C${"b".repeat(32)}`;
-const roomId = `R${"c".repeat(32)}`;
-const cfg = {} as OpenClawConfig;
+const cfg: OpenClawConfig = {
+  channels: {
+    line: {
+      channelAccessToken: "heartbeat-default-fixture",
+      channelSecret: "heartbeat-secret-fixture",
+      accounts: {
+        secondary: {
+          channelAccessToken: "heartbeat-secondary-fixture",
+          channelSecret: "heartbeat-secondary-secret-fixture",
+        },
+      },
+    },
+  },
+};
 
-const showLoadingAnimation = vi.fn(async () => {});
+describe("LINE heartbeat typing", () => {
+  afterEach(() => vi.unstubAllGlobals());
 
-async function sendTyping(to: string) {
-  await linePlugin.heartbeat?.sendTyping?.({ cfg, to, accountId: "default" });
-}
+  it("sends the LINE loading request only for direct chats with the selected account", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-describe("linePlugin heartbeat.sendTyping", () => {
-  beforeEach(() => {
-    showLoadingAnimation.mockClear();
-    setLineRuntime({
-      channel: { line: { showLoadingAnimation } },
-    } as unknown as PluginRuntime);
-  });
+    for (const to of [`C${"b".repeat(32)}`, `line:room:R${"c".repeat(32)}`, "", "invalid"]) {
+      await linePlugin.heartbeat?.sendTyping?.({ cfg, to });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
 
-  it.each([
-    { name: "a bare user id", to: userId },
-    { name: "a prefixed user id", to: `line:user:${userId}` },
-  ])("shows the loading animation for $name", async ({ to }) => {
-    await sendTyping(to);
+    await linePlugin.heartbeat?.sendTyping?.({ cfg, to: userId });
+    await linePlugin.heartbeat?.sendTyping?.({
+      cfg,
+      to: `line:user:${userId}`,
+      accountId: "secondary",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [index, token] of [
+      "heartbeat-default-fixture",
+      "heartbeat-secondary-fixture",
+    ].entries()) {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        index + 1,
+        new URL("https://api.line.me/v2/bot/chat/loading/start"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+          body: JSON.stringify({ chatId: userId, loadingSeconds: 20 }),
+        }),
+      );
+    }
 
-    expect(showLoadingAnimation).toHaveBeenCalledTimes(1);
-    expect(showLoadingAnimation).toHaveBeenCalledWith(userId, { cfg, accountId: "default" });
-  });
-
-  // LINE only shows the indicator in one-to-one chats, so anything else would be a
-  // call that can only fail; it is skipped instead of sent and logged as a failure.
-  it.each([
-    { name: "a group", to: groupId },
-    { name: "a room", to: roomId },
-    { name: "an unusable target", to: "not-a-line-id" },
-    { name: "an empty target", to: "   " },
-  ])("stays quiet for $name", async ({ to }) => {
-    await sendTyping(to);
-
-    expect(showLoadingAnimation).not.toHaveBeenCalled();
+    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 400 }));
+    await expect(linePlugin.heartbeat?.sendTyping?.({ cfg, to: userId })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

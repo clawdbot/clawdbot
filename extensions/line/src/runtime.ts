@@ -14,7 +14,6 @@ type LineChannelRuntime = {
   pushTextMessageWithQuickReplies?: typeof import("./send.js").pushTextMessageWithQuickReplies;
   resolveLineAccount?: typeof import("./accounts.js").resolveLineAccount;
   sendMessageLine?: typeof import("./send.js").sendMessageLine;
-  showLoadingAnimation?: typeof import("./send.js").showLoadingAnimation;
 };
 
 type LineRuntime = PluginRuntime & {
