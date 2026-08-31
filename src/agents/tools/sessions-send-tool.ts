@@ -376,7 +376,7 @@ async function startAgentRun(params: {
   | {
       ok: true;
       runId: string;
-      activeRunQueue?: boolean;
+      targetDisposition: "queued" | "steered";
       a2aSessionKey?: string;
       a2aDisplayKey?: string;
     }
@@ -441,7 +441,7 @@ async function startAgentRun(params: {
         );
       }
       if (queueOutcome.queued) {
-        return { ok: true, runId: params.runId, activeRunQueue: true };
+        return { ok: true, runId: params.runId, targetDisposition: "steered" };
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
@@ -462,6 +462,7 @@ async function startAgentRun(params: {
           ok: true,
           runId:
             typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          targetDisposition: "queued",
           a2aSessionKey: fallbackSessionKey,
           a2aDisplayKey: fallbackSessionKey,
         };
@@ -478,6 +479,7 @@ async function startAgentRun(params: {
     return {
       ok: true,
       runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      targetDisposition: "queued",
     };
   } catch (err) {
     const messageText =
@@ -1165,14 +1167,11 @@ export function createSessionsSendTool(opts?: {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
-          const targetDisposition = start.activeRunQueue
-            ? ("steered" as const)
-            : ("queued" as const);
           // Active-run steering is consumed by the current turn and does not
           // launch the detached A2A flow. Report that boundary directly so the
           // caller never mistakes target admission for announcement delivery.
           const delivery =
-            skipA2AFlow || start.activeRunQueue
+            skipA2AFlow || start.targetDisposition === "steered"
               ? ({ status: "skipped", mode: "announce" } as const)
               : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
@@ -1192,14 +1191,14 @@ export function createSessionsSendTool(opts?: {
           runId = start.runId;
           const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           if (timeoutSeconds === 0) {
-            if (!start.activeRunQueue) {
+            if (start.targetDisposition !== "steered") {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
               status: "accepted",
               sessionKey: displayKey,
-              targetDisposition,
+              targetDisposition: start.targetDisposition,
               delivery,
               ...watchField,
             });
@@ -1234,7 +1233,7 @@ export function createSessionsSendTool(opts?: {
                 runId,
                 status: "accepted",
                 sessionKey: displayKey,
-                targetDisposition,
+                targetDisposition: start.targetDisposition,
                 delivery,
                 ...watchField,
               });
