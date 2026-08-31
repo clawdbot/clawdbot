@@ -783,6 +783,25 @@ describe("scripts/pr process-group platform guard", () => {
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
   it.each([
+    ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
+    ["diff --name-only --no-renames -z", "require_no_ignored_transition_paths"],
+    ["check-ignore -z --stdin", "require_no_ignored_transition_paths"],
+    ["diff --cached --name-only --no-renames -z", "validate_review_transition_state"],
+  ])("rejects failed %s reads in %s", (query, guard) => {
+    const repoDir = createRepo();
+    const head = refOid(repoDir, "HEAD");
+    const result = runLockShell(repoDir, [
+      "git() {",
+      `  case "$*" in ${JSON.stringify(query)}*) echo 'fixture query failed' >&2; return 7 ;; esac`,
+      '  command git "$@"',
+      "}",
+      `${guard} 42 ${head} ${head} || exit $?`,
+    ]);
+    expect(result.stderr).toContain("fixture query failed");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+  });
+
+  it.each([
     ...(["healthy", "first", "second"] as const).flatMap((failure) =>
       [false, true]
         .filter((existing) => !existing || failure !== "second")
@@ -2061,20 +2080,23 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(daemonPidFile, daemonPgid);
     }
   });
-  it("joins worktree-list producers before releasing a successful operation lock", async () => {
+  it("joins Git read producers before releasing a successful operation lock", async () => {
     const repoDir = createRepo();
     const producerExited = join(repoDir, "worktree-producer-exited");
     const result = await runSupervisedOperation(repoDir, "joined-worktree-operation.sh", [
       "acquire_pr_operation_lock 42",
       "git() {",
-      '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
-      "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
-      "    exec 1>&-",
-      "    sleep 0.1",
-      "    : >worktree-producer-exited",
-      "    return 0",
-      "  fi",
-      '  command git "$@"',
+      "  local result=0",
+      '  case "$*" in',
+      '    "worktree list"*) printf \'worktree %s\\0branch refs/heads/pr-42\\0\\0\' "$PWD" ;;',
+      '    "ls-files --others --exclude-standard -z"|"diff --name-only --no-renames -z "*|"diff --cached --name-only --no-renames -z "*) ;;',
+      '    "check-ignore -z --stdin") result=1 ;;',
+      '    *) command git "$@"; return $? ;;',
+      "  esac",
+      "  exec 1>&-",
+      "  sleep 0.1",
+      "  : >worktree-producer-exited",
+      '  return "$result"',
       "}",
       'worktree_is_registered "$PWD"',
       "test -f worktree-producer-exited",
@@ -2082,6 +2104,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'resolved="$(worktree_path_for_branch pr-42)"',
       'test "$resolved" = "$PWD"',
       "test -f worktree-producer-exited",
+      'head="$(git rev-parse HEAD)"',
+      "for guard in require_no_foreign_untracked require_no_ignored_transition_paths validate_review_transition_state; do",
+      "  rm worktree-producer-exited",
+      '  "$guard" 42 "$head" "$head" || exit $?',
+      "  test -f worktree-producer-exited",
+      "done",
     ]);
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(existsSync(producerExited)).toBe(true);
