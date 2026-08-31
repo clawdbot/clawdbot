@@ -187,8 +187,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
-  and 96 with the GitHub or hybrid planner profile, Windows at 3, and Android
-  at 2.
+  and 96 with the GitHub or hybrid planner profile, Windows at 2, and Android
+  at 2. The compact row budgets are 112 for hosted-only GitHub and 96 for
+  hybrid; the higher hosted row budget does not increase concurrency.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact

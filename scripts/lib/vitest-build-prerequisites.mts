@@ -4,7 +4,9 @@ import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
 
-export type VitestPretestBuildMode = "private-qa" | "runtime";
+// A private-QA build also satisfies ordinary runtime readers.
+const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
+export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
 type TestSelection = {
@@ -16,7 +18,6 @@ type TestSelection = {
 // These process tests consume built runtime artifacts. Prepare their strongest
 // prerequisite before admitting any workers: a child build invalidates dist
 // while unrelated workers may still be importing its public plugin facades.
-// Strongest first: a private-QA build also satisfies ordinary runtime readers.
 const runtimeConsumers = [
   {
     file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
@@ -85,21 +86,32 @@ export function listVitestRuntimeConsumerFiles(configs: readonly string[]): stri
     .map((consumer) => consumer.file);
 }
 
+/** Merge prepared prerequisites without repeating test-file ownership discovery. */
+export function mergeVitestPretestBuildModes(
+  modes: readonly (VitestPretestBuildMode | undefined)[],
+): VitestPretestBuildMode | undefined {
+  return VITEST_PRETEST_BUILD_MODES.find((mode) => modes.includes(mode));
+}
+
 export function resolveVitestPretestBuildMode(
   selections: readonly TestSelection[],
 ): VitestPretestBuildMode | undefined {
-  return runtimeConsumers.find(({ file, configs: consumerConfigs }) =>
-    selections.some(({ configs, includePatterns, cli }) => {
-      const included = includePatterns
-        ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
-        : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
-      // Only project the canonical consumers; config loading and test discovery
-      // stay with Vitest. Include-file overrides still intersect emitted filters.
-      return cli
-        ? matchesVitestCliSelection(file, included ? [file] : [], cli.args, cli.dir, cli.env)
-        : included;
-    }),
-  )?.mode;
+  return mergeVitestPretestBuildModes(
+    runtimeConsumers
+      .filter(({ file, configs: consumerConfigs }) =>
+        selections.some(({ configs, includePatterns, cli }) => {
+          const included = includePatterns
+            ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
+            : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
+          // Only project the canonical consumers; config loading and test discovery
+          // stay with Vitest. Include-file overrides still intersect emitted filters.
+          return cli
+            ? matchesVitestCliSelection(file, included ? [file] : [], cli.args, cli.dir, cli.env)
+            : included;
+        }),
+      )
+      .map(({ mode }) => mode),
+  );
 }
 
 export async function prepareVitestRuntime(
