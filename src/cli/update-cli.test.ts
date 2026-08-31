@@ -5032,59 +5032,91 @@ describe("update-cli", () => {
     expect(logs).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
   });
 
-  it("recovers the old package when staged npm verification fails", async () => {
-    const tempDir = tempDirs.make("openclaw-update-staged-fail-");
-    const prefix = path.join(tempDir, "prefix");
-    const nodeModules = path.join(prefix, "lib", "node_modules");
-    const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
-      nodeModules,
-      "2026.4.20",
-    );
-    mockFileBackedPathExists();
-    mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
-    readPackageVersion.mockResolvedValue("2026.4.20");
-    primeNpmChannelTag("latest", "2026.4.25");
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-        expect(serviceStop).toHaveBeenCalledOnce();
-        expect(freshRestartCalls()).toEqual([]);
-        const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-        if (typeof stagePrefix !== "string") {
-          throw new Error("missing stage prefix");
-        }
-        const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-        await writeOpenClawPackageFixture(stageRoot, "2026.4.25", {
-          entrySource: "export {};\n",
-          inventory: true,
-        });
-        await fs.writeFile(
-          path.join(stageRoot, "dist", "stale-runtime.js"),
-          "export {};\n",
-          "utf-8",
-        );
+  it.each(["verification", "shim swap"] as const)(
+    "recovers the old package after staged npm %s failure",
+    async (failure) => {
+      const tempDir = tempDirs.make("openclaw-update-staged-fail-");
+      const prefix = path.join(tempDir, "prefix");
+      const nodeModules = path.join(prefix, "lib", "node_modules");
+      const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
+        nodeModules,
+        "2026.4.20",
+      );
+      mockFileBackedPathExists();
+      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
+      const targetShim = path.join(prefix, "bin", "openclaw");
+      if (failure === "shim swap") {
+        await fs.mkdir(path.dirname(targetShim), { recursive: true });
+        await fs.writeFile(targetShim, "old shim\n");
       }
-    });
+      let stagedShim: string | undefined;
+      const copyFile = fs.copyFile.bind(fs);
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        if (String(args[0]) === stagedShim) {
+          throw new Error("staged shim copy failed");
+        }
+        return await copyFile(...args);
+      });
+      readPackageVersion.mockResolvedValue("2026.4.20");
+      primeNpmChannelTag("latest", "2026.4.25");
+      mockNpmGlobalCommands(nodeModules, async (argv) => {
+        if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+          expect(serviceStop).toHaveBeenCalledOnce();
+          expect(freshRestartCalls()).toEqual([]);
+          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          if (typeof stagePrefix !== "string") {
+            throw new Error("missing stage prefix");
+          }
+          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writeOpenClawPackageFixture(stageRoot, "2026.4.25", {
+            entrySource: "export {};\n",
+            inventory: true,
+          });
+          if (failure === "verification") {
+            await fs.writeFile(
+              path.join(stageRoot, "dist", "stale-runtime.js"),
+              "export {};\n",
+              "utf8",
+            );
+          } else {
+            stagedShim = path.join(stagePrefix, "bin", "openclaw");
+            await fs.mkdir(path.dirname(stagedShim), { recursive: true });
+            await fs.writeFile(stagedShim, "new shim\n");
+          }
+        }
+      });
 
-    await updateCommand({ yes: true });
+      try {
+        await updateCommand({ yes: true });
+      } finally {
+        copyFileSpy.mockRestore();
+      }
 
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-      '"version":"2026.4.20"',
-    );
-    const logs = getLogOutput();
-    expect(logs).toContain("global install verify");
-    expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
-    expect(freshRestartCalls()).toEqual([
-      [
-        [expect.any(String), entryPath, "gateway", "restart", "--preserve-definition"],
-        expect.objectContaining({ cwd: pkgRoot }),
-      ],
-    ]);
-    expectNoSideEffects(serviceStart, serviceRestart);
-  });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(doctorCommandCall()).toBeUndefined();
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
+        '"version":"2026.4.20"',
+      );
+      const logs = getLogOutput();
+      if (failure === "verification") {
+        expect(logs).toContain("global install verify");
+        expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
+      } else {
+        expect(logs).toContain("global install swap");
+        expect(logs).toContain("staged shim copy failed");
+        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
+      }
+      expect(freshRestartCalls()).toEqual([
+        [
+          [expect.any(String), entryPath, "gateway", "restart", "--preserve-definition"],
+          expect.objectContaining({ cwd: pkgRoot }),
+        ],
+      ]);
+      expectNoSideEffects(serviceStart, serviceRestart);
+    },
+  );
 
   it("runs old package doctors without fix mode when service ownership is unknown", async () => {
     const tempDir = tempDirs.make("openclaw-update-package-");

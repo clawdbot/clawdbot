@@ -82,10 +82,13 @@ Installer-driven switches verify the replacement before the working owner is ret
 If a CLI update fails after installing a usable replacement, recovery uses the
 newly installed CLI to restart the Gateway it stopped, preserving the managed
 service definition. A rejected staged candidate leaves the original package intact,
-and recovery restarts that usable installation. After the live package has been
-modified, a blocking lifecycle, verification, or Doctor failure leaves the Gateway
-stopped because the replacement is not known to be runnable. Repair the reported
-failure, rerun `openclaw update`, and check `openclaw gateway status --deep`.
+and recovery restarts that usable installation. A failed staged swap can also
+recover when the updater verifies that the original package and every changed
+launcher were restored. Incomplete rollback keeps the Gateway stopped and retains
+available backups for repair. After the live package has been modified, a blocking
+lifecycle, verification, or Doctor failure also leaves the Gateway stopped because
+the replacement is not known to be runnable. Repair the reported failure, rerun
+`openclaw update`, and check `openclaw gateway status --deep`.
 If an older target does not support preserving the service definition, automatic
 recovery stops and reports the error; inspect the service before restarting it
 manually.
