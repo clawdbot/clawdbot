@@ -22,10 +22,6 @@ import type {
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-export {
-  LITELLM_PRICING_URL,
-  OPENROUTER_MODELS_URL,
-} from "@openclaw/model-catalog-core/model-catalog-pricing";
 
 type ModelCatalogManifestInput = {
   pluginId: string;
