@@ -1,5 +1,5 @@
 // Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createChannelIngressQueue,
   purgeChannelIngressQueueAccount,
@@ -7,6 +7,7 @@ import {
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
@@ -112,6 +113,14 @@ function firstWrittenChannelsConfig() {
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
     ({ channelsRemoveCommand } = await import("./channels.js"));
+  });
+
+  // Each seeding case drains its own queue today, so the store never leaks between
+  // cases — but that is discipline, not a mechanism. Close it the way the sibling
+  // purge suite does, so a future case that seeds without draining cannot silently
+  // change a later case's counts.
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
   });
 
   beforeEach(() => {
