@@ -25,6 +25,17 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 // replayed string-typed round-trip`) for the deterministic version of this
 // proof.
 //
+// GlobalFetchRequestCapture also tees each captured response's raw SSE
+// bytes (rawResponseTexts) and extractRawFunctionCallArguments pulls the
+// `response.function_call_arguments.done` event's raw arguments string out
+// of round 1's response, asserting it's a genuine bare/unquoted integer
+// literal on the wire -- not a model-quoted string, which the pre-fix
+// comparison already handled correctly. Without this, asserting only on
+// the post-parser AssistantMessage.arguments value can't tell those two
+// cases apart (both parse to the same string), so it wouldn't actually
+// prove this fix's regression path. Confirmed live: raw wire text was
+// exactly `{"n":9007199254740993}` -- a bare literal.
+//
 // (The call_id-reshaping half of this PR is not exercisable here: a real
 // native OpenAI tool-call id already arrives in the call_*/fc_*-paired shape
 // normalizeOpenAIResponsesToolCallIds produces, so its idempotent
@@ -40,26 +51,95 @@ const LIVE_TIMEOUT_MS = 120_000;
 
 class GlobalFetchRequestCapture {
   readonly requests: Array<Record<string, unknown>> = [];
+  // Raw SSE response bodies, one entry per captured request, in the same
+  // order as `requests`. Captured via a stream tee so the real SDK consumer
+  // is never disturbed -- this exists specifically to inspect the raw wire
+  // bytes api.openai.com actually sent, before any OpenClaw-side parsing
+  // (parseStreamingJson / parseJsonObjectPreservingUnsafeIntegers) can turn
+  // an unsafe integer literal into a string. Without this, a live test that
+  // only asserts on the post-parser AssistantMessage.arguments value can't
+  // tell a real unquoted 9007199254740993 apart from the model having
+  // quoted it as a string itself -- the case the pre-fix comparison already
+  // handled, so it would prove nothing about this fix. (ClawSweeper P2 on
+  // #134423.)
+  readonly rawResponseTexts: string[] = [];
   private readonly realFetch = globalThis.fetch;
 
   install(): void {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const body = init?.body;
-      if (url.includes("api.openai.com") && typeof body === "string") {
+      const isTarget = url.includes("api.openai.com") && typeof body === "string";
+      if (isTarget) {
         try {
           this.requests.push(JSON.parse(body) as Record<string, unknown>);
         } catch {
           // Non-JSON body on this host is unexpected for a Responses call.
         }
       }
-      return this.realFetch(input, init);
+      const response = await this.realFetch(input, init);
+      if (!isTarget || !response.body) {
+        return response;
+      }
+      const [forCaller, forCapture] = response.body.tee();
+      const captureIndex = this.rawResponseTexts.length;
+      this.rawResponseTexts.push("");
+      void (async () => {
+        const reader = forCapture.getReader();
+        const decoder = new TextDecoder();
+        let text = "";
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            text += decoder.decode(value, { stream: true });
+          }
+        } catch {
+          // Best-effort capture; the real caller's own stream is unaffected.
+        }
+        this.rawResponseTexts[captureIndex] = text;
+      })();
+      return new Response(forCaller, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     }) as typeof fetch;
   }
 
   restore(): void {
     globalThis.fetch = this.realFetch;
   }
+}
+
+/** Extracts the raw (pre-parser) arguments string from a captured SSE response's
+ * `response.function_call_arguments.done` event -- the exact wire text the
+ * provider sent for the tool call's arguments, before any OpenClaw-side JSON
+ * parsing normalizes an unsafe integer literal into a string. */
+function extractRawFunctionCallArguments(rawSse: string): string | undefined {
+  for (const line of rawSse.split("\n")) {
+    const trimmed = line.startsWith("data:") ? line.slice(5).trim() : "";
+    if (!trimmed || trimmed === "[DONE]") {
+      continue;
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (
+      event &&
+      typeof event === "object" &&
+      (event as { type?: unknown }).type === "response.function_call_arguments.done" &&
+      typeof (event as { arguments?: unknown }).arguments === "string"
+    ) {
+      return (event as { arguments: string }).arguments;
+    }
+  }
+  return undefined;
 }
 
 function userMessage(text: string, timestamp: number) {
@@ -129,6 +209,25 @@ describeLive(
           expect(toolCall).toBeDefined();
           expect(String(toolCall?.arguments.n)).toBe(unsafeInt);
 
+          // Prove the provider actually emitted a bare, unquoted numeric literal
+          // on the wire -- not a model-quoted string, which the pre-fix
+          // comparison already handled and would make this whole test prove
+          // nothing about the fix. Inspects raw SSE bytes, before any
+          // OpenClaw-side parsing.
+          const rawArguments = extractRawFunctionCallArguments(capture.rawResponseTexts[0] ?? "");
+          expect(
+            rawArguments,
+            `expected a response.function_call_arguments.done event in the raw SSE response; got ${capture.rawResponseTexts.length} captured response(s)`,
+          ).toBeDefined();
+          expect(
+            rawArguments,
+            `raw wire arguments must contain the bare unquoted integer ${unsafeInt}, not a quoted string; got: ${rawArguments}`,
+          ).toMatch(new RegExp(`"n"\\s*:\\s*${unsafeInt}(?!")`));
+          expect(
+            rawArguments,
+            `raw wire arguments must NOT have quoted the integer as a string; got: ${rawArguments}`,
+          ).not.toMatch(new RegExp(`"n"\\s*:\\s*"${unsafeInt}"`));
+
           const toolResultMsg = {
             role: "toolResult" as const,
             toolCallId: toolCall?.id ?? "",
@@ -149,7 +248,9 @@ describeLive(
           const secondRequest = capture.requests[1];
           expect(secondRequest).toHaveProperty("previous_response_id");
           expect(typeof secondRequest?.previous_response_id).toBe("string");
-          expect((secondRequest?.previous_response_id as string).length).toBeGreaterThan(0);
+          expect(
+            (secondRequest?.previous_response_id as string | undefined)?.length ?? 0,
+          ).toBeGreaterThan(0);
           // toolCall.id is OpenClaw's own internal call_id|fc_id pairing;
           // the wire delta's call_id must be restored to the bare provider
           // call_id (the part before the pairing separator), not the
