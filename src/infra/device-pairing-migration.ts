@@ -20,6 +20,22 @@ type LegacyDevicePairingMigrationResult = {
   skippedExisting: number;
 };
 
+function isValidLegacyPairedDevice(record: unknown): record is PairedDevice {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  // SAFETY: the object/array guard makes this a safe property-read view; each field is checked below.
+  const candidate = record as Partial<PairedDevice>;
+  return (
+    typeof candidate.publicKey === "string" &&
+    candidate.publicKey.trim().length > 0 &&
+    typeof candidate.createdAtMs === "number" &&
+    Number.isSafeInteger(candidate.createdAtMs) &&
+    typeof candidate.approvedAtMs === "number" &&
+    Number.isSafeInteger(candidate.approvedAtMs)
+  );
+}
+
 async function archiveLegacyFile(filePath: string): Promise<void> {
   try {
     await fs.rename(filePath, `${filePath}.migrated`);
@@ -63,14 +79,16 @@ export async function migrateLegacyDevicePairingStore(params?: {
     return null;
   }
 
-  const legacyPaired = coercePairingStateRecord<PairedDevice>(pairedRaw);
+  const legacyPaired = coercePairingStateRecord<unknown>(pairedRaw);
   let imported = 0;
   let skippedExisting = 0;
+  let skippedInvalid = 0;
   if (Object.keys(legacyPaired).length > 0) {
     await withPairedDeviceRecords(params?.baseDir, (pairedByDeviceId) => {
       for (const [rawDeviceId, record] of Object.entries(legacyPaired)) {
         const deviceId = rawDeviceId.trim();
-        if (!deviceId) {
+        if (!deviceId || !isValidLegacyPairedDevice(record)) {
+          skippedInvalid += 1;
           continue;
         }
         if (pairedByDeviceId[deviceId]) {
@@ -82,6 +100,12 @@ export async function migrateLegacyDevicePairingStore(params?: {
       }
       return { value: undefined, persist: imported > 0 };
     });
+  }
+
+  if (skippedInvalid > 0) {
+    params?.log?.warn(
+      `device pairing store migration skipped ${skippedInvalid} invalid paired record(s)`,
+    );
   }
 
   await Promise.all([
