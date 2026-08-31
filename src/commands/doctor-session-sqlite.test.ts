@@ -94,18 +94,20 @@ afterEach(() => {
 
 describe("runDoctorSessionSqlite", () => {
   it.each(
-    (["explicit", "default", "relocated"] as const).flatMap((reference) =>
-      ([1, 2, 3] as const).map((version) => ({ reference, version })),
+    [
+      { reference: "explicit", sessionFile: "session-1.jsonl" },
+      { reference: "default", sessionFile: undefined },
+      { reference: "relocated", sessionFile: "/previous-machine/relocated-original.jsonl" },
+      {
+        reference: "canonical-relocated",
+        sessionFile: "/previous-machine/.openclaw/agents/main/sessions/relocated-original.jsonl",
+      },
+    ].flatMap(({ reference, sessionFile }) =>
+      ([1, 2, 3] as const).map((version) => ({ reference, sessionFile, version })),
     ),
   )(
     "preserves index dependencies across an interrupted import retry ($reference, v$version)",
-    async ({ reference, version }) => {
-      const sessionFile =
-        reference === "default"
-          ? undefined
-          : reference === "relocated"
-            ? "/previous-machine/relocated-original.jsonl"
-            : "session-1.jsonl";
+    async ({ sessionFile, version }) => {
       const store = createLegacyStore({
         entryOverrides: { sessionFile },
         transcriptLines: [
@@ -113,10 +115,10 @@ describe("runDoctorSessionSqlite", () => {
           '{"type":"message","id":"one","parentId":null,"message":{"role":"user","content":"retained retry history"}}',
         ],
       });
-      const transcriptPath =
-        reference === "relocated"
-          ? path.join(store.sessionDir, "relocated-original.jsonl")
-          : store.transcriptPath;
+      const transcriptPath = path.join(
+        store.sessionDir,
+        path.basename(sessionFile ?? store.transcriptPath),
+      );
       if (transcriptPath !== store.transcriptPath) {
         fs.renameSync(store.transcriptPath, transcriptPath);
       }
@@ -149,6 +151,11 @@ describe("runDoctorSessionSqlite", () => {
         mode: "import",
       });
       expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
+      expect(
+        migrationRun.readSessionSqliteMigrationManifest(
+          requireMigrationManifestPath(retried.migrationRun?.manifestPath),
+        ),
+      ).toBeDefined();
       if (version !== 3) {
         for (const runPath of [interruptedManifestPath, retried.migrationRun?.manifestPath]) {
           const manifestPath = requireMigrationManifestPath(runPath);

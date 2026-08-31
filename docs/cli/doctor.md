@@ -407,8 +407,11 @@ checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
-into the archive. If an explicit import fails after artifacts moved, keep the
-Gateway stopped and run recovery:
+into the archive. Recovery references stay in the current sessions directory,
+including for backups with old-machine absolute transcript paths. Retrying an
+interrupted import keeps the index and previously archived transcripts restorable.
+If an explicit import fails after artifacts moved, keep the Gateway stopped and
+run recovery:
 
 ```bash
 openclaw doctor --session-sqlite recover --github-issue

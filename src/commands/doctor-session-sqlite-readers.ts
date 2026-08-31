@@ -87,12 +87,15 @@ export function resolveLegacyTranscriptPaths(
     }
     defaultPath = relocatedPath;
   }
-  // Index references outlive raw source paths: a prior interrupted run may already have
-  // archived either the normal or relocated transcript. Preserve both recovery dependencies.
-  const transcriptDependencies = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
+  const transcriptPaths = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
   const transcriptPath =
-    transcriptDependencies.find((file) => fs.existsSync(file)) ??
+    transcriptPaths.find((file) => fs.existsSync(file)) ??
     (relocatedPath ? defaultPath : undefined);
+  // Reads may retain a foreign root after archival, but recovery artifacts are direct
+  // files in this target's sessions directory. Their dependencies must stay local too.
+  const transcriptDependencies = transcriptPaths.map((file) =>
+    path.join(sessionsDir, path.basename(file)),
+  );
   return { transcriptPath, transcriptDependencies };
 }
 
