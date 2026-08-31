@@ -113,8 +113,8 @@ describe("plugin lifecycle lease", () => {
     ["an explicit database path across different state directories", true],
   ])("serializes lifecycle work sharing %s", async (_label, explicitPath) => {
     await withOpenClawTestState({ label: "plugin-lifecycle-lease" }, async (state) => {
-      const firstEntered = createDeferred<void>();
-      const releaseFirst = createDeferred<void>();
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
       const events: string[] = [];
       const leaseOptions = (caller: string) => ({
         env: explicitPath ? { ...state.env, OPENCLAW_STATE_DIR: state.path(caller) } : state.env,
