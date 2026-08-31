@@ -2,6 +2,7 @@ import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
@@ -599,16 +600,24 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       );
     }
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
+    const adopted = state.turnAdoptionState?.adopted === true;
     if (
       params.replyOptions?.isHeartbeat === true ||
-      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
     if (!didDeliverVisiblePartialReply) {
-      return undefined;
+      // Adoption retires ingress replay before the model starts. A progress ACK
+      // cannot settle a later failure; use normal final delivery and its policy.
+      return adopted &&
+        state.noVisibleReplyFallbackDirected &&
+        !state.suppressDelivery &&
+        !state.getObservedReplyDelivery()
+        ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
+        : undefined;
     }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
