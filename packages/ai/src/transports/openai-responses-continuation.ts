@@ -6,7 +6,14 @@ import { registerSessionResourceCleanup } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { sha256Hex } from "./transport-utils.js";
 
-const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
+// A real chat conversation's turns are commonly minutes to hours apart, well
+// past the original 5-minute TTL -- continuation only ever engaged within one
+// multi-round tool-calling turn (seconds between rounds), never across
+// separate incoming messages, even though sessionId and connection identity
+// are both stable across turns (confirmed by tracing the full call chain).
+// Unchanged since #122194 introduced it; review only ever flagged the
+// in-memory/process-local design generally, never the specific value.
+const HTTP_CONTINUATION_IDLE_TTL_MS = 90 * 60 * 1000;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
 export type ResponsesContinuationRequest = Record<string, unknown> & {
