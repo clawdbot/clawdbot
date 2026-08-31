@@ -967,7 +967,7 @@ describe("OpenAI-compatible completions params", () => {
   });
 
   it("keeps Z.AI thinking disabled for an explicit none effort even when off maps to a level", async () => {
-    const stream = streamSimpleOpenAICompletions(
+    const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
@@ -978,7 +978,8 @@ describe("OpenAI-compatible completions params", () => {
       context,
       {
         apiKey: "sk-test",
-        reasoning: "none",
+        reasoningEffort: "none",
+        maxTokens: 1_024,
       },
     );
 
