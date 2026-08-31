@@ -248,6 +248,13 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
+  const dispatch = workflowStep(job, "Dispatch publish workflows");
+  const complete = workflowStep(job, "Complete publish workflows");
+  const functions = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+  return { ...dispatch, run: [functions, dispatch.run, complete.run].join("\n") };
+}
+
 function workflowStepById(job: WorkflowJob, stepId: string): WorkflowStep {
   const step = job.steps?.find((candidate) => candidate.id === stepId);
   if (!step) {
@@ -1705,7 +1712,7 @@ describe("package acceptance workflow", () => {
     const downloadPreflight = workflowStep(resolveJob, "Download OpenClaw npm preflight manifest");
     const validateEvidence = workflowStep(resolveJob, "Validate OpenClaw npm preflight manifest");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-    const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
+    const dispatch = releasePublishOrchestration(publishJob);
 
     expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
       "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
@@ -2335,7 +2342,7 @@ describe("package acceptance workflow", () => {
 
   it("retries child environment approval when deployment propagation lags", () => {
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-    const orchestration = workflowStep(publishJob, "Dispatch publish workflows").run;
+    const orchestration = releasePublishOrchestration(publishJob).run;
     if (!orchestration) {
       throw new Error("Expected release publish orchestration script");
     }
@@ -2353,7 +2360,7 @@ describe("package acceptance workflow", () => {
   it("resolves broad release evidence and exact-binds every publish child", () => {
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-    const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
+    const publishOrchestration = releasePublishOrchestration(publishJob);
 
     for (const stepName of [
       "Download OpenClaw npm preflight manifest",
@@ -2382,7 +2389,7 @@ describe("package acceptance workflow", () => {
       "${{ steps.clawhub_plan.outputs.child_workflow_ref }}",
     );
     expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
-      "otherwise approve and monitor the detached runs separately",
+      "public verification follows terminal parent success",
     );
     expectTextToIncludeAll(publishOrchestration.run, [
       'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
@@ -2407,9 +2414,8 @@ describe("package acceptance workflow", () => {
   ])(
     "does not block core publication on Android completion (dispatch failure: %s, existing assets: %s)",
     (dispatchFailure, assetsVerified) => {
-      const script = workflowStep(
+      const script = releasePublishOrchestration(
         workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
-        "Dispatch publish workflows",
       ).run;
       if (!script) throw new Error("Missing publish orchestration");
       const start = script.indexOf('openclaw_result=""');
@@ -2478,9 +2484,8 @@ printf 'core_failed=%s\n' "$failed"
   );
 
   it("compares dependency evidence zip contents independently of archive timestamps", () => {
-    const orchestration = workflowStep(
+    const orchestration = releasePublishOrchestration(
       workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
-      "Dispatch publish workflows",
     ).run;
     if (!orchestration) {
       throw new Error("Expected release publish orchestration script");
@@ -7966,7 +7971,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const trustedTooling = workflowStep(resolveJob, "Download trusted release validation tooling");
     const validateManifest = workflowStep(resolveJob, "Validate full release validation manifest");
     const publishDownload = workflowStep(publishJob, "Download full release validation manifest");
-    const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
+    const publishOrchestration = releasePublishOrchestration(publishJob);
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
     const npmCheckout = workflowStep(npmPublishJob, "Checkout");
     const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
@@ -8094,7 +8099,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {
-    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const releaseWorkflow = [
+      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
+      readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8"),
+    ].join("\n");
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
     const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
     const releaseSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
@@ -8197,7 +8205,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it("keeps the signed Android APK contract independent of core publication", () => {
-    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const releaseWorkflow = [
+      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
+      readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8"),
+    ].join("\n");
     const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
     const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
     const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
@@ -8296,7 +8307,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
-    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const releaseWorkflow = [
+      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
+      readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8"),
+    ].join("\n");
     const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
     const parseManifestLinesIndex = releaseWorkflow.indexOf("map(capture(");
 
@@ -8501,12 +8515,40 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       workflowStep(releasePublishJob, "Install trusted release tooling dependencies"),
     ).toBeDefined();
     expect(workflowStep(releasePublishJob, "Resolve ClawHub release plan")).toBeDefined();
-    expect(workflowStep(releasePublishJob, "Dispatch publish workflows")).toBeDefined();
+    expect(releasePublishOrchestration(releasePublishJob)).toBeDefined();
 
+    const dispatchIndexForReceipt = releaseSteps.findIndex(
+      (step) => step.name === "Dispatch publish workflows",
+    );
+    const authorizeIndex = releaseSteps.findIndex(
+      (step) => step.name === "Authorize exact ClawHub package transactions",
+    );
+    const receiptIndex = releaseSteps.findIndex(
+      (step) => step.name === "Upload immutable ClawHub parent authorization",
+    );
+    const completionIndex = releaseSteps.findIndex(
+      (step) => step.name === "Complete publish workflows",
+    );
+    expect(authorizeIndex).toBeGreaterThan(dispatchIndexForReceipt);
+    expect(receiptIndex).toBeGreaterThan(authorizeIndex);
+    expect(completionIndex).toBeGreaterThan(receiptIndex);
+    expect(
+      workflowStep(releasePublishJob, "Upload immutable ClawHub parent authorization").with?.[
+        "if-no-files-found"
+      ],
+    ).toBe("error");
+    expect(
+      workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "seal_clawhub_transactions").needs,
+    ).toContain("pack_plugins_clawhub_artifacts");
+    expect(clawHubApproval.needs).toContain("seal_clawhub_transactions");
+    expect(
+      readWorkflow(PLUGIN_CLAWHUB_RELEASE_WORKFLOW).jobs?.verify_published_clawhub_package,
+    ).toBeUndefined();
     expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
     expect(clawHubPublish.needs).toEqual([
       "preview_plugins_clawhub",
       "pack_plugins_clawhub_artifacts",
+      "seal_clawhub_transactions",
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
@@ -8517,7 +8559,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       contents: "read",
       "id-token": "write",
     });
-    expect(clawHubPublish.with?.trusted_tooling_identity_json).toBeUndefined();
+    expect(clawHubPublish.with?.trusted_tooling_identity_json).toBe(
+      "${{ needs.seal_clawhub_transactions.outputs.identity }}",
+    );
+    expect(clawHubPublish.with?.wait_for_publication).toBe(false);
     const clawHubPreview = workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub");
     expect(
       readWorkflow(PLUGIN_CLAWHUB_RELEASE_WORKFLOW).on?.workflow_dispatch?.inputs
@@ -8532,7 +8577,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         ?.release_publish_workflow_sha,
     ).toBeDefined();
     expect(clawHubPreview.outputs?.trusted_tooling_identity_json).toBeUndefined();
-    const publishOrchestration = workflowStep(releasePublishJob, "Dispatch publish workflows");
+    const publishOrchestration = releasePublishOrchestration(releasePublishJob);
     expect(publishOrchestration.env?.PARENT_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expect(publishOrchestration.run).toContain(
       'wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}"',
@@ -8610,8 +8655,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("bounds the npm registry tarball download used for release resume", () => {
     const publishRun =
-      workflowStep(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"), "Dispatch publish workflows")
-        .run ?? "";
+      releasePublishOrchestration(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish")).run ?? "";
     const resolvePublishState = shellFunctionSource(
       publishRun,
       "resolve_openclaw_npm_publish_state",
@@ -8629,8 +8673,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("fails closed when child environment identity or approval mutation fails", () => {
     const publishRun =
-      workflowStep(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"), "Dispatch publish workflows")
-        .run ?? "";
+      releasePublishOrchestration(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish")).run ?? "";
     const verifyChild = shellFunctionSource(publishRun, "verify_child_run_sha");
     const approvePending = shellFunctionSource(publishRun, "approve_pending_deployments");
     const approveChild = shellFunctionSource(publishRun, "approve_child_publish_environment");
