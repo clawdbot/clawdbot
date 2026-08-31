@@ -401,8 +401,8 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
-7. Structured mode resolves two queries with one `tool_search` call before the
-   selected plugin tool runs through `tool_call`.
+7. Structured mode resolves one scalar query with one `tool_search` call before
+   the selected plugin tool runs through `tool_call`.
 
 ## Failure behavior
 

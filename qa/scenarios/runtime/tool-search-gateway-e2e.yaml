@@ -9,7 +9,7 @@ scenario:
       - plugins.plugin-tools
     secondary:
       - plugins.tool-plugin-invocation
-  objective: Verify Tool Search keeps a large plugin-owned catalog compact, supports structured batch discovery, and still invokes the selected plugin tool.
+  objective: Verify Tool Search keeps a large plugin-owned catalog compact, supports structured scalar discovery, and still invokes the selected plugin tool.
   successCriteria:
     - Direct mode exposes the fake plugin tool schemas and calls the selected plugin tool.
     - All three lanes report the selected tool through tools.effective with source=plugin and pluginId=tool-search-e2e-fixture.
@@ -92,7 +92,7 @@ flow:
                 ref: codeLane
               targetTool:
                 ref: toolSearchFixture.targetTool
-        - call: toolSearch.assertToolSearchBatchLaneResult
+        - call: toolSearch.assertToolSearchStructuredLaneResult
           args:
             - tools:
                 ref: toolsLane

@@ -6,8 +6,6 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 
 let mockFunctionCallSequence = 0;
 
-export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
-
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
   if (!trimmed) {
@@ -220,17 +218,17 @@ export function extractToolSearchTarget(text: string): string | null {
 }
 
 export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
+  const matchesTarget = (candidate: unknown) =>
+    isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool);
+  if (Array.isArray(output)) {
+    return output.some(matchesTarget);
+  }
   if (!isRecord(output) || !Array.isArray(output.results)) {
     return false;
   }
   return output.results.some(
     (result) =>
-      isRecord(result) &&
-      Array.isArray(result.candidates) &&
-      result.candidates.some(
-        (candidate) =>
-          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
-      ),
+      isRecord(result) && Array.isArray(result.candidates) && result.candidates.some(matchesTarget),
   );
 }
 
