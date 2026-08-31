@@ -62,26 +62,10 @@ jobs:
           cache-mode: restore
           install-bun: "false"
           install-trufflehog: "true"
-      - name: Resolve PR Testbox base
-        if: github.event_name == 'pull_request'
-        id: testbox-base
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          # The shallow merge checkout already contains its actual base parent.
-          base="$(node scripts/lib/merge-head-diff-base.mjs --base "$BASE_SHA" --head HEAD --prefer-first-parent)"
-          echo "sha=$base" >> "$GITHUB_OUTPUT"
-      - name: Ensure Testbox base commit
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ steps.testbox-base.outputs.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
-          base-ref: ${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}
+          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
 
       - name: Hydrate Testbox provider env helper
         shell: bash

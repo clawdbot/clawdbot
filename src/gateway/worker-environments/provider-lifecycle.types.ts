@@ -11,6 +11,7 @@ import type {
 } from "../../plugins/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -53,6 +54,7 @@ export type WorkerProviderLifecycleInputOptions = {
   closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
   projectNamespace?: string;
+  placementStore?: WorkerSessionPlacementGate;
   providerCallTimeoutMs?: number;
 };
 

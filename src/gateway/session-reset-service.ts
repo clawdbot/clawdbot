@@ -255,7 +255,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     await hookRunner.runSessionEnd(payload.event, payload.context);
-  }).catch((err: unknown) => {
+  }, "hooks:session-end").catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -300,7 +300,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     await hookRunner.runSessionStart(payload.event, payload.context);
-  }).catch((err: unknown) => {
+  }, "hooks:session-start").catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }

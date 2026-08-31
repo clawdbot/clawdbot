@@ -18,7 +18,7 @@ const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.
 async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
-    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({

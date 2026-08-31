@@ -85,7 +85,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       loadShellEnvFallback({
         enabled: true,
         env: deps.env,
-        expectedKeys: resolveShellEnvExpectedKeys(deps.env),
+        expectedKeys: resolveShellEnvExpectedKeys(deps.env, cfg),
         logger: deps.logger,
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });

@@ -1,5 +1,4 @@
 // Line plugin module implements bot behavior.
-import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -41,7 +40,7 @@ interface LineBotOptions {
 }
 
 interface LineBot {
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
+  handleWebhook: ReturnType<typeof createLineWebhookSpool>["accept"];
   account: ResolvedLineAccount;
   stop: () => Promise<void>;
 }

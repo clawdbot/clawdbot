@@ -2146,9 +2146,22 @@ syncBuiltinESMExports();
   });
 
   it.runIf(process.platform !== "win32").each([
-    { name: "uses bundled AI bytes when a prebuilt tarball is provided", statusExit: 0 },
-    { name: "preserves redirected Bun command diagnostics and exit status", statusExit: 23 },
-  ])("$name", ({ statusExit }) => {
+    {
+      name: "uses bundled AI bytes when a prebuilt tarball is provided",
+      bundledAi: true,
+      statusExit: 0,
+    },
+    {
+      name: "installs an older tarball with no bundled AI dependency unchanged",
+      bundledAi: false,
+      statusExit: 0,
+    },
+    {
+      name: "preserves redirected Bun command diagnostics and exit status",
+      bundledAi: true,
+      statusExit: 23,
+    },
+  ])("$name", ({ bundledAi, statusExit }) => {
     const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
     const packageDir = join(tempDir, "fixture", "package");
     const aiDir = join(packageDir, "node_modules", "@openclaw", "ai");
@@ -2156,20 +2169,27 @@ syncBuiltinESMExports();
     const bunPath = join(tempDir, "bun");
     const statePath = join(tempDir, "state-path");
     const aiTarballPath = join(tempDir, "ai-tarball-path");
-    mkdirSync(aiDir, { recursive: true });
+    mkdirSync(packageDir, { recursive: true });
     writeFileSync(
       join(packageDir, "package.json"),
       JSON.stringify({
         name: "openclaw",
         version: "2026.6.17",
-        dependencies: { "@openclaw/ai": "2026.6.17" },
-        bundleDependencies: ["@openclaw/ai"],
+        ...(bundledAi
+          ? {
+              dependencies: { "@openclaw/ai": "2026.6.17" },
+              bundleDependencies: ["@openclaw/ai"],
+            }
+          : {}),
       }),
     );
-    writeFileSync(
-      join(aiDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/ai", version: "2026.6.17" }),
-    );
+    if (bundledAi) {
+      mkdirSync(aiDir, { recursive: true });
+      writeFileSync(
+        join(aiDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/ai", version: "2026.6.17" }),
+      );
+    }
     const packed = spawnSync(
       "tar",
       ["-czf", packageTgz, "-C", join(tempDir, "fixture"), "package"],
@@ -2233,16 +2253,26 @@ case " $* " in
   *' --trust '*) ;;
   *) echo 'missing --trust' >&2; exit 1 ;;
 esac
+mkdir -p "$BUN_INSTALL/install/global"
+if [ ! -f "$BUN_INSTALL/install/global/package.json" ]; then
+  echo '{}' >"$BUN_INSTALL/install/global/package.json"
+fi
+if [ "$EXPECT_AI_OVERRIDE" = "1" ]; then
 override="$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.overrides["@openclaw/ai"])' "$BUN_INSTALL/install/global/package.json")"
 case "\${override#file:}" in
   *.tgz) ;;
   *) exit 1 ;;
 esac
 test -f "\${override#file:}"
+fi
 package_root="$BUN_INSTALL/install/global/node_modules/openclaw"
 mkdir -p "$BUN_INSTALL/bin" "$package_root/dist/plugin-sdk"
 printf '%s\\n' "$OPENCLAW_STATE_DIR" >"$FAKE_STATE_PATH"
-printf '%s\\n' "\${override#file:}" >"$FAKE_AI_TARBALL_PATH"
+if [ "$EXPECT_AI_OVERRIDE" = "1" ]; then
+  printf '%s\\n' "\${override#file:}" >"$FAKE_AI_TARBALL_PATH"
+else
+  node -e 'const p=require(process.argv[1]);process.exit(p.overrides ? 1 : 0)' "$BUN_INSTALL/install/global/package.json"
+fi
 # Synthetic package redactor isolates stderr routing; canonical redaction has separate proof.
 cat >"$package_root/dist/plugin-sdk/logging-core.js" <<'REDACTOR'
 exports.redactSensitiveText = (text) => text;
@@ -2272,6 +2302,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       env: {
         ...process.env,
         BUN_BIN: bunPath,
+        EXPECT_AI_OVERRIDE: bundledAi ? "1" : "0",
         FAKE_STATUS_EXIT: String(statusExit),
         FAKE_STATE_PATH: statePath,
         FAKE_AI_TARBALL_PATH: aiTarballPath,
@@ -2283,7 +2314,9 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
 
     expect(result.status, result.stderr).toBe(statusExit);
     expect(existsSync(path.dirname(readFileSync(statePath, "utf8").trim()))).toBe(false);
-    expect(existsSync(path.dirname(readFileSync(aiTarballPath, "utf8").trim()))).toBe(false);
+    if (bundledAi) {
+      expect(existsSync(path.dirname(readFileSync(aiTarballPath, "utf8").trim()))).toBe(false);
+    }
     expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
     if (statusExit === 0) {
       expect(result.stdout).toContain(

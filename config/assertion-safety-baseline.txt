@@ -3152,7 +3152,7 @@ src/infra/outbound/delivery-queue-preparation.ts	1
 src/infra/outbound/delivery-queue-storage.ts	8
 src/infra/outbound/envelope.ts	2
 src/infra/outbound/format.ts	1
-src/infra/outbound/message-account-selection.ts	4
+src/infra/outbound/message-account-selection.ts	2
 src/infra/outbound/message-action-execution.ts	4
 src/infra/outbound/message-action-runner.ts	1
 src/infra/outbound/message-action-send.ts	2

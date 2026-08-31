@@ -179,17 +179,18 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The seven application subprocess entries run as plain Node JavaScript without a
+The nine declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
-route ownership, the service relay, its POSIX and Windows anchors, and the memory
-plugin's KNN child. The same generation also compiles the fake-backend TUI
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, and the session transcript archive and reconciliation workers.
+The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Application/package build entries and Vitest source parents stay unchanged. This
-does not convert Worker-thread entries or arbitrary source CLI fixtures.
+Package build entry paths and Vitest source parents stay unchanged. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the

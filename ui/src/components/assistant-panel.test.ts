@@ -74,8 +74,8 @@ describe("assistant panel", () => {
 
   afterEach(() => {
     document.body.replaceChildren();
-    document.documentElement.style.removeProperty("--oc-custodian-reserve-bottom");
-    document.documentElement.style.removeProperty("--oc-custodian-reserve-right");
+    document.documentElement.style.removeProperty("--oc-assistant-reserve-bottom");
+    document.documentElement.style.removeProperty("--oc-assistant-reserve-right");
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -168,7 +168,7 @@ describe("assistant panel", () => {
     await replacement.updateComplete;
     expect(replacement.querySelector("openclaw-home-session")).toBeNull();
     expect(replacement.querySelector("openclaw-custodian-surface")).not.toBeNull();
-    expect(replacement.querySelectorAll(".cp")).toHaveLength(1);
+    expect(replacement.querySelectorAll(".assistant-panel")).toHaveLength(1);
   });
 
   it("minimizes a real page conversation into the dock on route leave", async () => {
@@ -185,11 +185,15 @@ describe("assistant panel", () => {
     await panel.updateComplete;
 
     expect(panel.assistantPanelOpen).toBe(true);
-    expect(document.documentElement.style.getPropertyValue("--oc-custodian-reserve-right")).toBe(
+    expect(document.documentElement.style.getPropertyValue("--oc-assistant-reserve-right")).toBe(
       "440px",
     );
 
-    panel.querySelector<HTMLButtonElement>(".cp-actions .cp-icon:last-child")!.click();
+    panel
+      .querySelector<HTMLButtonElement>(
+        ".assistant-panel-actions .assistant-panel-icon:last-child",
+      )!
+      .click();
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(false);
 
@@ -254,13 +258,13 @@ describe("assistant panel", () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
     const cases = [
-      [".cp-header", true],
-      [".cp-title", true],
-      [".cp-actions", true],
-      [".cp-actions button:first-child", false],
-      [".cp-actions button:first-child svg", false],
-      [".cp-actions button:last-child", false],
-      [".cp-actions button:last-child svg", false],
+      [".assistant-panel-header", true],
+      [".assistant-panel-title", true],
+      [".assistant-panel-actions", true],
+      [".assistant-panel-actions button:first-child", false],
+      [".assistant-panel-actions button:first-child svg", false],
+      [".assistant-panel-actions button:last-child", false],
+      [".assistant-panel-actions button:last-child svg", false],
       ["openclaw-custodian-surface", false],
     ] as const;
     for (const [selector, draggable] of cases) {
@@ -281,10 +285,12 @@ describe("assistant panel", () => {
       expect(event.defaultPrevented, selector).toBe(draggable);
     }
 
-    panel.querySelector<HTMLButtonElement>(".cp-actions button:first-child")!.click();
+    panel.querySelector<HTMLButtonElement>(".assistant-panel-actions button:first-child")!.click();
     await panel.updateComplete;
-    expect(panel.querySelector(`.cp--${dock === "right" ? "bottom" : "right"}`)).not.toBeNull();
-    panel.querySelector<HTMLButtonElement>(".cp-actions button:last-child")!.click();
+    expect(
+      panel.querySelector(`.assistant-panel--${dock === "right" ? "bottom" : "right"}`),
+    ).not.toBeNull();
+    panel.querySelector<HTMLButtonElement>(".assistant-panel-actions button:last-child")!.click();
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(false);
   });
@@ -362,7 +368,11 @@ describe("assistant panel", () => {
     await panel.updateComplete;
 
     expect(
-      (panel.querySelector(".cp-title openclaw-mascot") as HTMLElement & { mood: string }).mood,
+      (
+        panel.querySelector(".assistant-panel-title openclaw-mascot") as HTMLElement & {
+          mood: string;
+        }
+      ).mood,
     ).toBe("thinking");
   });
 });

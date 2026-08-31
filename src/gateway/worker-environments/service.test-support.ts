@@ -538,6 +538,7 @@ export function placementHarness(
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });

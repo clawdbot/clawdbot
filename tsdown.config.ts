@@ -380,10 +380,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
-    "config/sessions/session-accessor.sqlite-archive.worker":
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-    "config/sessions/session-transcript-reconcile.worker":
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":

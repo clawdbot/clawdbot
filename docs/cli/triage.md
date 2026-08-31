@@ -18,6 +18,8 @@ The prompt includes the OpenClaw version, platform, Node.js version, prioritized
 
 Secrets, tokens, raw chat payloads, and raw logs are excluded. Paths inside the prompt are shown relative to `~` or `$OPENCLAW_STATE_DIR`; the saved prompt path, archive path, and printed handoff commands retain the real absolute paths needed by your shell. Doctor checks remain advisory and do not apply repairs.
 
+The archive's config summary counts agent, plugin, and channel entries declared in the saved file. Shared channel settings and `$include` directives are excluded from those counts; diagnostics do not expand included files.
+
 ## Agent handoff
 
 In an interactive terminal, triage detects the agent handoff routes available on the current machine and asks which one to use. A configured OpenClaw embedded agent appears first, followed by Claude Code when `claude` is on `PATH`, Codex CLI when `codex` is on `PATH`, and an option to just print the commands.

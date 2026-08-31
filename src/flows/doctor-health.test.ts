@@ -19,6 +19,7 @@ import {
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
 import {
+  assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
@@ -379,6 +380,7 @@ describe("runDoctorHealthFlow", () => {
     "clean-repair",
     "clean-inspect",
     "repair-failed",
+    "store-close-failed",
     "config-refused",
     "workspace-cleanup-failed",
     "restart-unhealthy",
@@ -453,6 +455,14 @@ describe("runDoctorHealthFlow", () => {
         });
         const restart = vi.fn(async () => {
           events.push("restart");
+          if (outcome === "ready") {
+            expect(() =>
+              assertNoOpenClawAgentDatabaseLeases("main", { env: state.env }),
+            ).not.toThrow();
+            expect(() =>
+              assertNoOpenClawAgentDatabaseLeases("research", { env: state.env }),
+            ).not.toThrow();
+          }
           const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
             OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -491,6 +501,16 @@ describe("runDoctorHealthFlow", () => {
           }
           const result = await migrateLegacyMediaPersistence();
           expect(result.warnings).toEqual([]);
+          if (outcome === "ready" || outcome === "store-close-failed") {
+            // Later diagnostics reopen runtime handles after the migration closes its own.
+            const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+            openOpenClawAgentDatabase({ agentId: "research", env: state.env });
+            if (outcome === "store-close-failed") {
+              vi.spyOn(reopened.db, "close").mockImplementationOnce(() => {
+                throw new Error("synthetic database close failure");
+              });
+            }
+          }
           if (outcome === "workspace-cleanup-failed") {
             const migration = await migrateLegacyWorkspaceState({
               stateDir: state.stateDir,
@@ -513,20 +533,21 @@ describe("runDoctorHealthFlow", () => {
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        if (outcome === "config-refused") {
-          runtime.exit.mockImplementation(() => {
-            const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-              databasePath: resolveOpenClawStateSqlitePath(state.env),
-              runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-              uid: process.getuid?.(),
-            });
-            const peer = spawnSync(process.execPath, [
-              "-e",
-              "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
-              coordinatorPath,
-            ]);
-            expect(peer.status).toBe(0);
+        const expectCoordinatorReleased = () => {
+          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+            databasePath: resolveOpenClawStateSqlitePath(state.env),
+            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+            uid: process.getuid?.(),
           });
+          const peer = spawnSync(process.execPath, [
+            "-e",
+            "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
+            coordinatorPath,
+          ]);
+          expect(peer.status).toBe(0);
+        };
+        if (outcome === "config-refused") {
+          runtime.exit.mockImplementation(expectCoordinatorReleased);
         }
         try {
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
@@ -546,6 +567,9 @@ describe("runDoctorHealthFlow", () => {
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "store-close-failed") {
+            await expect(run).rejects.toThrow("synthetic database close failure");
+            expectCoordinatorReleased();
           } else if (outcome === "workspace-cleanup-failed") {
             await expect(run).rejects.toThrow(/workspace.*requires migration/);
           } else if (outcome === "restart-unhealthy") {

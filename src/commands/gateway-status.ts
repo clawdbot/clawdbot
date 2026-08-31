@@ -1,4 +1,4 @@
-/** CLI entrypoint for `openclaw gateway status`. */
+/** CLI entrypoint for `openclaw gateway probe`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -59,7 +59,9 @@ export async function gatewayStatusCommand(
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
-  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs);
+  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
+    invalidType: "error",
+  });
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,

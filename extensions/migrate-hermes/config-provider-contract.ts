@@ -6,7 +6,7 @@ import {
   mcpValueHasEnvReferences,
   resolveMcpEnvReferences,
 } from "./config-env.js";
-import { childRecord, readStringArray } from "./helpers.js";
+import { childRecord } from "./helpers.js";
 import { normalizeHermesCustomProviderId, normalizeHermesProviderId } from "./model.js";
 
 type OpenClawModelApi =
@@ -38,6 +38,27 @@ export const HERMES_TRANSPORTS: Record<string, OpenClawModelApi> = {
   codex_responses: "openai-responses",
   openai_chat: "openai-completions",
 };
+const HERMES_TRANSPORT_ALIASES: Record<string, string> = {
+  openai: "chat_completions",
+  "openai-chat": "chat_completions",
+  "chat-completions": "chat_completions",
+  chatcompletions: "chat_completions",
+  responses: "codex_responses",
+  openai_responses: "codex_responses",
+  "openai-responses": "codex_responses",
+  anthropic: "anthropic_messages",
+  "anthropic-messages": "anthropic_messages",
+  messages: "anthropic_messages",
+};
+
+export function readProviderTransport(raw: Record<string, unknown>): string | undefined {
+  const transport = (
+    normalizeOptionalString(raw.api_mode) ??
+    normalizeOptionalString(raw.apiMode) ??
+    normalizeOptionalString(raw.transport)
+  )?.toLowerCase();
+  return transport ? (HERMES_TRANSPORT_ALIASES[transport] ?? transport) : undefined;
+}
 const HERMES_MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 const HERMES_MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/anthropic";
 const HERMES_ALIBABA_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
@@ -170,7 +191,7 @@ export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,
 ): OpenClawModelApi | undefined {
-  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.api_mode);
+  const transport = readProviderTransport(raw);
   const sourceProvider = providerId?.trim().toLowerCase() ?? "";
   if (sourceProvider === "openai-codex") {
     return "openai-chatgpt-responses";
@@ -253,9 +274,10 @@ export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | un
   return (
     normalizeOptionalString(raw.key_env) ??
     normalizeOptionalString(raw.api_key_env) ??
+    normalizeOptionalString(raw.keyEnv) ??
     normalizeOptionalString(raw.apiKeyEnv) ??
     normalizeOptionalString(raw.env) ??
-    readEnvReference(raw.api_key)
+    readEnvReference(raw.api_key ?? raw.apiKey)
   );
 }
 
@@ -275,7 +297,9 @@ export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefi
 
 function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {
   const contextWindow =
-    readPositiveNumber(raw.context_length) ?? readPositiveNumber(raw.contextWindow);
+    readPositiveNumber(raw.context_length) ??
+    readPositiveNumber(raw.contextLength) ??
+    readPositiveNumber(raw.contextWindow);
   const maxTokens =
     readPositiveNumber(raw.max_tokens) ??
     readPositiveNumber(raw.max_output_tokens) ??
@@ -291,10 +315,22 @@ function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig
 export function collectProviderModels(raw: Record<string, unknown>): HermesModelConfig[] {
   const models = new Map<string, HermesModelConfig>();
   const rootMetadata = readModelMetadata(raw);
-  for (const modelId of readStringArray(raw.models)) {
-    models.set(modelId, { id: modelId, ...rootMetadata });
-  }
-  for (const [modelId, metadata] of Object.entries(childRecord(raw, "models"))) {
+  const entries = Array.isArray(raw.models)
+    ? raw.models.map((model) =>
+        isRecord(model)
+          ? ([
+              normalizeOptionalString(model.id) ?? normalizeOptionalString(model.name),
+              model,
+            ] as const)
+          : ([normalizeOptionalString(model), {}] as const),
+      )
+    : Object.entries(childRecord(raw, "models")).filter(
+        ([id]) => !["__discovered_model_catalog__", "__explicit_model_allowlist__"].includes(id),
+      );
+  for (const [modelId, metadata] of entries) {
+    if (!modelId) {
+      continue;
+    }
     models.set(modelId, {
       id: modelId,
       ...rootMetadata,
@@ -302,7 +338,7 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
     });
   }
   for (const modelId of [
-    normalizeOptionalString(raw.default_model),
+    normalizeOptionalString(raw.default_model) ?? normalizeOptionalString(raw.defaultModel),
     normalizeOptionalString(raw.default),
     normalizeOptionalString(raw.model),
   ]) {

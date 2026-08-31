@@ -119,15 +119,31 @@ export async function beginDoctorMaintenance(params: {
   await assertDoctorMaintenanceSchemasCompatible(env);
   let stopped: PreManagedServiceStop | undefined;
   const coordinators: Array<{ release(): void }> = [];
+  let repairStoresMayBeOpen = false;
   const release = async () => {
-    for (const coordinator of coordinators.splice(0).toReversed()) {
-      coordinator.release();
-    }
-    const recovery = stopped?.windowsTaskAutoStartRecovery;
     try {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
+      if (repairStoresMayBeOpen) {
+        repairStoresMayBeOpen = false;
+        const [{ closeOpenClawAgentDatabases }, { closeOpenClawStateDatabaseByPath }] =
+          await Promise.all([
+            import("../state/openclaw-agent-db.js"),
+            import("../state/openclaw-state-db.js"),
+          ]);
+        // Agent handles release leases through shared state. Close them before
+        // handing off the coordinators, or the restarted Gateway sees Doctor as a writer.
+        closeOpenClawAgentDatabases();
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+      }
     } finally {
-      recovery?.complete();
+      for (const coordinator of coordinators.splice(0).toReversed()) {
+        coordinator.release();
+      }
+      const recovery = stopped?.windowsTaskAutoStartRecovery;
+      try {
+        await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
+      } finally {
+        recovery?.complete();
+      }
     }
   };
   try {
@@ -174,6 +190,7 @@ export async function beginDoctorMaintenance(params: {
     // individual migrations acquire their own in-tree locks under this scope.
     coordinators.push(acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 250 }));
     coordinators.push(acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 }));
+    repairStoresMayBeOpen = true;
   } catch (error) {
     await release();
     throw new Error(

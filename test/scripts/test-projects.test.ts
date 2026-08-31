@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -66,6 +67,11 @@ describe("test runtime prerequisites", () => {
     ["ordinary CLI unit test", ["src/cli/command-path-policy.test.ts"], undefined],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
+    [
+      "Windows cron process identity",
+      ["src/gateway/gateway-cron-process-identity.windows.test.ts"],
+      "runtime",
+    ],
     ["Gateway directory", ["src/gateway"], "runtime"],
     ["Gateway core config", ["test/vitest/vitest.gateway-core.config.ts"], "runtime"],
     ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],
@@ -3673,6 +3679,57 @@ describe("test selector native source facts", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it.each([
+    { label: "null", includePatterns: null },
+    { label: "empty", includePatterns: [] },
+  ])("retains whole-config costs for $label selection", ({ includePatterns }) => {
+    const whole = { config: "test/vitest/vitest.gateway.config.ts", includePatterns };
+    const selected = {
+      config: "test/vitest/vitest.tooling.config.ts",
+      includePatterns: ["test/scripts/run-with-env.test.ts"],
+    };
+
+    expect(orderFullSuiteSpecsForParallelRun([selected, whole])).toEqual([whole, selected]);
+  });
+
+  it("prioritizes expensive selected files over whole-config defaults", () => {
+    const tooling = {
+      config: "test/vitest/vitest.tooling.config.ts",
+      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
+    };
+    const runtime = {
+      config: "test/vitest/vitest.runtime-config.config.ts",
+      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
+    };
+
+    expect(orderFullSuiteSpecsForParallelRun([runtime, tooling])).toEqual([tooling, runtime]);
+  });
+
+  it("uses observed selection timings without substituting a whole-config sample", () => {
+    const fastTooling = {
+      config: "test/vitest/vitest.tooling.config.ts",
+      includePatterns: ["test/scripts/run-with-env.test.ts"],
+    };
+    const slowTooling = {
+      config: fastTooling.config,
+      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
+    };
+    const runtime = {
+      config: "test/vitest/vitest.runtime-config.config.ts",
+      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
+    };
+    const timings = new Map([
+      [fastTooling.config, 1_000_000],
+      [resolveShardTimingKey(fastTooling), 500],
+      [resolveShardTimingKey(slowTooling), 153_000],
+      [resolveShardTimingKey(runtime), 35_000],
+    ]);
+
+    expect(orderFullSuiteSpecsForParallelRun([fastTooling, slowTooling, runtime], timings)).toEqual(
+      [slowTooling, fastTooling, runtime],
+    );
+  });
+
   it("interleaves heavy and light configs for cold parallel full-suite runs", () => {
     const specs = [
       "test/vitest/vitest.gateway.config.ts",

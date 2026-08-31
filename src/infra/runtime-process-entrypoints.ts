@@ -12,6 +12,16 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../state/openclaw-database-verify.worker",
     distWorkerPath: "state/openclaw-database-verify.worker.js",
   },
+  sessionTranscriptArchive: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-archive.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-archive.worker.js",
+  },
+  sessionTranscriptReconcile: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-transcript-reconcile.worker",
+    distWorkerPath: "config/sessions/session-transcript-reconcile.worker.js",
+  },
   tailscaleRouteOwner: {
     currentModuleUrl,
     sourceWorkerName: "tailscale-route-owner.worker",

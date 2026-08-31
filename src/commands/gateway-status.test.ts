@@ -313,7 +313,7 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
 async function runGatewayStatus(
   runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
   opts: {
-    timeout: string;
+    timeout?: string;
     json?: boolean;
     port?: unknown;
     url?: string;
@@ -361,6 +361,18 @@ function requireUnresolvedSecretRefWarning(runtimeLogs: string[]) {
 describe("gateway-status command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(["", "   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
+    const { runtime } = createRuntimeCapture();
+
+    await expect(runGatewayStatus(runtime, { timeout, json: true })).rejects.toThrow(
+      "Invalid --timeout",
+    );
+
+    expect(discoverGatewayBeacons).not.toHaveBeenCalled();
+    expect(startSshPortForward).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
   });
 
   it("prints human output by default", async () => {
@@ -1060,20 +1072,26 @@ describe("gateway-status command", () => {
     expect(tlsWarning?.message).toContain("gateway tls: failed to load cert");
   });
 
-  it("passes the full caller timeout through to local loopback probes", async () => {
-    const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
+  it.each([
+    { timeout: undefined, expected: 3000 },
+    { timeout: "15000", expected: 15_000 },
+  ])(
+    "passes timeout $timeout through to local loopback probes as $expected ms",
+    async ({ timeout, expected }) => {
+      const { runtime } = createRuntimeCapture();
+      probeGateway.mockClear();
+      readBestEffortConfig.mockResolvedValueOnce({
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "ltok" },
+        },
+      } as never);
 
-    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+      await runGatewayStatus(runtime, { timeout, json: true });
 
-    expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(15_000);
-  });
+      expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(expected);
+    },
+  );
 
   it("uses --port for the local loopback probe target", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();

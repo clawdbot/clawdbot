@@ -28,6 +28,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
+import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const freshMainTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -230,45 +231,7 @@ function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
 }
 
 function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
-  const files = [
-    "scripts/pr",
-    "scripts/watch-pr-ci.mjs",
-    "scripts/watch-pr-ci.mts",
-    "scripts/verify-pr-hosted-gates.mjs",
-    "scripts/verify-pr-hosted-gates.mts",
-    "scripts/lib/plain-gh.sh",
-    "scripts/lib/plain-gh.mjs",
-    "scripts/lib/direct-run.mjs",
-    "scripts/lib/record-shared.mjs",
-    "scripts/lib/tsx-cli-shim.mjs",
-    "scripts/lib/local-check-runtime.mts",
-    "scripts/tsx.mjs",
-    "scripts/pr-lib/worktree.sh",
-    "scripts/pr-lib/operation-lock.sh",
-    "scripts/pr-lib/process-group-runner.mjs",
-    "scripts/pr-lib/common.sh",
-    "scripts/pr-lib/changelog.sh",
-    "scripts/pr-lib/gates.sh",
-    "scripts/pr-lib/ci-dispatch.mjs",
-    "scripts/pr-lib/crabbox-gate-contract.mjs",
-    "scripts/pr-lib/crabbox-gate-plan.mts",
-    "scripts/pr-lib/crabbox-merge-bypass.mjs",
-    "scripts/pr-lib/crabbox-merge-bypass.sh",
-    "scripts/pr-lib/push.sh",
-    "scripts/pr-lib/review.sh",
-    "scripts/pr-lib/review-artifacts.mjs",
-    "scripts/pr-lib/prepare-core.sh",
-    "scripts/pr-lib/merge.sh",
-    "scripts/pr-lib/merge-outcome.sh",
-    "scripts/crabbox-untrusted-bootstrap.sh",
-    "scripts/pr-crabbox-gate-publisher.mjs",
-    ".github/workflows/pr-crabbox-gate-publisher.yml",
-  ];
-  for (const file of files) {
-    const target = join(repoDir, file);
-    mkdirSync(dirname(target), { recursive: true });
-    cpSync(join(repoRoot, file), target);
-  }
+  const wrapperSources = copyPrWrapperSources(repoDir);
   const cli = join(repoDir, "scripts/pr");
   chmodSync(cli, 0o755);
   const binDir = join(repoDir, "isolated-bin");
@@ -277,7 +240,7 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
     const resolved = execFileSync("which", [command], { encoding: "utf8", env }).trim();
     symlinkSync(resolved, join(binDir, command));
   }
-  return { binDir, cli };
+  return { binDir, cli, wrapperSources };
 }
 
 function createFreshMainTemplate() {
@@ -291,7 +254,7 @@ function createFreshMainTemplate() {
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(tmpDir, { recursive: true });
   const setupEnv = createPrFixtureEnv(homeDir, process.env.PATH ?? "");
-  const { binDir } = installPrCliFixture(repoDir, setupEnv);
+  const { binDir, wrapperSources } = installPrCliFixture(repoDir, setupEnv);
   const realGit = realpathSync(join(binDir, "git"));
   // Only these real tools are reachable. rg/pnpm are required by the CLI
   // preflight; these cases must stop before invoking either of them.
@@ -334,7 +297,7 @@ function createFreshMainTemplate() {
     join(repoDir, ".git/info/exclude"),
     "/.local/\n/.worktrees/\n/isolated-bin/\n/fixture-state/\n",
   );
-  git("add", "scripts", ".github");
+  git("add", "--", ...wrapperSources);
   git("commit", "-qm", "test: unmodified public PR wrapper fixture");
   const cachedMain = git("rev-parse", "HEAD");
   const canonicalTree = git("rev-parse", "HEAD^{tree}");
@@ -1812,7 +1775,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     "finishes native cleanup with $wrapper wrapper ($command, failure=$failure)",
     ({ wrapper, command, failure }) => {
       const repoDir = createRepo();
-      const { binDir, cli } = installPrCliFixture(repoDir);
+      const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
       const rg = writeFixtureFile(binDir, "rg", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
@@ -1842,7 +1805,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "validate_review_artifact_data() { :; }\n" +
           "merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; mark_pr_operation_side_effects_started; }\n",
       );
-      git("add", "scripts", ".github");
+      git("add", "--", ...wrapperSources);
       git("commit", "-qm", "test: native cleanup fixture");
       const preparedHead = git("rev-parse", "HEAD");
       const origin = tempDirs.make("openclaw-pr-cleanup-origin-");

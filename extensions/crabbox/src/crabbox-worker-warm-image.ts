@@ -577,7 +577,9 @@ export function createCrabboxWarmImageManager(dependencies: {
                 context.id,
                 "--mode",
                 "native",
-                "--wait=false",
+                // Crabbox owns pending capture recovery; wait for the exact checkpoint
+                // before enrollment. The command deadline still bounds the whole operation.
+                "--wait",
                 "--json",
                 // Daytona requires explicit permission to stop the scrubbed source for capture.
                 ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
