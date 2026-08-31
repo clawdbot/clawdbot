@@ -2992,6 +2992,15 @@ describe("feishuPlugin actions", () => {
     expect(details.messageId).toBe("om_pin");
   });
 
+  it("advertises delete with its bot-owned limit in the message tool hint", () => {
+    const hints = feishuPlugin.agentPrompt
+      ?.messageToolHints?.({ cfg, accountId: undefined })
+      ?.join("\n");
+    expect(hints).toContain("`delete`");
+    expect(hints).toContain("this bot sent");
+    expect(getDescribedActions(cfg)).toContain("delete");
+  });
+
   it("deletes messages", async () => {
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_delete",

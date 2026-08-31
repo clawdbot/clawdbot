@@ -1095,7 +1095,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           return [
             "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
             "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-            "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+            "- Feishu supports `send`, `read`, `edit`, `delete`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+            ...(actions?.includes("delete")
+              ? [
+                  "- Feishu `action=delete`: recalls a message this bot sent (`messageId` required). Only the configured app's own messages can be deleted; other senders are refused before any recall.",
+                ]
+              : []),
             ...(actions?.includes("sticker")
               ? [
                   "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker upload is not supported.",
