@@ -31,8 +31,8 @@ prompt refers to the background service for the selected profile; it does not me
 CLI is missing. The dashboard needs a running Gateway, which can also run in a terminal.
 
 A newer database schema warning means this build cannot read the existing state. Use a
-compatible build with that state, or a separate profile for a fresh setup. Installing the
-background service does not resolve a database version mismatch. See
+compatible build with that state. To start fresh, point `OPENCLAW_STATE_DIR` at a separate
+directory. Installing the background service does not resolve a database version mismatch. See
 [database compatibility](/reference/database-schemas#troubleshooting).
 
 ## Machine-readable output

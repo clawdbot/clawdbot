@@ -45,7 +45,7 @@ export function createNewerSqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
-      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, use a separate profile or OPENCLAW_STATE_DIR.\n` +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, point OPENCLAW_STATE_DIR at a separate directory.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }
