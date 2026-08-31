@@ -34,23 +34,30 @@ function jsonValuesEqual(left: object, right: object): boolean {
   );
 }
 
-function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  // Instructions are rebuilt and sent on every request; exclude them from
-  // history matching. `tools` gets the same exclusion: the agent's available
-  // tool list legitimately varies turn to turn (tool-search activation,
-  // session-scoped gating, MCP servers connecting/disconnecting), and the
-  // official Responses API accepts previous_response_id after that list
-  // changes -- confirmed live in
-  // openai-responses-client.continuation-tools-change.live.test.ts. Comparing
-  // `tools` here would just turn an ordinary tool-list change into a
-  // permanent `request_changed` false positive.
+function requestWithoutInput(
+  request: ResponsesContinuationRequest,
+  options: { excludeTools: boolean },
+): ResponsesContinuationRequest {
+  // Instructions are rebuilt and sent on every request; exclude them from history matching.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
     instructions: _instructions,
-    tools: _tools,
     ...rest
   } = request;
+  // `tools` gets the same treatment, but only where it's proven: the agent's
+  // available tool list legitimately varies turn to turn, and the official
+  // Responses API accepts previous_response_id after that list changes --
+  // confirmed live, over HTTP, in
+  // openai-responses-client.continuation-tools-change.live.test.ts. That
+  // proof doesn't cover the WebSocket transport, which shares this resolver
+  // and has its own test asserting a tool-schema change resets continuation
+  // (openai-responses-websocket.test.ts, "resets continuation on tool schema
+  // change") -- so the exclusion is HTTP-only until WS gets equivalent live
+  // proof (tracked as a follow-up, not assumed safe by inheritance).
+  if (options.excludeTools) {
+    delete rest.tools;
+  }
   if (!isRecord(rest.metadata)) {
     return rest;
   }
@@ -95,6 +102,10 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
+  // Required, not defaulted: forces every caller (HTTP, WebSocket, and any
+  // future transport) to state its own proof status for the `tools`
+  // exclusion instead of silently inheriting one. See requestWithoutInput.
+  options: { excludeTools: boolean },
 ): { request: ResponsesContinuationRequest; continuationStatus: ResponsesContinuationStatus } {
   if (!continuation) {
     return { request, continuationStatus: "no_previous_response" };
@@ -103,7 +114,10 @@ export function resolveResponsesContinuationRequest(
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
   if (
-    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
+    !jsonValuesEqual(
+      requestWithoutInput(request, options),
+      requestWithoutInput(continuation.lastRequest, options),
+    )
   ) {
     return { request, continuationStatus: "request_changed" };
   }
@@ -189,6 +203,8 @@ export function claimOpenAIResponsesHttpContinuation(
   const wireRequest = resolveResponsesContinuationRequest(
     previous?.kind === "ready" ? previous.state : undefined,
     params.request,
+    // Proven live over HTTP -- see requestWithoutInput's comment.
+    { excludeTools: true },
   ).request;
   return {
     request: wireRequest,

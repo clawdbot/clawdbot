@@ -618,6 +618,9 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
           ],
         },
         request,
+        // This test builds a transport-agnostic request payload; it doesn't
+        // vary tools, so this flag doesn't affect the assertions.
+        { excludeTools: false },
       );
       expect(continuation.continuationStatus).toBe("continued");
       expect(continuation.request.input).toEqual([
@@ -638,6 +641,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
           lastResponseItems: [],
         },
         nextTurn,
+        { excludeTools: false },
       ).continuationStatus,
     ).toBe("history_changed");
   });
