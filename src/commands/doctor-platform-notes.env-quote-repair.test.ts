@@ -21,13 +21,12 @@ function makePrompter(accept: boolean): DoctorPrompter {
   return { confirmRuntimeRepair: vi.fn(async () => accept) } as unknown as DoctorPrompter;
 }
 
-async function seedCorruptedEnvFile(): Promise<{ env: NodeJS.ProcessEnv; envFilePath: string }> {
+async function seedCorruptedEnvFile(
+  label = "ai.openclaw.gateway",
+): Promise<{ env: NodeJS.ProcessEnv; envFilePath: string }> {
   tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-envfix-")));
   const env = { OPENCLAW_STATE_DIR: tmpDir } as NodeJS.ProcessEnv;
-  const envFilePath = resolveLaunchAgentEnvFilePath(
-    env as GatewayServiceEnv,
-    "ai.openclaw.gateway",
-  );
+  const envFilePath = resolveLaunchAgentEnvFilePath(env as GatewayServiceEnv, label);
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(
     envFilePath,
@@ -55,6 +54,26 @@ it("warns and repairs the corrupted env file when the operator accepts", async (
   const texts = noteFn.mock.calls.map(([text]) => String(text));
   expect(texts.some((text) => text.includes("AWS_REGION") && text.includes("#103804"))).toBe(true);
   expect(texts.some((text) => text.includes("Rewrote 1 value(s)"))).toBe(true);
+  expect(texts.some((text) => text.includes("openclaw gateway restart"))).toBe(true);
+  expect(await fs.readFile(envFilePath, "utf8")).toContain("export AWS_REGION='us-east-1'");
+});
+
+it("names the node restart command after repairing the node service env file", async () => {
+  const { env, envFilePath } = await seedCorruptedEnvFile("ai.openclaw.node");
+  const noteFn = vi.fn();
+
+  await maybeRepairMacGatewayServiceEnvQuotes({
+    prompter: makePrompter(true),
+    platform: "darwin",
+    env,
+    noteFn,
+  });
+
+  const texts = noteFn.mock.calls.map(([text]) => String(text));
+  expect(texts.some((text) => text.includes("Rewrote 1 value(s)"))).toBe(true);
+  // A gateway restart does not reload the node LaunchAgent env file.
+  expect(texts.some((text) => text.includes("openclaw node restart"))).toBe(true);
+  expect(texts.some((text) => text.includes("openclaw gateway restart"))).toBe(false);
   expect(await fs.readFile(envFilePath, "utf8")).toContain("export AWS_REGION='us-east-1'");
 });
 

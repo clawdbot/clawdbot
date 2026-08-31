@@ -247,8 +247,14 @@ export async function maybeRepairMacGatewayServiceEnvQuotes(params: {
   }
   const env = params.env ?? process.env;
   const noteFn = params.noteFn ?? note;
-  const labels = [...new Set([resolveLaunchAgentLabel(env), resolveNodeLaunchAgentLabel()])];
+  const nodeLabel = resolveNodeLaunchAgentLabel();
+  const labels = [...new Set([resolveLaunchAgentLabel(env), nodeLabel])];
   for (const label of labels) {
+    // A repaired node LaunchAgent is reloaded by `openclaw node restart`;
+    // a gateway restart leaves the node process on the corrupted values.
+    const restartCommand =
+      label === nodeLabel ? "openclaw node restart" : "openclaw gateway restart";
+    const serviceName = label === nodeLabel ? "node" : "gateway";
     const detected = await detectLaunchAgentEnvFileJsonQuoteKeys(env, label).catch(() => null);
     if (!detected) {
       continue;
@@ -285,7 +291,7 @@ export async function maybeRepairMacGatewayServiceEnvQuotes(params: {
     noteFn(
       [
         `Rewrote ${repaired.healedKeys.length} value(s) (${repaired.healedKeys.join(", ")}).`,
-        `Restart the gateway service (${formatCliCommand("openclaw gateway restart")}) so the healed values take effect.`,
+        `Restart the ${serviceName} service (${formatCliCommand(restartCommand)}) so the healed values take effect.`,
         ...(inheritedCorruptKeys.length > 0
           ? [
               `This shell still carries the corrupted value(s) for ${inheritedCorruptKeys.join(", ")}; start a fresh shell before reinstalling the service or they will be persisted again.`,
