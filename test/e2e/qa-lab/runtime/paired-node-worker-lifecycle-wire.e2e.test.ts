@@ -297,6 +297,12 @@ describe("paired node worker lifecycle wire", () => {
         // An offline runner fails before handoff, leaves the active placement retryable, and
         // does not terminalize the independent local session.
         await workerNode.disconnect();
+        // Client socket closure precedes the Gateway's lifecycle-dispatch drain.
+        // Admit the offline turn only after the server has retired this connection.
+        await vi.waitFor(
+          async () => expect(await readNode(operator, nodeId)).toMatchObject({ connected: false }),
+          { timeout: 30_000, interval: 100 },
+        );
         const offlineRunId = await startTurn({
           operator,
           key: repairedKey,
