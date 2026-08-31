@@ -98,8 +98,26 @@ describe("cross-OS release checks workflow", () => {
 
   it("bounds npm baseline packing during prepare", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
+    const baseline = step(job(workflow, "prepare"), "Resolve baseline package spec");
     const baselineMetadata = step(job(workflow, "prepare"), "Capture baseline metadata");
 
+    expect(workflow.on?.workflow_dispatch?.inputs?.target_context_ref).toMatchObject({
+      default: "",
+      required: false,
+    });
+    expect(workflow.on?.workflow_call?.inputs?.target_context_ref).toMatchObject({
+      default: "",
+      required: false,
+    });
+    expect(baseline.env).toMatchObject({
+      CANDIDATE_JSON: "${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json",
+      INPUT_TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+    });
+    expect(baseline.run).toContain('"$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"*');
+    expect(baseline.run).toContain("npm view openclaw versions --json");
+    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
+    expect(baseline.run).toContain('--target-context-ref "$INPUT_TARGET_CONTEXT_REF"');
+    expect(baseline.run).toContain('BASELINE_VERSION="$(npm view openclaw@latest version)"');
     expect(readFileSync(WORKFLOW_PATH, "utf8")).toContain(
       "timeout --preserve-status 300s npm pack --ignore-scripts",
     );
@@ -236,6 +254,7 @@ describe("cross-OS release checks workflow", () => {
       candidate_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       prepublish_plugin_registry_json:
         "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
+      target_context_ref: "${{ inputs.target_context_ref }}",
     });
     expect(crossOs.with?.required_companion_packages_json).toBeUndefined();
 
