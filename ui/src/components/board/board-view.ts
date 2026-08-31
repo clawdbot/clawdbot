@@ -16,6 +16,7 @@ import {
   resize,
   type BoardGridDirection,
   type BoardGridItem,
+  type BoardGridRect,
 } from "../../lib/board/grid.ts";
 import type { BoardOp, BoardSnapshot, BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type {
@@ -40,6 +41,7 @@ type BoardPointerGesture = {
   originH: number;
   pointerId: number;
   items: BoardGridItem[];
+  rects: BoardGridRect[];
 };
 
 function orderedTabs(snapshot: BoardSnapshot): BoardTab[] {
@@ -337,6 +339,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       ),
       pointerId: event.pointerId,
       items,
+      rects: layout(items),
     };
     this.previewItems = items;
     this.gestureName = widget.name;
@@ -384,7 +387,10 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         1,
         (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
       );
-      const targetCell = {
+      const targetName = pointerElement?.closest<
+        HTMLElementTagNameMap["openclaw-board-widget-cell"]
+      >("openclaw-board-widget-cell")?.widget?.name;
+      const targetCell = gesture.rects.find((rect) => rect.name === targetName) ?? {
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
       };

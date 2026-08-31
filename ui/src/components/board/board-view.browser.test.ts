@@ -142,6 +142,26 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(firstBounds.top).toBeGreaterThanOrEqual(secondBounds.bottom + BOARD_GRID_GAP - 1);
   });
 
+  it("maps narrow pointer drops from the visible card target", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount(applyOps);
+    view.style.width = "354px";
+    const widgets = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
+    const firstBounds = widgets[0]!.getBoundingClientRect();
+    const secondHandle = widgets[1]!.querySelector<HTMLElement>(".board-widget__drag-handle")!;
+    const secondBounds = secondHandle.getBoundingClientRect();
+    const targetX = firstBounds.right - 4;
+    const targetY = firstBounds.top + firstBounds.height / 2;
+
+    pointer(secondHandle, "pointerdown", 37, secondBounds.left, secondBounds.top);
+    pointer(window, "pointermove", 37, targetX, targetY);
+    pointer(window, "pointerup", 37, targetX, targetY);
+
+    await vi.waitFor(() =>
+      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
+    );
+  });
+
   it("hides widget chrome by default on fine-pointer devices", async () => {
     const view = await mount();
     const bar = view.querySelector<HTMLElement>(".board-widget__bar");
