@@ -6,7 +6,7 @@ extensions/acpx/src/codex-trust-config.ts	1
 extensions/acpx/src/config.ts	1
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
 extensions/acpx/src/process-lease.ts	3
-extensions/acpx/src/runtime.ts	15
+extensions/acpx/src/runtime.ts	13
 extensions/acpx/src/service.ts	2
 extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	4

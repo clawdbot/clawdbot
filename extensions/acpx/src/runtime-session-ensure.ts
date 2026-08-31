@@ -49,6 +49,7 @@ function isRequestedResumeTargetNotFound(value: unknown, resumeSessionId: string
   if (!value || typeof value !== "object") {
     return false;
   }
+  // SAFETY: the guard above narrows value to a non-null record; all fields stay optional.
   const record = value as {
     code?: unknown;
     data?: unknown;
@@ -57,10 +58,11 @@ function isRequestedResumeTargetNotFound(value: unknown, resumeSessionId: string
   if (record.code !== -32002) {
     return false;
   }
-  const resourceUri =
-    record.data && typeof record.data === "object"
-      ? (record.data as { uri?: unknown }).uri
-      : undefined;
+  let resourceUri: unknown;
+  if (record.data && typeof record.data === "object") {
+    // SAFETY: the guard narrows data to a non-null record; uri remains optional and unknown.
+    resourceUri = (record.data as { uri?: unknown }).uri;
+  }
   return (
     resourceUri === resumeSessionId || record.message === `Resource not found: ${resumeSessionId}`
   );
@@ -104,14 +106,17 @@ export function prepareResumeSafeSessionInput(params: {
 }
 
 export function withAcpxSessionOptions(input: RuntimeEnsureInput): DelegateEnsureInput {
+  // SAFETY: Acpx accepts sessionOptions as an optional pass-through field on ensureSession input.
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
   const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
   const { modelExplicit: _modelExplicit, ...rest } = input;
-  return {
+  const delegateInput = {
     ...rest,
     ...(sessionOptions ? { sessionOptions } : {}),
-  } as DelegateEnsureInput;
+  };
+  // SAFETY: after removing OpenClaw-only modelExplicit, the object matches Acpx ensureSession input.
+  return delegateInput as DelegateEnsureInput;
 }
 
 // ACPX owns the distinction between missing model capability and an invalid model id.
@@ -136,13 +141,15 @@ export function withSessionResumeCapability<T extends object>(
   handle: T,
   record: unknown,
 ): T & { sessionResumeSupported?: boolean } {
-  const agentCapabilities =
-    typeof record === "object" && record !== null
-      ? (record as { agentCapabilities?: unknown }).agentCapabilities
-      : undefined;
+  let agentCapabilities: unknown;
+  if (typeof record === "object" && record !== null) {
+    // SAFETY: the guard narrows record to a non-null object; the capability field remains optional.
+    agentCapabilities = (record as { agentCapabilities?: unknown }).agentCapabilities;
+  }
   if (typeof agentCapabilities !== "object" || agentCapabilities === null) {
     return handle;
   }
+  // SAFETY: the guard narrows capabilities to a non-null record; nested fields remain optional.
   const capabilities = agentCapabilities as {
     loadSession?: unknown;
     sessionCapabilities?: { resume?: unknown } | null;
