@@ -282,6 +282,14 @@ describe("createUserTurnTranscriptRecorder", () => {
   it("freezes managed delivery receipts once approved input is staged", async () => {
     const dir = tempDirs.make("openclaw-user-turn-managed-delivery-staged-");
     const target = createSqliteTranscriptTarget({ dir });
+    await replaceSessionEntry(
+      {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      },
+      { sessionId: target.sessionId, updatedAt: 1 },
+    );
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "managed completion",
