@@ -717,8 +717,8 @@ returns `{"ok":true,"status":"live"}` and `GET /readyz` returns
 
 ### Verified hardware
 
-| Board | SoC | Result |
-|---|---|---|
+| Board            | SoC                   | Result                                                    |
+| ---------------- | --------------------- | --------------------------------------------------------- |
 | Banana Pi BPI-F3 | SpaceMiT K1 (riscv64) | Gateway starts and serves `/healthz` + `/readyz` natively |
 
 ## Troubleshooting
