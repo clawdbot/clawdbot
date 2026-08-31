@@ -52,6 +52,7 @@ export const failoverRetryExpectations = {
   "patterns-context-llamacpp-available": false,
   "patterns-context-llamacpp-no-the": false,
   "patterns-context-llamacpp-prompt": false,
+  "patterns-context-llamacpp-size-exceeded": false,
   "patterns-context-ds4": false,
   "structured-context-raw-invalid-request": false,
   "structured-context-typed-invalid-request": false,
