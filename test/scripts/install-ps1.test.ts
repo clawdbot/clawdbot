@@ -67,10 +67,23 @@ function createFailingNodeFixture(source: string): string {
   ].join("\n");
 }
 
-function createDeferredPathSuccessFixture(source: string): string {
+function createMissingPathFailureFixture(source: string, catchFailure = false): string {
   const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
   const entrypointLines = extractEntrypointLines(source);
   expect(scriptWithoutEntryPoint).not.toBe(source);
+
+  const entrypoint = catchFailure
+    ? [
+        "$caught = $false",
+        "try {",
+        ...entrypointLines.map((line) => `  ${line}`),
+        "} catch {",
+        "  if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 1.') { throw }",
+        "  $caught = $true",
+        "}",
+        "if (-not $caught) { throw 'Missing PATH did not fail the install' }",
+      ]
+    : entrypointLines;
 
   return [
     scriptWithoutEntryPoint,
@@ -84,7 +97,7 @@ function createDeferredPathSuccessFixture(source: string): string {
     "function Ensure-OpenClawOnPath { return $false }",
     "$NoOnboard = $true",
     "",
-    ...entrypointLines,
+    ...entrypoint,
     "",
   ].join("\n");
 }
@@ -686,8 +699,8 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
-        name: "scriptblock-deferred-path-success",
-        source: createDeferredPathSuccessFixture(source),
+        name: "scriptblock-missing-path-failure",
+        source: createMissingPathFailureFixture(source, true),
       },
       {
         name: "noisy-git-failure",
@@ -1756,12 +1769,12 @@ try {
   });
 
   runConcurrentIfPowerShell(
-    "exits zero after install succeeds with deferred PATH discovery",
+    "exits non-zero when the installed command is not on PATH",
     async () => {
       const tempDir = mkdtempSync(join(tmpdir(), "openclaw-install-ps1-"));
       const scriptPath = join(tempDir, "install.ps1");
       try {
-        writeFileSync(scriptPath, createDeferredPathSuccessFixture(source));
+        writeFileSync(scriptPath, createMissingPathFailureFixture(source));
         chmodSync(scriptPath, 0o755);
 
         const result = await runPowerShellAsync([
@@ -1773,8 +1786,10 @@ try {
           scriptPath,
         ]);
 
-        expect(result.status).toBe(0);
-        expect(`${result.stdout}\n${result.stderr}`).not.toContain("installation failed");
+        expect(result.status).toBe(1);
+        expect(`${result.stdout}\n${result.stderr}`).toContain(
+          "OpenClaw was installed, but its command is not on PATH",
+        );
       } finally {
         rmSync(tempDir, { force: true, recursive: true });
       }
@@ -1785,8 +1800,8 @@ try {
     expectBatchedPowerShellCase("scriptblock-failure");
   });
 
-  runIfPowerShell("accepts deferred PATH discovery when run as a scriptblock", () => {
-    expectBatchedPowerShellCase("scriptblock-deferred-path-success");
+  runIfPowerShell("fails missing PATH discovery when run as a scriptblock", () => {
+    expectBatchedPowerShellCase("scriptblock-missing-path-failure");
   });
 
   runIfPowerShell("treats noisy Git install false as failure", () => {

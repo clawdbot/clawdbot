@@ -2173,8 +2173,9 @@ function Main {
     }
 
     if (-not (Ensure-OpenClawOnPath)) {
-        Write-Host "Install completed, but OpenClaw is not on PATH yet." -ForegroundColor Yellow
+        Write-Host "OpenClaw was installed, but its command is not on PATH." -ForegroundColor Yellow
         Write-Host "Open a new terminal, then run: openclaw doctor" -ForegroundColor Cyan
+        Fail-Install
         return
     }
 
