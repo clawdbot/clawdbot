@@ -35,8 +35,14 @@ export {
   isRawApiErrorPayload,
 } from "./failover/user-copy.js";
 export {
+  ERROR_ICON_PREFIX_RE,
+  ERROR_ICON_PREFIX_TOKEN_RE,
+  ERROR_TEXT_PREFIX_RE,
   formatRawAssistantErrorForUi,
+  formatWebUiIconErrorText,
+  normalizeErrorComparisonText,
   parseApiErrorInfo,
+  stripErrorIconPrefix,
 } from "../shared/assistant-error-format.js";
 export {
   classifyFailoverReason,

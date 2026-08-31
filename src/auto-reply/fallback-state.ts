@@ -1,6 +1,7 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { ERROR_ICON_PREFIX_RE } from "../shared/assistant-error-format.js";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,7 +42,7 @@ function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): str
     return undefined;
   }
   const formatted = formatRawAssistantErrorForUi(rawError)
-    .replace(/^⚠️\s*/, "")
+    .replace(ERROR_ICON_PREFIX_RE, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!formatted || /unknown error/i.test(formatted)) {
