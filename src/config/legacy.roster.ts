@@ -127,10 +127,14 @@ export function migratePersistedImplicitMainRoster(
   const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
   let changed = convertedLegacyList;
   if (legacyDefaultAgentId) {
+    // Retiring the `default: true` marker (below) must not drop the agent's workspace.
+    // Pin the workspace by default so every read path (load, snapshot, validation) keeps
+    // the legacy default agent resolving to agents.defaults.workspace instead of falling
+    // through to `<workspace>/<agentId>`. Callers may still opt out with materializeWorkspace: false.
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
       legacyDefaultAgentId,
-      options,
+      { ...options, materializeWorkspace: options.materializeWorkspace ?? true },
     );
     nextRoot = materialized.config as Record<string, unknown>;
     insertedPaths = materialized.insertedPaths;

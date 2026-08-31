@@ -32,6 +32,34 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it("pins the legacy default agent's workspace on load so it keeps resolving to defaults.workspace", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { workspace: "/data/team-workspace" },
+            entries: {
+              main: { default: true },
+              voice: { workspace: "/data/team-workspace" },
+            },
+          },
+        }),
+      );
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      // The retired `default: true` marker is stripped, but the workspace must be pinned
+      // to defaults.workspace so the agent does not silently move to `<workspace>/main`
+      // (blank persona + empty memory) on upgrade.
+      expect(snapshot.sourceConfig.agents?.entries?.main?.workspace).toBe("/data/team-workspace");
+      expect(snapshot.sourceConfig.agents?.entries?.main?.default).toBeUndefined();
+    });
+  });
+
   it("retains include-resolved roster provenance before migration", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
