@@ -821,87 +821,108 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 describe("upgrade survivor assertions", () => {
   it.each([
     {
-      name: "default-only export",
+      name: "legacy default-only doctor export",
+      sdkPath: "runtime-doctor",
       declaresTypes: false,
       runtime: 'throw new Error("undeclared SDK must not be imported");\n',
       failure: undefined,
     },
     {
       name: "declared constructor missing at runtime",
+      sdkPath: "runtime-doctor",
       declaresTypes: true,
       runtime: "export {};\n",
       failure: "declared a keyed store constructor but did not export it",
     },
     {
       name: "declared SDK import failure",
+      sdkPath: "runtime-doctor",
       declaresTypes: true,
       runtime: 'throw new Error("synthetic SDK import failure");\n',
       failure: "synthetic SDK import failure",
     },
-  ])("classifies baseline shared state for $name", ({ declaresTypes, runtime, failure }) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
-    try {
-      const packageRoot = join(root, "package");
-      const stateDir = join(root, "state");
-      const version = "1.0.0";
-      mkdirSync(packageRoot);
-      mkdirSync(stateDir);
-      writeJson(join(packageRoot, "package.json"), {
-        name: "openclaw",
-        version,
-        type: "module",
-        exports: {
-          "./plugin-sdk/runtime-doctor": {
-            ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
-            default: "./runtime-doctor.js",
-          },
-        },
-      });
-      // An undeclared sibling file must not become a guessed declaration fallback.
-      writeFileSync(
-        join(packageRoot, "runtime-doctor.d.ts"),
-        "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
-      );
-      writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
-      const baselinePath = join(stateDir, "survivor-baseline.json");
-      writeJson(baselinePath, { marker: "existing fixture" });
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
-          "seed-baseline-plugin-state",
-          packageRoot,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
-          },
-        },
-      );
-      const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-      if (failure) {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(failure);
-        expect(baseline).toEqual({ marker: "existing fixture" });
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(baseline).toEqual({
-          marker: "existing fixture",
-          sharedState: {
-            status: "not-applicable",
-            packageVersion: version,
-            reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+    {
+      name: "dedicated default-only store export missing its constructor",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime: "export {};\n",
+      failure: "declared a keyed store constructor but did not export it",
+    },
+    {
+      name: "dedicated default-only store constructor failure",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime:
+        'export function createPluginStateSyncKeyedStore() { throw new Error("synthetic store failure"); }\n',
+      failure: "synthetic store failure",
+    },
+  ])(
+    "classifies baseline shared state for $name",
+    ({ sdkPath, declaresTypes, runtime, failure }) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
+      try {
+        const packageRoot = join(root, "package");
+        const stateDir = join(root, "state");
+        const version = "1.0.0";
+        mkdirSync(packageRoot);
+        mkdirSync(stateDir);
+        writeJson(join(packageRoot, "package.json"), {
+          name: "openclaw",
+          version,
+          type: "module",
+          exports: {
+            [`./plugin-sdk/${sdkPath}`]: {
+              ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
+              default: "./runtime-doctor.js",
+            },
           },
         });
-        expect(result.stdout).toContain("not-applicable");
+        // An undeclared sibling file must not become a guessed declaration fallback.
+        writeFileSync(
+          join(packageRoot, "runtime-doctor.d.ts"),
+          "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
+        );
+        writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
+        const baselinePath = join(stateDir, "survivor-baseline.json");
+        writeJson(baselinePath, { marker: "existing fixture" });
+        const result = spawnSync(
+          process.execPath,
+          [
+            "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
+            "seed-baseline-plugin-state",
+            packageRoot,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+            },
+          },
+        );
+        const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+        if (failure) {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(failure);
+          expect(baseline).toEqual({ marker: "existing fixture" });
+        } else {
+          expect(result.status, result.stderr).toBe(0);
+          expect(baseline).toEqual({
+            marker: "existing fixture",
+            sharedState: {
+              status: "not-applicable",
+              packageVersion: version,
+              reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+            },
+          });
+          expect(result.stdout).toContain("not-applicable");
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
       }
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("verifies legacy auth import in the current shared owner without losing credentials or state", () => {
     const fixture = JSON.parse(
