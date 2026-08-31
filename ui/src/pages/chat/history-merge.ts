@@ -21,7 +21,6 @@ import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatState } from "./chat-state-contract.ts";
 
 const chatSessionProjections = new WeakMap<
   object,
@@ -265,7 +264,7 @@ export function selectChatInputDisplay(
 
 /** A custody or consumption receipt retires only an uncommitted local user source. */
 export function reconcileChatInputCustody(
-  owner: ChatState,
+  owner: ChatSessionProjectionOwner,
   page: ChatPendingInputsPage | undefined,
   receipts: ChatInputReceipts = [],
 ) {
