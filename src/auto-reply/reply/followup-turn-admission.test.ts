@@ -22,7 +22,7 @@ vi.mock("./agent-runner-auto-fallback.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runPreflightCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
+  runSessionCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -89,6 +89,8 @@ function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
 function createOperation(sessionId = "queued-session") {
   return {
     sessionId,
+    abortSignal: new AbortController().signal,
+    setPhase: vi.fn(),
     abortForRestart: vi.fn(() => true),
     retainFailureUntilComplete: vi.fn(),
     fail: vi.fn(),
@@ -121,12 +123,22 @@ beforeEach(() => {
 });
 
 describe("admitFollowupTurn", () => {
-  it("returns a closed deferral without adopting the queued source", async () => {
+  it("reports each active-run deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
+    const onDeferredHeartbeat = vi.fn();
+    const queued = createRun({
+      turnAdoptionLifecycle: { onAdopted: async () => {}, onDeferredHeartbeat },
+    });
 
-    await expect(
-      admitFollowupTurn({ queued: createRun(), defaults: createDefaults() }),
-    ).resolves.toEqual({ kind: "deferred", reason: "active-run" });
+    await expect(admitFollowupTurn({ queued, defaults: createDefaults() })).resolves.toEqual({
+      kind: "deferred",
+      reason: "active-run",
+    });
+    await expect(admitFollowupTurn({ queued, defaults: createDefaults() })).resolves.toEqual({
+      kind: "deferred",
+      reason: "active-run",
+    });
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(2);
     expect(state.admitLifecycle).not.toHaveBeenCalled();
   });
 

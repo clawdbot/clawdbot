@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -6,6 +7,11 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
+import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+} from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -18,10 +24,13 @@ import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
 } from "../../worker/worker-connection-contract.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
@@ -35,7 +44,6 @@ const MAX_ADMISSION_ATTEMPTS = 5;
 const ADMISSION_REARM_BACKOFF = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 };
 
 const RETRYABLE_TRANSPORT_CODES = new Set([
-  "AT_CAPACITY",
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -107,6 +115,47 @@ function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInpu
   return parseNodeWorkerLaunchInput(encoded);
 }
 
+function rearmNodeWorkerLaunchInput(
+  input: NodeWorkerLaunchInput,
+  attempt: number,
+): NodeWorkerLaunchInput {
+  const launchId = createHash("sha256")
+    .update(`${input.launchId}:admission-rearm:${attempt}`)
+    .digest("hex");
+  return {
+    ...input,
+    launchId,
+    descriptor: {
+      ...input.descriptor,
+      assignment: { ...input.descriptor.assignment, turnId: launchId },
+    },
+  };
+}
+
+export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
+  // the original plan; the registry bounds timeouts and always generates UUID request IDs.
+  return Math.max(
+    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+      Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: randomUUID(),
+            nodeId,
+            command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+            params: attempt,
+            timeoutMs: MAX_TIMER_TIMEOUT_MS,
+            idempotencyKey: attempt.launchId,
+          }),
+        ),
+        "utf8",
+      ),
+      measureWorkerProcessTurnBytes(attempt.descriptor),
+    ]),
+  );
+}
+
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
   if (input.launchId !== input.descriptor.assignment.turnId) {
     throw new Error("node worker launch ID must match the durable turn ID");
@@ -163,26 +212,6 @@ function signalError(signal: AbortSignal, fallback: string): Error {
   return signal.reason instanceof Error ? signal.reason : new Error(fallback);
 }
 
-function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(signalError(signal, "node worker operation aborted"));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signalError(signal, "node worker operation aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error("node worker operation failed"));
-      },
-    );
-  });
-}
-
 function createDeadline(params: {
   now: () => number;
   timeoutMs: number;
@@ -220,12 +249,11 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
     deviceId: string;
-    requireLaunchAvailability?: boolean;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
     try {
-      nodes = await raceWithSignal(params.transport.listCurrentNodes(), params.signal);
+      nodes = await raceNodeWorkerOperation(params.transport.listCurrentNodes(), params.signal);
     } catch (error) {
       if (params.signal.aborted) {
         throw error;
@@ -242,9 +270,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node is not currently connected",
       );
     }
-    if (params.requireLaunchAvailability && node.workerHost.capacity.available === 0) {
-      throw new NodeWorkerLaunchTransportError("AT_CAPACITY", "device worker capacity is full");
-    }
     return node;
   };
 
@@ -255,7 +280,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     payload: unknown;
-    requireLaunchAvailability?: boolean;
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
@@ -294,9 +318,18 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const node = await findNode({
         transport,
         deviceId: params.deviceId,
-        requireLaunchAvailability: params.requireLaunchAvailability,
         signal,
       });
+      if (
+        params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
+        node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION
+      ) {
+        throw new Error(
+          formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        );
+      }
+      // A retained environment already owns its slot. The node arbitrates new physical
+      // launches atomically; its advertised free-slot count cannot reject turn reuse.
       const operation = transport.invoke({
         node,
         command: params.command,
@@ -314,7 +347,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         isDispatchAuthorized: params.isAuthorized,
         ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
       });
-      const result = await raceWithSignal(operation, signal);
+      const result = await raceNodeWorkerOperation(operation, signal);
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
         if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
@@ -354,7 +387,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     if (remainingMs <= 0 || params.deadline.signal.aborted) {
       throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
     }
-    await raceWithSignal(
+    await raceNodeWorkerOperation(
       sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
       params.deadline.signal,
     );
@@ -415,7 +448,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
-    const originalLaunchId = input.launchId;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
     let admissionAttempts = 1;
@@ -435,7 +467,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     let dispatchReady = false;
     let pollStatus = false;
     let delayMs = pollIntervalMs;
-    let availabilityCode: string | undefined;
     const markDispatchReady = () => {
       mayHaveLaunched = true;
       if (!dispatchReady) {
@@ -459,7 +490,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            ...(!pollStatus ? { requireLaunchAvailability: true } : {}),
             isAuthorized: stableRequest.isDispatchAuthorized,
             deadline: attemptDeadline,
             ...(!pollStatus
@@ -501,19 +531,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                   delayMs: rearmDelayMs,
                   deadline,
                 });
-                const launchId = createHash("sha256")
-                  .update(`${originalLaunchId}:admission-rearm:${admissionAttempts++}`)
-                  .digest("hex");
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
-                input = {
-                  ...originalInput,
-                  launchId,
-                  descriptor: {
-                    ...originalInput.descriptor,
-                    assignment: { ...originalInput.descriptor.assignment, turnId: launchId },
-                  },
-                };
+                input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
                 expected = expectedIdentity(input);
                 pollStatus = false;
                 delayMs = pollIntervalMs;
@@ -538,7 +558,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           ) {
             throw error;
           }
-          availabilityCode = error.code;
           pollStatus = false;
         }
         delayMs = await waitBeforeRetry({
@@ -548,11 +567,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
     } catch (error) {
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
-        // Keep the latest discovery reason through the grace; a connected full
-        // node is retryable capacity, not an instruction to reconnect the device.
-        throw availabilityCode === "AT_CAPACITY"
-          ? new WorkerRunnerCapacityError()
-          : new WorkerRunnerUnavailableError();
+        throw new WorkerRunnerUnavailableError();
       }
       // The node authors this result only after its durable claim stayed absent.
       // Transport dispatch is therefore not launch ambiguity and needs no cancel.

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -25,7 +25,10 @@ function sha256(filePath: string): string {
 }
 
 function createTarball(archivePath: string, sourceDir: string, entries: string[]): void {
-  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries]);
+  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries], {
+    // The candidate packer runs in Linux; prevent macOS tar from adding AppleDouble files.
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+  });
 }
 
 function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
@@ -56,26 +59,13 @@ function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: b
     `${JSON.stringify({ name: "openclaw", version: PACKAGE_VERSION })}\n`,
   );
   writeFileSync(path.join(packageContents, "index.js"), "console.log('openclaw');\n");
-  const packageName = `openclaw-${PACKAGE_VERSION}.tgz`;
-  const packagePath = path.join(packageDir, packageName);
+  const packagePath = path.join(packageDir, "candidate.tgz");
   createTarball(packagePath, packageRoot, ["package"]);
   if (options.symlinkPackage) {
     unlinkSync(packagePath);
     symlinkSync(path.join(root, "candidate.tar.gz"), packagePath);
   }
-  writeFileSync(
-    path.join(packageDir, "pack.json"),
-    `${JSON.stringify([
-      {
-        filename: packageName,
-        name: "openclaw",
-        size: 100,
-        unpackedSize: 200,
-        version: PACKAGE_VERSION,
-      },
-    ])}\n`,
-  );
-  return { archivePath, packageDir, payloadDir, root };
+  return { archivePath, packageDir, packagePath, packageContents, payloadDir, root };
 }
 
 async function sealFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
@@ -128,6 +118,20 @@ describe("install smoke candidate payload", () => {
       { name: "candidate-pack.json", role: "package-metadata" },
       { name: "install.sh", role: "installer" },
       { name: "install-cli.sh", role: "cli-installer" },
+    ]);
+    expect(
+      JSON.parse(readFileSync(path.join(fixture.payloadDir, "candidate-pack.json"), "utf8")),
+    ).toEqual([
+      {
+        entryCount: 2,
+        filename: "candidate.tgz",
+        name: "openclaw",
+        size: statSync(fixture.packagePath).size,
+        unpackedSize:
+          statSync(path.join(fixture.packageContents, "package.json")).size +
+          statSync(path.join(fixture.packageContents, "index.js")).size,
+        version: PACKAGE_VERSION,
+      },
     ]);
     expect(readFileSync(path.join(fixture.payloadDir, "install.sh"), "utf8")).toContain(
       "echo install",

@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
+  NotEmpty: class SessionGroupNotEmptyError extends Error {},
   NotFound: class SessionGroupNotFoundError extends Error {},
+  put: vi.fn(),
   rename: vi.fn(),
   update: vi.fn(),
 }));
@@ -17,8 +20,10 @@ vi.mock("../session-groups.js", () => ({
   listSessionGroupDefaults: vi.fn(() => []),
   listSessionGroups: vi.fn(() => []),
   listSidebarSectionOrder: vi.fn(() => []),
-  putSessionGroups: vi.fn(() => []),
+  putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
+  resolveSessionGroupMutationTargetsByName: vi.fn(() => new Map()),
+  SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
 }));
@@ -52,6 +57,77 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
     context: { getRuntimeConfig: () => ({}) },
   } as unknown as GatewayRequestHandlerOptions;
 }
+
+describe("sessions.groups.put", () => {
+  beforeEach(() => {
+    groupMocks.put.mockReset();
+  });
+
+  it("rejects dropping a non-empty group as an invalid request", async () => {
+    const message = "cannot drop Gone; remove it via sessions.groups.delete";
+    groupMocks.put.mockImplementation(() => {
+      throw new groupMocks.NotEmpty(message);
+    });
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(updateOptions({ names: ["Keep"] }, respond));
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message }),
+    );
+  });
+
+  it("replaces the catalog using the runtime config and authorization guards", async () => {
+    const cfg = { agents: { list: [{ id: "main" }] } };
+    const names = ["Keep"];
+    const sectionOrder = ["category:Keep", "ungrouped"];
+    const groups = [{ name: "Keep", position: 0 }];
+    groupMocks.put.mockReturnValue(groups);
+    const respond = vi.fn();
+    const options = updateOptions({ names, sectionOrder }, respond);
+    options.context.getRuntimeConfig = () => cfg;
+    const assertCurrent = vi.fn();
+    const assertTargetCurrent = vi.fn();
+    options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
+
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(options);
+
+    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      names,
+      sectionOrder,
+      assertCurrent,
+      assertTargetCurrent,
+    });
+    expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+  });
+
+  it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
+    const error = new SessionMutationAuthorizationChangedError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.groups.put; retry the request",
+    });
+    groupMocks.put.mockImplementation(() => {
+      throw error;
+    });
+    const respond = vi.fn();
+    await expect(
+      expectDefined(
+        sessionGroupHandlers["sessions.groups.put"],
+        'sessionGroupHandlers["sessions.groups.put"] test invariant',
+      )(updateOptions({ names: [] }, respond)),
+    ).rejects.toBe(error);
+    expect(respond).not.toHaveBeenCalled();
+  });
+});
 
 describe("sessions.groups.update", () => {
   beforeEach(() => {

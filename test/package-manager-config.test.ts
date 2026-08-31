@@ -7,6 +7,7 @@ import {
   parsePnpmPackageKey,
   readNpmLockOverrides,
 } from "../scripts/generate-npm-package-lock.mts";
+import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -21,6 +22,8 @@ type RootPackageJson = {
 };
 
 type WorkspaceConfig = PnpmBuildConfig & {
+  minimumReleaseAge?: number;
+  minimumReleaseAgeStrict?: boolean;
   verifyDepsBeforeRun?: boolean;
 };
 
@@ -29,7 +32,9 @@ function readJson(filePath: string): unknown {
 }
 
 function collectPnpmLockPackages(): Set<string> {
-  const lockfile = parse(fs.readFileSync("pnpm-lock.yaml", "utf8")) as {
+  const lockfile = parse(
+    pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8")).dependencies,
+  ) as {
     packages?: Record<string, { version?: unknown }>;
   };
   const packages = new Set<string>();
@@ -54,6 +59,8 @@ describe("package manager build policy", () => {
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
+    expect(workspace.minimumReleaseAge).toBe(7 * 24 * 60);
+    expect(workspace.minimumReleaseAgeStrict).toBe(true);
     expect(workspace.verifyDepsBeforeRun).toBe(false);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
@@ -109,6 +116,42 @@ describe("package manager build policy", () => {
     });
   });
 
+  it.each(
+    (
+      [
+        ["package", "workspace"],
+        ["package", "lock"],
+        ["workspace", "lock"],
+      ] as const
+    ).flatMap(([first, second]) =>
+      [false, true].flatMap((childrenFirst) =>
+        ["1.2.3", "npm:@scope/parent@1.2.3"].map((rootSpec) => ({
+          first,
+          second,
+          childrenFirst,
+          rootSpec,
+        })),
+      ),
+    ),
+  )(
+    "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
+    ({ first, second, childrenFirst, rootSpec }) => {
+      const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {
+        package: {},
+        workspace: {},
+        lock: {},
+      };
+      const children = { parent: { child: "2.0.0" } };
+      const self = { parent: rootSpec };
+      sources[first] = childrenFirst ? children : self;
+      sources[second] = childrenFirst ? self : children;
+
+      expect(mergeOverrides(sources.package, sources.workspace, sources.lock)).toEqual({
+        parent: { ".": rootSpec, child: "2.0.0" },
+      });
+    },
+  );
+
   it("preserves npm alias pins when merging nested lock-derived pins", () => {
     expect(
       mergeOverrides(
@@ -139,18 +182,21 @@ describe("package manager build policy", () => {
     });
   });
 
-  it("rejects non-exact root pins when merging nested pins", () => {
+  it.each([
+    ["^1.0.0", "~1.0.0"],
+    ["1.0.0", "2.0.0"],
+  ])("rejects conflicting root pins %s and %s when merging nested pins", (left, right) => {
     expect(() =>
       mergeOverrides(
-        { "floating-package": "^1.0.0" },
-        { "floating-package": { ".": "~1.0.0", child: "2.0.0" } },
+        { "floating-package": left },
+        { "floating-package": { ".": right, child: "2.0.0" } },
         {},
       ),
     ).toThrow(/conflicts with pnpm lock policy/u);
     expect(() =>
       mergeOverrides(
-        { "floating-package": { ".": "^1.0.0", child: "2.0.0" } },
-        { "floating-package": "~1.0.0" },
+        { "floating-package": { ".": left, child: "2.0.0" } },
+        { "floating-package": right },
         {},
       ),
     ).toThrow(/conflicts with pnpm lock policy/u);

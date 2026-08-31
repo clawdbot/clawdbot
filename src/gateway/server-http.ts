@@ -16,9 +16,10 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -39,6 +40,7 @@ import {
   classifyNodeWorkerBundleTransferPath,
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
+  classifyWorkerBootstrapArtifactTransferPath,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -78,6 +80,10 @@ import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
+import {
+  handleWorkerBootstrapArtifactTransferHttpRequest,
+  type WorkerBootstrapArtifactTransferHttpCallback,
+} from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -166,6 +172,7 @@ export function createGatewayHttpServer(opts: {
   joinRateLimiter?: AuthRateLimiter;
   /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -203,10 +210,19 @@ export function createGatewayHttpServer(opts: {
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
-  const handleServerRequest = (req: IncomingMessage, res: ServerResponse) => {
+  const handleServerRequest = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleRequest(req, res),
+    void runHttpConnectionRequest(
+      req,
+      () =>
+        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+          handleRequest(req, res, expectation),
+        ),
+      res,
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
       if (!res.destroyed) {
@@ -217,11 +233,37 @@ export function createGatewayHttpServer(opts: {
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, handleServerRequest)
     : createHttpServer(handleServerRequest);
+  // Node otherwise sends interim/expectation responses before application admission.
+  httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
+  httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));
+  httpServer.on("connect", (req, socket) => {
+    void runHttpConnectionRequest(
+      req,
+      async () => {
+        socket.destroy();
+      },
+      "upgrade",
+    );
+  });
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  async function handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
+    // Preserve Node's version/token classification while deferring its response
+    // until admission; reparsing Expect here would change HTTP/1.0 semantics.
+    if (expectation === "reject") {
+      res.writeHead(417);
+      res.end();
+      return;
+    }
+    if (expectation === "continue") {
+      res.writeContinue();
+    }
 
     // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
     if (isWebSocketUpgradeRequest(req)) {
@@ -309,7 +351,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
         });
       const handleStandaloneControlUiRequest = async () => {
@@ -354,6 +396,18 @@ export function createGatewayHttpServer(opts: {
         respondNotFound(res);
         return true;
       });
+
+      addAdmittedStage(
+        classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
+        () =>
+          handleWorkerBootstrapArtifactTransferHttpRequest({
+            req,
+            res,
+            clientIp: ingressAttribution.rateLimit.subject.key,
+            rateLimiter: joinRateLimiter,
+            callback: opts.handleWorkerBootstrapArtifactTransferRequest,
+          }),
+      );
 
       addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
         handleNodeWorkerBundleTransferHttpRequest({
@@ -623,7 +677,7 @@ export function createGatewayHttpServer(opts: {
       addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
         }),
       );
       addRequestStage(controlUiEnabled, async () =>

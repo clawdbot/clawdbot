@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -17,8 +17,22 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:rail-tabs";
-const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-const videoDir = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
+const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("chat-rail-columns", proofDirParent)
+    : undefined;
+});
+const videoDirParent = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
+let videoDir: string | undefined;
+beforeEach(() => {
+  videoDir = videoDirParent
+    ? proofDir && proofDirParent && path.resolve(videoDirParent) === path.resolve(proofDirParent)
+      ? proofDir
+      : createControlUiE2eArtifactDir("chat-rail-columns", videoDirParent)
+    : undefined;
+});
 
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
@@ -50,6 +64,13 @@ function scenario(): ControlUiMockGatewayScenario {
       "artifacts.list": { artifacts: [] },
       "browser.request": {
         cases: [{ match: { method: "GET", path: "/tabs" }, response: { running: true, tabs: [] } }],
+      },
+      "desktop.observe": {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=rail-tabs",
+        expiresAtMs: 60_000,
+        control: false,
+        auth: "vnc-password",
       },
       "environments.list": {
         environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
@@ -269,7 +290,6 @@ async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   const clip = await page.evaluate(() => {
     const elements = [
       document.querySelector<HTMLElement>(".chat-pane__header"),
@@ -303,7 +323,7 @@ suite.define(() => {
         async ({ page }) => {
           await seedDockReservationRegression(page, dock);
           await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           await page.locator(".chat-browser-panel-toggle").click();
@@ -372,7 +392,7 @@ suite.define(() => {
         async ({ page }) => {
           await seedSettings(page, themeMode);
           const gateway = await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
@@ -458,7 +478,9 @@ suite.define(() => {
           await sidePanel(page).locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
           await openFromPlus(page, "Desktop");
           await sidePanel(page).locator('[data-panel-slot="desktop"]:not([hidden])').waitFor();
-          await sidePanel(page).getByText("Desktop sources", { exact: true }).waitFor();
+          const desktopObserve = await gateway.waitForRequest("desktop.observe");
+          expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
+          await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
           expect(await tabLabels(page)).toEqual([
             "Files",
@@ -801,19 +823,17 @@ suite.define(() => {
           await page.keyboard.press("Meta+Shift+B");
           await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Files");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
+                .textContent(),
+            )
+            .toContain("Terminal");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Terminal");
+          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
 
-          for (const label of [
-            "Review",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-            "Files",
-            "Terminal",
-          ]) {
+          for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
               .locator(":scope > .side-panel__header")
               .getByRole("button", { name: `Close ${label}`, exact: true })

@@ -1,11 +1,11 @@
 // Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -22,7 +22,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "question-flow");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("question-flow");
+  }
+});
 const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
@@ -70,7 +75,6 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

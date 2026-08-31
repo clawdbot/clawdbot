@@ -44,8 +44,12 @@ export function registerTestCatalogAccess(
 
 export async function listModels(params: {
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  preparedOnly?: boolean;
   catalog: ModelCatalogEntry[];
   catalogLoadDelayMs?: number;
+  preparedCatalog?: ModelCatalogEntry[];
   publishedCatalog?: ModelCatalogEntry[];
   refresh?: boolean;
   staticEntries?: ModelCatalogEntry[];
@@ -61,14 +65,17 @@ export async function listModels(params: {
   const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
     ({
       agentId,
-      agentDir: "/tmp/models-list-openai-agent",
+      agentDir: params.agentDir ?? "/tmp/models-list-openai-agent",
       catalogComplete: false,
-      workspaceDir: "/tmp/models-list-openai-workspace",
+      workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
       authModes: params.preparedAuthModes ?? {},
-      authStore: loadAuthProfileStoreWithoutExternalProfiles("/tmp/models-list-openai-agent", {
-        allowKeychainPrompt: false,
-      }),
+      authStore: loadAuthProfileStoreWithoutExternalProfiles(
+        params.agentDir ?? "/tmp/models-list-openai-agent",
+        {
+          allowKeychainPrompt: false,
+        },
+      ),
       metadataSnapshot:
         params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
       entries,
@@ -76,13 +83,16 @@ export async function listModels(params: {
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
     }) satisfies PreparedGatewayModelCatalogSnapshot;
-  const loadGatewayModelCatalogSnapshot = async () => {
+  const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {
     if (params.catalogLoadDelayMs !== undefined) {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, params.catalogLoadDelayMs);
       });
     }
-    return createCatalogSnapshot(params.catalog);
+    const readOnly = loadParams && "readOnly" in loadParams && loadParams.readOnly === true;
+    return createCatalogSnapshot(
+      readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog,
+    );
   };
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: loadGatewayModelCatalogSnapshot,
@@ -98,7 +108,11 @@ export async function listModels(params: {
   return await buildModelsListResult({
     context,
     agentId,
-    params: { view: params.view ?? "all", ...(params.refresh ? { refresh: true } : {}) },
+    params: {
+      view: params.view ?? "all",
+      ...(params.refresh ? { refresh: true } : {}),
+      ...(params.preparedOnly ? { preparedOnly: true } : {}),
+    },
     ...(params.discoveryModes
       ? {
           preloadedCatalog: {

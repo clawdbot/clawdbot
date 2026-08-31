@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -15,14 +15,38 @@ import {
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
 import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { guardModelFixtureWorkspace } from "./embedded-agent-runner/model.fixture.test-support.js";
+import {
   createModelGenerationFixture,
-  GENERATION_WORKSPACE_DIR,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+
+let state: OpenClawTestState;
+let workspaceGuard: ReturnType<typeof guardModelFixtureWorkspace>;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "btw-model" });
+});
+beforeEach(() => {
+  workspaceGuard = guardModelFixtureWorkspace(state.root);
+});
+afterEach(() => {
+  try {
+    workspaceGuard.verify();
+  } finally {
+    workspaceGuard.spy.mockRestore();
+  }
+});
+afterAll(async () => {
+  defaultPluginMetadataSnapshot = undefined;
+  await state.cleanup();
+});
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -476,6 +500,7 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
 function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
   return runBtwSideQuestion({
     cfg: { agents: { entries: { main: { default: true } } } } as never,
+    agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
@@ -728,11 +753,16 @@ describe("runBtwSideQuestion", () => {
     resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
-    defaultPluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      allowCurrent: false,
-    });
+    if (!defaultPluginMetadataSnapshot) {
+      defaultPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+        config: {},
+        workspaceDir: state.workspaceDir,
+        allowCurrent: false,
+      });
+      expect(workspaceGuard.spy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: state.workspaceDir }),
+      );
+    }
     preparedRuntimeSnapshotState.snapshot = {
       metadataSnapshot: defaultPluginMetadataSnapshot,
     };
@@ -842,6 +872,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: { agents: { entries: { main: { default: true } } } } as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
@@ -884,21 +915,48 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
-  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
-    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
-    // (server-startup-post-attach.ts), and that flag is part of the owner key
-    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
-    // it matches no owner, and standalone activation is refused while the gateway
-    // lifecycle is active, so the side question fails with "owner was not published".
-    mockDoneAnswer("Final answer.");
+  it.each([
+    { harness: "openclaw", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: "agent:main:policy" },
+  ])(
+    "retains the selected global agent for $harness with policy $sandboxSessionKey",
+    async ({ harness, sandboxSessionKey }) => {
+      // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+      // (server-startup-post-attach.ts), and that flag is part of the owner key
+      // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+      // it matches no owner, and standalone activation is refused while the gateway
+      // lifecycle is active, so the side question fails with "owner was not published".
+      mockDoneAnswer("Final answer.");
+      resolveSessionAgentIdMock.mockImplementation(
+        (await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js"))
+          .resolveSessionAgentId,
+      );
+      const sideQuestion = harness === "codex" ? registerCodexSideQuestionHarness() : undefined;
 
-    await runSideQuestion({ allowGatewaySubagentBinding: true });
+      await runSideQuestion({
+        agentId: "work",
+        cfg: {
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+          session: { scope: "global" },
+        },
+        sessionKey: "global",
+        sandboxSessionKey,
+        allowGatewaySubagentBinding: true,
+      });
 
-    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
-      agentDir: DEFAULT_AGENT_DIR,
-      allowGatewaySubagentBinding: true,
-    });
-  });
+      expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+        agentDir: DEFAULT_AGENT_DIR,
+        agentId: "work",
+        allowGatewaySubagentBinding: true,
+      });
+      if (sideQuestion) {
+        expect(sideQuestion).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "work", sessionKey: "global" }),
+        );
+      }
+    },
+  );
 
   it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
     // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
@@ -916,6 +974,8 @@ describe("runBtwSideQuestion", () => {
   it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
     const cfg = { agents: { entries: { main: { default: true } } } } as never;
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config: cfg,
       label: "btw-a",
       provider: "local-proxy",
@@ -923,6 +983,8 @@ describe("runBtwSideQuestion", () => {
       modelId: "side-model",
     });
     const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config: cfg,
       label: "btw-b",
       provider: "local-proxy",
@@ -931,7 +993,7 @@ describe("runBtwSideQuestion", () => {
     });
     preparedRuntimeSnapshotState.snapshot = generationA.preparedModelRuntime;
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = true;
-    resolveAgentWorkspaceDirMock.mockReturnValue(GENERATION_WORKSPACE_DIR);
+    resolveAgentWorkspaceDirMock.mockReturnValue(state.workspaceDir);
     publishCurrentModelGeneration(generationB);
     const runtimeAuthA = vi.fn(async () => ({ apiKey: "runtime-auth-a" }));
     const runtimeAuthB = vi.fn(async () => ({ apiKey: "runtime-auth-b" }));
@@ -953,7 +1015,7 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockImplementation(() => {
       const snapshot = getCurrentPluginMetadataSnapshot({
         config: cfg,
-        workspaceDir: GENERATION_WORKSPACE_DIR,
+        workspaceDir: state.workspaceDir,
       });
       const label = snapshot === generationA.metadataSnapshot ? "A" : "B";
       return {
@@ -2457,6 +2519,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: {} as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: "amazon-bedrock",
       model: "us.anthropic.claude-sonnet-4-5-v1:0",

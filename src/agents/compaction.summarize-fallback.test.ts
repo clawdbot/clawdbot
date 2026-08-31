@@ -8,7 +8,6 @@ import { summarizeWithFallback } from "./compaction.test-support.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
-  estimateTokens: vi.fn((_message: unknown) => 100),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
@@ -18,7 +17,6 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
   return {
     ...actual,
     generateSummary: agentSessionMocks.generateSummary,
-    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
@@ -27,7 +25,6 @@ vi.mock("./sessions/index.js", async () => {
   return {
     ...actual,
     generateSummary: agentSessionMocks.generateSummary,
-    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
@@ -45,8 +42,6 @@ describe("summarizeWithFallback", () => {
     agentSessionMocks.generateSummary.mockRejectedValue(
       new Error("Summarization failed: fetch failed"),
     );
-    agentSessionMocks.estimateTokens.mockReset();
-    agentSessionMocks.estimateTokens.mockImplementation(() => 100);
   });
 
   it("throws CompactionError when all summarization attempts fail", async () => {
@@ -198,14 +193,6 @@ describe("summarizeWithFallback", () => {
   it("throws CompactionError when both full and partial summarization fail", async () => {
     // Oversized-message fallback tries the safe subset so a huge attachment or
     // tool output does not prevent summarizing the rest of the transcript.
-    agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
-      const content =
-        typeof (message as { content?: unknown }).content === "string"
-          ? (message as { content: string }).content
-          : "";
-      return content.length > 10_000 ? 500_000 : 100;
-    });
-
     const messages: AgentMessage[] = [
       {
         role: "user",

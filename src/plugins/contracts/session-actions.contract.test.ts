@@ -5,12 +5,23 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
+  READ_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "../../gateway/operator-scopes.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import type { PluginSessionActionContext } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
@@ -484,132 +495,154 @@ describe("plugin session actions", () => {
     expect(throwsSecretError.message).toBe("plugin session action failed");
   });
 
-  it("authorizes session actions through the gateway by action-declared scopes", async () => {
-    const callApprovalAction = (params: {
-      actionId: string;
-      extra?: Record<string, unknown>;
-      scopes?: string[];
-    }): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> =>
-      callRegisteredSessionActionThroughGatewayForTest({
-        pluginId: "approval-action-fixture",
-        actionId: params.actionId,
-        ...(params.extra ? { extra: params.extra } : {}),
-        ...(params.scopes ? { scopes: params.scopes } : {}),
+  describe("authorizes session actions through the gateway by action-declared scopes", () => {
+    const pluginId = "scope-action-fixture";
+    const actionScopes = {
+      approve: [APPROVALS_SCOPE],
+      view: [READ_SCOPE],
+      talk: [TALK_SCOPE],
+      "talk-approve": [TALK_SCOPE, APPROVALS_SCOPE],
+      "talk-secrets": [TALK_SECRETS_SCOPE],
+      admin: [ADMIN_SCOPE],
+      pairing: [PAIRING_SCOPE],
+      questions: [QUESTIONS_SCOPE],
+      "default-write": undefined,
+    } satisfies Record<string, OperatorScope[] | undefined>;
+    const handler = vi.fn(({ sessionKey }: PluginSessionActionContext) => ({
+      result: { accepted: true, ...(sessionKey ? { sessionKey } : {}) },
+      continueAgent: true,
+    }));
+
+    beforeEach(() => {
+      handler.mockClear();
+      const { registry } = registerActionFixture({
+        id: pluginId,
+        register(api) {
+          for (const [id, requiredScopes] of Object.entries(actionScopes)) {
+            api.registerSessionAction({ id, requiredScopes, handler });
+          }
+        },
       });
-    const handlerCalls: unknown[] = [];
-    const { registry } = registerActionFixture({
-      id: "approval-action-fixture",
-      name: "Approval Action Fixture",
-      register(api) {
-        api.registerSessionAction({
-          id: "approve",
-          requiredScopes: [APPROVALS_SCOPE],
-          handler: ({ client, sessionKey }) => {
-            handlerCalls.push({ scopes: client?.scopes ?? [], sessionKey });
-            return {
-              result: { approved: true, ...(sessionKey ? { sessionKey } : {}) },
-              continueAgent: true,
-            };
-          },
+      setActivePluginRegistry(registry.registry);
+    });
+
+    it.each<
+      [
+        name: string,
+        actionId: keyof typeof actionScopes,
+        scopes: OperatorScope[],
+        missingScope?: OperatorScope,
+      ]
+    >([
+      ["approvals admits a custom approval action", "approve", [APPROVALS_SCOPE]],
+      ["read cannot approve", "approve", [READ_SCOPE], APPROVALS_SCOPE],
+      ["write cannot approve", "approve", [WRITE_SCOPE], APPROVALS_SCOPE],
+      ["read admits a read action", "view", [READ_SCOPE]],
+      ["write satisfies read", "view", [WRITE_SCOPE]],
+      ["talk admits a talk action", "talk", [TALK_SCOPE]],
+      ["write satisfies talk", "talk", [WRITE_SCOPE]],
+      ["admin admits a talk action", "talk", [ADMIN_SCOPE]],
+      ["read cannot talk", "talk", [READ_SCOPE], TALK_SCOPE],
+      ["no scopes cannot talk", "talk", [], TALK_SCOPE],
+      [
+        "write reports missing approvals after satisfying talk",
+        "talk-approve",
+        [WRITE_SCOPE],
+        APPROVALS_SCOPE,
+      ],
+      [
+        "write and approvals satisfy talk and approvals",
+        "talk-approve",
+        [WRITE_SCOPE, APPROVALS_SCOPE],
+      ],
+      [
+        "talk and approvals satisfy both requirements",
+        "talk-approve",
+        [TALK_SCOPE, APPROVALS_SCOPE],
+      ],
+      ["admin satisfies both requirements", "talk-approve", [ADMIN_SCOPE]],
+      ["write cannot read talk secrets", "talk-secrets", [WRITE_SCOPE], TALK_SECRETS_SCOPE],
+      ["write cannot administer", "admin", [WRITE_SCOPE], ADMIN_SCOPE],
+      ["write cannot pair", "pairing", [WRITE_SCOPE], PAIRING_SCOPE],
+      ["write cannot answer questions", "questions", [WRITE_SCOPE], QUESTIONS_SCOPE],
+      ["write admits an action with default scopes", "default-write", [WRITE_SCOPE]],
+      ["talk cannot perform a default-write action", "default-write", [TALK_SCOPE], WRITE_SCOPE],
+      ["read cannot perform a default-write action", "default-write", [READ_SCOPE], WRITE_SCOPE],
+      ["no scopes cannot perform a default-write action", "default-write", [], WRITE_SCOPE],
+      ["admin admits an action with default scopes", "default-write", [ADMIN_SCOPE]],
+    ])("%s", async (_name, actionId, scopes, missingScope) => {
+      const response = await callRegisteredSessionActionThroughGatewayForTest({
+        pluginId,
+        actionId,
+        scopes,
+      });
+      const expectedResponse: HookResponse = missingScope
+        ? {
+            ok: false,
+            payload: undefined,
+            error: {
+              code: "FORBIDDEN",
+              message: `missing scope: ${missingScope}`,
+              details: {
+                code: "MISSING_SCOPE",
+                missingScope,
+                requiredScopes: actionScopes[actionId] ?? [WRITE_SCOPE],
+              },
+            },
+          }
+        : {
+            ok: true,
+            payload: { ok: true, result: { accepted: true }, continueAgent: true },
+            error: undefined,
+          };
+      expect({ response, handlerCalls: handler.mock.calls.length }).toEqual({
+        response: expectedResponse,
+        handlerCalls: missingScope ? 0 : 1,
+      });
+      if (!missingScope) {
+        expect(handler).toHaveBeenCalledWith({
+          pluginId,
+          actionId,
+          client: { connId: "test-client", scopes },
         });
-        api.registerSessionAction({
-          id: "view",
-          requiredScopes: [READ_SCOPE],
-          handler: ({ client }) => {
-            handlerCalls.push({ scopes: client?.scopes ?? [], action: "view" });
-            return { result: { visible: true }, continueAgent: false };
-          },
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await expect(
-      callApprovalAction({
-        actionId: "approve",
-        scopes: [APPROVALS_SCOPE],
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: { ok: true, result: { approved: true }, continueAgent: true },
-      error: undefined,
+      }
     });
 
-    await expect(
-      callApprovalAction({
-        actionId: "view",
-        scopes: [WRITE_SCOPE],
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: { ok: true, result: { visible: true }, continueAgent: false },
-      error: undefined,
-    });
-
-    const missingApprovalScope = await callApprovalAction({
-      actionId: "approve",
-      scopes: [READ_SCOPE],
-    });
-    const missingApprovalScopeError = requireHookError(missingApprovalScope);
-    expect(missingApprovalScopeError).toEqual({
-      code: "FORBIDDEN",
-      message: `missing scope: ${APPROVALS_SCOPE}`,
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: APPROVALS_SCOPE,
-        requiredScopes: [APPROVALS_SCOPE],
-      },
-    });
-    expect(handlerCalls).toEqual([
-      { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
-      { scopes: [WRITE_SCOPE], action: "view" },
-    ]);
-
-    await expect(
-      callApprovalAction({
-        actionId: "approve",
-        extra: { sessionKey: ` ${MAIN_SESSION_KEY} ` },
-        scopes: [APPROVALS_SCOPE],
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: {
+    it("normalizes session keys and rejects invalid params for approval-only callers", async () => {
+      await expect(
+        callRegisteredSessionActionThroughGatewayForTest({
+          pluginId,
+          actionId: "approve",
+          extra: { sessionKey: ` ${MAIN_SESSION_KEY} ` },
+          scopes: [APPROVALS_SCOPE],
+        }),
+      ).resolves.toEqual({
         ok: true,
-        result: { approved: true, sessionKey: MAIN_SESSION_KEY },
-        continueAgent: true,
-      },
-      error: undefined,
-    });
-
-    await expect(
-      callApprovalAction({
-        actionId: "view",
-        scopes: [READ_SCOPE],
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: { ok: true, result: { visible: true }, continueAgent: false },
-      error: undefined,
-    });
-
-    const blankPluginId = await callPluginSessionActionThroughGatewayForTest({
-      body: {
-        pluginId: "   ",
+        payload: {
+          ok: true,
+          result: { accepted: true, sessionKey: MAIN_SESSION_KEY },
+          continueAgent: true,
+        },
+        error: undefined,
+      });
+      expect(handler).toHaveBeenCalledWith({
+        pluginId,
         actionId: "approve",
-      },
-      scopes: [APPROVALS_SCOPE],
+        sessionKey: MAIN_SESSION_KEY,
+        agentId: "main",
+        client: { connId: "test-client", scopes: [APPROVALS_SCOPE] },
+      });
+
+      const blankPluginId = await callPluginSessionActionThroughGatewayForTest({
+        body: { pluginId: "   ", actionId: "approve" },
+        scopes: [APPROVALS_SCOPE],
+      });
+      expect(requireHookError(blankPluginId)).toEqual({
+        code: "INVALID_REQUEST",
+        message: "plugins.sessionAction pluginId and actionId must be non-empty",
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
     });
-    const blankPluginIdError = requireHookError(blankPluginId);
-    expect(blankPluginIdError.code).toBe("INVALID_REQUEST");
-    expect(blankPluginIdError.message).toBe(
-      "plugins.sessionAction pluginId and actionId must be non-empty",
-    );
-    expect(handlerCalls).toEqual([
-      { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
-      { scopes: [WRITE_SCOPE], action: "view" },
-      { scopes: [APPROVALS_SCOPE], sessionKey: MAIN_SESSION_KEY },
-      { scopes: [READ_SCOPE], action: "view" },
-    ]);
   });
 
   it("passes a defensive copy of client scopes to session action handlers", async () => {

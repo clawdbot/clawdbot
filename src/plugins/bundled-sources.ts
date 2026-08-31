@@ -2,6 +2,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -48,20 +49,26 @@ export function resolveBundledPluginSources(params: {
   env?: NodeJS.ProcessEnv;
   discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const discovery =
-    params.discovery ??
-    discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env });
+  const snapshot = params.discovery ? undefined : getGatewayPluginMetadataSnapshot();
+  const sources = snapshot
+    ? (snapshot.bundledManifestRegistry?.plugins ?? []).map((manifest) => ({
+        candidate: manifest,
+        manifest,
+      }))
+    : (
+        params.discovery ??
+        discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env })
+      ).candidates.flatMap((candidate) => {
+        if (candidate.origin !== "bundled") {
+          return [];
+        }
+        const loaded = loadPluginManifest(candidate.rootDir, false);
+        return loaded.ok ? [{ candidate, manifest: loaded.manifest }] : [];
+      });
   const bundled = new Map<string, BundledPluginSource>();
 
-  for (const candidate of discovery.candidates) {
-    if (candidate.origin !== "bundled") {
-      continue;
-    }
-    const manifest = loadPluginManifest(candidate.rootDir, false);
-    if (!manifest.ok) {
-      continue;
-    }
-    const pluginId = manifest.manifest.id;
+  for (const { candidate, manifest } of sources) {
+    const pluginId = manifest.id;
     if (bundled.has(pluginId)) {
       continue;
     }
@@ -73,7 +80,7 @@ export function resolveBundledPluginSources(params: {
 
     const version =
       normalizeOptionalString(candidate.packageVersion) ||
-      normalizeOptionalString(manifest.manifest.version) ||
+      normalizeOptionalString(manifest.version) ||
       undefined;
 
     bundled.set(pluginId, {
@@ -81,22 +88,17 @@ export function resolveBundledPluginSources(params: {
       localPath: candidate.rootDir,
       npmSpec,
       version,
-      ...(isRecord(manifest.manifest.configSchema)
-        ? { configSchema: manifest.manifest.configSchema }
-        : {}),
-      requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.manifest.configSchema),
+      ...(isRecord(manifest.configSchema) ? { configSchema: manifest.configSchema } : {}),
+      requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.configSchema),
     });
   }
 
   return bundled;
 }
 
-let processBundledPluginSources: ReadonlyMap<string, BundledPluginSource> | undefined;
-
-/** Bundled manifests are process-stable; installs and metadata changes require restart. */
+/** Projects bundled sources from the current generation's shared discovery facts. */
 export function getProcessBundledPluginSources(): ReadonlyMap<string, BundledPluginSource> {
-  processBundledPluginSources ??= resolveBundledPluginSources({});
-  return processBundledPluginSources;
+  return resolveBundledPluginSources({});
 }
 
 function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {

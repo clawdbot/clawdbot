@@ -63,6 +63,35 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
 }
 
 describe("in-process paired-node invocation cancellation", () => {
+  it.each([true, false])(
+    "requires ok=true before waiting beyond an accepted-shaped response (ok=%s)",
+    async (ok) => {
+      const onAccepted = vi.fn();
+      const error = { code: "UNAVAILABLE", message: "rejected" };
+      const accepted = { status: "accepted", runId: "run-1" };
+      const final = { status: "ok", runId: "run-1" };
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        options.respond(ok, accepted, ok ? undefined : error);
+        options.respond(true, final);
+      });
+      await expect(
+        dispatchGatewayRequestInProcessRaw(
+          "agent",
+          {},
+          {
+            client: null,
+            context: {} as GatewayRequestContext,
+            expectFinal: true,
+            onAccepted,
+          },
+        ),
+      ).resolves.toMatchObject(
+        ok ? { ok: true, payload: final } : { ok: false, payload: accepted, error },
+      );
+      expect(onAccepted.mock.calls).toEqual(ok ? [[accepted]] : []);
+    },
+  );
+
   it("cancels a real first-party paired-node invocation and removes its pending work", async () => {
     const { registry, frames } = registerPairedNode();
     const controller = new AbortController();

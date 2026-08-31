@@ -1,7 +1,21 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as runtimeNormalization from "../agents/provider-model-normalization.runtime.js";
+import { resolveResponseUsageLine } from "../auto-reply/reply/agent-runner-usage-line.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
+import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { buildStatusMessageParts } from "../status/status-message.js";
+import {
+  estimateAggregateUsageCost,
+  resetUsageFormatCachesForTest,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
@@ -14,6 +28,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readStoredCatalog = vi.fn();
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
+  resetUsageFormatCachesForTest();
   resetRemoteModelCatalogOverlayForTest();
   readStoredCatalog.mockReset().mockReturnValue({
     source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
@@ -26,6 +42,19 @@ beforeEach(() => {
         openai: {
           models: [
             { id: "gpt-catalog", cost: { input: 1, output: 2 } },
+            {
+              id: "gpt-authored",
+              cost: {
+                input: 2,
+                output: 8,
+                cacheRead: 0.5,
+                cacheWrite: 1,
+                tieredPricing: [
+                  { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1, range: [0, 201] },
+                  { input: 4, output: 16, cacheRead: 1, cacheWrite: 2, range: [201] },
+                ],
+              },
+            },
             {
               id: "gpt-zero-tier",
               cost: {
@@ -59,6 +88,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  resetUsageFormatCachesForTest();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   setRemoteModelCatalogOverlaySourcesForTest();
   resetRemoteModelCatalogOverlayForTest();
 });
@@ -77,6 +111,378 @@ function configFor(baseUrl: string): OpenClawConfig {
 }
 
 describe("hosted model pricing", () => {
+  it.each([
+    { name: "native owner", policy: { venice: { provider: "venice" } }, known: true },
+    { name: "other native source", policy: { openCode: { provider: "upstream" } }, known: true },
+    { name: "missing policy", policy: undefined, known: false },
+    {
+      name: "external disabled",
+      policy: { external: false, venice: { provider: "venice" } },
+      known: false,
+    },
+    { name: "source disabled", policy: { venice: false }, known: false },
+    {
+      name: "non-authoritative source",
+      policy: { openRouter: { provider: "venice" } },
+      known: false,
+    },
+    {
+      name: "unowned policy",
+      policy: { venice: { provider: "venice" } },
+      unowned: true,
+      known: false,
+    },
+    {
+      name: "disabled plugin",
+      policy: { venice: { provider: "venice" } },
+      disabled: true,
+      known: false,
+    },
+    {
+      name: "private endpoint",
+      policy: { venice: { provider: "venice" } },
+      private: true,
+      known: false,
+    },
+    {
+      name: "normalized hosted alias",
+      policy: { venice: { provider: "venice" } },
+      alias: true,
+      known: false,
+    },
+    { name: "policy-free hosted alias", policy: undefined, alias: true, known: false },
+    {
+      name: "foreign owner key",
+      policy: { venice: { provider: "venice" } },
+      foreign: true,
+      known: false,
+    },
+  ])("requires exact authoritative hosted zero evidence: $name", (scenario) => {
+    const agentDir = tempDirs.make("openclaw-native-zero-policy-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    const config: OpenClawConfig = {
+      plugins: { allow: ["venice"], entries: { venice: { enabled: !scenario.disabled } } },
+      ...(scenario.private
+        ? {
+            models: { providers: { venice: { baseUrl: "http://127.0.0.1:8080/v1", models: [] } } },
+          }
+        : {}),
+    };
+    const snapshot = pluginMetadata.resolvePluginMetadataSnapshot({ config, env: process.env });
+    const plugins = [...snapshot.manifestRegistry.plugins];
+    const ownerIndex = plugins.findIndex((plugin) => plugin.id === "venice");
+    plugins[ownerIndex] = {
+      ...expectDefined(plugins[ownerIndex], "Venice manifest owner"),
+      modelPricing: normalizeManifestModelPricing(
+        { providers: { venice: scenario.policy } },
+        { ownedProviders: new Set(scenario.unowned ? [] : ["venice"]) },
+      ),
+    };
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { ...snapshot.manifestRegistry, plugins },
+    });
+    readStoredCatalog.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      bundle_json: JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: 200,
+        sourceCommit: "native-zero-policy",
+        providers: { venice: { models: [{ id: "zero-fixture", cost: { input: 0, output: 0 } }] } },
+        pricing: {
+          [`${scenario.foreign ? "opencode" : scenario.alias ? "Venice" : "venice"}/zero-fixture`]:
+            { input: 0, output: 0 },
+        },
+      }),
+    });
+    const cost = resolveModelCostConfig({
+      config,
+      agentDir,
+      provider: "venice",
+      model: "zero-fixture",
+    });
+    expect(cost).toEqual(
+      scenario.known ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined,
+    );
+  });
+
+  const catalogRates = { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 };
+  const catalogTiers = [
+    { ...catalogRates, range: [0, 201] },
+    { input: 4, output: 16, cacheRead: 1, cacheWrite: 2, range: [201, Infinity] },
+  ];
+  const preparedRates = { input: 11, output: 13, cacheRead: 17, cacheWrite: 19 };
+  const preparedTiers = [{ ...preparedRates, range: [0, Infinity] }];
+
+  it.each(
+    [
+      {
+        name: "sizing-only",
+        cost: undefined,
+        expected: { ...catalogRates, tieredPricing: catalogTiers },
+        preparedExpected: { ...preparedRates, tieredPricing: preparedTiers },
+        total: undefined,
+        price: undefined,
+      },
+      {
+        name: "empty cost",
+        cost: {},
+        expected: { ...catalogRates, tieredPricing: catalogTiers },
+        preparedExpected: { ...preparedRates, tieredPricing: preparedTiers },
+        total: undefined,
+        price: undefined,
+      },
+      {
+        name: "omitted cost with flat prepared rates",
+        cost: undefined,
+        flatPrepared: true,
+        expected: { ...catalogRates, tieredPricing: catalogTiers },
+        preparedExpected: preparedRates,
+        total: 0.06,
+        price: "$0.06",
+      },
+      {
+        name: "empty cost with flat prepared rates",
+        cost: {},
+        flatPrepared: true,
+        expected: { ...catalogRates, tieredPricing: catalogTiers },
+        preparedExpected: preparedRates,
+        total: 0.06,
+        price: "$0.06",
+      },
+      {
+        name: "partial cost",
+        cost: { output: 3 },
+        expected: { ...catalogRates, output: 3 },
+        preparedExpected: { ...preparedRates, output: 3 },
+        total: 0.05,
+        price: "$0.05",
+      },
+      {
+        name: "input/output-only cost",
+        cost: { input: 1, output: 2 },
+        expected: { ...catalogRates, input: 1, output: 2 },
+        preparedExpected: { ...preparedRates, input: 1, output: 2 },
+        total: 0.039,
+        price: "$0.04",
+      },
+      {
+        name: "full cost",
+        cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+        expected: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+        preparedExpected: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+        total: 0.019,
+        price: "$0.02",
+      },
+      {
+        name: "zero cost",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        preparedExpected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        total: 0,
+        price: "$0.0000",
+      },
+      {
+        name: "empty tiers",
+        cost: { tieredPricing: [] },
+        expected: catalogRates,
+        preparedExpected: preparedRates,
+        total: 0.06,
+        price: "$0.06",
+      },
+      {
+        name: "authored tiers",
+        cost: { tieredPricing: [{ input: 7, output: 9, cacheRead: 1, cacheWrite: 2, range: [0] }] },
+        expected: {
+          ...catalogRates,
+          tieredPricing: [
+            { input: 7, output: 9, cacheRead: 1, cacheWrite: 2, range: [0, Infinity] },
+          ],
+        },
+        preparedExpected: {
+          ...preparedRates,
+          tieredPricing: [
+            { input: 7, output: 9, cacheRead: 1, cacheWrite: 2, range: [0, Infinity] },
+          ],
+        },
+        total: undefined,
+        price: undefined,
+      },
+    ].flatMap(({ preparedExpected, ...testCase }) => [
+      { ...testCase, mode: "catalog", allowPluginNormalization: true },
+      {
+        ...testCase,
+        mode: "prepared",
+        allowPluginNormalization: false,
+        expected: preparedExpected,
+      },
+    ]),
+  )(
+    "resolves $name from authored source over $mode pricing",
+    ({ cost, expected, allowPluginNormalization, total, price, flatPrepared }) => {
+      const source = {
+        messages: { responseUsage: "full" },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-authored",
+                  name: "Authored GPT",
+                  contextWindow: 64_000,
+                  ...(cost ? { cost } : {}),
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const runtime = structuredClone(source);
+      const model = expectDefined(
+        runtime.models?.providers?.openai?.models[0],
+        "materialized model",
+      );
+      model.cost = {
+        ...preparedRates,
+        ...(flatPrepared ? {} : { tieredPricing: [{ ...preparedRates, range: [0] }] }),
+      };
+      setRuntimeConfigSnapshot(runtime, source);
+      const agentDir = tempDirs.make("openclaw-authored-pricing-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+      const fetch = vi.fn(() => {
+        throw new Error("pricing display must not use the network");
+      });
+      vi.stubGlobal("fetch", fetch);
+      for (const config of [runtime, structuredClone(runtime)]) {
+        resetUsageFormatCachesForTest();
+        const discoverySpies = allowPluginNormalization
+          ? []
+          : [
+              vi.spyOn(manifestNormalization, "normalizeProviderModelIdWithManifest"),
+              vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime"),
+              vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot"),
+            ];
+        const params = { config, agentDir, provider: "openai", model: "gpt-authored" };
+        const resolvedCost = resolveModelCostConfig({ ...params, allowPluginNormalization });
+        expect.soft(resolvedCost).toEqual(expected);
+        if (allowPluginNormalization) {
+          expect(resolveModelCostConfigFingerprint(config, agentDir)).toBe(
+            resolveModelCostConfigFingerprint(source, agentDir),
+          );
+          continue;
+        }
+        const usage = { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 1000 };
+        const estimate = estimateAggregateUsageCost({ usage, cost: resolvedCost });
+        if (total === undefined) {
+          expect.soft(estimate).toBeUndefined();
+        } else {
+          expect.soft(estimate).toBeCloseTo(total);
+        }
+        expect
+          .soft(resolveResponseUsageLine({ ...params, usage }))
+          .toBe(
+            `Usage: 1.0k in / 1.0k out · cache 1.0k cached / 1.0k new${price ? ` · est ${price}` : ""}`,
+          );
+        for (const spy of discoverySpies) {
+          expect.soft(spy).not.toHaveBeenCalled();
+          spy.mockRestore();
+        }
+        const status = buildStatusMessageParts({
+          config,
+          agent: { model: "openai/gpt-authored" },
+          modelAuth: "api-key",
+          activeModelAuth: "api-key",
+          sessionEntry: {
+            sessionId: "prepared-pricing",
+            updatedAt: 0,
+            modelProvider: "openai",
+            model: "gpt-authored",
+            inputTokens: 1000,
+            outputTokens: 1000,
+            cacheRead: 1000,
+            cacheWrite: 1000,
+          },
+        });
+        if (price) {
+          expect.soft(status.text).toContain(`Cost: ${price}`);
+        } else {
+          expect.soft(status.text).not.toContain("Cost:");
+        }
+        const rows = status.presentation.blocks.flatMap((block) =>
+          block.type === "table" ? block.rows : [],
+        );
+        expect.soft(rows.find((row) => row[0] === "💵 Cost")?.[1]).toBe(price);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(model.contextWindow).toBe(64_000);
+    },
+  );
+
+  it.each(["unpaired", "incompatible"] as const)(
+    "preserves independent configured pricing with an %s runtime snapshot",
+    (snapshot) => {
+      const runtime = { agents: { defaults: {} } } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(runtime, snapshot === "unpaired" ? undefined : {});
+      const config = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-authored", name: "Authored GPT", cost: { output: 3 } }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const agentDir = tempDirs.make("openclaw-independent-pricing-");
+      expect(
+        resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+      ).toEqual({ ...catalogRates, output: 3 });
+      expect(
+        resolveModelCostConfig({
+          config,
+          agentDir,
+          provider: "openai",
+          model: "gpt-authored",
+          allowPluginNormalization: false,
+        }),
+      ).toEqual({ input: 0, output: 3, cacheRead: 0, cacheWrite: 0 });
+      expect(
+        resolveModelCostConfig({
+          config,
+          agentDir,
+          provider: "openai",
+          model: "missing",
+          allowPluginNormalization: false,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("invalidates pricing fingerprints when authored empty tiers replace inherited tiers", () => {
+    const cost = {} as ModelDefinitionConfig["cost"];
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-authored", name: "Authored GPT", cost }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const agentDir = tempDirs.make("openclaw-empty-tier-pricing-");
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+    ).toEqual({ ...catalogRates, tieredPricing: catalogTiers });
+    const before = resolveModelCostConfigFingerprint(config, agentDir);
+    cost.tieredPricing = [];
+    expect(resolveModelCostConfigFingerprint(config, agentDir)).not.toBe(before);
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+    ).toEqual(catalogRates);
+  });
+
   it("resolves a non-catalog model from the stored hosted pricing map", () => {
     const agentDir = tempDirs.make("openclaw-hosted-pricing-");
     expect(

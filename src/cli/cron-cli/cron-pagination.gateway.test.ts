@@ -30,7 +30,10 @@ vi.mock("../gateway-rpc.js", async () => {
   };
 });
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: mocks.runtime,
+}));
 
 const { registerCronCli } = await import("../cron-cli.js");
 

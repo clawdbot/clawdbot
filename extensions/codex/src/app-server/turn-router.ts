@@ -565,7 +565,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   }
 
   private async drainNotifications(route: Route): Promise<void> {
-    await route.notificationTail;
+    // A released route cannot promise that accepted handlers finish processing.
+    await Promise.race([route.notificationTail, route.ended.promise]);
   }
 
   private release(route: Route, error = new Error("codex app-server thread route is released")) {

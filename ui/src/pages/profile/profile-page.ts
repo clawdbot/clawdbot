@@ -9,7 +9,10 @@ import type {
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -23,7 +26,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -55,7 +58,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
   @state() private displayName = "";
-  @state() private gitCoauthorEnabled = false;
+  @state() private gitCoauthorEnabled = true;
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | "git-coauthor" | null = null;
   @state() private identityError: string | null = null;
@@ -140,7 +143,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityRequestId += 1;
       this.ownProfile = null;
       this.displayName = "";
-      this.gitCoauthorEnabled = false;
+      this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
@@ -183,7 +186,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.ownProfile = profile;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
-      this.gitCoauthorEnabled = false;
+      this.gitCoauthorEnabled = true;
       if (profile.githubIdentity) {
         const preferences = await client.request<UsersPrefsGetResult>("users.prefs.get", {
           keys: [GIT_COAUTHOR_PREFERENCE_KEY],
@@ -192,7 +195,8 @@ export class ProfilePage extends OpenClawLightDomElement {
           return;
         }
         this.gitCoauthorEnabled =
-          preferences.status === "ok" && preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY] === true;
+          preferences.status === "ok" &&
+          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
       }
     } catch (error) {
       if (requestId === this.identityRequestId) {
@@ -495,8 +499,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("profile")}
-            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>
         </div>
         ${this.selfUser

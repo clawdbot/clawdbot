@@ -81,11 +81,7 @@ function withPackedPackage(
     for (const assetPath of CONTROL_UI_ASSETS) {
       writeFixtureFile(packageRoot, assetPath, "shipped Control UI asset\n");
     }
-    writeFixtureFile(
-      packageRoot,
-      "dist/openclaw-install-guard",
-      "OpenClaw package preinstall has not completed.\n",
-    );
+    writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
       writeFixtureFile(packageRoot, relativePath, `# ${relativePath}\n`);
     }
@@ -93,6 +89,7 @@ function withPackedPackage(
       "scripts/postinstall-bundled-plugins.mjs",
       "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });

@@ -12,6 +12,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -233,7 +234,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim());
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
+            tableMode: resolveMarkdownTableMode({
+              cfg,
+              channel: "slack",
+              accountId: account.accountId,
+            }),
+          });
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =
@@ -472,9 +479,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          if (payload.phase === "start") {
-            progress.progressWorkCounter.noteToolCall(payload.name);
-          }
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
@@ -539,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } catch (err) {
     dispatchError = err;
   } finally {
-    progress.progressDraft.cancel();
+    await progress.cancel();
     if (!progress.useDraftProgressCard) {
       await draftStream?.discardPending();
     }

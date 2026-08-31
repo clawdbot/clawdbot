@@ -119,6 +119,7 @@ describe("Gateway pending-profile authorization", () => {
       "artifacts.list",
       "board.event",
       "chat.history",
+      "chat.metadata",
       "controlUi.sessionPreview",
       "exec.approval.resolve",
       "mcp.app.view",

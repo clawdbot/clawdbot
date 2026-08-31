@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -27,15 +28,13 @@ import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 type ProductionRunEmbeddedAgent = typeof import("./run.js").runEmbeddedAgent;
 export type TestRunEmbeddedAgent = (
-  params: Omit<
-    Parameters<ProductionRunEmbeddedAgent>[0],
-    "admittedRunContext" | "preparedRunAdmission"
-  >,
+  params: RunEmbeddedAgentInternalParams,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 
 // Shared Vitest harness for overflow, compaction, failover, and hook tests.
@@ -77,19 +76,21 @@ type MockResolvedModel = {
   reasoning?: boolean;
 };
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
@@ -186,9 +187,8 @@ function makeMockRuntimePlan(): MockRuntimePlan {
 export const mockedCompactDirect = mockedContextEngine.compact;
 const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
-const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
-  () => makeMockRuntimePlan() as AgentRuntimePlan,
-);
+const buildMockAgentRuntimePlan = () => makeMockRuntimePlan() as AgentRuntimePlan;
+export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(buildMockAgentRuntimePlan);
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
   async (input: Record<string, unknown>) => {
     const pluginRegistry = getActivePluginRegistry();
@@ -276,8 +276,8 @@ type MockTruncateOversizedToolResultsResult = {
   reason?: string;
 };
 const mockedTruncateOversizedToolResultsInSession = vi.fn<
-  () => Promise<MockTruncateOversizedToolResultsResult>
->(async () => ({
+  () => MockTruncateOversizedToolResultsResult
+>(() => ({
   truncated: false,
   truncatedCount: 0,
   reason: "no oversized tool results",
@@ -446,15 +446,17 @@ const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 // the mocked codex harness does not claim: such runs select the built-in openclaw
 // host harness and pay its one-time source-compile cost. Suites proving plugin
 // harness behavior must pin provider "openai" (see run.session-permissions.test.ts).
-export const overflowBaseRunParams = {
-  agentId: "main",
-  sessionId: "test-session",
-  sessionKey: "agent:main:test-key",
-  workspaceDir: "/tmp/workspace",
-  prompt: "hello",
-  timeoutMs: 30000,
-  runId: "run-1",
-} as const;
+export function createOverflowRunParams(state: Pick<OpenClawTestState, "workspaceDir">) {
+  return {
+    agentId: "main",
+    sessionId: "test-session",
+    sessionKey: "agent:main:test-key",
+    workspaceDir: state.workspaceDir,
+    prompt: "hello",
+    timeoutMs: 30000,
+    runId: "run-1",
+  } as const;
+}
 
 function resetMockAgentHarness(): void {
   clearAgentHarnesses();
@@ -462,7 +464,7 @@ function resetMockAgentHarness(): void {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" || ctx.provider === "openai" || ctx.provider === "openai"
+      ctx.provider === "codex" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
@@ -482,7 +484,8 @@ function resetMockAgentHarness(): void {
 
 /** Reset every mocked runner dependency to the default successful no-op state. */
 function resetRunOverflowCompactionHarnessMocks(): void {
-  vi.unstubAllEnvs();
+  // Loading and warmup can run inside an already-owned environment. Only the
+  // per-test reset restores stubbed env, before the next fixture applies it.
   resetCommandQueueStateForTest();
   resetMockAgentHarness();
   mockedGlobalHookRunner.hasHooks.mockReset();
@@ -505,7 +508,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
   mockedAcquireAgentRunPreparedModelRuntime.mockClear();
-  mockedBuildAgentRuntimePlan.mockImplementation(() => makeMockRuntimePlan() as AgentRuntimePlan);
+  mockedBuildAgentRuntimePlan.mockImplementation(buildMockAgentRuntimePlan);
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
     ok: false,
@@ -534,7 +537,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveLiveToolResultMaxChars.mockReset();
   mockedResolveLiveToolResultMaxChars.mockReturnValue(32_000);
   mockedTruncateOversizedToolResultsInSession.mockReset();
-  mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
+  mockedTruncateOversizedToolResultsInSession.mockReturnValue({
     truncated: false,
     truncatedCount: 0,
     reason: "no oversized tool results",
@@ -670,6 +673,9 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   vi.unstubAllEnvs();
   resetCommandQueueStateForTest();
   resetMockAgentHarness();
+
+  mockedBuildAgentRuntimePlan.mockReset();
+  mockedBuildAgentRuntimePlan.mockImplementation(buildMockAgentRuntimePlan);
 
   mockedBuildEmbeddedRunPayloads.mockReset();
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
@@ -816,7 +822,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   // real handle shape without rediscovering every bundled provider plugin.
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: object) => model,
+    resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
+    resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderRuntimePluginHandle: vi.fn((params: Record<string, unknown>) => params),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
   }));
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: mockedIsProfileInCooldown,
@@ -835,78 +845,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
       resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
     };
   });
-
-  vi.doMock("../usage.js", () => ({
-    normalizeUsage: vi.fn((usage?: unknown) =>
-      usage && typeof usage === "object" ? usage : undefined,
-    ),
-    hasNonzeroUsage: vi.fn(
-      (usage?: {
-        total?: number;
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        reasoningTokens?: number;
-      }) =>
-        [
-          usage?.total,
-          usage?.input,
-          usage?.output,
-          usage?.cacheRead,
-          usage?.cacheWrite,
-          usage?.reasoningTokens,
-        ].some((value) => (value ?? 0) > 0),
-    ),
-    derivePromptTokens: vi.fn(
-      (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
-        usage
-          ? (() => {
-              const sum = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-              return sum > 0 ? sum : undefined;
-            })()
-          : undefined,
-    ),
-    deriveContextPromptTokens: vi.fn(
-      (params: {
-        lastCallUsage?: {
-          input?: number;
-          output?: number;
-          cacheRead?: number;
-          cacheWrite?: number;
-          contextUsage?:
-            | { state: "available"; promptTokens: number; totalTokens: number }
-            | { state: "unavailable" };
-          total?: number;
-        };
-        promptTokens?: number;
-        usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
-      }) => {
-        if (
-          typeof params.promptTokens === "number" &&
-          Number.isFinite(params.promptTokens) &&
-          params.promptTokens > 0
-        ) {
-          return params.promptTokens;
-        }
-        const lastCall = params.lastCallUsage;
-        if (lastCall?.contextUsage?.state === "available") {
-          return lastCall.contextUsage.promptTokens;
-        }
-        if (lastCall?.contextUsage?.state === "unavailable") {
-          return undefined;
-        }
-        for (const usage of [lastCall, params.usage]) {
-          const promptTokens =
-            (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
-          if (promptTokens > 0) {
-            return promptTokens;
-          }
-        }
-        return undefined;
-      },
-    ),
-  }));
 
   vi.doMock("../cli-backends.js", async () => {
     const actual = await vi.importActual<typeof import("../cli-backends.js")>("../cli-backends.js");
@@ -987,9 +925,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
-    truncateOversizedToolResultsInActiveTarget: mockedTruncateOversizedToolResultsInSession,
-    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
-    truncateOversizedToolResultsInRuntimeTranscript: mockedTruncateOversizedToolResultsInSession,
+    truncateOversizedToolResultsInSessionManager: mockedTruncateOversizedToolResultsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({
@@ -1115,19 +1051,21 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   return {
     runEmbeddedAgent: async (params) => {
       const agentId = params.agentId ?? "main";
-      const preparedRunAdmission = prepareAgentRunAdmission({
-        cfg: params.config ?? {},
-        operationalRunInstance: createOperationalRunInstanceRef(params.runId),
-        facts: {
-          runId: params.runId,
-          agentId,
-          ingress: {
-            kind: "system",
-            boundary: "run-overflow-compaction-harness",
-            state: "present",
+      const preparedRunAdmission =
+        params.preparedRunAdmission ??
+        prepareAgentRunAdmission({
+          cfg: params.config ?? {},
+          operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+          facts: {
+            runId: params.runId,
+            agentId,
+            ingress: {
+              kind: "system",
+              boundary: "run-overflow-compaction-harness",
+              state: "present",
+            },
           },
-        },
-      });
+        });
       try {
         return await runEmbeddedAgent({
           ...params,
@@ -1145,6 +1083,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 /** Move one-time runner compilation out of individual behavior timings. */
 export async function warmRunOverflowCompactionHarness(
   runEmbeddedAgent: TestRunEmbeddedAgent,
+  state: Pick<OpenClawTestState, "workspaceDir">,
   params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
 ): Promise<void> {
   resetRunOverflowCompactionHarnessMocks();
@@ -1152,7 +1091,7 @@ export async function warmRunOverflowCompactionHarness(
   mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "warmup" }]);
   mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["warmup"] }));
   await runEmbeddedAgent({
-    ...overflowBaseRunParams,
+    ...createOverflowRunParams(state),
     ...params,
     runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
   });
