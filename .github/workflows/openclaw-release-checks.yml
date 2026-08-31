@@ -834,6 +834,7 @@ jobs:
           (startsWith(inputs.target_context_ref, 'extended-stable/') ||
           startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ steps.ref.outputs.sha }}
         run: |

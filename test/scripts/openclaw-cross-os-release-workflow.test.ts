@@ -169,6 +169,7 @@ describe("cross-OS release checks workflow", () => {
     expect(baseline.if).toContain("steps.inputs.outputs.install_smoke_scheduled == 'true'");
     expect(baseline.if).toContain("startsWith(inputs.target_context_ref, 'extended-stable/')");
     expect(baseline.env).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
       TARGET_SHA: "${{ steps.ref.outputs.sha }}",
     });
