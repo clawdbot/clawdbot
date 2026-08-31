@@ -609,7 +609,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts default non-service repair prompts; service definition rewrites still require interactive confirmation.
-    - `openclaw doctor --fix` applies recommended non-service fixes without prompts (`--repair` is an alias). Outside update repair mode, headless runs report service drift without rewriting the definition.
+    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias). When state migration requires exclusive access, it stops the matching managed Gateway, verifies repairs, and restarts the same service once. It preserves the installed service definition, leaves already-stopped services stopped, and refuses to stop an ancestor Gateway. Outside update repair mode, headless runs report service drift without rewriting the definition.
     - `openclaw doctor --fix --force` can overwrite the managed supervisor config; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).

@@ -1299,6 +1299,22 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("defers gateway probes while Doctor owns offline maintenance", async () => {
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const ctx = createDoctorContext({
+      cfg: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      env: {},
+    });
+    ctx.gatewayMaintenanceActive = true;
+    await contribution.run(ctx);
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+  });
+
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,

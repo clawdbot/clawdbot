@@ -1,10 +1,16 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
   detectLegacyWorkspaceState,
@@ -43,6 +49,9 @@ const mocks = vi.hoisted(() => ({
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
+  service: vi.fn(),
+  packageRoot: vi.fn<() => string | undefined>(),
+  restartedHealthy: true,
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -56,7 +65,26 @@ vi.mock("../commands/doctor-prompter.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => undefined,
+  resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
+}));
+
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: () => mocks.service(),
+}));
+
+vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/update-cli/update-command-service-plan.js")>()),
+  // The fixture owns an in-memory manager; native machine profile policy is
+  // covered at the updater boundary and must not select a host service here.
+  assertGatewayServiceManagementAllowedForUpdate: () => undefined,
+  resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
+}));
+
+vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
+  waitForGatewayHealthyRestart: async () => ({ healthy: mocks.restartedHealthy }),
+  renderRestartDiagnostics: () => ["synthetic readiness failure"],
 }));
 
 vi.mock("../commands/doctor-update.js", () => ({
@@ -101,10 +129,134 @@ vi.mock("./doctor-health-contributions.js", () => ({
 describe("runDoctorHealthFlow", () => {
   beforeEach(() => {
     mocks.config.mockReturnValue({});
+    mocks.packageRoot.mockReturnValue(undefined);
+    mocks.service.mockReset();
+    mocks.restartedHealthy = true;
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
+
+  it.each(["ready", "repair-failed", "config-refused", "restart-unhealthy"] as const)(
+    "coordinates the matching managed writer through legacy multi-agent repair: %s",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({
+          agents: {
+            list: [
+              { id: "main", workspace: state.workspaceDir },
+              { id: "research", workspace: state.path("research") },
+            ],
+          },
+        });
+        const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        const secondary = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
+        secondary.db.exec(
+          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+        );
+        initial.db.exec(
+          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+        );
+        closeOpenClawAgentDatabasesForTest();
+        const leaseId = claimOpenClawAgentDatabaseLease({
+          agentId: "main",
+          path: initial.path,
+          env: state.env,
+        });
+        const events: string[] = [];
+        let running = true;
+        const packageRoot = process.cwd();
+        mocks.packageRoot.mockReturnValue(packageRoot);
+        const command = {
+          programArguments: [process.execPath, path.join(packageRoot, "openclaw.mjs"), "gateway"],
+          environment: {
+            OPENCLAW_STATE_DIR: state.stateDir,
+            OPENCLAW_CONFIG_PATH: state.configPath,
+          },
+        };
+        const stop = vi.fn(async () => {
+          events.push("stop");
+          running = false;
+          releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+        });
+        const restart = vi.fn(async () => {
+          events.push("restart");
+          const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+          expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+          const research = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
+          expect(research.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+          running = true;
+          return { outcome: "completed" as const };
+        });
+        mocks.service.mockReturnValue({
+          readCommand: async () => command,
+          readRuntime: async () => ({ status: running ? "running" : "stopped" }),
+          readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
+          isLoaded: async () => running,
+          isEnabled: async () => running,
+          stop,
+          restart,
+        });
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          events.push("repair");
+          expect(ctx.gatewayMaintenanceActive).toBe(true);
+          if (outcome === "repair-failed") {
+            throw new Error("synthetic migration failure");
+          }
+          if (outcome === "config-refused") {
+            ctx.configWriteRefusal = "validation";
+            return;
+          }
+          const result = await migrateLegacyMediaPersistence();
+          expect(result.warnings).toEqual([]);
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        if (outcome === "config-refused") {
+          runtime.exit.mockImplementation(() => {
+            const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+              databasePath: resolveOpenClawStateSqlitePath(state.env),
+              runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+              uid: process.getuid?.(),
+            });
+            const peer = spawnSync(process.execPath, [
+              "-e",
+              "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
+              coordinatorPath,
+            ]);
+            expect(peer.status).toBe(0);
+          });
+        }
+        try {
+          mocks.restartedHealthy = outcome !== "restart-unhealthy";
+          const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+          if (outcome === "repair-failed") {
+            await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "restart-unhealthy") {
+            await expect(run).rejects.toThrow("managed Gateway did not become ready");
+          } else {
+            await run;
+          }
+          const shouldRestart = outcome === "ready" || outcome === "restart-unhealthy";
+          expect(events).toEqual(
+            shouldRestart ? ["stop", "repair", "restart"] : ["stop", "repair"],
+          );
+          expect(stop).toHaveBeenCalledOnce();
+          expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
+          if (outcome === "ready") {
+            expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+          } else {
+            expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+          }
+        } finally {
+          releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+        }
+      });
+    },
+  );
 
   it("reports a cron ownership refusal instead of a recoverable post-install advisory", async () => {
     mocks.runContributions.mockImplementation(async (ctx) => {

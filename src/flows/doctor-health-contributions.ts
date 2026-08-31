@@ -429,6 +429,12 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { note } = await loadNoteModule();
+  if (ctx.gatewayMaintenanceActive) {
+    note("Gateway health will be checked after state migration.", "Gateway");
+    ctx.gatewayHealthSkipped = true;
+    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
+    return;
+  }
   if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
