@@ -169,9 +169,9 @@ describe("cross-OS release checks workflow", () => {
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
     });
-    expect(baseline.run).toContain('baseline=latest');
+    expect(baseline.run).toContain("baseline=latest");
     expect(baseline.run).toContain('"$TARGET_CONTEXT_REF" == "extended-stable/"*');
-    expect(baseline.run).toContain('contents/package.json?ref=${TARGET_SHA}');
+    expect(baseline.run).toContain("contents/package.json?ref=${TARGET_SHA}");
     expect(baseline.run).toContain("npm view openclaw versions --json");
     expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
     expect(baseline.run).toContain('--target-context-ref "$TARGET_CONTEXT_REF"');

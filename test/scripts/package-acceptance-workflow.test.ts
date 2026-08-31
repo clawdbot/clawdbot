@@ -9157,7 +9157,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(releaseCrossOsPath).toEqual([30, 15, 90, 60, 5]);
 
     const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
-    expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);
+    expect(jobNeeds(releaseInstall)).toEqual([
+      "resolve_target",
+      "resolve_installer_smoke_baseline",
+    ]);
     expect(jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_image"))).toEqual(
       ["preflight"],
     );
