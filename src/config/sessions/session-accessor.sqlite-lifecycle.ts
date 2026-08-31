@@ -53,6 +53,7 @@ import {
   readReferencedSessionIdsAfterTargetMutation,
   shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
+import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
@@ -176,6 +177,11 @@ export async function cleanupSessionLifecycleArtifactsCore(
       });
     },
   );
+  // The SQL commit survives a later archive-publication failure, so refresh
+  // planner statistics before crossing that separate artifact boundary.
+  if (committed.removedEntries > 0 || cleanupPlan.deletePlans.length > 0) {
+    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved);
+  }
   const archivedTranscripts = await publishSessionStateArchives(
     resolved,
     committed.archivedTranscripts,

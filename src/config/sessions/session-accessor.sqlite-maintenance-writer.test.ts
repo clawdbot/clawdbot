@@ -7,6 +7,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
+  cleanupSessionLifecycleArtifactsCore,
   loadSessionEntry,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
@@ -95,7 +96,45 @@ it("releases the store writer before maintenance archive sizing completes", asyn
   expect(writerCompletedBeforeMaterialization).toBe(true);
 });
 
-it("refreshes planner statistics after bulk session maintenance", async () => {
+it.each([
+  {
+    expected: { afterCount: 1, capped: 65 },
+    name: "maintenance pruning",
+    mutate: async (storePath: string) =>
+      await applySessionEntryLifecycleMutation({
+        storePath,
+        maintenanceOverride: {
+          maxEntries: 1,
+          mode: "enforce",
+          pruneAfterMs: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+  },
+  {
+    expected: { afterCount: 1, removedEntries: 65 },
+    name: "explicit lifecycle cleanup",
+    mutate: async (storePath: string) =>
+      await applySessionEntryLifecycleMutation({
+        storePath,
+        removals: Array.from({ length: 65 }, (_, index) => ({
+          sessionKey: `agent:main:planner-${index + 1}`,
+        })),
+        skipMaintenance: true,
+      }),
+  },
+  {
+    expected: { archivedTranscriptArtifacts: 0, removedEntries: 65 },
+    name: "lifecycle artifact cleanup",
+    mutate: async (storePath: string) =>
+      await cleanupSessionLifecycleArtifactsCore({
+        storePath,
+        sessionKeySegmentPrefix: "planner-",
+        transcriptContentMarker: "planner-marker",
+        orphanTranscriptMinAgeMs: 1,
+        nowMs: 66,
+      }),
+  },
+])("refreshes planner statistics after bulk $name", async ({ expected, mutate }) => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   for (let index = 0; index < 66; index += 1) {
@@ -111,26 +150,19 @@ it("refreshes planner statistics after bulk session maintenance", async () => {
     throw new Error("expected planner maintenance database path");
   }
   const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-  database.db.exec("ANALYZE");
+  database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
   expect(
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
 
-  const result = await applySessionEntryLifecycleMutation({
-    storePath,
-    maintenanceOverride: {
-      maxEntries: 1,
-      mode: "enforce",
-      pruneAfterMs: Number.MAX_SAFE_INTEGER,
-    },
-  });
+  await expect(mutate(storePath)).resolves.toMatchObject(expected);
 
-  expect(result).toMatchObject({ afterCount: 1, capped: 65 });
   expect(
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });

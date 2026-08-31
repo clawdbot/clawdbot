@@ -94,10 +94,10 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
         | undefined;
       const previousLimit = Number(row?.analysis_limit ?? 0);
       try {
-        // The explicit limit bounds older supported SQLite builds; 0x10000 examines
-        // every table after bulk deletion, independent of connection query history.
+        // Direct analysis is required after known deletions. SQLite 3.44 is still
+        // supported and its optimize heuristic only reacts to table growth.
         database.db.exec(
-          `PRAGMA analysis_limit = ${SESSION_PLANNER_ANALYSIS_LIMIT}; PRAGMA optimize = 0x10002;`,
+          `PRAGMA analysis_limit = ${SESSION_PLANNER_ANALYSIS_LIMIT}; ANALYZE main;`,
         );
       } finally {
         database.db.exec(`PRAGMA analysis_limit = ${previousLimit};`);
@@ -559,6 +559,7 @@ export function applySessionEntryMaintenance(
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
+  options: { deletedRowsBeforeMaintenance?: boolean } = {},
 ): Promise<SessionEntryMaintenanceResult> {
   const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
   if (archivedWorktrees.length) {
@@ -587,6 +588,9 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     capped: 0,
   };
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
+    if (options.deletedRowsBeforeMaintenance) {
+      await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
+    }
     return { archivedTranscripts: [], ...committedCounts };
   }
   let archiveBytesBySessionId: Map<string, number>;
@@ -597,10 +601,13 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     );
   } catch (error) {
     warn("SQLite session maintenance archive sizing failed", error, stateDeletePlans);
+    if (options.deletedRowsBeforeMaintenance) {
+      await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
+    }
     return { archivedTranscripts: [], ...committedCounts };
   }
   const publishedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-  let deletedRows = false;
+  let deletedRows = options.deletedRowsBeforeMaintenance === true;
   for (const batch of buildSessionMaintenanceBatches({
     archiveBytesBySessionId,
     entryRemovals,
