@@ -149,7 +149,12 @@ export function bindWorkerTurnOwner(
     capability,
     claim,
     claimKey: currentClaimKey,
-    runtime: { delegatedAuthority, prepareAssistantTranscriptMessage, scope, store },
+    runtime: {
+      delegatedAuthority,
+      prepareAssistantTranscriptMessage,
+      scope: scope ?? undefined,
+      store,
+    },
   };
   owners.set(claim.sessionId, owner);
   workerTurnOwners.set(path, owners);
