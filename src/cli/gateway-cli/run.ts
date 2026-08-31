@@ -1128,10 +1128,17 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let activeBootId: string | undefined;
   const tryRecoverChannelAutostartSuppression = () => {
     const decision = inspectGatewayCrashLoopBreaker(process.env);
-    // The current safe-mode boot remains an open row until the full window has
-    // drained. Requiring zero prevents a near-expiry history from restoring
-    // channels before this process itself has proven stable for the whole window.
-    if (!decision.recovered || decision.uncleanBoots !== 0) {
+    // Fix #133820: breaker previously required the window to be completely
+    // empty (uncleanBoots === 0), but the current safe-mode boot itself stays
+    // open while stable, counting as 1. That blocked self-healing for an extra
+    // full window after the 27-boot crash loop and, combined with the health-
+    // monitor's global "expected stopped" class, left all 7 Feishu accounts
+    // permanently suppressed until manual restart. Recover as soon as the
+    // breaker is no longer tripped (window drained below threshold); the
+    // recovered marker + fresh lifecycle row gives the next crash loop its own
+    // window. TTL / exponential backoff is provided by the 5-minute window
+    // itself, not by requiring zero.
+    if (!decision.recovered) {
       return false;
     }
     const recoveredBootId = recordGatewayCrashLoopRecovery(activeBootId, process.env);

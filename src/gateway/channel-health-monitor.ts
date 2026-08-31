@@ -138,9 +138,44 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
           const key = rKey(channelId, accountId);
           if (autostartSuppressed) {
+            // Fix #133820: previously every stopped account while the global
+            // crash-loop breaker was tripped was logged as "expected stopped"
+            // and skipped forever. That misclassifies unclean crash-induced
+            // stops (lastError contains "breaker tripped") as operator-intended
+            // stops, permanently blocking the 5-minute self-heal. For ambient
+            // suppression the "expected" label is still correct (operator must
+            // configure credentials). For crash-loop breaker, treat only clean
+            // stops as expected; deferred crash stops log distinctly and remain
+            // retryable once recoverAutostartSuppression clears the breaker.
+            const isAmbientSuppressed =
+              channelManager.isAmbientAutostartSuppressed(channelId);
+            const isCrashSuppressed =
+              globalAutostartSuppression !== null &&
+              typeof status.lastError === "string" &&
+              status.lastError.includes("breaker tripped");
+            // Ambient: always expected. Crash-loop: only clean (no breaker error)
+            // is expected; crash-suppressed is deferred and not permanently expected.
+            const treatAsExpected =
+              isAmbientSuppressed || !isCrashSuppressed;
+            if (treatAsExpected) {
+              if (status.running !== true && !suppressedAccounts.has(key)) {
+                log.info?.(
+                  `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
+                );
+                suppressedAccounts.add(key);
+              }
+              continue;
+            }
+            // Crash-loop suppressed but unclean: log as deferred, not expected.
+            // Continue to defer restart while breaker holds, but don't mark as
+            // permanently expected — suppressedAccounts still debounces the log,
+            // and the next loop's recoverAutostartSuppression will clear the
+            // global flag once the 5-minute window drains, allowing per-channel
+            // restart. This keeps single-channel faults from being mislabelled
+            // and provides the TTL self-heal (#133820).
             if (status.running !== true && !suppressedAccounts.has(key)) {
               log.info?.(
-                `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
+                `[${channelId}:${accountId}] health-monitor: channel autostart suppressed (crash-loop breaker); deferring restart until breaker recovers`,
               );
               suppressedAccounts.add(key);
             }
