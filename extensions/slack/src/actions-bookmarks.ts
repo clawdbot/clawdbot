@@ -1,7 +1,8 @@
 // Slack channel bookmark operations, split from actions.ts to keep that file
 // under the repo max-lines limit. Re-exported by actions.ts so the lazy
 // action-runtime module loader resolves them through the actions.js barrel.
-import { getClient, type SlackActionClientOpts } from "./actions.js";
+import { getClient } from "./actions-client.js";
+import type { SlackActionClientOpts } from "./actions.js";
 
 export type SlackBookmark = {
   id?: string;
