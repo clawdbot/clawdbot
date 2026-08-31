@@ -23,6 +23,54 @@ describe("Hermes skill activation policy migration", () => {
     await workspace.cleanup();
   });
 
+  it("plans skill config and disabled state as independently conflicting entries", async () => {
+    const source = path.join(workspace.dir, "hermes");
+    const workspaceDir = path.join(workspace.dir, "workspace");
+    await writeFile(
+      path.join(source, "config.yaml"),
+      "skills:\n  disabled: [hidden-skill]\n  config:\n    hidden-skill:\n      mode: careful\n    selected-skill:\n      mode: fast\n",
+    );
+    await writeFile(
+      path.join(source, "skills", "hidden-directory", "SKILL.md"),
+      "---\nname: hidden-skill\ndescription: Hidden skill\n---\n",
+    );
+    await writeFile(
+      path.join(source, "skills", "selected-directory", "SKILL.md"),
+      "\uFEFF---\r\nname: selected-skill\r\ndescription: Selected skill\r\n---\r\n",
+    );
+    const ctx = makeContext({ source, stateDir: path.join(workspace.dir, "state"), workspaceDir });
+    ctx.config.skills = { entries: { "hidden-skill": { enabled: true } } };
+
+    const plan = await buildHermesMigrationProvider().plan(ctx);
+
+    expect(plan.items.filter((item) => item.kind === "skill")).toEqual([
+      expect.objectContaining({
+        target: path.join(workspaceDir, "skills", "hidden-directory"),
+        details: expect.objectContaining({ skillName: "hidden-skill" }),
+      }),
+      expect.objectContaining({
+        target: path.join(workspaceDir, "skills", "selected-directory"),
+        details: expect.objectContaining({ skillName: "selected-skill" }),
+      }),
+    ]);
+    expect(plan.items.filter((item) => item.kind === "config")).toEqual([
+      expect.objectContaining({
+        status: "conflict",
+        details: {
+          path: ["skills", "entries", "hidden-skill"],
+          value: { config: { mode: "careful" }, enabled: false },
+        },
+      }),
+      expect.objectContaining({
+        status: "planned",
+        details: {
+          path: ["skills", "entries", "selected-skill"],
+          value: { config: { mode: "fast" } },
+        },
+      }),
+    ]);
+  });
+
   it.each([
     ["YAML list", "[hidden-skill]"],
     ["scalar name", "hidden-skill"],

@@ -67,7 +67,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
     Memory config defaults for OpenClaw file memory. External memory providers such as Honcho are recorded as archive or manual-review items so you can move them deliberately.
   </Accordion>
   <Accordion title="Skills">
-    Skills with a `SKILL.md` file under active directories in `skills/` are discovered recursively, flattened into the OpenClaw workspace skill directory, and copied with their support files. Per-skill config values from `skills.config` and global disabled state from `skills.disabled` are preserved. Only the organization mirror selected by `_org/.active_org` is imported.
+    Skills with a `SKILL.md` file under active directories in `skills/` are discovered recursively, flattened into the OpenClaw workspace skill directory, and copied with their support files. Per-skill config values from `skills.config` and global disabled state from `skills.disabled` are preserved. With `--skill`, only the selected skills' config and disabled state are imported. Only the organization mirror selected by `_org/.active_org` is imported.
   </Accordion>
   <Accordion title="Auth credentials">
     Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include current Hermes OpenAI Codex OAuth entries, OpenCode OpenAI OAuth and GitHub Copilot entries, and the [supported Hermes `.env` keys](/cli/migrate#supported-env-keys). Use `--include-secrets` for non-interactive import, `--no-auth-credentials` to skip credentials, or onboarding's `--import-secrets` flag. After importing Hermes OAuth, do not keep Hermes and OpenClaw using the same refresh grant; reauthenticate one side before running both.

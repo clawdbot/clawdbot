@@ -137,13 +137,10 @@ describe("Hermes migration config mapping", () => {
       },
     });
 
-    const skillEntries = itemById(plan.items, "config:skill-entries");
-    expect(skillEntries?.details?.value).toEqual({
-      "ship-it": {
-        config: {
-          mode: "fast",
-        },
-      },
+    const skillEntry = itemById(plan.items, "config:skill-entry:ship-it");
+    expect(skillEntry?.details).toEqual({
+      path: ["skills", "entries", "ship-it"],
+      value: { config: { mode: "fast" } },
     });
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",

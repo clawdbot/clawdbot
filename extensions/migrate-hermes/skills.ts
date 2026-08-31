@@ -3,13 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { exists, readText, sanitizeName } from "./helpers.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { exists, parseHermesConfig, readText, sanitizeName } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   id: string;
   name: string;
+  skillName: string;
   source: string;
   target: string;
 };
@@ -73,6 +75,14 @@ export async function buildSkillItems(params: {
     if (!name) {
       continue;
     }
+    const content = await readText(path.join(source, "SKILL.md"));
+    const frontmatter = content?.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u)?.[1];
+    let skillName = path.basename(source);
+    try {
+      skillName = normalizeOptionalString(parseHermesConfig(frontmatter).name) ?? skillName;
+    } catch {
+      // Keep copying malformed source files; the skill loader reports invalid frontmatter.
+    }
     plannedSkills.push({
       id: `skill:${path
         .relative(params.source.skillsDir, source)
@@ -81,6 +91,7 @@ export async function buildSkillItems(params: {
         .filter(Boolean)
         .join(":")}`,
       name,
+      skillName,
       source,
       target: path.join(params.targets.workspaceDir, "skills", name),
     });
@@ -100,6 +111,7 @@ export async function buildSkillItems(params: {
         action: "copy",
         source: skill.source,
         target: skill.target,
+        details: { skillName: skill.skillName },
         status: collides ? "conflict" : targetExists && !params.overwrite ? "conflict" : "planned",
         reason: collides
           ? `multiple Hermes skill directories normalize to "${skill.name}"`

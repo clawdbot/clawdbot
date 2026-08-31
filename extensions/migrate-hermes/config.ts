@@ -5,9 +5,14 @@ import {
   createMigrationConfigPatchItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
+  mergeMigrationConfigValue,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
 import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
 import { providerConfig } from "./config-provider-contract.js";
@@ -18,7 +23,7 @@ import {
 } from "./config-providers.js";
 import { childRecord, readStringArray, sanitizeName } from "./helpers.js";
 
-function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> | undefined {
+function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> {
   const skills = childRecord(config, "skills");
   const entries = new Map<string, { config?: Record<string, unknown>; enabled?: false }>();
   for (const [skillKey, value] of Object.entries(childRecord(skills, "config"))) {
@@ -43,7 +48,8 @@ function mapSkillEntries(config: Record<string, unknown>): Record<string, unknow
       entries.set(skillKey, { ...entries.get(skillKey), enabled: false });
     }
   }
-  return entries.size > 0 ? Object.fromEntries(entries) : undefined;
+  // Apply the shared untrusted-key policy before skill names become path segments.
+  return asNonArrayRecord(mergeMigrationConfigValue({}, Object.fromEntries(entries)));
 }
 
 export function buildConfigItems(params: {
@@ -187,18 +193,18 @@ export function buildConfigItems(params: {
     }
   }
 
-  const skillEntries = mapSkillEntries(params.config);
-  if (skillEntries) {
+  for (const [skillKey, value] of Object.entries(mapSkillEntries(params.config))) {
+    const configPath = ["skills", "entries", skillKey];
     items.push(
       createMigrationConfigPatchItem({
-        id: "config:skill-entries",
-        target: "skills.entries",
-        path: ["skills", "entries"],
-        value: skillEntries,
+        id: `config:skill-entry:${sanitizeName(skillKey)}`,
+        target: configPath.join("."),
+        path: configPath,
+        value,
         message: "Import Hermes skill config values and global disabled state.",
         conflict:
           !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["skills", "entries"], skillEntries),
+          hasMigrationConfigPatchConflict(params.ctx.config, configPath, value),
       }),
     );
   }
