@@ -154,9 +154,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
-    // A loopback transport can forward to a remote filesystem with its own workspace mapping.
+    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
     assertLocalTargetSupported(
-      appServer.connectionClass === "remote" || Boolean(appServer.remoteWorkspaceRoot),
+      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
     );
     return shellEnvironment
       ? {

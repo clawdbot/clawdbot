@@ -31,6 +31,7 @@ describe("prepareCodexAttemptConnection", () => {
   it.each([
     "local",
     "loopback-server",
+    "ordinary-loopback-server",
     "forwarded-server",
     "unix-server",
     "remote-server",
@@ -51,7 +52,7 @@ describe("prepareCodexAttemptConnection", () => {
         credentialScrubEnv: {},
         localIdentityEnv: {},
         managedLocalIdentity: false,
-        localProcessEnv,
+        localProcessEnv: placement === "ordinary-loopback-server" ? undefined : localProcessEnv,
       }),
     });
     if (["sandbox", "remote", "remote-only"].includes(placement)) {
@@ -75,9 +76,9 @@ describe("prepareCodexAttemptConnection", () => {
                     : {
                         transport: "websocket",
                         url:
-                          placement === "loopback-server" || placement === "forwarded-server"
-                            ? "ws://127.0.0.1:19400"
-                            : "wss://fixture.invalid/native",
+                          placement === "remote-server"
+                            ? "wss://fixture.invalid/native"
+                            : "ws://127.0.0.1:19400",
                         authToken: "fixture-token",
                         ...(placement === "forwarded-server"
                           ? { remoteWorkspaceRoot: "/remote/workspace" }
@@ -88,11 +89,17 @@ describe("prepareCodexAttemptConnection", () => {
           : {}),
       },
     });
-    if (!["local", "loopback-server", "unix-server"].includes(placement)) {
+    if (!["local", "ordinary-loopback-server", "unix-server"].includes(placement)) {
       await expect(pending).rejects.toThrow("saved prompt");
       return;
     }
     const connection = await pending;
+    if (placement === "ordinary-loopback-server") {
+      expect(connection.shellEnvironment).toBeUndefined();
+      expect(connection.appServer.start.env ?? {}).not.toHaveProperty("OPENCLAW_STATE_DIR");
+      expect(connection.disableLoginShell).toBe(false);
+      return;
+    }
     expect(connection.shellEnvironment).toEqual(localProcessEnv);
     expect(connection.appServer.start.env).toMatchObject(localProcessEnv);
     expect(connection.disableLoginShell).toBe(true);
