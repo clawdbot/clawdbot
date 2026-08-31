@@ -5,7 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { markCoreTtsAttemptResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { transferCoreTtsToolResultProvenance } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -31,6 +31,7 @@ export type CodexAppServerToolTelemetry = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAutoDeliveryMediaUrls?: string[];
+  coreTtsToolResults?: object[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
@@ -245,7 +246,8 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
-  return toolAutoDeliveryMediaUrls && toolAutoDeliveryMediaUrls.length > 0
-    ? markCoreTtsAttemptResult(result, toolAutoDeliveryMediaUrls)
-    : result;
+  for (const toolResult of input.toolTelemetry.coreTtsToolResults ?? []) {
+    transferCoreTtsToolResultProvenance(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
+  }
+  return result;
 }

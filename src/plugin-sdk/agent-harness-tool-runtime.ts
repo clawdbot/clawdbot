@@ -11,7 +11,7 @@ import {
 
 export {
   getCoreTtsToolResultMediaUrls,
-  markCoreTtsAttemptResult,
+  transferCoreTtsToolResultProvenance,
 } from "../agents/tools/tts-tool-result-provenance.js";
 
 type OpenClawCodingToolsOptions = NonNullable<

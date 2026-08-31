@@ -30,6 +30,25 @@ export function markCoreTtsAttemptResult<T extends object>(
   return result;
 }
 
+/** Transfer only built-in TTS provenance; callers cannot mint delivery authority. */
+export function transferCoreTtsToolResultProvenance<T extends object>(
+  toolResult: unknown,
+  attemptResult: T,
+  eligibleMediaUrls: readonly string[],
+): T {
+  const toolMediaUrls = getCoreTtsToolResultMediaUrls(toolResult);
+  if (!toolMediaUrls) {
+    return attemptResult;
+  }
+  const eligible = new Set(eligibleMediaUrls.map((url) => url.trim()));
+  const transferred = toolMediaUrls.filter((url) => eligible.has(url.trim()));
+  if (transferred.length === 0) {
+    return attemptResult;
+  }
+  const existing = coreTtsMediaByAttemptResult.get(attemptResult) ?? [];
+  return markCoreTtsAttemptResult(attemptResult, [...new Set([...existing, ...transferred])]);
+}
+
 /** Core lifecycle copies preserve attestation; plugin-created result copies stay untrusted. */
 export function copyCoreTtsAttemptResultProvenance<T extends object>(source: object, target: T): T {
   const mediaUrls = coreTtsMediaByAttemptResult.get(source);

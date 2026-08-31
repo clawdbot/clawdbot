@@ -2,7 +2,11 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
+import {
+  markCoreTtsAttemptResult,
+  markCoreTtsToolResult,
+  transferCoreTtsToolResultProvenance,
+} from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -116,18 +120,35 @@ describe("prepareEmbeddedRunTerminal", () => {
       name: "core-attested delivered media",
       attestedMediaUrls: ["/tmp/reply.opus"],
       forgePublicField: false,
+      transferToolResult: undefined,
       expectedMarkedMedia: ["/tmp/reply.opus"],
     },
     {
       name: "an external harness field",
       attestedMediaUrls: [],
       forgePublicField: true,
+      transferToolResult: undefined,
       expectedMarkedMedia: [],
     },
     {
       name: "core-attested but non-delivered media",
       attestedMediaUrls: ["/tmp/other.opus"],
       forgePublicField: false,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "a transferred core TTS result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "core" as const,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "a transferred plugin result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "plugin" as const,
       expectedMarkedMedia: [],
     },
   ])("accepts only $name for source-suppression delivery", async (testCase) => {
@@ -144,6 +165,13 @@ describe("prepareEmbeddedRunTerminal", () => {
     }
     if (testCase.forgePublicField) {
       Reflect.set(attempt, "toolAutoDeliveryMediaUrls", ["/tmp/reply.opus"]);
+    }
+    if (testCase.transferToolResult) {
+      const toolResult =
+        testCase.transferToolResult === "core"
+          ? markCoreTtsToolResult({}, ["/tmp/reply.opus"])
+          : {};
+      transferCoreTtsToolResultProvenance(toolResult, attempt, ["/tmp/reply.opus"]);
     }
 
     const prepared = await prepareAttempt({

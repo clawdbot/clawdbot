@@ -437,6 +437,7 @@ export type CodexDynamicToolBridge = {
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAutoDeliveryMediaUrls: string[];
+    coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
     acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -564,6 +565,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAutoDeliveryMediaUrls: [],
+    coreTtsToolResults: [],
     toolAudioAsVoice: false,
     acceptedSessionSpawns: [],
     quarantinedTools,
@@ -874,6 +876,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
         const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+        const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
         collectToolTelemetry({
           toolName,
           args: executedArgs,
@@ -881,7 +884,8 @@ export function createCodexDynamicToolBridge(params: {
           mediaTrustResult: telemetryRawResult,
           telemetry,
           isError: resultIsError,
-          autoDeliveryTtsMediaUrls: getCoreTtsToolResultMediaUrls(rawResult),
+          autoDeliveryTtsMediaUrls,
+          coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
@@ -1395,6 +1399,7 @@ function collectToolTelemetry(params: {
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
   autoDeliveryTtsMediaUrls?: readonly string[];
+  coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
@@ -1421,6 +1426,7 @@ function collectToolTelemetry(params: {
       const seen = new Set(params.telemetry.toolMediaUrls);
       const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
       const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
+      let retainsCoreTtsMedia = false;
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
           seen.add(mediaUrl);
@@ -1428,11 +1434,19 @@ function collectToolTelemetry(params: {
         }
         if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
           autoDeliveryMediaUrls.add(mediaUrl);
+          retainsCoreTtsMedia = true;
         } else {
           autoDeliveryMediaUrls.delete(mediaUrl);
         }
       }
       params.telemetry.toolAutoDeliveryMediaUrls = [...autoDeliveryMediaUrls];
+      if (
+        retainsCoreTtsMedia &&
+        params.coreTtsToolResult &&
+        !params.telemetry.coreTtsToolResults.includes(params.coreTtsToolResult)
+      ) {
+        params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
+      }
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;
       }
