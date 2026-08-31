@@ -147,6 +147,115 @@ describe("OpenAI Responses continuation", () => {
     );
   });
 
+  it("does not treat two different unsafe-integer arguments as equal (lossless comparison)", () => {
+    // Number.MAX_SAFE_INTEGER + 1 and + 2 both round to the same double
+    // under plain JSON.parse; a lossless comparator must still tell them
+    // apart so a genuinely changed argument is never mistaken for a
+    // re-serialization whitespace difference.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740994}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
+  it("treats a cached number-typed unsafe integer as equal to its own replayed string-typed round-trip", () => {
+    // Real shape, confirmed live against a real tool-calling round: the
+    // cached side is the raw provider text (a bare, unsafe-integer number),
+    // but AssistantMessage.arguments already stores every unsafe integer as
+    // a string (parseJsonObjectPreservingUnsafeIntegers,
+    // transport-stream-shared.ts, precision-preserving), so the *unmodified*
+    // replay of this exact same historical tool call always re-serializes it
+    // back as a same-digits JSON string. This is the client's own necessary
+    // representation of the same value, not a real argument change -- an
+    // earlier revision of this fix (a distinguishing tag on the cached side
+    // only) treated this as a genuine change, permanently breaking
+    // continuation for the very next round of any real tool call carrying an
+    // out-of-range integer.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n":"9007199254740993"}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "continued",
+    );
+  });
+
+  it("treats a whitespace-only re-serialization of the same unsafe integer as equal", () => {
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740993}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "continued",
+    );
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     first?.commit(continuationState().lastRequest, {
