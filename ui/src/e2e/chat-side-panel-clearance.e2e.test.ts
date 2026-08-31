@@ -138,7 +138,10 @@ async function waitForShellLayout(page: Page): Promise<void> {
   });
 }
 
-async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<void> {
+async function expectPanelHeaderControlsClearShellChrome(
+  page: Page,
+  shellChromeExpected: boolean,
+): Promise<void> {
   const panelControls = sidePanel(page).locator(
     ":scope > .side-panel__header :is(button, wa-tab):visible",
   );
@@ -179,14 +182,18 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
     };
   });
 
-  expect(geometry.shells.length).toBeGreaterThan(0);
-  const shellRight = Math.max(...geometry.shells.map((box) => box.right));
   const panelLeft = Math.min(...geometry.panels.map((box) => box.left));
-  expect(geometry.contentLeft - shellRight).toBeGreaterThanOrEqual(4);
-  expect(geometry.contentLeft - shellRight).toBeLessThanOrEqual(16);
-  expect(panelLeft - shellRight).toBeGreaterThanOrEqual(8);
-  if (geometry.direction !== "rtl") {
-    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+  if (shellChromeExpected) {
+    expect(geometry.shells.length).toBeGreaterThan(0);
+    const shellRight = Math.max(...geometry.shells.map((box) => box.right));
+    expect(geometry.contentLeft - shellRight).toBeGreaterThanOrEqual(4);
+    expect(geometry.contentLeft - shellRight).toBeLessThanOrEqual(16);
+    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(8);
+    if (geometry.direction !== "rtl") {
+      expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    }
+  } else {
+    expect(geometry.shells).toEqual([]);
   }
   expect(
     geometry.panels.every(
@@ -212,7 +219,7 @@ suite.define(() => {
       custodian: false,
       deviceLess: false,
       direction: "ltr",
-      expectedControl: ".shell-chrome-controls__search",
+      expectedControl: ".sidebar-brand__search",
       name: "expanded navigation",
       navCollapsed: false,
       operatorScopes: undefined,
@@ -288,7 +295,7 @@ suite.define(() => {
         }
         await page.locator(testCase.expectedControl).waitFor();
         await waitForShellLayout(page);
-        await expectPanelHeaderControlsClearShellChrome(page);
+        await expectPanelHeaderControlsClearShellChrome(page, testCase.navCollapsed);
         await capturePanel(page, testCase.proof);
       },
     );

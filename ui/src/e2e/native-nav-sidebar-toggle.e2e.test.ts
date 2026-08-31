@@ -177,13 +177,13 @@ suite.define(() => {
           .some((entry) => entry.name.includes("nav-drawer-swipe")),
       ),
     ).toBe(false);
-    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-    await expect.poll(() => toggle.isVisible()).toBe(true);
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const collapse = page.locator(".sidebar-brand__collapse");
+    await expect.poll(() => collapse.isVisible()).toBe(true);
+    await collapse.click();
+    const expand = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expand.click();
+    await expect.poll(() => collapse.isVisible()).toBe(true);
 
     await page.locator(".sidebar-issues-button").click();
     const desktopInbox = page.locator("#sidebar-issues-panel");
@@ -283,15 +283,18 @@ suite.define(() => {
         } else if (action === "Escape") {
           await page.keyboard.press("Escape");
         } else {
-          const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-          await toggle.click();
-          await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+          await page.getByRole("button", { name: "Collapse sidebar" }).click();
+          await expect
+            .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
+            .toBe(true);
           // The native event does not generate an outside pointer that could
           // accidentally dismiss an Inbox resurrected by the old import.
           await page.evaluate(() => {
             window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
           });
-          await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+          await expect
+            .poll(() => page.getByRole("button", { name: "Collapse sidebar" }).isVisible())
+            .toBe(true);
           if (action === "replacement open") {
             await inbox.click();
           }
@@ -323,8 +326,7 @@ suite.define(() => {
 
   it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-    const tooltip = toggle.locator("xpath=..").locator("wa-tooltip");
+    const toggle = page.locator(".sidebar-brand__collapse");
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
 
     // Safari does not focus buttons on tap. Reproduce that ordering so the
@@ -336,9 +338,11 @@ suite.define(() => {
       (element as HTMLElement).click();
     });
 
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    const expand = page.locator(".shell-chrome-controls__nav-toggle");
+    const tooltip = expand.locator("xpath=..").locator("wa-tooltip");
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
     await expect
-      .poll(() => toggle.evaluate((element) => element === document.activeElement))
+      .poll(() => expand.evaluate((element) => element === document.activeElement))
       .toBe(true);
     await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
   });
@@ -372,12 +376,10 @@ suite.define(() => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    // Expanded native-nav hosts keep the cluster's search (no native search
-    // control exists while the rail is open) but hide the duplicate nav toggle.
-    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
-    await expect
-      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
-      .toBe(false);
+    // Expanded native-nav hosts keep sidebar search (no native search control
+    // exists while the rail is open) but hide the duplicate web nav toggle.
+    await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
 
     // Collapse through the native titlebar path; the whole web chrome cluster
     // hides (native titlebar provides search and new-thread while collapsed).
