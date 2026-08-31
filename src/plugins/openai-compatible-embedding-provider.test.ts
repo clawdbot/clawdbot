@@ -96,7 +96,9 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
-  if (!text.trim()) return {};
+  if (!text.trim()) {
+    return {};
+  }
   return JSON.parse(text) as Record<string, unknown>;
 }
 
