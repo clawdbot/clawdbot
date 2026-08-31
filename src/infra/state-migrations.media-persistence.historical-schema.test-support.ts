@@ -29,9 +29,9 @@ function restoreHistoricalAgentLeaseSchema(sql: string): string {
   return sql.replace(marker, `${HISTORICAL_AGENT_LEASE_SCHEMA}${marker}`);
 }
 
-function removeSchemaRange(sql: string, startMarker: string, endMarker: string): string {
+function removeSchemaRange(sql: string, startMarker: string, endMarker?: string): string {
   const start = sql.indexOf(startMarker);
-  const end = sql.indexOf(endMarker, start);
+  const end = endMarker === undefined ? sql.length : sql.indexOf(endMarker, start);
   if (start === -1 || end === -1) {
     throw new Error(`Historical agent schema marker is missing: ${startMarker}`);
   }
@@ -40,7 +40,11 @@ function removeSchemaRange(sql: string, startMarker: string, endMarker: string):
 
 /** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
 export function historicalV15AgentSchemaSql(): string {
-  let sql = restoreHistoricalAgentLeaseSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+  const withoutPendingInputs = removeSchemaRange(
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    "\n-- Accepted input stays outside the active transcript until its exact turn owns execution.",
+  );
+  let sql = restoreHistoricalAgentLeaseSchema(withoutPendingInputs)
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
     .replace("  route_context_json TEXT,\n", "")

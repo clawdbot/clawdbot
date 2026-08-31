@@ -149,14 +149,14 @@ export function handleMessageEnd(
     const rawCommentaryText = coerceChatContentText(
       extractAssistantCommentaryText(commentaryMessage),
     );
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
-    });
+    }));
     emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
       final: true,
       itemId: ctx.state.lastAssistantStreamItemId,
@@ -197,14 +197,14 @@ export function handleMessageEnd(
     resetMessageEndStreamingState(ctx);
     return;
   }
-  appendRawStream({
+  appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
-  });
+  }));
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
     extractStandaloneMessageToolText(rawVisibleText, {

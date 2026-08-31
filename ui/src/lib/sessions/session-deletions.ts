@@ -14,11 +14,8 @@ import type {
   SessionState,
 } from "./session-capability.ts";
 import {
-  canonicalUiSessionKeyForPersistence,
-  isUiGlobalScopeConfigured,
   normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiGlobalAliasAgentId,
+  resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import { requestSessionDelete } from "./session-requests.ts";
@@ -62,16 +59,16 @@ export function createSessionDeletions(host: DeletionHost) {
   // Canonical generation and request order outlive an individual mutation,
   // including rollback. Retired IDs share this owner with the active claim.
   const deletions = new Map<string, DeletionOwner>();
-  const identity = (key: string, agentId?: string | null) => {
+  const prepareIdentity = () => {
     const snapshot = host.snapshot();
-    const canonical =
-      isUiGlobalScopeConfigured(snapshot) && resolveUiGlobalAliasAgentId(snapshot, key)
-        ? "global"
-        : canonicalUiSessionKeyForPersistence(snapshot, key);
-    return `${canonical}\0${normalizeAgentId(parseAgentSessionKey(key)?.agentId ?? parseAgentSessionKey(canonical)?.agentId ?? agentId ?? resolveUiSelectedGlobalAgentId(snapshot))}`;
+    const selectedAgentId = resolveUiSelectedGlobalAgentId(snapshot);
+    return (key: string, agentId?: string | null) => {
+      const canonical = resolveUiConversationIdentity(snapshot, key, agentId ?? undefined);
+      return `${canonical.sessionKey}\0${canonical.agentId ?? normalizeAgentId(agentId ?? selectedAgentId)}`;
+    };
   };
-  const find = (key: string, agentId?: string | null, sessionId?: string) => {
-    const owner = deletions.get(identity(key, agentId));
+  const identity = (key: string, agentId?: string | null) => prepareIdentity()(key, agentId);
+  const find = (owner: DeletionOwner | undefined, sessionId?: string) => {
     for (const deletion of owner?.records ?? []) {
       if (sessionId && deletion.sessionId === sessionId) {
         return deletion;
@@ -82,10 +79,8 @@ export function createSessionDeletions(host: DeletionHost) {
   const owns = (deletion: Deletion) =>
     deletions.get(identity(deletion.target.key, deletion.target.agentId)) === deletion.owner &&
     deletion.owner.records.has(deletion);
-  const acceptsGeneration = (key: string, sessionId?: string, agentId?: string | null) => {
-    const canonical = deletions.get(identity(key, agentId));
-    return !canonical?.sessionId || !sessionId || canonical.sessionId === sessionId;
-  };
+  const acceptsGeneration = (owner: DeletionOwner | undefined, sessionId?: string) =>
+    !owner?.sessionId || !sessionId || owner.sessionId === sessionId;
   const reportError = (message: string) => {
     host.publish({ ...host.readState(), error: message }, "operation");
     // The initiating header/organizer may already be retired by navigation or reconnect.
@@ -133,7 +128,7 @@ export function createSessionDeletions(host: DeletionHost) {
       deletions.set(id, owner);
     }
     const sessionId = target.expectedSessionId ?? owner.sessionId;
-    const existing = find(target.key, target.agentId, sessionId);
+    const existing = find(owner, sessionId);
     if (
       existing &&
       (owner.active === existing || existing.phase === "pending") &&
@@ -276,9 +271,10 @@ export function createSessionDeletions(host: DeletionHost) {
   };
 
   return {
-    acceptsGeneration,
+    acceptsGeneration: (key: string, sessionId?: string, agentId?: string | null) =>
+      acceptsGeneration(deletions.get(identity(key, agentId)), sessionId),
     deletionState: (key: string, agentId?: string | null, sessionId?: string) =>
-      stateOf(find(key, agentId, sessionId), sessionId),
+      stateOf(find(deletions.get(identity(key, agentId)), sessionId), sessionId),
     deleteMany: removeMany,
     async delete(
       this: void,
@@ -303,6 +299,9 @@ export function createSessionDeletions(host: DeletionHost) {
       if (!result || deletions.size === 0) {
         return result;
       }
+      // A projection shares one snapshot of alias defaults; the next projection
+      // prepares them again so reconnects never retain stale session identities.
+      const identify = prepareIdentity();
       let rows = result.sessions;
       for (const [id, generation] of deletions) {
         for (const deletion of generation.records) {
@@ -311,7 +310,7 @@ export function createSessionDeletions(host: DeletionHost) {
             deletion.phase === "rollback" &&
             generation.active === deletion &&
             saved &&
-            !rows.some((row) => identity(row.key, row.agentId ?? owner.scope.agentId) === id)
+            !rows.some((row) => identify(row.key, row.agentId ?? owner.scope.agentId) === id)
           ) {
             if (rows === result.sessions) {
               rows = rows.slice();
@@ -322,10 +321,11 @@ export function createSessionDeletions(host: DeletionHost) {
       }
       const sessions = rows.filter((row, index) => {
         const agentId = row.agentId ?? owner.scope.agentId;
-        if (!acceptsGeneration(row.key, row.sessionId, agentId)) {
+        const generation = deletions.get(identify(row.key, agentId));
+        if (!acceptsGeneration(generation, row.sessionId)) {
           return false;
         }
-        const current = find(row.key, agentId, row.sessionId);
+        const current = find(generation, row.sessionId);
         if (!stateOf(current, row.sessionId)) {
           return true;
         }
@@ -349,8 +349,9 @@ export function createSessionDeletions(host: DeletionHost) {
       if (!result) {
         return result;
       }
+      const identify = prepareIdentity();
       const sessions = result.sessions.filter((row) => {
-        const id = identity(row.key, row.agentId ?? agentId);
+        const id = identify(row.key, row.agentId ?? agentId);
         let owner = deletions.get(id);
         if (!owner) {
           owner = { revision: issuedRevision, sessionId: row.sessionId, records: new Set() };
@@ -360,7 +361,7 @@ export function createSessionDeletions(host: DeletionHost) {
           // history and events pass through the pure generation filter in apply.
           if (
             issuedRevision <= owner.revision ||
-            find(row.key, row.agentId ?? agentId, row.sessionId)?.sessionId === row.sessionId
+            find(owner, row.sessionId)?.sessionId === row.sessionId
           ) {
             return false;
           }
@@ -391,7 +392,7 @@ export function createSessionDeletions(host: DeletionHost) {
         });
         confirm(deletion, key);
       } else if (reason === "create" || reason === "new") {
-        const deletion = find(key, agentId);
+        const deletion = find(deletions.get(identity(key, agentId)));
         if (deletion?.phase === "confirmed") {
           deletion.owner.active = undefined;
           publish();

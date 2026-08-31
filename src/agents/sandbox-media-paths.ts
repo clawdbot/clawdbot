@@ -16,6 +16,7 @@ export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
 };
 
 export function createSandboxBridgeReadFile(params: {
@@ -39,10 +40,24 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const mediaPathInfo = params.inboundFallbackDir
     ? resolveMediaReferenceSandboxPath(params.mediaPath, params.inboundFallbackDir)
     : { resolved: params.mediaPath };
-  const filePath = /^file:/iu.test(mediaPathInfo.resolved)
+  let filePath = /^file:/iu.test(mediaPathInfo.resolved)
     ? safeFileURLToPath(mediaPathInfo.resolved, "linux")
     : mediaPathInfo.resolved;
-  const rewrittenFrom = mediaPathInfo.rewrittenFrom;
+  let rewrittenFrom = mediaPathInfo.rewrittenFrom;
+  const stagedMediaPath = rewrittenFrom
+    ? undefined
+    : params.sandbox.stagedMediaPaths?.get(filePath);
+  if (stagedMediaPath) {
+    // A real workspace entry remains authoritative over the producer's staged alias.
+    const directStat = await params.sandbox.bridge.stat({
+      filePath,
+      cwd: params.sandbox.root,
+    });
+    if (!directStat) {
+      rewrittenFrom = filePath;
+      filePath = stagedMediaPath;
+    }
+  }
   if (rewrittenFrom) {
     const stat = await params.sandbox.bridge.stat({
       filePath,

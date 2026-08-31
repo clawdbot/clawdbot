@@ -487,7 +487,7 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     expect(logged).toHaveLength(0);
   });
 
-  // Producer-side invariant pin: incrementRunCompactionCount (session-run-accounting.ts)
+  // Producer-side invariant pin: incrementCompactionCount (session-updates.ts)
   // returns `number | undefined`. When defined, the value is computed as
   // `Math.max(0, entry.compactionCount ?? 0) + Math.max(0, amount)` where amount >= 1
   // at the agent-runner callsite (amount: autoCompactionCount, guarded by `> 0`).
@@ -511,7 +511,7 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     }
   });
 
-  // Producer-coupling pin: invoke incrementRunCompactionCount with a stub
+  // Producer-coupling pin: invoke incrementCompactionCount with a stub
   // session-store, capture the returned `count`, and assert it flows through
   // to attrs["compaction.id"]. The sampled-range test above pins the helper
   // accepts the producer's documented range; this test pins the *call-site*
@@ -521,9 +521,9 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
   //
   // Stub keeps storePath undefined to avoid file IO; cfg undefined to skip
   // lifecycle hooks. Only the count-arithmetic path is exercised.
-  it("producer-coupling: incrementRunCompactionCount return value flows to compaction.id attr", async () => {
-    const { incrementRunCompactionCount } =
-      await import("../auto-reply/reply/session-run-accounting.js");
+  it("producer-coupling: incrementCompactionCount return value flows to compaction.id attr", async () => {
+    const { incrementCompactionCount } =
+      await import("../auto-reply/reply/session-updates.js");
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
 
@@ -533,13 +533,13 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
       sessionFile: "/tmp/sessions/s1.jsonl",
       compactionCount: 0,
       updatedAt: Date.now(),
-    } as unknown as Parameters<typeof incrementRunCompactionCount>[0]["sessionEntry"];
+    } as unknown as Parameters<typeof incrementCompactionCount>[0]["sessionEntry"];
     const sessionStore: Record<string, NonNullable<typeof baseEntry>> = {
       [sessionKey]: baseEntry as NonNullable<typeof baseEntry>,
     };
 
     // amount=1: producer returns 1 (0 + max(0,1))
-    const count1 = await incrementRunCompactionCount({
+    const count1 = await incrementCompactionCount({
       sessionEntry: baseEntry,
       sessionStore,
       sessionKey,
@@ -553,7 +553,7 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     });
 
     // amount=3: producer returns 4 (1 + max(0,3)) — sanity-check non-1 increments
-    const count3 = await incrementRunCompactionCount({
+    const count3 = await incrementCompactionCount({
       sessionEntry: sessionStore[sessionKey],
       sessionStore,
       sessionKey,

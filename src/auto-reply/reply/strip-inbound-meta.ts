@@ -38,23 +38,14 @@ function isInboundContextHeaderLine(line: string): boolean {
   return t.length > INBOUND_CONTEXT_MARKER.length && t.endsWith(INBOUND_CONTEXT_MARKER);
 }
 
-// Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
-// Active-memory's bare Context: sentinel is valid only as a complete line.
-const SENTINEL_SUBSTRING_ALTERNATIVES = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS]
-  .map((sentinel) => sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  .join("|");
-const ACTIVE_MEMORY_HEADER_ESCAPED = ACTIVE_MEMORY_CONTEXT_HEADER.replace(
-  /[.*+?^${}()|[\]\\]/g,
-  "\\$&",
-);
-const SENTINEL_FAST_RE = new RegExp(
-  `${SENTINEL_SUBSTRING_ALTERNATIVES}|^[ \t]*${ACTIVE_MEMORY_HEADER_ESCAPED}[ \t]*$`,
-  "m",
-);
-
 /** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
-  return Boolean(text && SENTINEL_FAST_RE.test(text));
+  return (
+    text.includes(INBOUND_CONTEXT_MARKER) ||
+    MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => text.includes(hint)) ||
+    // Active-memory's bare Context: sentinel is valid only as a complete line.
+    (text.includes(ACTIVE_MEMORY_CONTEXT_HEADER) && /^[ \t]*Context:[ \t]*$/m.test(text))
+  );
 }
 
 function isMessageToolDeliveryHintLine(line: string): boolean {
@@ -212,7 +203,7 @@ export function stripInboundMetadata(text: string): string {
   }
 
   const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
-  if (!SENTINEL_FAST_RE.test(withoutTimestamp)) {
+  if (!hasInboundMetadataSentinel(withoutTimestamp)) {
     return withoutTimestamp;
   }
 
@@ -282,7 +273,7 @@ export function stripInboundMetadata(text: string): string {
 
 /** Strips only leading inbound metadata blocks while preserving later user text. */
 export function stripLeadingInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!hasInboundMetadataSentinel(text)) {
     return text;
   }
 
@@ -359,7 +350,7 @@ export function stripLeadingInboundMetadata(text: string): string {
 
 /** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text.includes(INBOUND_CONTEXT_MARKER)) {
     return null;
   }
 

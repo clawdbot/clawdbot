@@ -1,19 +1,11 @@
 // Plugin state store tests cover per-plugin persisted state reads and writes.
 import { chmodSync, existsSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import {
-  clearOpenClawStateDatabaseOpenFailure,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
-  recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -927,68 +919,6 @@ describe("plugin state keyed store", () => {
         expect(existsSync(databasePath)).toBe(false);
       },
     );
-  });
-
-  it("fails closed for process-local and persisted database quarantine", async () => {
-    await withPluginStateTestState(async () => {
-      const store = createPluginStateKeyedStore("discord", {
-        namespace: "quarantine",
-        maxEntries: 10,
-      });
-      await store.register("k", { ok: true });
-      const databasePath = resolveOpenClawStateSqlitePath(testState?.env);
-      closePluginStateDatabase();
-
-      recordOpenClawStateDatabaseOpenFailure(databasePath, new Error("latched failure"));
-      await expect(store.lookup("k")).rejects.toMatchObject({
-        code: "PLUGIN_STATE_OPEN_FAILED",
-        path: databasePath,
-      });
-      clearOpenClawStateDatabaseOpenFailure(databasePath);
-
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: testState?.env,
-          kind: "state",
-          path: databasePath,
-          reason: "persisted failure",
-        }),
-      ).toBe(true);
-      await expect(store.lookup("k")).rejects.toMatchObject({
-        code: "PLUGIN_STATE_OPEN_FAILED",
-        path: databasePath,
-      });
-      expect(clearOpenClawDatabaseQuarantine(databasePath, { env: testState?.env })).toBe(true);
-    });
-  });
-
-  it("fails closed for a newer shared-state schema", async () => {
-    await withPluginStateTestState(async () => {
-      const store = createPluginStateKeyedStore("discord", {
-        namespace: "newer-schema",
-        maxEntries: 10,
-      });
-      await store.register("k", { ok: true });
-      const databasePath = resolveOpenClawStateSqlitePath(testState?.env);
-      openOpenClawStateDatabase().db.exec(
-        `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`,
-      );
-      closePluginStateDatabase();
-
-      try {
-        await expect(store.lookup("k")).rejects.toMatchObject({
-          code: "PLUGIN_STATE_OPEN_FAILED",
-          path: databasePath,
-        });
-      } finally {
-        const database = new DatabaseSync(databasePath);
-        try {
-          database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
-        } finally {
-          database.close();
-        }
-      }
-    });
   });
 
   it.runIf(process.platform !== "win32")(

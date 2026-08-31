@@ -510,6 +510,45 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
+  it.each([
+    { name: "direct", toolNames: ["secrets"], capabilityToolNames: [], codeModeActive: false },
+    {
+      name: "deferred Code Mode",
+      toolNames: ["exec"],
+      capabilityToolNames: ["secrets"],
+      codeModeActive: true,
+    },
+  ])("teaches protected credential requests for $name tools", (surface) => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
+    expect(prompt).toContain("`secrets`: list metadata first");
+    expect(prompt).toContain("request only missing task-needed credentials: name + reason");
+    expect(prompt).toContain("exact allowedHosts for egress");
+    expect(prompt).toContain("Human masked entry -> protected shared store");
+    expect(prompt).toContain("metadata/ref only");
+    expect(prompt).toContain("returned store SecretRef on supported config fields");
+    expect(prompt).toContain("Gateway egress needs enabled proxy + allowed hosts");
+    expect(prompt).toContain("no plaintext fallback");
+    expect(prompt).toContain("auto-injected opaque env sentinel under stored name");
+    expect(prompt).toContain("No secret templates; never override/print that variable");
+    expect(prompt).toContain("Native shell/sandbox/node: no protected injection");
+    expect(prompt).toContain("late saves need next turn");
+    expect(prompt).toContain(
+      "no_answer: report blocker or continue with best judgment; never ask in chat",
+    );
+  });
+
+  it("omits the named credential route when policy leaves only Code Mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+      capabilityToolNames: [],
+      codeModeActive: true,
+    });
+    expect(prompt).not.toContain("`secrets`");
+    expect(prompt).toContain("host-owned masked credential entry");
+    expect(prompt).toContain("safe external setup");
+  });
+
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

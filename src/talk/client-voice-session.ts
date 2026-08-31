@@ -238,16 +238,12 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
   deadlineAt?: number;
+  assertCommitAllowed?: () => void;
   creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
 }): Promise<string> {
   const created = await patchSessionEntryCore(
     params,
     (_entry, context) => {
-      // Browser credentials can be short-lived. Check at the authoritative
-      // write boundary so a queued write cannot create an unusable empty chat.
-      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
-        throw new Error("Realtime browser session expired during startup; try again");
-      }
       if (context.existingEntry?.sessionId) {
         return null;
       }
@@ -260,7 +256,17 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
         sandbox: params.creation?.sandbox,
       });
     },
-    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+    {
+      fallbackEntry: mergeSessionEntry(undefined, {}),
+      assertCommitAllowed: () => {
+        // Provider startup can end while this write is queued or being prepared.
+        // Revalidate at commit so it cannot leave an unusable empty chat.
+        params.assertCommitAllowed?.();
+        if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+          throw new Error("Realtime browser session expired during startup; try again");
+        }
+      },
+    },
   );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);

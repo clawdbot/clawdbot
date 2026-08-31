@@ -93,6 +93,8 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
   continuationDelegateAdmission?: SpawnSubagentAdmissionAuthority;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {

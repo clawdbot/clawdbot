@@ -38,16 +38,15 @@ export async function releaseQueuedCompactionCompletion(params: {
     return;
   }
 
-  const { incrementRunCompactionCount } = await import("./session-run-accounting.js");
-  const compactionId = await incrementRunCompactionCount({
+  const { incrementCompactionCount } = await import("./session-updates.js");
+  const compactionId = await incrementCompactionCount({
     agentId: params.followupRun.run.agentId,
-    cfg: params.followupRun.run.config,
     sessionEntry,
     sessionStore: params.activeSessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     amount: 1,
-    compactionTokensAfter: params.compactionResult.result?.tokensAfter,
+    tokensAfter: params.compactionResult.result?.tokensAfter,
     newSessionId: params.compactionResult.result?.sessionId,
   });
   const resolved = resolveSessionEntryFromStore({

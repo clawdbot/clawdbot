@@ -32,6 +32,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  isRuntimeCompactionDelegate,
   prepareMemorySystemPromptAddition,
 } from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
@@ -721,6 +722,12 @@ describe("Default engine selection", () => {
   it("resolveContextEngine() with no config returns the default ('legacy') engine", async () => {
     const engine = await resolveContextEngine();
     expect(engine.info.id).toBe("legacy");
+  });
+
+  it("preserves native compaction watchdog ownership through default resolution", async () => {
+    const engine = await resolveContextEngine();
+
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
   });
 
   it("resolveContextEngine() with config contextEngine='legacy' returns legacy engine", async () => {
@@ -1542,6 +1549,7 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect(assemble).toHaveBeenCalledTimes(1);
   });
 
@@ -1632,6 +1640,7 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect(compact).toHaveBeenCalledTimes(1);
   });
 

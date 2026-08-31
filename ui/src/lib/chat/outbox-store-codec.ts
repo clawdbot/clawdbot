@@ -11,17 +11,31 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // Shipped v1 state could hold one full queue under each of 20 alias keys.
 // Alias consolidation may exceed today's admission cap, but must retain every
 // existing input while the canonical queue drains back below 50.
-export const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
+const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
 export type StoredComposerSession = {
+  awaitingDefaults?: true;
   draft?: string;
   goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
   queue?: ChatQueueItem[];
   updatedAt: number;
 };
+
+export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
+  return (
+    left.id === right.id &&
+    left.sendRunId === right.sendRunId &&
+    left.sendAttempts === right.sendAttempts &&
+    left.sendState === right.sendState &&
+    left.agentId === right.agentId &&
+    left.sessionKey === right.sessionKey &&
+    left.orderKey === right.orderKey &&
+    left.attachmentPayload?.key === right.attachmentPayload?.key
+  );
+}
 
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
@@ -63,7 +77,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
       ? entry.createdAt
       : Date.now();
-  if (!id || (!text.trim() && !Array.isArray(entry.attachments))) {
+  if (
+    !id ||
+    (!text.trim() &&
+      !Array.isArray(entry.attachments) &&
+      entry.attachmentPayload === undefined &&
+      entry.attachmentStorageError === undefined)
+  ) {
     return null;
   }
   const attachments = Array.isArray(entry.attachments)
@@ -72,6 +92,37 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (entry.attachmentPayload !== undefined) {
+    const payload = entry.attachmentPayload;
+    if (
+      isRecord(payload) &&
+      typeof payload.key === "string" &&
+      typeof payload.recoveryScope === "string" &&
+      typeof payload.tabId === "string"
+    ) {
+      item.attachmentPayload = {
+        key: payload.key,
+        recoveryScope: payload.recoveryScope,
+        tabId: payload.tabId,
+      };
+    } else {
+      item.attachmentStorageError = "missing";
+    }
+  }
+  if (
+    entry.attachmentStorageError === "missing" ||
+    entry.attachmentStorageError === "unavailable" ||
+    entry.attachmentStorageError === "capacity"
+  ) {
+    item.attachmentStorageError = entry.attachmentStorageError;
+  }
+  if (Array.isArray(entry.attachments) && attachments.length !== entry.attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+  if (item.attachmentPayload && !attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+
   if (entry.intent !== undefined) {
     const intent = entry.intent;
     // Never restore a structured admission as ordinary text after losing its intent.
@@ -123,8 +174,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering") {
+  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "sending") {
+    item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
@@ -176,9 +229,12 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     return null;
   }
   const goalMode = entry.goalMode;
+  // Reject oversize input as a whole; migration keeps its source bytes intact.
+  if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
+    return null;
+  }
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
-        .slice(0, MAX_RETAINED_QUEUE_ITEMS)
         .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
@@ -206,6 +262,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     return null;
   }
   return {
+    ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),

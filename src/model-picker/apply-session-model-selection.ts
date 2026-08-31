@@ -76,6 +76,7 @@ export type ApplySessionModelSelectionResult =
       provider: string;
       model: string;
       effectiveModelRef: string;
+      agentRuntime: string;
       changed: boolean;
       contextTokens: number;
       configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
@@ -300,6 +301,17 @@ export async function applySessionModelSelection(
     persistedEntry = params.sessionEntry;
   }
 
+  const agentRuntime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    provider: request.provider,
+    modelId: request.model,
+    modelApi: selectedCatalogEntry?.api,
+    modelBaseUrl: selectedCatalogEntry?.baseUrl,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: persistedEntry,
+  });
+
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
@@ -338,16 +350,7 @@ export async function applySessionModelSelection(
       nextThinking: {
         level: persistedEntry.thinkingLevel,
         catalog: [...thinkingCatalog],
-        agentRuntime: resolveEffectiveAgentRuntime({
-          cfg: params.cfg,
-          provider,
-          modelId: model,
-          modelApi: selectedCatalogEntry?.api,
-          modelBaseUrl: selectedCatalogEntry?.baseUrl,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionEntry: persistedEntry,
-        }),
+        agentRuntime,
       },
     });
   }
@@ -361,16 +364,7 @@ export async function applySessionModelSelection(
 
   const contextProvider = resolveContextConfigProviderForRuntime({
     provider,
-    runtimeId: resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider,
-      modelId: model,
-      modelApi: selectedCatalogEntry?.api,
-      modelBaseUrl: selectedCatalogEntry?.baseUrl,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionEntry: persistedEntry,
-    }),
+    runtimeId: agentRuntime,
     config: params.cfg,
   });
   return {
@@ -378,6 +372,7 @@ export async function applySessionModelSelection(
     provider,
     model,
     effectiveModelRef,
+    agentRuntime,
     changed,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,

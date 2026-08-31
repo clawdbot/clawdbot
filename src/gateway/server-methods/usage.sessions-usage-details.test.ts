@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({
@@ -107,33 +108,36 @@ describe("sessions.usage details", () => {
   });
 
   it("loads bare-key usage details through the persisted fixed-store owner", async () => {
-    const config: OpenClawConfig = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
-    mockStoredUsageSession("global", "s-ops", {
-      agentId: "ops",
-      config,
-      storePath: "/tmp/shared-sessions.sqlite",
-    });
+    await withOpenClawTestState({ label: "usage-fixed-store-owner" }, async (state) => {
+      const storePath = state.statePath("shared-sessions.sqlite");
+      const config: OpenClawConfig = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      };
+      mockStoredUsageSession("global", "s-ops", {
+        agentId: "ops",
+        config,
+        storePath,
+      });
 
-    const respond = await runSessionsUsageDetail(
-      "sessions.usage.timeseries",
-      { key: "global" },
-      config,
-    );
+      const respond = await runSessionsUsageDetail(
+        "sessions.usage.timeseries",
+        { key: "global" },
+        config,
+      );
 
-    expect(getUsageMockArg(respond, 0, 0)).toBe(true);
-    expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
-      agentId: "ops",
+      expect(getUsageMockArg(respond, 0, 0)).toBe(true);
+      expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
+        agentId: "ops",
+      });
+      expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "ops" }),
+      );
     });
-    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops" }),
-    );
   });
 
   it("preserves JSONL detail lookup for storeless sessions", async () => {

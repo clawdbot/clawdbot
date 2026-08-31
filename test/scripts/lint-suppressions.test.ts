@@ -199,6 +199,9 @@ describe("production lint suppressions", () => {
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        // Gateway metadata uses __openclaw; execFile error causes can expose credential argv.
+        "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
+        "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|preserve-caught-error|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",

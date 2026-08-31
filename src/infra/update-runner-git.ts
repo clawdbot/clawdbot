@@ -21,6 +21,7 @@ import {
 } from "./update-runner-doctor.js";
 import {
   findBlockingGitFailure,
+  gitCleanCheckArgs,
   resolveBuildEnv,
   resolveInstallEnv,
   shouldInstallWithoutScriptsOnWindows,
@@ -269,13 +270,10 @@ export async function updateGitCheckout(params: {
     return buildError(reason);
   };
 
-  const statusCheck = await runStep(
-    step(
-      "clean check",
-      ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-      gitRoot,
-    ),
-  );
+  const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
+  if (statusCheck.exitCode !== 0) {
+    return buildError("clean-check-failed");
+  }
   if (statusCheck.stdoutTail?.trim()) {
     return buildError("dirty", "skipped");
   }
@@ -457,11 +455,7 @@ export async function updateGitCheckout(params: {
       return await rollbackError("build-failed");
     }
     const buildCleanCheck = await runStep(
-      step(
-        "build clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-        gitRoot,
-      ),
+      step("build clean check", gitCleanCheckArgs(gitRoot), gitRoot),
     );
     if (buildCleanCheck.exitCode !== 0) {
       return await rollbackError("build-failed");

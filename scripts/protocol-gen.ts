@@ -1,10 +1,14 @@
 // Protocol Gen script supports OpenClaw repository automation.
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripInternalProtocolFields } from "../packages/gateway-protocol/src/schema/internal-fields.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
+import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
+import {
+  assertProtocolSchemaDocument,
+  buildProtocolSchemaDocument,
+} from "./lib/protocol-schema-document.mts";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -32,51 +36,39 @@ function resolveOutputPath(args: string[]): string {
   return outputPath;
 }
 
-async function writeJsonSchema(jsonSchemaPath: string) {
-  const definitions: Record<string, unknown> = {};
+function main() {
+  const schemas: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
     const publicSchema = stripInternalProtocolFields(schema);
     if (publicSchema !== undefined) {
-      definitions[name] = publicSchema;
+      schemas[name] = publicSchema;
     }
   }
-  const methods = Object.fromEntries(
-    listCoreGatewayMethodMetadata().map(({ name, scope, since }) => [name, { since, scope }]),
+  const document = buildProtocolSchemaDocument({
+    methods: listCoreGatewayMethodMetadata(),
+    schemas,
+  });
+  // The artifact is a build output with no committed baseline, so this contract
+  // check is the only guard between a degraded registry and the published
+  // schema; a regenerate-then-diff guard on it can never fail.
+  assertProtocolSchemaDocument(document);
+  const result = writeGeneratedOutput({
+    check: false,
+    next: JSON.stringify(document, null, 2),
+    outputPath: resolveOutputPath(process.argv.slice(2)),
+    repoRoot,
+  });
+  const displayPath = path.relative(repoRoot, result.outputPath);
+  console.log(
+    result.wrote
+      ? `[protocol-gen] wrote ${displayPath}`
+      : `[protocol-gen] unchanged ${displayPath}`,
   );
-
-  const rootSchema = {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    $id: "https://openclaw.ai/protocol.schema.json",
-    title: "OpenClaw Gateway Protocol",
-    description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
-    oneOf: [
-      { $ref: "#/definitions/RequestFrame" },
-      { $ref: "#/definitions/ResponseFrame" },
-      { $ref: "#/definitions/EventFrame" },
-    ],
-    discriminator: {
-      propertyName: "type",
-      mapping: {
-        req: "#/definitions/RequestFrame",
-        res: "#/definitions/ResponseFrame",
-        event: "#/definitions/EventFrame",
-      },
-    },
-    methods,
-    definitions,
-  };
-
-  await fs.mkdir(path.dirname(jsonSchemaPath), { recursive: true });
-  await fs.writeFile(jsonSchemaPath, JSON.stringify(rootSchema, null, 2));
-  console.log(`wrote ${jsonSchemaPath}`);
-  return { jsonSchemaPath, schemaString: JSON.stringify(rootSchema) };
 }
 
-async function main() {
-  await writeJsonSchema(resolveOutputPath(process.argv.slice(2)));
-}
-
-main().catch((err: unknown) => {
+try {
+  main();
+} catch (err: unknown) {
   console.error(err);
   process.exit(1);
-});
+}

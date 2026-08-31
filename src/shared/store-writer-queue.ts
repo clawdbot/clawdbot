@@ -140,10 +140,14 @@ export async function runQueuedStoreWrite<T>(params: {
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
     return await params.fn();
   }
+  // A queued writer retains its caller's authority, never the preceding writer's
+  // async context. The active-writer scope still belongs to actual execution.
+  const runInAsyncContext = AsyncLocalStorage.snapshot();
   const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
   return await new Promise<T>((resolve, reject) => {
     const task: StoreWriterTask = {
-      fn: async () => await runActiveStoreWriter(params.queues, params.storePath, params.fn),
+      fn: async () =>
+        await runInAsyncContext(runActiveStoreWriter, params.queues, params.storePath, params.fn),
       resolve: (value) => resolve(value as T),
       reject,
     };

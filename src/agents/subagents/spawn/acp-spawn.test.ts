@@ -12,6 +12,7 @@ import {
 } from "../../../acp/runtime/registry.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
+import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
@@ -29,6 +30,11 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
@@ -81,8 +87,6 @@ const hoisted = vi.hoisted(() => {
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
   const requestHeartbeatNowMock = vi.fn();
-  const getChannelPluginMock = vi.fn();
-  const getLoadedChannelPluginMock = vi.fn();
   const normalizeChannelIdMock = vi.fn((channelId: string) => {
     const normalized = channelId.trim().toLowerCase();
     return normalized || null;
@@ -180,8 +184,6 @@ const hoisted = vi.hoisted(() => {
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
     requestHeartbeatNowMock,
-    getChannelPluginMock,
-    getLoadedChannelPluginMock,
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
     registerSubagentRunMock,
@@ -208,14 +210,14 @@ vi.mock("../../../acp/runtime/session-meta.js", () => ({
 }));
 
 vi.mock("../../../channels/plugins/index.js", () => ({
-  getChannelPlugin: hoisted.getChannelPluginMock,
-  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  getChannelPlugin: (channelId: string) => getLoadedChannelPluginForRead(channelId),
+  getLoadedChannelPlugin: (channelId: string) => getLoadedChannelPluginForRead(channelId),
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
 vi.mock("../../../channels/plugins/registry.js", () => ({
-  getChannelPlugin: hoisted.getChannelPluginMock,
-  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  getChannelPlugin: (channelId: string) => getLoadedChannelPluginForRead(channelId),
+  getLoadedChannelPlugin: (channelId: string) => getLoadedChannelPluginForRead(channelId),
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
@@ -571,6 +573,7 @@ function enableMatrixAcpThreadBindings(): void {
     },
   };
   const matrixPlugin = {
+    ...createChannelTestPluginBase({ id: "matrix" }),
     conversationBindings: {
       defaultTopLevelPlacement: "child",
     },
@@ -603,11 +606,8 @@ function enableMatrixAcpThreadBindings(): void {
       },
     },
   };
-  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "matrix" ? matrixPlugin : undefined,
-  );
-  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "matrix" ? matrixPlugin : undefined,
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
   );
   registerSessionBindingAdapter({
     channel: "matrix",
@@ -634,6 +634,7 @@ function enableLineCurrentConversationBindings(): void {
     },
   });
   const linePlugin = {
+    ...createChannelTestPluginBase({ id: "line" }),
     messaging: {
       resolveInboundConversation: ({
         conversationId,
@@ -649,11 +650,8 @@ function enableLineCurrentConversationBindings(): void {
       },
     },
   };
-  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "line" ? linePlugin : undefined,
-  );
-  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "line" ? linePlugin : undefined,
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "line", plugin: linePlugin, source: "test" }]),
   );
   registerSessionBindingAdapter({
     channel: "line",
@@ -682,6 +680,7 @@ function enableTelegramCurrentConversationBindings(): void {
     },
   });
   const telegramPlugin = {
+    ...createChannelTestPluginBase({ id: "telegram" }),
     messaging: {
       resolveInboundConversation: ({
         conversationId,
@@ -706,11 +705,8 @@ function enableTelegramCurrentConversationBindings(): void {
       },
     },
   };
-  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "telegram" ? telegramPlugin : undefined,
-  );
-  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
-    channelId === "telegram" ? telegramPlugin : undefined,
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
   );
   registerSessionBindingAdapter({
     channel: "telegram",
@@ -729,12 +725,11 @@ function enableTelegramCurrentConversationBindings(): void {
 
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.requestHeartbeatNowMock.mockReset();
-    hoisted.getChannelPluginMock.mockReset().mockReturnValue(undefined);
-    hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
@@ -881,6 +876,7 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   });
@@ -1309,6 +1305,50 @@ describe("spawnAcpDirect", () => {
       },
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
+  it("strips an inherited OpenClaw auth profile before ACP initialization", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "openai/gpt-5.6-luna@openai:test-profile",
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Investigate flaky tests", agentId: "codex" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.6-luna" }),
+    );
+  });
+
+  it("rejects an explicit OpenClaw auth profile for ACP runtimes", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "openai/gpt-5.6-luna@openai:test-profile",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result).toHaveProperty(
+      "error",
+      "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
+    );
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {

@@ -85,6 +85,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const assertActive = ctx.assertActive;
   const promptedAt = Date.now();
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
@@ -184,6 +185,7 @@ export async function spawnSubagentDirect(
       cfg,
       targetAgentId,
       childSessionKey,
+      label: label || undefined,
       incognito,
       requesterInternalKey,
       creationPolicy,
@@ -266,7 +268,7 @@ export async function spawnSubagentDirect(
         agentId: targetAgentId,
         label: label || undefined,
         mode: spawnMode,
-        requesterSessionKey: ownership.threadBindingRequesterSessionKey,
+        requesterSessionKey: ownership.controllerSessionKey,
         requester: {
           channel: childSessionOrigin?.channel,
           accountId: childSessionOrigin?.accountId,
@@ -367,7 +369,6 @@ export async function spawnSubagentDirect(
         childSystemPrompt,
         thinkingOverride,
         runTimeoutSeconds,
-        label: label || undefined,
         lightContext: params.lightContext === true,
         expectsCompletionMessage,
         requesterOrigin,
@@ -464,6 +465,9 @@ export async function spawnSubagentDirect(
         return { contextEnginePreparation: result.preparation };
       },
       async dispatchTurn() {
+        // Initialize returned its rollback handle. Refusal here follows dispatch
+        // cleanup instead of losing that handle through initialize failure.
+        assertActive?.();
         if (params.collect) {
           return { runId: childIdem };
         }
@@ -536,6 +540,7 @@ export async function spawnSubagentDirect(
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
+        assertActive?.();
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {

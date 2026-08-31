@@ -37,12 +37,8 @@ import {
 } from "../../../shared/text/assistant-visible-text.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
-  formatRawAssistantErrorForUi,
   formatUserFacingAssistantErrorText,
-  getApiErrorPayloadFingerprint,
-  isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
@@ -141,10 +137,6 @@ function resolveRawAssistantAnswerParts(lastAssistant: AssistantMessage | undefi
   });
 }
 
-function normalizeReplyTextForComparison(text: string): string {
-  return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
-}
-
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -181,6 +173,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  runStopReason?: string;
   deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
@@ -270,21 +263,6 @@ export function buildEmbeddedRunPayloads(params: {
               authMode: params.authMode,
             })
       : undefined;
-  const rawErrorFingerprint = rawErrorMessage
-    ? getApiErrorPayloadFingerprint(rawErrorMessage)
-    : null;
-  const formattedRawErrorMessage = rawErrorMessage
-    ? formatRawAssistantErrorForUi(rawErrorMessage)
-    : null;
-  const normalizedFormattedRawErrorMessage = formattedRawErrorMessage
-    ? normalizeTextForComparison(formattedRawErrorMessage)
-    : null;
-  const normalizedRawErrorText = rawErrorMessage
-    ? normalizeTextForComparison(rawErrorMessage)
-    : null;
-  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
-  const genericErrorText = "The AI service returned an error. Please try again.";
   const deferAssistantTimeoutError =
     params.deferAssistantTimeoutError === true &&
     rawErrorMessage !== undefined &&
@@ -376,7 +354,10 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
+  const normalizedAssistantTexts =
+    rawAnswerHasMedia && nonEmptyAssistantTexts.length > 0 && !assistantTextsHaveMedia
+      ? normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"))
+      : "";
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
     rawAnswerHasContinuation ||
@@ -389,8 +370,14 @@ export function buildEmbeddedRunPayloads(params: {
   // continuation markers that must remain available to the post-run extractor.
   const fallbackAnswerSourceText =
     shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
-  const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
-    ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
+  const fallbackAnswerDirectiveState =
+    fallbackAnswerSourceText === fallbackRawAnswerText
+      ? rawAnswerDirectiveState
+      : fallbackAnswerSourceText
+        ? parseReplyDirectives(fallbackAnswerSourceText)
+        : null;
+  const normalizedFallbackAnswerSourceText = fallbackAnswerDirectiveState
+    ? normalizeTextForComparison(fallbackAnswerDirectiveState.text)
     : "";
   const shouldUseCanonicalFinalAnswer =
     !lastAssistantNeedsErrorSurface &&
@@ -416,6 +403,10 @@ export function buildEmbeddedRunPayloads(params: {
                 ? [fallbackAnswerText]
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
+  const preparedAnswerDirectives =
+    shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
+      ? fallbackAnswerDirectiveState
+      : null;
   let hasUserFacingReply =
     Boolean(errorText) ||
     completedSourceReplyViaMessageTool ||
@@ -428,7 +419,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = preparedAnswerDirectives ?? parseReplyDirectives(text);
     const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
     const delivery = shouldUseCanonicalFinalAnswer
       ? {
@@ -458,14 +449,19 @@ export function buildEmbeddedRunPayloads(params: {
     hasUserFacingReply = true;
   }
   if (params.lastToolError) {
-    const failureWarning = buildFailureWarning({
-      lastToolError: params.lastToolError,
-      hasUserFacingReply,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
-      verboseLevel: params.verboseLevel,
-      useMarkdown,
-    });
+    // A restart intentionally aborts the active tool while the Gateway takes over.
+    // Keep that lifecycle status independent from tool-error suppression.
+    const isRestartStatus = params.runStopReason === "restart";
+    const failureWarning = isRestartStatus
+      ? { text: "Gateway restarting…", nonTerminalToolErrorWarning: false }
+      : buildFailureWarning({
+          lastToolError: params.lastToolError,
+          hasUserFacingReply,
+          suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+          suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+          verboseLevel: params.verboseLevel,
+          useMarkdown,
+        });
     if (failureWarning) {
       const normalizedWarning = normalizeTextForComparison(failureWarning.text);
       const duplicateWarning = normalizedWarning
@@ -480,9 +476,13 @@ export function buildEmbeddedRunPayloads(params: {
       if (!duplicateWarning) {
         replyItems.push({
           text: failureWarning.text,
-          isError: true,
-          nonTerminalToolErrorWarning:
-            hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+          ...(!isRestartStatus
+            ? {
+                isError: true,
+                nonTerminalToolErrorWarning:
+                  hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+              }
+            : {}),
         });
       }
     }

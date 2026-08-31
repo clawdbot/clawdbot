@@ -65,7 +65,7 @@ const globalMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
 }));
 const askUserMocks = vi.hoisted(() => ({
-  isAskUserPromptPending: vi.fn(async () => true),
+  isAskUserPromptPending: vi.fn(async (_questionId: string) => true),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
@@ -586,16 +586,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     unbind: vi.fn(async () => []),
   }),
 }));
-vi.mock("../../bindings/records.js", () => ({
-  resolveConversationBindingRecord: (conversation: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => sessionBindingMocks.resolveByConversation(conversation),
-  touchConversationBindingRecord: (...args: [bindingId: string, at?: number]) =>
-    sessionBindingMocks.touch(...args),
-}));
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",
@@ -617,16 +607,20 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingErrorText: () => "Plugin binding request failed.",
   buildPluginBindingUnavailableText: (binding: { pluginName?: string; pluginId: string }) =>
     `${binding.pluginName ?? binding.pluginId} is not currently loaded.`,
-  hasShownPluginBindingFallbackNotice: (bindingId: string) =>
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(bindingId),
-  isPluginOwnedSessionBindingRecord: (
-    record: SessionBindingRecord | null | undefined,
-  ): record is SessionBindingRecord =>
-    record?.metadata != null &&
-    typeof record.metadata === "object" &&
-    (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
-  markPluginBindingFallbackNoticeShown: (bindingId: string) => {
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(bindingId);
+  hasShownPluginBindingFallbackNotice: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) =>
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    ),
+  markPluginBindingFallbackNoticeShown: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) => {
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    );
   },
   toPluginConversationBinding: (record: SessionBindingRecord) => {
     const metadata = (record.metadata ?? {}) as {

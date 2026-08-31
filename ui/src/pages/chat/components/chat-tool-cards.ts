@@ -33,11 +33,7 @@ import {
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  formatToolDetail,
-  resolveToolDisplay,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -344,7 +340,13 @@ export function syncToolDisclosureOverflow(event: Event): void {
   );
 }
 
-function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
+function renderToolRowContent(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  workspaceFilePath: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
     return html`
@@ -363,9 +365,23 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
           : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      <span class="chat-tool-row__target">${compactToolTarget(view.target, view.kind)}</span>
+      ${workspaceFilePath && onOpenWorkspaceFile
+        ? html`<button
+            class="chat-tool-row__file-link"
+            type="button"
+            title=${t("chat.toolCards.openFile")}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              onOpenWorkspaceFile({ path: workspaceFilePath });
+            }}
+          >
+            ${compactToolTarget(view.target, view.kind)}
+          </button>`
+        : html`<span class="chat-tool-row__target"
+            >${compactToolTarget(view.target, view.kind)}</span
+          >`}
       ${stat ? renderDiffStatChips(stat) : nothing}
-      ${view.targetDetail && view.kind !== "edit" && view.kind !== "write"
+      ${!workspaceFilePath && view.targetDetail && view.kind !== "edit" && view.kind !== "write"
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
     `;
@@ -450,43 +466,6 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
       <span class="chat-tool-msg-summary__label">${label}</span>
     </div>
   </div>`;
-}
-
-function renderFileToolRowContent(
-  card: ToolCard,
-  view: ToolCallView,
-  outcome: ToolCardOutcome,
-  workspaceFilePath: string | null,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
-) {
-  const verb = resolveToolRowVerb(view, outcome);
-  if (!verb || !view.target) {
-    return renderToolRowContent(card, view, outcome);
-  }
-  const stat =
-    outcome === "succeeded"
-      ? view.stat
-      : outcome === "running" && (view.kind === "edit" || view.kind === "write")
-        ? card.liveDiffStat
-        : undefined;
-  const filename = compactToolTarget(view.target, view.kind);
-  return html`
-    <span class="chat-tool-row__verb">${verb}</span>
-    ${workspaceFilePath && onOpenWorkspaceFile
-      ? html`<button
-          class="chat-tool-row__file-link"
-          type="button"
-          title=${t("chat.toolCards.openFile")}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            onOpenWorkspaceFile({ path: workspaceFilePath });
-          }}
-        >
-          ${filename}
-        </button>`
-      : html`<span class="chat-tool-row__target">${filename}</span>`}
-    ${stat ? renderDiffStatChips(stat) : nothing}
-  `;
 }
 
 // ── Command syntax highlighting ──
@@ -855,19 +834,17 @@ export function renderToolApprovalReviews(card: ToolCard) {
   `;
 }
 
+type ToolCardRenderOptions = {
+  runActive?: boolean;
+  onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+};
+
 export function renderToolCard(
   card: ToolCard,
-  opts: {
+  opts: ToolCardRenderOptions & {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
-    runActive?: boolean;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
     showApprovalReviews?: boolean;
   },
 ) {
@@ -886,6 +863,19 @@ export function renderToolCard(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const isFileRow = Boolean(workspaceFilePath);
+  const rowContent = html`
+    <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+    <span class="chat-tool-disclosure__content"
+      >${renderToolRowContent(
+        card,
+        view,
+        outcome,
+        workspaceFilePath,
+        opts.onOpenWorkspaceFile,
+      )}</span
+    >
+    <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+  `;
 
   return html`
     <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
@@ -904,17 +894,7 @@ export function renderToolCard(
               aria-label=${resolveToolRowText(card, opts.runActive)}
               @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderFileToolRowContent(
-                card,
-                view,
-                outcome,
-                workspaceFilePath,
-                opts.onOpenWorkspaceFile,
-              )}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+            ${rowContent}
           </div>`
         : html`<button
             class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
@@ -930,27 +910,10 @@ export function renderToolCard(
               }
             }}
           >
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderToolRowContent(card, view, outcome)}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+            ${rowContent}
           </button>`}
       ${expanded
-        ? html`
-            <div class="chat-tool-msg-body">
-              ${renderExpandedToolCardContent(
-                card,
-                opts.sessionKey,
-                opts.onOpenSidebar,
-                opts.canvasPluginSurfaceUrl,
-                opts.embedSandboxMode ?? "scripts",
-                opts.allowExternalEmbedUrls ?? false,
-                opts.runActive,
-                opts.onOpenWorkspaceFile,
-              )}
-            </div>
-          `
+        ? html` <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div> `
         : nothing}
       ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
     </div>
@@ -959,13 +922,7 @@ export function renderToolCard(
 
 export function renderExpandedToolCardContent(
   card: ToolCard,
-  sessionKey?: string,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  canvasPluginSurfaceUrl?: string | null,
-  embedSandboxMode: EmbedSandboxMode = "scripts",
-  allowExternalEmbedUrls = false,
-  runActive?: boolean,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+  { onOpenSidebar, runActive, onOpenWorkspaceFile }: ToolCardRenderOptions,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -993,17 +950,6 @@ export function renderExpandedToolCardContent(
     buildSidebarContent(buildToolCardSidebarContent(card), {
       rawText: card.outputText ?? null,
     });
-  const visiblePreview =
-    card.preview?.kind === "canvas"
-      ? renderToolPreview(card.preview, "chat_tool", {
-          onOpenSidebar,
-          rawText: card.outputText,
-          canvasPluginSurfaceUrl,
-          embedSandboxMode,
-          allowExternalEmbedUrls,
-          sessionKey,
-        })
-      : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -1096,7 +1042,7 @@ export function renderExpandedToolCardContent(
         : nothing}
       ${hasOutput
         ? card.preview?.kind === "canvas"
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
+          ? renderRawOutputToggle(card.outputText!)
           : renderToolDataBlock({
               ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
               text: card.outputText!,

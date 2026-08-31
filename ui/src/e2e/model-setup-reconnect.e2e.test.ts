@@ -57,6 +57,11 @@ suite.define(() => {
         },
         async ({ page, context }) => {
           const modelRef = "openai/gpt-5.6-luna";
+          const pendingVerification = {
+            ok: false,
+            status: "unavailable",
+            error: "Gateway settings are saved but not active yet. Retry after the restart.",
+          };
           const gateway = await installMockGateway(page, {
             featureMethods: [
               "chat.metadata",
@@ -79,7 +84,7 @@ suite.define(() => {
                 status: "auth",
                 error: "401: invalid test API key",
               },
-              "openclaw.setup.verify": { ok: true, modelRef, latencyMs: 31 },
+              "openclaw.setup.verify": pendingVerification,
             },
           });
 
@@ -121,7 +126,7 @@ suite.define(() => {
               methodResponses: {
                 "openclaw.chat": onboardingWelcome,
                 "openclaw.setup.detect": detection(modelRef),
-                "openclaw.setup.verify": { ok: true, modelRef, latencyMs: 31 },
+                "openclaw.setup.verify": pendingVerification,
               },
             });
             await destination.goto(
@@ -138,6 +143,22 @@ suite.define(() => {
             await gateway.closeLatest(1012, "first-run activation restart");
           }
           await reconnectedGateway.waitForRequest("openclaw.setup.verify");
+          await destination.getByText(pendingVerification.error, { exact: false }).waitFor();
+          expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
+          expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
+          if (captureUiProofEnabled) {
+            await mkdir(artifactDir, { recursive: true });
+            await destination.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, `manual-first-run-${restart}-pending.png`),
+            });
+          }
+          await reconnectedGateway.setMethodResponse("openclaw.setup.verify", {
+            ok: true,
+            modelRef,
+            latencyMs: 31,
+          });
+          await destination.getByRole("button", { name: "Verify & use selected model" }).click();
           await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
           if (restart === "reconnect") {
             expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(2);

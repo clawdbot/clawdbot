@@ -54,6 +54,8 @@ export type OpenClawToolsOptions = {
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;
   sandboxWritable?: boolean;
+  /** Producer-authored bare upload handles mapped to exact sandbox paths. */
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   /** Prepared effective read authorization for exporting sandbox workspace media. */
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
@@ -97,6 +99,7 @@ export type OpenClawToolsOptions = {
   sameChannelThreadRequired?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  computerTransport?: import("./tools/computer-tool.js").ComputerToolTransport | null;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   /** Internal review-run restrictions and proposal provenance. */

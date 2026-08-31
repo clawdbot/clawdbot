@@ -1,10 +1,10 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
 import { randomUUID } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
+  bindSessionPendingInputSources,
   persistSessionTranscriptTurn,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
   rewriteTranscriptMessageAtAnchor,
@@ -12,16 +12,14 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
-import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
 import { resolveUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
   buildLateResolvedMediaMessage,
+  isUserMessage,
   readUserTurnMessageMeta,
-} from "./user-turn-transcript-late-media.js";
-import { normalizeStructuredMediaEntryForTranscript } from "./user-turn-transcript.media-normalize.js";
+  resolvePersistedUserTurnMessage,
+} from "./user-turn-transcript.message.js";
 import {
-  buildPersistedUserTurnMetadata,
   normalizePersistedSteerTargetRunId,
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
@@ -31,8 +29,6 @@ import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
-  UserTurnMessagePersistenceParams,
-  UserTurnInput,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptRecorder,
@@ -41,12 +37,24 @@ import type {
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
 
+const pendingInputReceipts = new WeakMap<
+  UserTurnTranscriptRecorder,
+  () => Awaited<ReturnType<typeof stageSessionPendingInput>>
+>();
+
 export type {
   PersistedUserTurnMessage,
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
-export { buildPersistedUserTurnMediaInputsFromFields } from "./user-turn-transcript.media-normalize.js";
+
+export {
+  buildLateMediaAttachedProjection,
+  buildPersistedUserTurnMediaInputsFromFields,
+  buildPersistedUserTurnMessage,
+  mergePreparedUserTurnMessageForRuntime,
+  resolvePersistedUserTurnText,
+} from "./user-turn-transcript.message.js";
 
 export {
   preparePersistedUserTurnMessageForTranscriptWrite,
@@ -55,108 +63,6 @@ export {
 
 export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
-}
-
-// Select normalized text for persisted user turns.
-export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-export function buildLateMediaAttachedProjection(message: AgentMessage): {
-  text?: string;
-  media: MediaFact[];
-} {
-  const isLateMedia = readUserTurnMessageMeta(message)?.lateMedia === true;
-  const media = isLateMedia ? (readPersistedMediaFacts(message) ?? []) : [];
-  const text = media
-    .flatMap((fact) => {
-      const mediaRef = fact.path ?? fact.url;
-      return mediaRef ? [`[media attached: ${mediaRef}]`] : [];
-    })
-    .join("\n");
-  return { ...(text ? { text } : {}), media };
-}
-
-export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
-  const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
-  const text = params.text ?? "";
-  // Storage is BARE (no timestamp prefix). The per-message timestamp is added
-  // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
-  // derived from each message's own `timestamp` field, so the current turn and
-  // every historical turn serialize identically on the wire. Persisting a stamp
-  // here would NOT match the bare-current arrival (the gateway no longer stamps
-  // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  // Upstream owns the shared metadata shape; managed session-delivery acks are a
-  // fork-local field the recorder later replaces, so they stay layered here.
-  const openClawMeta = {
-    ...buildPersistedUserTurnMetadata(params, normalizedMedia),
-    ...(params.sessionDeliveryAckIds && params.sessionDeliveryAckIds.length > 0
-      ? { sessionDeliveryAckIds: [...new Set(params.sessionDeliveryAckIds)] }
-      : {}),
-  };
-  const message = {
-    role: "user",
-    ...(params.display === false ? { display: false } : {}),
-    content: text,
-    timestamp: params.timestamp ?? Date.now(),
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
-  } as PersistedUserTurnMessage;
-  return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
-}
-
-function resolvePersistedUserTurnMessage(
-  params: Pick<UserTurnMessagePersistenceParams, "input" | "message">,
-): PersistedUserTurnMessage | undefined {
-  return params.message ?? (params.input ? buildPersistedUserTurnMessage(params.input) : undefined);
-}
-
-function isUserMessage(message: unknown): message is PersistedUserTurnMessage {
-  return asOptionalRecord(message)?.role === "user";
-}
-
-function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
-  const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
-    ?.beforeAgentRunBlocked;
-  return marker !== undefined;
-}
-
-function userMessageHasImageContent(message: AgentMessage): boolean {
-  return (
-    isUserMessage(message) &&
-    Array.isArray(message.content) &&
-    message.content.some(
-      (block) =>
-        typeof block === "object" &&
-        block !== null &&
-        (block as { type?: unknown }).type === "image",
-    )
-  );
-}
-
-// Runtime messages may lack transcript metadata because channel adapters prepare
-// display text separately. Merge only safe user messages, never block markers.
-export function mergePreparedUserTurnMessageForRuntime(params: {
-  runtimeMessage: AgentMessage;
-  preparedMessage?: PersistedUserTurnMessage;
-}): AgentMessage {
-  if (
-    !params.preparedMessage ||
-    !isUserMessage(params.runtimeMessage) ||
-    isBeforeAgentRunBlockedMessage(params.runtimeMessage)
-  ) {
-    return params.runtimeMessage;
-  }
-  const runtimeMeta = readUserTurnMessageMeta(params.runtimeMessage);
-  const preparedMeta = readUserTurnMessageMeta(params.preparedMessage);
-  return {
-    ...params.runtimeMessage,
-    ...params.preparedMessage,
-    ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
-    ...(userMessageHasImageContent(params.runtimeMessage)
-      ? { content: params.runtimeMessage.content }
-      : {}),
-  } as AgentMessage;
 }
 
 // Store-backed persistence resolves the current session transcript file lazily
@@ -295,6 +201,10 @@ export function createUserTurnTranscriptRecorder(
   let sentToProvider = false;
   let admissionHandler: ((admission: UserTurnTranscriptAdmissionReceipt) => void) | undefined;
   let resolvedBeforeProvider = false;
+  let replacementText: string | undefined;
+  let confirmedSteerTargetRunId: string | undefined;
+  let pendingInput: Awaited<ReturnType<typeof stageSessionPendingInput>>;
+  let staging: Promise<boolean> | undefined;
   const replacementSessionDeliveryAckIds = new Set<string>();
   let hasReplacementSessionDeliveryAckIds = false;
 
@@ -332,9 +242,6 @@ export function createUserTurnTranscriptRecorder(
     } as PersistedUserTurnMessage;
   };
 
-  let replacementText: string | undefined;
-  let confirmedSteerTargetRunId: string | undefined;
-
   const applyReplacementText = (
     candidate: PersistedUserTurnMessage | undefined,
   ): PersistedUserTurnMessage | undefined => {
@@ -362,10 +269,7 @@ export function createUserTurnTranscriptRecorder(
   };
 
   const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
-    if (params.message || !params.resolveInput) {
-      return withReplacementSessionDeliveryAckIds(applyMessageOverrides(message));
-    }
-    if (!resolvedMessagePromise) {
+    if (!params.message && params.resolveInput && !resolvedMessagePromise) {
       resolvedMessagePromise = (async () => {
         try {
           const resolvedInput = await params.resolveInput?.();
@@ -382,7 +286,23 @@ export function createUserTurnTranscriptRecorder(
         }
       })();
     }
-    return withReplacementSessionDeliveryAckIds(await resolvedMessagePromise);
+    const resolved = await (params.message || !params.resolveInput
+      ? applyMessageOverrides(message)
+      : resolvedMessagePromise);
+    if (!pendingInput && resolved && params.pendingInputSources) {
+      const sources = params.pendingInputSources.flatMap(
+        (source) => pendingInputReceipts.get(source)?.() ?? [],
+      );
+      if (sources.length > 0 && sources.length !== params.pendingInputSources.length) {
+        throw new Error("Collected input cannot mix staged and unstaged source approval");
+      }
+      pendingInput = bindSessionPendingInputSources(sources, resolved);
+      if (pendingInput) {
+        message = pendingInput.message;
+        resolvedMessagePromise = Promise.resolve(message);
+      }
+    }
+    return withReplacementSessionDeliveryAckIds(pendingInput?.message ?? resolved);
   };
 
   const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
@@ -471,29 +391,25 @@ export function createUserTurnTranscriptRecorder(
       const persistMessage = async (
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
-      ) =>
-        await persistUserTurnTranscript({
-          ...resolvedTarget,
-          logicalTurnId,
-          message: candidate,
-          ...(params.sessionTurnMutation
-            ? { sessionTurnMutation: params.sessionTurnMutation }
-            : {}),
-          ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-          ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
-            ? {
-                sessionLifecyclePatch:
-                  options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
-              }
-            : {}),
-          ...((options.expectedSessionState ?? params.expectedSessionState)
-            ? {
-                expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
-              }
-            : {}),
-          updateMode: candidateUpdateMode,
-          ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
-        });
+      ) => {
+        const persist = () =>
+          persistUserTurnTranscript({
+            ...resolvedTarget,
+            logicalTurnId,
+            message: candidate,
+            sessionTurnMutation: params.sessionTurnMutation,
+            expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
+            sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
+            expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
+            updateMode: candidateUpdateMode,
+            beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
+          });
+        // Collection can resolve its media lazily during admission. Bind custody
+        // here too so the canonical append always consumes the exact sources.
+        return await (pendingInput
+          ? withSessionPendingInputPersistence(pendingInput, persist)
+          : persist());
+      };
       const lateMediaMessage =
         sentToProvider && !resolvedBeforeProvider
           ? buildLateResolvedMediaMessage({
@@ -547,13 +463,51 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-  return {
+  const recorder: UserTurnTranscriptRecorder = {
     get message() {
       return message;
     },
     resolveMessage: resolveMessageForPersistence,
+    stageApproved: (options) => {
+      staging ??= (async () => {
+        const candidate = await resolveMessageForPersistence();
+        const target = await resolveUserTurnTranscriptTarget(params.target);
+        if (!candidate || !target || persisted || runtimePersisted) {
+          return false;
+        }
+        pendingInput = await stageSessionPendingInput(target, {
+          ...options,
+          message: candidate,
+          config: target.config as SessionTranscriptTurnPersistOptions["config"],
+          prepareMessageAfterIdempotencyCheck: (next) =>
+            preparePersistedUserTurnMessageForTranscriptWrite(next, {
+              ...target,
+              beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
+            }),
+        });
+        if (!pendingInput) {
+          return false;
+        }
+        message = pendingInput.message;
+        resolvedMessagePromise = Promise.resolve(message);
+        return pendingInput.state !== "consumed";
+      })();
+      return staging;
+    },
+    getPendingInputMessage: () => pendingInput?.message,
+    isPendingInputConsumed: () => pendingInput?.state === "consumed",
+    withPendingInput: (run) => (pendingInput ? pendingInput.run(run) : run()),
+    finishPendingInput: (disposition) => {
+      if (pendingInput) {
+        pendingInput.finish(disposition);
+      } else {
+        for (const source of params.pendingInputSources ?? []) {
+          source.finishPendingInput?.(disposition);
+        }
+      }
+    },
     replaceTextBeforePersistence: (text) => {
-      if (persisted || runtimePersisted || sentToProvider) {
+      if (pendingInput || persisted || runtimePersisted || sentToProvider) {
         return;
       }
       replacementText = text;
@@ -661,6 +615,8 @@ export function createUserTurnTranscriptRecorder(
         cwd: options?.cwd,
       }),
   };
+  pendingInputReceipts.set(recorder, () => pendingInput);
+  return recorder;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

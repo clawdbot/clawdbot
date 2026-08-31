@@ -18,7 +18,6 @@ import {
   listTsdownOutputRoots,
   parseTsdownBuildArgs,
   prepareTsdownBuildExecution,
-  pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneStaleRuntimeSymlinks,
   pruneUntrackedGeneratedSourceDeclarations,
@@ -36,6 +35,7 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -1734,28 +1734,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(resolveTsdownCleanOutputRoots(["--format", "esm"])).toEqual(listTsdownOutputRoots());
   });
 
-  it("keeps source-checkout prune best-effort", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const rmSync = vi.spyOn(fs, "rmSync");
-
-    rmSync.mockImplementation(() => {
-      throw new Error("locked");
-    });
-
-    expect(
-      pruneSourceCheckoutBundledPluginNodeModules({
-        cwd: process.cwd(),
-      }),
-    ).toBeUndefined();
-
-    expect(warn).toHaveBeenCalledWith(
-      "tsdown: could not prune bundled plugin source node_modules: Error: locked",
-    );
-
-    warn.mockRestore();
-    rmSync.mockRestore();
-  });
-
   it("prunes stale hashed root chunk files but keeps stable aliases and nested assets", async () => {
     const rootDir = createTempDir("openclaw-tsdown-build-");
     const distDir = path.join(rootDir, "dist");
@@ -1806,6 +1784,8 @@ describe("resolveTsdownBuildInvocation", () => {
     "preserves separately owned outputs during $label cleanup",
     async ({ args, skipDts, preserveMetadata }) => {
       const rootDir = createTempDir("openclaw-tsdown-clean-");
+      const sourceDependencies = await createSourcePluginDependenciesFixture(rootDir);
+      sourceDependencies.assertResolution();
       const retainedFiles = [
         "dist/control-ui/index.html",
         "dist/control-ui/sw.js",
@@ -1881,6 +1861,7 @@ describe("resolveTsdownBuildInvocation", () => {
         },
       );
       expect(result.status, result.stderr).toBe(0);
+      sourceDependencies.assertResolution();
       for (const relativePath of staleFiles) {
         await expectPathMissing(path.join(rootDir, relativePath));
       }

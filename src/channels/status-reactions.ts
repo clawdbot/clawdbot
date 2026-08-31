@@ -203,11 +203,14 @@ export function createStatusReactionController(params: {
   enabled: boolean;
   adapter: StatusReactionAdapter;
   initialEmoji: string;
+  /** Acknowledgement keeps one working reaction; only actual errors replace it. */
+  presentation?: "activity" | "acknowledgement";
   emojis?: StatusReactionEmojis;
   timing?: StatusReactionTiming;
   onError?: (err: unknown) => void;
 }): StatusReactionController {
   const { enabled, adapter, initialEmoji, onError } = params;
+  const showActivity = params.presentation !== "acknowledgement";
 
   const emojis: Required<StatusReactionEmojis> = {
     ...DEFAULT_EMOJIS,
@@ -283,6 +286,9 @@ export function createStatusReactionController(params: {
   }
 
   function resetStallTimers(): void {
+    if (!showActivity) {
+      return;
+    }
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
     }
@@ -340,12 +346,13 @@ export function createStatusReactionController(params: {
   }
 
   function scheduleEmoji(
-    emoji: string,
+    requestedEmoji: string,
     options: { immediate?: boolean; skipStallReset?: boolean } = {},
   ): void {
     if (!enabled || finished) {
       return;
     }
+    const emoji = showActivity ? requestedEmoji : initialEmoji;
 
     // Skip duplicate sends while still refreshing stall timers for active phases.
     if (emoji === currentEmoji || emoji === pendingEmoji) {
@@ -419,7 +426,9 @@ export function createStatusReactionController(params: {
   }
 
   function setDone(): Promise<void> {
-    return finishWithEmoji(emojis.done, timing.doneHoldMs);
+    return showActivity
+      ? finishWithEmoji(emojis.done, timing.doneHoldMs)
+      : finishWithEmoji(initialEmoji, 0);
   }
 
   function setError(): Promise<void> {

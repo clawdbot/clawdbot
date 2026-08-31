@@ -219,7 +219,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.notifications.title",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchKeys: [
-      "configView.notifications.hint",
       "configView.notifications.browserSupport",
       "configView.notifications.permission",
       "configView.notifications.status",
@@ -227,7 +226,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.notSubscribed",
       "configView.notifications.enable",
       "configView.notifications.nativeTitle",
-      "configView.notifications.nativeHint",
       "configView.notifications.openSystemSettings",
     ],
     aliases: "vapid gateway",

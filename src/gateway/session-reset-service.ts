@@ -1638,8 +1638,6 @@ export async function performGatewaySessionReset(params: {
               : params.clearExecBinding
                 ? undefined
                 : currentEntry?.execHost,
-            execSecurity: currentEntry?.execSecurity,
-            execAsk: currentEntry?.execAsk,
             execNode: nextExecNode,
             execCwd: params.execNode
               ? params.execCwd

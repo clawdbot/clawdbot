@@ -515,25 +515,11 @@ export async function createWorkspaceGitTransferList(params: {
     }
     throw error;
   });
-  await runWorkspaceInventoryCommandToFile({
-    argv: [
-      "git",
-      "-C",
-      params.gitRoot,
-      "ls-files",
-      "--full-name",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-      "-z",
-      ...(worktreeInclude?.isFile() ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
-    ],
-    outputPath: ignoredPath,
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-  });
-  if (worktreeInclude?.isFile()) {
-    await runWorkspaceInventoryCommandToFile({
+  const hasWorktreeInclude = worktreeInclude?.isFile() === true;
+  // Both producers write into the same scratch directory. Join them before
+  // reporting either error so caller cleanup cannot race the remaining writer.
+  const results = await Promise.allSettled([
+    runWorkspaceInventoryCommandToFile({
       argv: [
         "git",
         "-C",
@@ -542,15 +528,37 @@ export async function createWorkspaceGitTransferList(params: {
         "--full-name",
         "--others",
         "--ignored",
-        `--exclude-from=${worktreeIncludePath}`,
+        "--exclude-standard",
         "-z",
+        ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
       ],
-      outputPath: selectedPath,
+      outputPath: ignoredPath,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
-    });
-  } else {
-    await fs.writeFile(selectedPath, "", { mode: 0o600 });
+    }),
+    hasWorktreeInclude
+      ? runWorkspaceInventoryCommandToFile({
+          argv: [
+            "git",
+            "-C",
+            params.gitRoot,
+            "ls-files",
+            "--full-name",
+            "--others",
+            "--ignored",
+            `--exclude-from=${worktreeIncludePath}`,
+            "-z",
+          ],
+          outputPath: selectedPath,
+          signal: params.signal,
+          timeoutMs: params.timeoutMs,
+        })
+      : fs.writeFile(selectedPath, "", { mode: 0o600 }),
+  ]);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
   }
   await writeEligibleGitFiles({
     gitRoot: params.gitRoot,

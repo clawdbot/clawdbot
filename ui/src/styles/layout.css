@@ -2691,6 +2691,55 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.session-menu__appearance {
+  width: 224px;
+  max-width: calc(100vw - 48px);
+  padding: 6px;
+}
+
+.session-menu__colors {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 2px;
+  margin: 4px 0 10px;
+}
+
+.session-menu__color-choice {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.session-menu__color-choice:hover {
+  background: var(--bg-hover);
+}
+
+.session-menu__color-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session-menu__color-swatch {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  color: var(--bg);
+}
+
+.session-menu__color-swatch svg {
+  width: 12px;
+  height: 12px;
+}
+
 .session-menu__icon-picker {
   padding: 2px;
 }
@@ -2761,11 +2810,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__icon-choice--glyph {
   color: var(--text);
   font-size: inherit;
-}
-
-.session-menu__icon-separator {
-  margin: 5px 4px 3px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
 .session-menu__icon-remove {

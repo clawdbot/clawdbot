@@ -40,7 +40,6 @@ import {
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -93,10 +92,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     deliveryStatus: "failed",
     deliveryError,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry,
-    reason: deliveryError,
   });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);

@@ -10,6 +10,7 @@ import {
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
@@ -79,7 +80,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
@@ -132,7 +133,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
@@ -779,7 +780,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-0"));
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
       // alongside the first ten rows in the ungrouped section.

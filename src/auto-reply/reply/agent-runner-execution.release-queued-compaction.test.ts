@@ -52,8 +52,8 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   resolveSessionEntryFromStore: (params: unknown) => state.resolveSessionStoreEntryMock(params),
 }));
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: (params: unknown) => state.incrementRunCompactionCountMock(params),
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: (params: unknown) => state.incrementRunCompactionCountMock(params),
 }));
 
 vi.mock("./post-compaction-delegate-dispatch.js", () => ({
@@ -316,8 +316,7 @@ describe("releaseQueuedCompactionCompletion: happy-path dispatch (branch 4)", ()
     expect(incArg.sessionStore).toBe(activeSessionStore);
     expect(incArg.sessionKey).toBe(SESSION_KEY);
     expect(incArg.storePath).toBe(STORE_PATH);
-    expect(incArg.cfg).toBe(followupRun.run.config);
-    expect(incArg.compactionTokensAfter).toBe(5_000);
+    expect(incArg.tokensAfter).toBe(5_000);
     expect(incArg.newSessionId).toBe("new-session-id");
     expect(incArg.agentId).toBe("agent");
 

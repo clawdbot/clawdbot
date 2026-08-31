@@ -121,6 +121,7 @@ describe("subagent registry archive behavior", () => {
   ) => {
     mod.testing.setDepsForTest({
       callGateway,
+      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadAgentRuntimePluginRegistryHandle: vi.fn(),

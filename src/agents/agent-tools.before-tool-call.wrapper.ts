@@ -9,7 +9,7 @@ import {
   freezeDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
@@ -74,7 +74,7 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
@@ -489,6 +489,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
+      signal?.throwIfAborted();
       runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);

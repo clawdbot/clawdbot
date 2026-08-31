@@ -3,6 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
@@ -126,6 +127,14 @@ const rawMessageSchema = z
     timestamp: optionalMessageNumberSchema,
     id: optionalMessageStringSchema,
     senderLabel: optionalMessageStringSchema,
+    senderSession: z
+      .object({
+        sessionKey: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+        agentId: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+      })
+      .refine((value) => Boolean(value.sessionKey || value.agentId))
+      .optional()
+      .catch(undefined),
     toolCallId: optionalMessageStringSchema,
     tool_call_id: optionalMessageStringSchema,
     toolUseId: optionalMessageStringSchema,
@@ -142,43 +151,33 @@ type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
 
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
-  if (lower === "user") {
-    return "user";
+  if (["user", "assistant", "system"].includes(lower)) {
+    return lower;
   }
-  if (lower === "assistant") {
-    return "assistant";
-  }
-  if (lower === "system") {
-    return "system";
-  }
-  if (
-    lower === "toolresult" ||
-    lower === "tool_result" ||
-    lower === "tool" ||
-    lower === "function"
-  ) {
+  if (["toolresult", "tool_result", "tool", "function"].includes(lower)) {
     return "tool";
   }
   return role;
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role?.toLowerCase() ?? "";
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role ? normalizeRoleForGrouping(m.role) : "unknown";
+  // Tool classification needs envelope fields, not parsed content or media.
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
   return (
     role === "tool" ||
-    m.toolCallId !== undefined ||
-    m.tool_call_id !== undefined ||
-    m.toolUseId !== undefined ||
-    m.tool_use_id !== undefined ||
-    m.toolName !== undefined ||
-    m.tool_name !== undefined
+    typeof m?.toolCallId === "string" ||
+    typeof m?.tool_call_id === "string" ||
+    typeof m?.toolUseId === "string" ||
+    typeof m?.tool_use_id === "string" ||
+    typeof m?.toolName === "string" ||
+    typeof m?.tool_name === "string"
   );
 }
 
@@ -649,6 +648,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    ...(m.senderSession ? { senderSession: m.senderSession } : {}),
     ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText

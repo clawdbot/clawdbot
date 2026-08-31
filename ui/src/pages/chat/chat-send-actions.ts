@@ -14,6 +14,7 @@ import {
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
   scheduleStoredChatOutboxDrain,
 } from "./chat-outbox-drain.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
@@ -36,13 +37,11 @@ import {
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   activeQueuedMessageEdit,
   isQueuedMessageBeingEdited,
-  isQueuedMessageRetryBlocked,
-  isQueuedMessageReorderBlocked,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
@@ -103,26 +102,29 @@ export async function sendChatMessageWithGeneratedRunId(
   }
 }
 
-function findStoredOutbox(host: ChatHost, id: string) {
-  return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
-}
-
 const resetRetryState = (
   entry: ChatQueueItem,
   sendState: ChatQueueItem["sendState"],
-): ChatQueueItem => ({
-  ...entry,
-  sendAttempts: 0,
-  // A failed delivery keeps its diagnostic while an explicit retry waits for
-  // run admission; the transcript uses it to retain the same optimistic row.
-  sendError: entry.sendState === "failed" ? entry.sendError : undefined,
-  sendRequestStartedAtMs: undefined,
-  sendRunId:
-    entry.sendState === "failed" && entry.queueMode !== "steer" && !entry.intent
-      ? generateUUID()
-      : entry.sendRunId,
-  sendState,
-});
+): ChatQueueItem => {
+  // An ID-less post-clear review barrier has no transport attempt to preserve.
+  const uncertain =
+    entry.sendState === "unconfirmed" && Boolean(entry.sendRunId) && !entry.localCommandName;
+  return {
+    ...entry,
+    // Local payload failure cannot erase an uncertain transport attempt. Keep its
+    // identity until the explicitly admitted retry actually reaches transport.
+    sendAttempts: uncertain ? entry.sendAttempts : 0,
+    // A failed delivery keeps its diagnostic while an explicit retry waits for
+    // run admission; the transcript uses it to retain the same optimistic row.
+    sendError: entry.sendState === "failed" ? entry.sendError : undefined,
+    sendRequestStartedAtMs: uncertain ? entry.sendRequestStartedAtMs : undefined,
+    sendRunId:
+      entry.sendState === "failed" && entry.queueMode !== "steer" && !entry.intent
+        ? generateUUID()
+        : entry.sendRunId,
+    sendState: uncertain ? "unconfirmed" : sendState,
+  };
+};
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
   if (readQueuedMessageById(host, id)?.intent) {
@@ -167,7 +169,7 @@ export function moveQueuedChatMessage(
   if (!item || !isMovableChatQueueItem(item)) {
     return "noop";
   }
-  if (isQueuedMessageReorderBlocked(host, id)) {
+  if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
     return "rejected";
   }
@@ -226,7 +228,9 @@ export function moveQueuedChatMessage(
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   const item = host.chatQueue.find((entry) => entry.id === id);
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
-  if (isQueuedMessageRetryBlocked(host, id)) {
+  const retriesUnconfirmed =
+    item?.sendState === "unconfirmed" && Boolean(item.sendRunId) && !item.localCommandName;
+  if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
     return;
   }
@@ -239,7 +243,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   ) {
     return;
   }
-  let outbox = findStoredOutbox(host, item.id);
+  let outbox = chatOutboxOwner(host).durable(host, item.id);
   if (!outbox) {
     const wasVolatile = isVolatileQueuedMessage(host, item.id);
     if (!admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)) {
@@ -274,17 +278,18 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
-  outbox = findStoredOutbox(host, retry.id);
+  outbox = chatOutboxOwner(host).durable(host, retry.id);
   if (!outbox) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
+  const explicitAdmission = retry.queueMode || retriesFailedDelivery || retriesUnconfirmed;
   const drain = scheduleStoredChatOutboxDrain(
     host,
     outbox,
     chatOutboxDrainDependencies,
-    retry.queueMode || retriesFailedDelivery ? retry.id : undefined,
-    retry.queueMode || retriesFailedDelivery
+    explicitAdmission ? retry.id : undefined,
+    explicitAdmission
       ? {
           routingSessionKey: host.sessionKey,
           ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),

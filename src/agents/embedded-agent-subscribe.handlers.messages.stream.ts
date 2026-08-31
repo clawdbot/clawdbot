@@ -13,7 +13,6 @@ import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives
 import type { AssistantMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
-  resolveAssistantMessagePhase,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
@@ -23,11 +22,8 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { extractAssistantCommentaryText } from "./embedded-agent-utils.js";
 import type { AgentMessage } from "./runtime/index.js";
-
-export function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
-}
 
 export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   message: AgentMessage | undefined,
@@ -78,7 +74,14 @@ export function extractStandaloneMessageToolText(
   params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
 ): string | undefined {
   try {
-    const record = asRecord(JSON.parse(text.trim()) as unknown);
+    if (!params.allowCurrentSourceReply && !params.allowRoutedReply) {
+      return undefined;
+    }
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) {
+      return undefined;
+    }
+    const record = asRecord(JSON.parse(trimmed) as unknown);
     const args = asRecord(record?.arguments);
     const hasRoute = Boolean(
       normalizeOptionalString(args?.target) ||
@@ -180,6 +183,29 @@ export function scopeAssistantMessageToStreamBlock(
   return { ...message, content: [block] };
 }
 
+export function emitAssistantCommentaryStreamData(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AssistantMessage,
+) {
+  const isResponsesCommentary = isResponsesApiAssistantMessage(message);
+  const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
+  // Non-text updates carry prior Responses items too; publish only the active item.
+  const commentaryMessage = isResponsesCommentary
+    ? scopeAssistantMessageToStreamBlock(message, index, itemId)
+    : message;
+  const text = extractAssistantCommentaryText(commentaryMessage);
+  if (text && (!isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
+    ctx.emitAssistantStreamData(
+      buildAssistantStreamData({
+        text,
+        replace: true,
+        phase: "commentary",
+        itemId: isResponsesCommentary ? itemId : undefined,
+      }),
+    );
+  }
+}
+
 export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -238,7 +264,9 @@ export function resolveCurrentSourceMessagingToolPartial(
     held && params.evtType === "text_delta" && !params.text.startsWith(held)
       ? `${held}${params.visibleDelta || params.text}`
       : params.text;
-  const normalized = normalizeTextForComparison(text);
+  const normalized = state.currentSourceMessagingToolSentTextsNormalized.length
+    ? normalizeTextForComparison(text)
+    : "";
   if (!normalized) {
     state.currentSourceMessagingToolHeldPartial = undefined;
     return { hold: false, text };
@@ -421,7 +449,6 @@ function parseFullStreamingReplyText(text: string): string {
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-
 export function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
@@ -451,5 +478,3 @@ export function buildAssistantStreamData(params: {
     itemId: params.itemId,
   };
 }
-
-/** Handles assistant message-start boundaries for streaming state. */

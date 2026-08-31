@@ -57,7 +57,8 @@ function isUnendedRunStalePastCutoff(
   now: number,
   defaultFloorMs: number,
 ): boolean {
-  const startedAt = getSubagentSessionStartedAt(entry);
+  // Creation bounds stale admission, but must not become a displayed execution start.
+  const startedAt = getSubagentSessionStartedAt(entry) ?? entry.createdAt;
   if (
     typeof startedAt !== "number" ||
     !Number.isFinite(startedAt) ||

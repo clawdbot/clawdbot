@@ -1,6 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Feishu plugin module implements thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -30,6 +31,7 @@ type FeishuThreadBindingRecord = {
   boundBy?: string;
   boundAt: number;
   lastActivityAt: number;
+  metadata?: Record<string, unknown>;
 };
 
 type FeishuThreadBindingManager = {
@@ -111,6 +113,7 @@ function toSessionBindingRecord(
     boundAt: record.boundAt,
     expiresAt,
     metadata: {
+      ...record.metadata,
       agentId: record.agentId,
       label: record.label,
       boundBy: record.boundBy,
@@ -194,6 +197,14 @@ export function createFeishuThreadBindingManager(params: {
         return null;
       }
       const existingLocal = manager.getByConversationId(normalizedConversationId);
+      const storedTargetKind = toFeishuTargetKind(targetKind);
+      const previous =
+        existingLocal?.targetSessionKey === normalizedTargetSessionKey &&
+        existingLocal.targetKind === storedTargetKind
+          ? existingLocal
+          : undefined;
+      // A plugin's opaque target has no agent owner, including on metadata-omitting refreshes.
+      const targetMetadata = { ...previous?.metadata, ...metadata };
       const now = Date.now();
       const record: FeishuThreadBindingRecord = {
         accountId,
@@ -208,25 +219,22 @@ export function createFeishuThreadBindingManager(params: {
           typeof metadata?.deliveryThreadId === "string" && metadata.deliveryThreadId.trim()
             ? metadata.deliveryThreadId.trim()
             : existingLocal?.deliveryThreadId,
-        targetKind: toFeishuTargetKind(targetKind),
+        targetKind: storedTargetKind,
         targetSessionKey: normalizedTargetSessionKey,
         agentId:
           normalizeOptionalString(metadata?.agentId) ??
-          existingLocal?.agentId ??
-          resolveSessionAgentIdStrict({
-            config: params.cfg,
-            sessionKey: normalizedTargetSessionKey,
-          }),
-        label:
-          typeof metadata?.label === "string" && metadata.label.trim()
-            ? metadata.label.trim()
-            : existingLocal?.label,
-        boundBy:
-          typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
-            ? metadata.boundBy.trim()
-            : existingLocal?.boundBy,
+          previous?.agentId ??
+          (isPluginOwnedSessionBindingRecord({ metadata: targetMetadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({
+                config: params.cfg,
+                sessionKey: normalizedTargetSessionKey,
+              })),
+        label: normalizeOptionalString(metadata?.label) ?? previous?.label,
+        boundBy: normalizeOptionalString(metadata?.boundBy) ?? previous?.boundBy,
         boundAt: now,
         lastActivityAt: now,
+        metadata: targetMetadata,
       };
       getState().bindingsByAccountConversation.set(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),

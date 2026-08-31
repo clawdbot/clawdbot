@@ -129,8 +129,9 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     expect(harness.tabsRemove).not.toHaveBeenCalled();
   });
 
-  it("composes the real relay and background policy for blank-first CDP creation", async () => {
+  it("keeps a blank-first CDP target alive when earlier discovery resolves after creation", async () => {
     const harness = await createHarness(mode);
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 7, windowId: 1 }]);
     const bridge = new ExtensionRelayBridge();
     const extension = bridge.attachExtensionSocket({
       send: (raw) => harness.socket.receive(JSON.parse(raw)),
@@ -157,12 +158,28 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     };
     try {
       await request("Target.setAutoAttach", { autoAttach: true, flatten: true });
+      const staleTabs = await harness.tabsQuery();
+      const inventory = deferred(staleTabs);
+      let inspecting = false;
+      harness.tabsQuery.mockImplementationOnce(async () => {
+        inspecting = true;
+        return await inventory.promise;
+      });
+      harness.updateTab(100, { url: "about:blank" });
+      await vi.waitFor(() => expect(inspecting).toBe(true));
       expect(await request("Target.createTarget", { url: "about:blank" })).toEqual({
         targetId: "tab-101",
       });
       const attached = frames.find((frame) => frame.method === "Target.attachedToTarget")
         ?.params as { sessionId: string };
       expect(attached.sessionId).toBeTruthy();
+      const inventoryCount = harness.frames().filter((frame) => frame.type === "tabs").length;
+      inventory.resolve();
+      await vi.waitFor(() =>
+        expect(harness.frames().filter((frame) => frame.type === "tabs").length).toBeGreaterThan(
+          inventoryCount,
+        ),
+      );
       await request("Page.enable", {}, attached.sessionId);
       harness.debuggerSendCommand.mockImplementationOnce(async () => {
         harness.updateTab(101, { url: "https://example.com/" });
@@ -177,7 +194,7 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
       expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
     } finally {
-      client.onClose();
+      await client.onClose();
       bridge.dispose();
     }
   });

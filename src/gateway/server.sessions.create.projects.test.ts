@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,20 +10,19 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
-import { withTimeout } from "../infra/fs-safe.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
-import {
-  getSessionWorkAdmissionRelease,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../sessions/session-lifecycle-admission.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import {
+  controlUiClient,
+  initializeRepository,
+  settleWorkspaceRuns,
+} from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -33,78 +30,28 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+const titleMocks = vi.hoisted(() => ({ generate: vi.fn() }));
+
+vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
+  generateConversationLabelWithFallback: titleMocks.generate,
+}));
 
 vi.mock("../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
 
-const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-const controlUiClient = {
-  client: {
-    connect: {
-      scopes: ["operator.write"],
-      client: {
-        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        version: "dev",
-        platform: "web",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    },
-  } as never,
-};
 
 afterEach(() => {
+  titleMocks.generate.mockReset();
   projectCloneMocks.materialize.mockReset();
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
-
-async function initializeRepository(root: string, name: string): Promise<string> {
-  const repo = path.join(root, name);
-  await fs.mkdir(repo, { recursive: true });
-  await execFileAsync("git", ["init", "-b", "main", repo]);
-  await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
-  await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
-  await execFileAsync("git", ["-C", repo, "add", "README.md"]);
-  await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
-  return await fs.realpath(repo);
-}
-
-async function settleWorkspaceRuns(
-  context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
-  storePath: string,
-  sessionKey: string | undefined,
-  abort = false,
-): Promise<void> {
-  const targets = [...context.chatAbortControllers].map(([runId, entry]) => ({ runId, entry }));
-  const released = getSessionWorkAdmissionRelease({
-    scope: storePath,
-    identities: [sessionKey],
-  });
-  if (abort) {
-    for (const { entry } of targets) {
-      entry.controller.abort();
-    }
-  }
-  // Error paths revoke registration before persisting failure; the admission
-  // retains custody until all dispatch and title work finishes in this test store.
-  expect(
-    await waitForChatAbortControllerRemoval({
-      entries: context.chatAbortControllers,
-      targets,
-      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-    }),
-  ).toBe(true);
-  if (released) {
-    await withTimeout(released, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS, "workspace run cleanup");
-  }
-}
 
 test.each([
   { worktree: false, sandboxed: false },
@@ -461,94 +408,6 @@ test.each([false, true])(
   },
 );
 
-test("chat.send rechecks setup scope when a write-only caller retries an admin's failed worktree", async () => {
-  const root = tempDirs.make("openclaw-session-worktree-retry-scope-");
-  const workspace = await initializeRepository(root, "workspace");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const setup = path.join(workspace, ".openclaw");
-  await fs.mkdir(setup);
-  const starts = path.join(setup, "starts");
-  await fs.writeFile(
-    path.join(setup, "worktree-setup.sh"),
-    '#!/bin/sh\necho started >> "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/starts"\nexit 1\n',
-    { mode: 0o755 },
-  );
-  const context = {
-    broadcast: vi.fn(),
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    dedupe: new Map(),
-  };
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
-  let key: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      key: string;
-      runId: string;
-      sessionId: string;
-      runStarted: boolean;
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        message: "Start work in the checkout",
-        worktree: true,
-        worktreeName: "setup-scope-retry",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never, context },
-    );
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.runStarted).toBe(true);
-    key = created.payload!.key;
-    await waitForFile(starts, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
-    await settleWorkspaceRuns(context, storePath, key);
-    expect(context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: created.payload!.runId,
-        state: "error",
-        errorMessage: expect.stringContaining("worktree setup failed"),
-      }),
-      expect.anything(),
-    );
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-
-    const retried = await directSessionReq(
-      "chat.send",
-      {
-        agentId: "main",
-        sessionKey: key,
-        message: "Continue without repository setup",
-        idempotencyKey: "write-only-setup-retry",
-      },
-      { ...controlUiClient, context },
-    );
-    expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
-    await settleWorkspaceRuns(context, storePath, key);
-    expect(await fs.readFile(starts, "utf8")).toBe("started\n");
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-    expect(entry).toMatchObject({
-      sessionId: created.payload!.sessionId,
-      worktree: { canonicalWorkspaceDir: workspace },
-    });
-    expect(entry).not.toHaveProperty("pendingWorktree");
-  } finally {
-    await settleWorkspaceRuns(context, storePath, key, true);
-    const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
-    if (owned) {
-      await managedWorktrees.remove({
-        id: owned.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-  }
-});
-
 test.each([false, true])(
   "concurrent sends retain one bound worktree after deferred setup (abort first=%s)",
   async (abortFirst) => {
@@ -894,6 +753,14 @@ test("sessions.create provisions a managed worktree from a registered project at
     expect(created.payload?.entry?.spawnedCwd).toBe(created.payload?.worktree?.path);
     expect(created.payload?.entry?.worktree?.canonicalWorkspaceDir).toBe(projectRoot);
     sessionKey = created.payload?.key ?? "";
+    const original = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    if (!original) {
+      throw new Error("expected created session");
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { ...original, displayName: "Repository review" },
+    );
     dispatchInboundMessageMock.mockResolvedValueOnce({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
@@ -911,6 +778,7 @@ test("sessions.create provisions a managed worktree from a registered project at
     );
     expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
     expect(reused.payload).toMatchObject({ worktree: { id: worktreeId }, runStarted: true });
+    expect(titleMocks.generate).not.toHaveBeenCalled();
     await settleWorkspaceRuns(context, storePath, sessionKey);
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });

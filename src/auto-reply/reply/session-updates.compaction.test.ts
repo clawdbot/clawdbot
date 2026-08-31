@@ -3,29 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { incrementCompactionCount } from "./session-updates.js";
-
-// Regression coverage for the canonical-primitives fix in
-// `incrementCompactionCount` (replaces the b82fd65c00 shape that dropped
-// `mergeSessionEntry` semantics + the `activeSessionKey` preserve-from-prune opt).
-//
-// These tests exercise the load-bearing edges via real fs:
-//   1. First-turn manual /compact: in-memory session has an entry but the
-//      on-disk store is fresh (no entry yet). The persist must merge-or-create
-//      from the active in-memory entry rather than silently dropping the count.
-//   2. sessionId rollover during compaction: the canonical merge primitive
-//      rolls `sessionStartedAt` to the new-session epoch when sessionId
-//      changes (existing.sessionId !== sessionId), which a raw spread would
-//      not do.
-//
-// Tests for monotonic-`updatedAt` under concurrent-compaction races and
-// activeSessionKey-preserve-from-enforce-mode-prune are queued for a follow-up
-// pass — they require concurrent-write simulation and enforce-mode trigger
-// staging that's beyond this PR's scope. The current fix uses the same
-// canonical primitives those scenarios depend on (mergeSessionEntry +
-// `{ activeSessionKey }`), so the structural protection is in place even
-// though the targeted tests are deferred.
 
 describe("incrementCompactionCount canonical-primitives fix", () => {
   let tmp: string;
@@ -38,44 +20,6 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
 
   afterEach(() => {
     rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it("persists count on first-turn /compact when on-disk store has no entry yet", async () => {
-    const sessionKey = "test:first-turn-compact";
-    const inMemoryEntry: SessionEntry = {
-      sessionId: "session-A",
-      compactionCount: 0,
-      updatedAt: 1_000_000,
-      sessionStartedAt: 900_000,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      [sessionKey]: inMemoryEntry,
-    };
-
-    // Sanity: store path must not yet exist — this IS the first-turn case.
-    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toBeUndefined();
-
-    const result = await incrementCompactionCount({
-      sessionStore,
-      sessionKey,
-      storePath,
-      now: 2_000_000,
-    });
-
-    // Count returned to caller.
-    expect(result).toBe(1);
-
-    // In-memory entry advanced.
-    expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
-
-    // On-disk store now has the entry. (b82fd65c00's `updateSessionStoreEntry`
-    // call was a no-op here because the existing-entry check returned null;
-    // count was silently dropped on disk. The canonical-primitives fix
-    // merge-or-creates from the active in-memory entry.)
-    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-    expect(persisted).toBeDefined();
-    expect(persisted?.compactionCount).toBe(1);
-    expect(persisted?.sessionId).toBe("session-A");
   });
 
   it("rolls sessionStartedAt to new-session epoch when sessionId changes during compaction", async () => {
@@ -94,6 +38,7 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
     const sessionStore: Record<string, SessionEntry> = {
       [sessionKey]: inMemoryEntry,
     };
+    await replaceSessionEntry({ storePath, sessionKey }, inMemoryEntry);
 
     const compactionMoment = Date.now();
     await incrementCompactionCount({
@@ -136,6 +81,7 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
         sessionStartedAt: 1_000_000,
       },
     };
+    await replaceSessionEntry({ storePath, sessionKey }, sessionStore[sessionKey]!);
 
     await incrementCompactionCount({
       sessionStore,

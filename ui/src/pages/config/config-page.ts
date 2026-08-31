@@ -114,6 +114,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -512,7 +513,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncUpdateCountdownPolling();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants media permission; each
-    // refresh button next to a picker requests its permission explicitly.
+    // picker requests its permission explicitly when opened.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
@@ -1356,9 +1357,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.enable(),
-      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
-      onWebPushTest: () => void this.context.webPush.sendTest(),
+      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
     if (this.pageId === "mcp") {
       return renderMcp({

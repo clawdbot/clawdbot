@@ -241,6 +241,7 @@ suite.define(() => {
       "antialiased",
     ],
     ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
+    ["crt", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
     async (theme, body, chat, faces, chatSmoothing) => {
@@ -354,6 +355,7 @@ suite.define(() => {
     ["tide", "tide", "#10151b", "#f7f9fb"],
     ["beacon", "beacon", "#000000", "#ffffff"],
     ["phosphor", "phosphor", "#0a0f0a", "#f4f7f4"],
+    ["crt", "crt", "#090a09", "#f5f5f4"],
   ])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {

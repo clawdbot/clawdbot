@@ -694,6 +694,7 @@ export async function handleToolExecutionEnd(
   if (!isCurrentDeliveryGeneration()) {
     return { status: "stale" };
   }
+  terminal.executedArguments ??= startArgs;
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (!isCurrentDeliveryGeneration()) {
     return { status: "stale" };
@@ -710,5 +711,11 @@ export async function handleToolExecutionEnd(
     runId,
   });
   const { executionStarted: terminalExecutionStarted, effectReceipt } = terminal;
-  return { status: "completed", executionStarted: terminalExecutionStarted, effectReceipt };
+  return {
+    ...terminal,
+    status: "completed",
+    isError: observerIsError,
+    executionStarted: terminalExecutionStarted,
+    effectReceipt,
+  };
 }

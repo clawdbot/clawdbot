@@ -85,6 +85,25 @@ update occurred. Existing synchronous and asynchronous callbacks that return `vo
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
 
+### Quiet progress presentation
+
+`createChannelProgressDraftCompositor({ presentation: "summary", ... })` keeps
+routine tool activity out of the visible draft while retaining authored status,
+reasoning, commentary, milestones, and actionable approval/failure lines. Pass
+`approvalId` on requested and resolved approval events so the compositor can
+clear the matching attention line. The default presentation remains unchanged.
+
+`createStatusReactionController({ presentation: "acknowledgement", ... })`
+keeps the initial reaction through work and success, skips inactivity warnings,
+and retains the existing error/cleanup lifecycle. The default `activity` policy
+continues to expose detailed lifecycle reactions.
+
+For edited or native progress, `createDraftStreamLoop` and finalizable draft
+controls accept `coalesceInFlight: true` to keep background updates arriving
+during a send in the next throttle window. Explicit `flush()` still bypasses
+the delay for attention and finalization. Cancel pending updates and await
+in-flight work before closing or rotating a stream.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
@@ -384,8 +403,8 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectConversationBinding(...)` from
-`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
+Use `inspectSessionBindingByConversation(...)` from
+`openclaw/plugin-sdk/session-binding-runtime` when the resolver needs this
 available/unavailable distinction.
 
 ### Account-scoped conversation binding support
@@ -410,6 +429,35 @@ configured binding rules or plugin-owned session routing. Contract tests
 should cover at least one supported and one unsupported account through the
 `ChannelPlugin["conversationBindings"]` contract exported by
 `openclaw/plugin-sdk/channel-core`.
+
+Binding ids are local to a channel and account. `SessionBindingService.touch(bindingId, at?, scope?)`
+and `unbind({ bindingId, reason, scope })` accept an optional `{ channel, accountId }`
+scope to select that owner. For an individual mutation, pass the existing binding's
+`conversation` as the scope. For example, to detach a resolved binding:
+
+```ts
+await getSessionBindingService().unbind({
+  bindingId: binding.bindingId,
+  scope: binding.conversation,
+  reason: "manual",
+});
+```
+
+Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runtime`.
+For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
+Omit scope only for intentional global cleanup or an existing legacy cross-channel
+operation. Scope does not change binding ids or require a new adapter method.
+
+Refreshing the same target session and target kind preserves omitted runtime
+metadata. Replacing either starts fresh target metadata, so a new session cannot
+inherit the previous plugin owner, agent, or label. Keep conversation transport
+details and explicit lifecycle settings separate from target metadata.
+
+Preserve opaque plugin ownership metadata when projecting binding records.
+Plugin-owned targets do not require an OpenClaw agent id; use
+`isPluginOwnedSessionBindingRecord(...)` from
+`openclaw/plugin-sdk/conversation-binding-runtime` to distinguish them from
+agent-owned targets before resolving an agent.
 
 ## Approvals and channel capabilities
 

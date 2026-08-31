@@ -670,9 +670,9 @@ describe("xai web search config resolution", () => {
     );
   });
 
-  it("rejects xAI web search success JSON without answer text", async () => {
+  it("reports missing xAI web search answers without blaming JSON decoding", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(jsonResponse({ output: [] })),
+      Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = requireXaiWebSearchTool({
@@ -680,7 +680,7 @@ describe("xai web search config resolution", () => {
     });
 
     await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
-      "xAI web search failed: malformed JSON response",
+      "xAI web search failed: no answer text returned; try a simpler request",
     );
   });
 

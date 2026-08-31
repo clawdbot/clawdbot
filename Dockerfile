@@ -119,6 +119,7 @@ RUN sh scripts/docker/verify-native-addons.sh
 # these after the dependency layer so a new timestamp does not invalidate install.
 ARG GIT_COMMIT=""
 ARG OPENCLAW_BUILD_TIMESTAMP=""
+ARG OPENCLAW_DOCKER_BUILD_VERSION=""
 ENV GIT_COMMIT=${GIT_COMMIT} \
     OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
 
@@ -148,8 +149,13 @@ RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
+# Correction-release sources keep the base package version; official images
+# stamp the complete release version before generating their build metadata.
 RUN set -eu; \
     selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"; \
+    if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi; \
     if [ -z "$OPENCLAW_BUILD_TIMESTAMP" ]; then \
       OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
       export OPENCLAW_BUILD_TIMESTAMP; \
@@ -174,6 +180,9 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN rm -rf node_modules ui/node_modules && \
     find packages "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -name node_modules -prune -exec rm -rf {} +
 COPY --from=production-deps /app/ ./
+# Production dependencies carry the base source version. Restore the release
+# manifest so every runtime surface keeps the version used during the build.
+COPY --from=build /app/package.json ./package.json
 
 # Prune omitted plugins and build metadata. Keep SDK-native binaries only for
 # selected plugins that explicitly require them.
@@ -263,6 +272,14 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+
+# Validate the three version surfaces in every release-built runtime variant.
+ARG OPENCLAW_DOCKER_BUILD_VERSION
+RUN if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      test "$(node -p "require(\"/app/package.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node -p "require(\"/app/dist/build-info.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node /app/openclaw.mjs --version | cut -d ' ' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a

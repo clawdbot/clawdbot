@@ -442,14 +442,14 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     exhaustedBlockReplyKeys.clear();
   };
 
-  const rememberAssistantText = (text: string) => {
+  const rememberAssistantText = (text: string, normalizedText?: string) => {
     state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
     state.lastAssistantTextTrimmed = text.trimEnd();
-    const normalized = normalizeTextForComparison(text);
+    const normalized = normalizedText ?? normalizeTextForComparison(text);
     state.lastAssistantTextNormalized = normalized.length > 0 ? normalized : undefined;
   };
 
-  const shouldSkipAssistantText = (text: string) => {
+  const shouldSkipAssistantText = (text: string, normalizedText?: string) => {
     if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) {
       return false;
     }
@@ -457,25 +457,25 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
       return true;
     }
-    const normalized = normalizeTextForComparison(text);
+    const normalized = normalizedText ?? normalizeTextForComparison(text);
     if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
       return true;
     }
     return false;
   };
 
-  const pushAssistantText = (text: string) => {
+  const pushAssistantText = (text: string, normalizedText?: string) => {
     if (!text) {
       return;
     }
     if (params.silentExpected && !shouldAllowSilentTurnText(text)) {
       return;
     }
-    if (shouldSkipAssistantText(text)) {
+    if (shouldSkipAssistantText(text, normalizedText)) {
       return;
     }
     assistantTexts.push(text);
-    rememberAssistantText(text);
+    rememberAssistantText(text, normalizedText);
   };
 
   const replaceCurrentAssistantText = (text: string) => {

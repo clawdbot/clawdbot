@@ -88,31 +88,17 @@ function parseMessageEventRow(row: {
   };
 }
 
-function readMessageRange(
-  projection: ResetWindowProjection,
-  start: number,
-  endExclusive: number,
-): ResetWindowMessageEvent[] {
-  if (endExclusive <= start) {
-    return [];
-  }
-  const db = getResetWindowKysely(projection.database);
-  return executeSqliteQuerySync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select(["active.event_seq", "active.message_position", "event.event_json"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", "is not", null)
-      .where("active.message_position", ">=", start)
-      .where("active.message_position", "<", endExclusive)
-      .orderBy("active.message_position", "asc"),
-  ).rows.map(parseMessageEventRow);
+function selectMessageRows(projection: ResetWindowProjection) {
+  return getResetWindowKysely(projection.database)
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_events as event", (join) =>
+      join
+        .onRef("event.session_id", "=", "active.session_id")
+        .onRef("event.seq", "=", "active.event_seq"),
+    )
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("active.message_position", "is not", null)
+    .orderBy("active.message_position", "asc");
 }
 
 function resetMessageWindowCacheKey(projection: ResetWindowProjection): string {
@@ -345,54 +331,82 @@ export function resolveVisibleMessagePositions(
   };
 }
 
+function selectVisibleMessageRanges(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+) {
+  const ranges: Array<{
+    query: ReturnType<typeof selectMessageRows>;
+    logicalPosition: (position: number) => number;
+  }> = [];
+  if (endExclusive <= start) {
+    return ranges;
+  }
+  const visible = resolveVisibleMessagePositions(projection);
+  const boundedStart = Math.min(Math.max(0, start), visible.total);
+  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
+  const query = selectMessageRows(projection);
+  const keptEnd = Math.min(boundedEnd, visible.kept.length);
+  // Reset tails have holes where tool results were discarded. Batch exact retained
+  // positions below SQLite's binding limit; sparse tails must not become N+1 reads.
+  for (let offset = boundedStart; offset < keptEnd; offset += 500) {
+    const positions = visible.kept.slice(offset, Math.min(offset + 500, keptEnd));
+    const ordinals = new Map(positions.map((position, index) => [position, offset + index]));
+    ranges.push({
+      query: query.where("active.message_position", "in", positions),
+      logicalPosition: (position) => ordinals.get(position)!,
+    });
+  }
+  const logicalStart = Math.max(boundedStart, visible.kept.length);
+  if (boundedEnd > logicalStart) {
+    const rawStart = visible.postStart + logicalStart - visible.kept.length;
+    ranges.push({
+      query: query
+        .where("active.message_position", ">=", rawStart)
+        .where("active.message_position", "<", rawStart + boundedEnd - logicalStart),
+      logicalPosition: (position) => logicalStart + position - rawStart,
+    });
+  }
+  return ranges;
+}
+
 export function readVisibleMessageRange(
   projection: ResetWindowProjection,
   start: number,
   endExclusive: number,
 ): ResetWindowMessageEvent[] {
-  if (endExclusive <= start) {
-    return [];
-  }
-  const visible = resolveVisibleMessagePositions(projection);
-  const boundedStart = Math.min(Math.max(0, start), visible.total);
-  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
-  if (boundedEnd <= boundedStart) {
-    return [];
-  }
-  const keptEnd = Math.min(boundedEnd, visible.kept.length);
-  const keptEvents = visible.kept
-    .slice(boundedStart, keptEnd)
-    .flatMap((position) => readMessageRange(projection, position, position + 1));
-  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
-  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
-  const postEvents = readMessageRange(
-    projection,
-    visible.postStart + postVisibleStart - visible.kept.length,
-    visible.postStart + postVisibleEnd - visible.kept.length,
+  return selectVisibleMessageRanges(projection, start, endExclusive).flatMap((range) =>
+    executeSqliteQuerySync(
+      projection.database.db,
+      range.query.select(["active.event_seq", "active.message_position", "event.event_json"]),
+    ).rows.map(parseMessageEventRow),
   );
-  return [...keptEvents, ...postEvents];
 }
 
-/** Maps a logical visible-message range to its materialized message positions. */
-export function resolveVisibleMessagePositionRange(
+/** Sizes the same logical ranges without fetching or parsing excluded payloads. */
+export function readVisibleMessageMetadata(
   projection: ResetWindowProjection,
   start: number,
   endExclusive: number,
-): number[] {
-  if (endExclusive <= start) {
-    return [];
-  }
-  const visible = resolveVisibleMessagePositions(projection);
-  const boundedStart = Math.min(Math.max(0, start), visible.total);
-  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
-  const keptEnd = Math.min(boundedEnd, visible.kept.length);
-  const positions = visible.kept.slice(boundedStart, keptEnd);
-  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
-  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
-  for (let logical = postVisibleStart; logical < postVisibleEnd; logical += 1) {
-    positions.push(visible.postStart + logical - visible.kept.length);
-  }
-  return positions;
+) {
+  return selectVisibleMessageRanges(projection, start, endExclusive).flatMap((range) =>
+    executeSqliteQuerySync(
+      projection.database.db,
+      range.query
+        .select([
+          "active.message_position",
+          /* kysely-allow-raw: byte caps include each event's JSONL newline. */
+          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+        ])
+        .$narrowType<{ message_position: number }>(),
+    ).rows.map((row) => ({
+      message_position: row.message_position,
+      serialized_bytes: row.serialized_bytes,
+      // Position-based mapping preserves logical holes if a joined row is absent.
+      logicalPosition: range.logicalPosition(row.message_position),
+    })),
+  );
 }
 
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */

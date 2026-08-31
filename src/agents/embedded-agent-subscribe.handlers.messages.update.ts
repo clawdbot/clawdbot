@@ -113,7 +113,7 @@ export function handleMessageUpdate(
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
     const rawCommentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_text_stream",
       runId: ctx.params.runId,
@@ -121,7 +121,7 @@ export function handleMessageUpdate(
       evtType: "commentary_update",
       delta: "",
       content: rawCommentaryText,
-    });
+    }));
     emitResolvedCommentaryDisplay(ctx, rawCommentaryText, { preferReplace: true });
     return;
   }
@@ -160,7 +160,7 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_thinking_stream",
       runId: ctx.params.runId,
@@ -168,7 +168,7 @@ export function handleMessageUpdate(
       evtType,
       delta: thinkingDelta,
       content: thinkingContent,
-    });
+    }));
     // Emit-always: emitReasoningStream always reaches the bus/archive; the
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
@@ -196,7 +196,7 @@ export function handleMessageUpdate(
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
-  appendRawStream({
+  appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_text_stream",
     runId: ctx.params.runId,
@@ -204,7 +204,7 @@ export function handleMessageUpdate(
     evtType,
     delta,
     content,
-  });
+  }));
 
   let chunk = resolveAssistantTextChunk({
     evtType,

@@ -19,6 +19,7 @@ import {
   type InlineAttachment,
 } from "../../shared/inline-attachments.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -373,7 +374,10 @@ export function createSessionsSpawnTool(
       subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
+      const assertActive = captureAgentToolSourceExecutionGuard(
+        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal),
+      );
       const params = args as Record<PropertyKey, unknown>;
       if (opts?.swarmCollector && params.collect !== true) {
         throw new ToolInputError(
@@ -650,6 +654,7 @@ export function createSessionsSpawnTool(
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
             requesterRunId: opts?.requesterRunId,
+            assertActive,
           },
           parentExecutionIdentityToken,
         ),

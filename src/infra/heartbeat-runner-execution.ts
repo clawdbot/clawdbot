@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
-import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import {

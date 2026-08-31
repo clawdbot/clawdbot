@@ -1,6 +1,7 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -14,7 +15,6 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const isDefaultInstallIdentityMock = vi.hoisted(() => vi.fn(() => true));
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
@@ -104,9 +104,8 @@ vi.mock("../../config/mutate.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: isDefaultInstallIdentityMock,
-  resolveNativeServiceProfileConflict: () => null,
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));
@@ -258,7 +257,7 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
-    isDefaultInstallIdentityMock.mockReturnValue(true);
+    mockSystemAccountHome();
     replaceConfigFileMock.mockReset();
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
@@ -316,6 +315,7 @@ describe("runDaemonInstall", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
   });
 
@@ -357,7 +357,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("blocks non-default install identities before inspecting host services", async () => {
-    isDefaultInstallIdentityMock.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
 
     await runDaemonInstall({ json: true });
 

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import type { NewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const REMOTE_PROJECT = {
@@ -11,14 +15,20 @@ const REMOTE_PROJECT = {
   cloneUrl: "https://github.com/openclaw/openclaw.git",
 };
 
-function createRepositoryFixture() {
+function createRepositoryFixture(
+  options: {
+    workspaceGit?: boolean;
+    unavailable?: boolean;
+    data?: NewSessionRouteData;
+  } = {},
+) {
   const requestUpdate = vi.fn();
   const persistPreference = vi.fn();
-  const readPreference = vi.fn(() => ({ worktree: true }));
-  const request = vi.fn(async (method: string) =>
+  const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
+  const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
     method === "fs.listDir"
       ? { path: "/plain", entries: [] }
-      : { repositoryStatus: "not_git", branches: [] },
+      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
@@ -32,7 +42,9 @@ function createRepositoryFixture() {
       state: {
         agentsList: {
           defaultId: "main",
-          agents: [{ id: "main", workspace: "/workspace", workspaceGit: false }],
+          agents: [
+            { id: "main", workspace: "/workspace", workspaceGit: options.workspaceGit ?? false },
+          ],
         },
       },
     },
@@ -40,6 +52,7 @@ function createRepositoryFixture() {
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
+    cloudProfilesReady: true,
     environments: [
       {
         id: "node:desktop",
@@ -69,13 +82,142 @@ function createRepositoryFixture() {
   const state = new DraftPlaceState(
     gateway,
     browser,
-    () => ({ context, data: undefined, submitting: false, pendingPlacementSessionKey: "" }),
+    () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
-  return { state, browser, persistPreference, requestUpdate };
+  return { state, browser, persistPreference, readPreference, request, requestUpdate };
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("preserves edited details when identity preferences arrive after discovery", async () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    request.mockResolvedValue({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+    state.adoptAgentDefaults();
+    await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+    state.setBaseRef("my-branch");
+    state.setWorktreeName("my-checkout");
+
+    readPreference.mockReturnValue({
+      worktree: true,
+      baseRef: "saved-branch",
+      worktreeName: "saved-checkout",
+    });
+    state.adoptAgentDefaults();
+
+    expect(state.baseRef).toBe("my-branch");
+    expect(state.worktreeName).toBe("my-checkout");
+  });
+
+  it.each([false, true])(
+    "adopts a preference arriving during repository discovery without overwriting user edits (%s)",
+    async (edited) => {
+      const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockImplementation(async (method) =>
+        method === "worktrees.branches" ? discovery.promise : {},
+      );
+      state.adoptAgentDefaults();
+      expect(state.repository.kind).toBe("checking");
+
+      readPreference.mockReturnValue({ worktree: true, baseRef: "release/next" });
+      state.adoptAgentDefaults();
+      if (edited) {
+        state.setBaseRef("my-branch");
+      }
+      discovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.baseRef).toBe(edited ? "my-branch" : "release/next");
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+        1,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "finishes restoring a saved cloud preference for a non-Git workspace (unavailable: %s)",
+    async (unavailable) => {
+      const { state, readPreference, persistPreference } = createRepositoryFixture({
+        workspaceGit: unavailable,
+        unavailable,
+      });
+      readPreference.mockReturnValue({ where: { kind: "cloud", id: "aws" } });
+      state.adoptAgentDefaults();
+      await vi.waitFor(() =>
+        expect(state.repository.kind).toBe(unavailable ? "unavailable" : "direct"),
+      );
+
+      state.restorePreferenceSelections();
+
+      expect(state.placementPreferenceReady).toBe(true);
+      expect(state.cloudProfileId).toBe("");
+      expect(state.worktree).toBe(false);
+      if (unavailable) {
+        expect(persistPreference).not.toHaveBeenCalled();
+      } else {
+        expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
+          where: { kind: "local" },
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "reconciles group defaults with cached repository discovery (unavailable: %s)",
+    async (unavailable) => {
+      const { state } = createRepositoryFixture({
+        workspaceGit: unavailable,
+        unavailable,
+        data: {
+          agentId: "main",
+          requestedAgentId: "main",
+          catalogId: "",
+          model: "",
+          catalogLabel: "",
+          startTerminal: false,
+          group: "Notes",
+          groupStatus: "resolved",
+          groupCwd: "/workspace",
+          groupWorktree: true,
+        },
+      });
+      state.adoptAgentDefaults();
+      await vi.waitFor(() => expect(state.placementPreferenceReady).toBe(true));
+      expect(state.worktree).toBe(false);
+
+      state.adoptGroupDefaults();
+
+      expect(state.placementPreferenceReady).toBe(true);
+      expect(state.worktree).toBe(false);
+      expect(state.worktreeAvailable()).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "does not offer worktrees for an unverified workspace (project selected: %s)",
+    async (projectSelected) => {
+      const { state, browser } = createRepositoryFixture({ workspaceGit: true, unavailable: true });
+      if (projectSelected) {
+        vi.spyOn(browser, "selectedProject").mockReturnValue({
+          id: "workspace",
+          displayName: "Workspace",
+          repoRoot: "/workspace",
+          source: "workspace",
+        });
+        browser.selectProject({ kind: "local", id: "workspace" });
+      }
+
+      state.adoptAgentDefaults();
+
+      expect(state.repository.kind).toBe("checking");
+      expect(state.worktreeAvailable()).toBe(false);
+      await vi.waitFor(() => expect(state.repository.kind).toBe("unavailable"));
+      expect(state.worktreeAvailable()).toBe(false);
+      expect(state.worktree).toBe(false);
+      expect(state.placementPreferenceReady).toBe(true);
+    },
+  );
+
   it("offers remote-project worktrees locally without resetting the typed base branch on toggle", () => {
     const { state } = createRepositoryFixture();
     state.selectRemoteProject(REMOTE_PROJECT);

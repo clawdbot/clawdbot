@@ -49,6 +49,19 @@ function loadPrecomputedHelpText(
   return null;
 }
 
+function outputPrecomputedHelpText(
+  key: PrecomputedHelpTextKey,
+  cache: string | null | undefined,
+  setCache: (value: string | null) => void,
+): boolean {
+  const helpText = loadPrecomputedHelpText(key, cache, setCache);
+  if (!helpText) {
+    return false;
+  }
+  process.stdout.write(helpText);
+  return true;
+}
+
 function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
   if (!isPrecomputedSubcommandHelpName(commandName)) {
     return null;
@@ -75,59 +88,27 @@ function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
 }
 
 export function outputPrecomputedRootHelpText(): boolean {
-  const rootHelpText = loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
+  return outputPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
     precomputedRootHelpText = value;
   });
-  if (!rootHelpText) {
-    return false;
-  }
-  process.stdout.write(rootHelpText);
-  return true;
 }
 
 export function outputPrecomputedBrowserHelpText(): boolean {
-  const browserHelpText = loadPrecomputedHelpText(
-    "browserHelpText",
-    precomputedBrowserHelpText,
-    (value) => {
-      precomputedBrowserHelpText = value;
-    },
-  );
-  if (!browserHelpText) {
-    return false;
-  }
-  process.stdout.write(browserHelpText);
-  return true;
+  return outputPrecomputedHelpText("browserHelpText", precomputedBrowserHelpText, (value) => {
+    precomputedBrowserHelpText = value;
+  });
 }
 
 export function outputPrecomputedSecretsHelpText(): boolean {
-  const secretsHelpText = loadPrecomputedHelpText(
-    "secretsHelpText",
-    precomputedSecretsHelpText,
-    (value) => {
-      precomputedSecretsHelpText = value;
-    },
-  );
-  if (!secretsHelpText) {
-    return false;
-  }
-  process.stdout.write(secretsHelpText);
-  return true;
+  return outputPrecomputedHelpText("secretsHelpText", precomputedSecretsHelpText, (value) => {
+    precomputedSecretsHelpText = value;
+  });
 }
 
 export function outputPrecomputedNodesHelpText(): boolean {
-  const nodesHelpText = loadPrecomputedHelpText(
-    "nodesHelpText",
-    precomputedNodesHelpText,
-    (value) => {
-      precomputedNodesHelpText = value;
-    },
-  );
-  if (!nodesHelpText) {
-    return false;
-  }
-  process.stdout.write(nodesHelpText);
-  return true;
+  return outputPrecomputedHelpText("nodesHelpText", precomputedNodesHelpText, (value) => {
+    precomputedNodesHelpText = value;
+  });
 }
 
 export function outputPrecomputedSubcommandHelpText(commandName: string): boolean {

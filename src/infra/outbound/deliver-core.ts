@@ -398,7 +398,7 @@ export async function deliverOutboundPayloadsCore(
         }
       } else if (!deliveryHandler.supportsMedia) {
         log.warn(
-          "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+          "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
           {
             channel,
             to,
@@ -408,7 +408,7 @@ export async function deliverOutboundPayloadsCore(
         const fallbackText = payloadSummary.text.trim();
         if (!fallbackText) {
           throw new Error(
-            "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+            "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia and no text fallback is available for media payload",
           );
         }
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
@@ -423,23 +423,18 @@ export async function deliverOutboundPayloadsCore(
           overrides: sendOverrides,
           consumeReplyTo: applySendReplyToConsumption,
         });
+        const sendMedia = deliveryHandler.sendFormattedMedia ?? deliveryHandler.sendMedia;
         for (const unit of mediaUnits) {
           if (unit.kind !== "media") {
             continue;
           }
           throwIfAborted(abortSignal);
           const resultIndex = results.length;
-          const delivery = deliveryHandler.sendFormattedMedia
-            ? await deliveryHandler.sendFormattedMedia(
-                unit.caption ?? "",
-                unit.mediaUrl,
-                withPreparedTarget(unit.overrides),
-              )
-            : await deliveryHandler.sendMedia(
-                unit.caption ?? "",
-                unit.mediaUrl,
-                withPreparedTarget(unit.overrides),
-              );
+          const delivery = await sendMedia(
+            unit.caption ?? "",
+            unit.mediaUrl,
+            withPreparedTarget(unit.overrides),
+          );
           const recorded = await recordIdentifiedDeliveryResult(delivery);
           adoptSuccessfulResultsSince(resultIndex);
           if (recorded) {

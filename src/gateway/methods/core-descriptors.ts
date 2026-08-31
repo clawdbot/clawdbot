@@ -383,7 +383,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.abort", "chat", "operator.write", "<=2026.7"],
+  ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
@@ -421,6 +421,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["push.web.subscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.web.preferences.get", "push", "operator.read", "2026.8"],
+  ["push.web.preferences.set", "push", "operator.write", "2026.8"],
   ["config.openFile", "config", "operator.admin", "<=2026.7", { advertise: false }],
   ["connect", "connect", "operator.admin", "<=2026.7", { advertise: false }],
   ["chat.inject", "chat", "operator.admin", "<=2026.7", { advertise: false }],

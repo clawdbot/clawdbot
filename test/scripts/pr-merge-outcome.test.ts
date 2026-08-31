@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -10,21 +12,19 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
 const scripts = join(process.cwd(), "scripts");
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
 const lockRef = "refs/openclaw/pr-operation-locks/123";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
 
-function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
-  const root = realpathSync(temps.make("pr-merge-outcome-"));
-  const remote = join(root, "remote.git");
-  const repo = join(root, "repo");
-  mkdirSync(repo);
+function createFixtureGit(repo: string) {
   const git = (args: string[], input?: string, cwd = repo) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
@@ -32,14 +32,6 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "user.name", "Merge Fixture"]);
-  git(["config", "user.email", "fixture@example.invalid"]);
-  git(["init", "-q", "--bare", remote]);
-  git(["remote", "add", "origin", remote]);
-  // Production URLs still use the real Git transport, redirected only in this disposable repo.
-  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
-  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const tree = (owner: string, sibling = "stable\n") => {
     const a = git(["hash-object", "-w", "--stdin"], owner);
     const b = git(["hash-object", "-w", "--stdin"], sibling);
@@ -47,14 +39,48 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   };
   const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
     git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
+  return { git, tree, commit };
+}
+
+function createFixtureTemplate(directory: string) {
+  const root = realpathSync(directory);
+  const repo = join(root, "repo");
+  const remote = join(root, "remote.git");
+  mkdirSync(repo);
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.name", "Merge Fixture"]);
+  git(["config", "user.email", "fixture@example.invalid"]);
+  git(["init", "-q", "--bare", remote]);
   const base = commit(tree("before\n"), []);
+  git(["update-ref", "refs/heads/main", base]);
+  return { repo, remote, base };
+}
+
+function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
+  const root = realpathSync(temps.make("pr-merge-outcome-"));
+  const remote = join(root, "remote.git");
+  const repo = join(root, "repo");
+  const template = (fixtureTemplate ??= createFixtureTemplate(
+    templateDirs.make("pr-merge-outcome-template-"),
+  ));
+  // Only the common base is reused. Source commits stay fresh, loose and private
+  // so corruption, GC, attribution and multi-commit rebase cases keep their proof.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.repo, repo, copyOptions);
+  cpSync(template.remote, remote, copyOptions);
+  const { base } = template;
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["remote", "add", "origin", remote]);
+  // Production URLs still use the real Git transport, redirected only in this disposable repo.
+  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
+  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const sourceCommits: string[] = [];
   let head = base;
   for (const [owner, sibling] of sourceVersions) {
     head = commit(tree(owner, sibling), [head], sourceMessage);
     sourceCommits.push(head);
   }
-  git(["update-ref", "refs/heads/main", base]);
   git(["update-ref", "refs/heads/topic", head]);
   git(["push", "-q", "origin", "main", "topic:refs/pull/123/head", "topic"]);
   const worktree = join(repo, ".worktrees/pr-123");
@@ -62,7 +88,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   mkdirSync(join(worktree, ".local"));
   writeFileSync(
     join(worktree, ".local/prep.env"),
-    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\n`,
+    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=external\n`,
   );
   writeFileSync(join(worktree, ".local/gates.env"), "GATES_MODE=full\n");
   for (const name of ["review.md", "review.json", "pr-meta.env", "pr-meta.json", "prep.md"]) {
@@ -142,11 +168,15 @@ const out=(value)=>console.log(typeof value==="string"?value:JSON.stringify(valu
 const fail=(text)=>{save();console.error(text);process.exit(1)};
 if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
 s.calls.push([route,...args]);save();
+if(args.some(arg=>arg.includes("{owner}")||arg.includes("{repo}"))) fail("protected unresolved repository placeholder");
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
-else if(args[0]==="api"&&args.includes("user")) out(s.operator);
+else if(args[0]==="api"&&args.includes("user")) out("relay-reader");
+else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {out([{name:"CI",bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
+  const fields=args[args.indexOf("--json")+1].split(",");
+  if(fields.includes("headRefName")&&!fields.includes("headRefOid")) fail("missing live cleanup metadata");
   const pr={...s.pr,changedFiles:0,files:[],headRefName:"topic",headRepository:{name:"repo"},headRepositoryOwner:{login:"fixture"}};
   if(route==="path"&&s.stale) {pr.state="OPEN";pr.mergeCommit=null;}
   if(args.includes("--jq")) {const q=args[args.indexOf("--jq")+1];out(q===".state"?pr.state:q===".mergeCommit.oid"?pr.mergeCommit?.oid??"null":pr.url);}
@@ -220,7 +250,10 @@ else if(args[0]==="pr"&&args[1]==="view") {
     save();
     if(s.comment!=="success") fail("comment response lost");
     out(url);
-  } else out([s.comments]);
+  } else {
+    if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
+    out([s.comments]);
+  }
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
   out({parents:[{sha:git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
@@ -234,6 +267,7 @@ save();
     `#!/usr/bin/env bash
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
+source "$script_parent_dir/lib/plain-gh.sh"
 source "$script_parent_dir/pr-lib/worktree.sh"
 source "$script_parent_dir/pr-lib/operation-lock.sh"
 source "$script_parent_dir/pr-lib/common.sh"
@@ -344,6 +378,19 @@ merge_run 123 "\${1:-false}" "\${2:-}"
       .filter((name) => /^merge-output(?:\..+)?\.log$/.test(name))
       .sort()
       .map((name) => [name, readFileSync(join(worktree, ".local", name), "utf8")] as const);
+  const setPrivacyProvenance = (rewrite: string | null, access: string | null) => {
+    const path = join(worktree, ".local/prep.env");
+    let contents = readFileSync(path, "utf8");
+    contents = contents.replace(
+      /^PREP_REPLACED_HOSTED_ANCESTRY=.*\n/mu,
+      rewrite === null ? "" : `PREP_REPLACED_HOSTED_ANCESTRY=${rewrite}\n`,
+    );
+    contents = contents.replace(
+      /^PREP_AUTHOR_ACCESS=.*\n/mu,
+      access === null ? "" : `PREP_AUTHOR_ACCESS=${access}\n`,
+    );
+    writeFileSync(path, contents);
+  };
   return {
     root,
     repo,
@@ -362,11 +409,126 @@ merge_run 123 "\${1:-false}" "\${2:-}"
     advance,
     record,
     captures,
+    setPrivacyProvenance,
     ordinaryRead,
   };
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([
+    {
+      route: "immediate",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "auto",
+      access: "unknown",
+      auto: true,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "BEHIND",
+    },
+    {
+      route: "queue",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: true,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "admin",
+      access: "unknown",
+      auto: false,
+      admin: true,
+      queue: false,
+      mergeStateStatus: "BLOCKED",
+    },
+  ])(
+    "blocks rewritten $access squash before $route intent",
+    ({ access, auto, admin, queue, mergeStateStatus }) => {
+      const f = fixture();
+      f.setPrivacyProvenance("true", access);
+      f.save({
+        ...f.state(),
+        admin,
+        gates: admin ? "fail" : "pass",
+        pr: { ...f.state().pr, isMergeQueueEnabled: queue, mergeStateStatus },
+      });
+
+      const run = f.run(auto);
+
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).toContain("maintainer-owned replacement PR");
+      expect(f.state().mutations).toBe(0);
+      expect(f.captures()).toEqual([]);
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each([
+    { rewrite: "true", access: "maintainer" },
+    { rewrite: "false", access: "unknown" },
+  ])("allows squash with valid privacy provenance: %j", ({ rewrite, access }) => {
+    const f = fixture();
+    f.setPrivacyProvenance(rewrite, access);
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record().phase).toBe("complete");
+  });
+
+  it.each([
+    ["missing", "PREP_REPLACED_HOSTED_ANCESTRY=false\n"],
+    [
+      "malformed rewrite",
+      "PREP_REPLACED_HOSTED_ANCESTRY=false",
+      "PREP_REPLACED_HOSTED_ANCESTRY=yes",
+    ],
+    ["malformed access", "PREP_AUTHOR_ACCESS=external", "PREP_AUTHOR_ACCESS=write"],
+  ])("requires prepare rerun for %s squash provenance", (_label, from, to = "") => {
+    const f = fixture();
+    const prepPath = join(f.worktree, ".local/prep.env");
+    writeFileSync(prepPath, readFileSync(prepPath, "utf8").replace(from, to));
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it.each(["merge", "rebase"])("leaves %s mechanics independent of squash provenance", (method) => {
+    const f = fixture();
+    f.setPrivacyProvenance(null, null);
+
+    const run = f.run(false, f.repo, method);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("reconciles a prior outcome before reading squash privacy provenance", () => {
+    const f = fixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    f.recover();
+    f.setPrivacyProvenance(null, null);
+
+    const retry = f.run();
+
+    expect(retry.status, retry.output).toBe(1);
+    expect(retry.output).not.toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(1);
+  });
+
   it("operator recovery preserves prior evidence and consumes one exact attempt", () => {
     const f = fixture();
     f.save({ ...f.state(), mode: "unapplied" });
@@ -1182,6 +1344,27 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     f.git(["merge-base", "--is-ancestor", f.head, f.record().landed]);
   });
+  it("audits a confirmed admin landing using the prepared repository", () => {
+    const f = fixture();
+    f.save({ ...f.state(), admin: true, gates: "fail", comment: "rejected" });
+    const result = f.run();
+    expect(result.status, result.output).toBe(1);
+    expect(f.record().phase, result.output).toBe("commenting");
+    expect(f.state().calls).toContainEqual([
+      "direct",
+      "api",
+      `repos/fixture/repo/commits/${f.record().landed}`,
+    ]);
+    expect(
+      JSON.parse(readFileSync(join(f.worktree, ".local/merge-crabbox-parent-audit.json"), "utf8")),
+    ).toMatchObject({
+      status: "match",
+      expectedParentSha: f.base,
+      actualParentSha: f.base,
+    });
+    f.recover();
+  });
+
   it("retains confirmed admin merge before failed post-merge audit", () => {
     const f = fixture();
     f.save({ ...f.state(), admin: true, audit: true, gates: "fail" });

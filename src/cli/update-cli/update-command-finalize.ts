@@ -11,7 +11,7 @@ import {
   type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
+import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -40,7 +40,7 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure } from "./update-command-post-core.js";
+import { reportPreMutationUpdateFailure } from "./update-command-result.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -147,16 +147,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         }
       : undefined);
   if (requestedChannel === "extended-stable") {
-    const updateStatus = await checkUpdateStatus({
-      root,
-      timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
-    });
-    if (updateStatus.installKind === "git") {
+    const installKind = await resolveUpdateInstallKind(root);
+    if (installKind === "git") {
       await reportPreMutationUpdateFailure({
         root,
-        installKind: updateStatus.installKind,
+        installKind,
         reason: "unsupported_git_channel",
         opts,
         controlPlaneUpdateSentinelMeta: null,

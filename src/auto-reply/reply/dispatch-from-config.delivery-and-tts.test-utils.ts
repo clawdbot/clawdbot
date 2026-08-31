@@ -216,7 +216,11 @@ describe("dispatchReplyFromConfig", () => {
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-denied",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/codex detach" }),
@@ -827,7 +831,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-dm-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-dm-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -848,7 +856,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("falls back to OpenClaw once per startup when a bound plugin is missing", async () => {
+  it("notifies once per binding owner when a bound plugin is missing", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -857,7 +865,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "missing_plugin",
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const binding: SessionBindingRecord = {
       bindingId: "binding-missing-1",
       targetSessionKey: "plugin-binding:codex:missing123",
       targetKind: "session",
@@ -875,62 +883,52 @@ describe("dispatchReplyFromConfig", () => {
         pluginRoot: "/Users/huntharo/github/openclaw-app-server",
         detachHint: "/codex_detach",
       },
-    } satisfies SessionBindingRecord);
+    };
 
-    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+    const cases = [
+      { channel: "discord", accountId: "default", notice: true },
+      { channel: "discord", accountId: "default", notice: false },
+      { channel: "telegram", accountId: "default", notice: true },
+      { channel: "discord", accountId: "work", notice: true },
+    ];
+    for (const [index, { channel, accountId, notice }] of cases.entries()) {
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        ...binding,
+        conversation: { ...binding.conversation, channel, accountId },
+      });
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(
+        async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload,
+      );
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: channel,
+          Surface: channel,
+          OriginatingChannel: channel,
+          OriginatingTo: `${channel}:channel:missing-plugin`,
+          To: `${channel}:channel:missing-plugin`,
+          AccountId: accountId,
+          MessageSid: `msg-missing-plugin-${index}`,
+          SessionKey: `agent:main:${channel}:${accountId}:channel:missing-plugin`,
+          CommandBody: "hello",
+          RawBody: "hello",
+          Body: "hello",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
 
-    const firstDispatcher = createDispatcher();
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:missing-plugin",
-        To: "discord:channel:missing-plugin",
-        AccountId: "default",
-        MessageSid: "msg-missing-plugin-1",
-        SessionKey: "agent:main:discord:channel:missing-plugin",
-        CommandBody: "hello",
-        RawBody: "hello",
-        Body: "hello",
-      }),
-      cfg: emptyConfig,
-      dispatcher: firstDispatcher,
-      replyResolver,
-    });
-
-    const firstNotice = (firstDispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(firstNotice?.text).toContain("is not currently loaded.");
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
-
-    replyResolver.mockClear();
-    hookMocks.runner.runInboundClaim.mockClear();
-
-    const secondDispatcher = createDispatcher();
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:missing-plugin",
-        To: "discord:channel:missing-plugin",
-        AccountId: "default",
-        MessageSid: "msg-missing-plugin-2",
-        SessionKey: "agent:main:discord:channel:missing-plugin",
-        CommandBody: "still there?",
-        RawBody: "still there?",
-        Body: "still there?",
-      }),
-      cfg: emptyConfig,
-      dispatcher: secondDispatcher,
-      replyResolver,
-    });
-
-    expect(secondDispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+      if (notice) {
+        const payload = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+          .calls[0]?.[0] as ReplyPayload | undefined;
+        expect(payload?.text).toContain("is not currently loaded.");
+      } else {
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      }
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    }
   });
 
   it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {

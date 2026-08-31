@@ -20,7 +20,7 @@ import {
   listStagedChangedPaths,
 } from "./changed-lanes.mts";
 import type { ChangedLaneResult } from "./changed-lanes.mts";
-import { isMacosToolingPath } from "./ci-changed-scope.mjs";
+import { detectChangedScope, isMacosToolingPath } from "./ci-changed-scope.mjs";
 import {
   booleanFlag,
   isOpenEndedTruthyValue,
@@ -824,18 +824,34 @@ export function createChangedCheckPlan(
       addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
     }
   }
-  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
-    addCommand(
-      "lint apps (swiftlint unavailable on this host)",
-      "node",
-      [
-        "-e",
-        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
-      ],
-      baseEnv,
-    );
-  } else if (lanes.apps) {
-    addLint("lint apps", ["lint:apps"]);
+  if (lanes.apps) {
+    const appScopes = result.paths
+      .filter((changedPath) => getChangedPathFacts(changedPath).surface === "app")
+      .map((changedPath) => detectChangedScope([changedPath]));
+    // Shared Apple sources select Android consumer CI, but Gradle ktlint owns
+    // only Android-exclusive app paths. Classify each path so mixed diffs retain both.
+    if (
+      appScopes.some(
+        ({ runAndroid, runMacos, runIosBuild }) => runAndroid && !runMacos && !runIosBuild,
+      )
+    ) {
+      addLint("lint Android", ["android:lint"]);
+    }
+    if (appScopes.some(({ runMacos, runIosBuild }) => runMacos || runIosBuild)) {
+      if (shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+        addCommand(
+          "lint apps (swiftlint unavailable on this host)",
+          "node",
+          [
+            "-e",
+            "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
+          ],
+          baseEnv,
+        );
+      } else {
+        addLint("lint apps", ["lint:apps"]);
+      }
+    }
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);

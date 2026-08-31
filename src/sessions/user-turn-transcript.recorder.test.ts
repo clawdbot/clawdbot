@@ -279,6 +279,33 @@ describe("createUserTurnTranscriptRecorder", () => {
     expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-3"])).toBe(false);
   });
 
+  it("freezes managed delivery receipts once approved input is staged", async () => {
+    const dir = tempDirs.make("openclaw-user-turn-managed-delivery-staged-");
+    const target = createSqliteTranscriptTarget({ dir });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "managed completion",
+        sessionDeliveryAckIds: ["delivery-approved"],
+      },
+      target,
+    });
+
+    expect(
+      await recorder.stageApproved?.({
+        runId: "managed-delivery-staged",
+        assertCurrent: () => {},
+      }),
+    ).toBe(true);
+    try {
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-too-late"])).toBe(false);
+      expect(recorder.getPendingInputMessage?.()).toMatchObject({
+        __openclaw: { sessionDeliveryAckIds: ["delivery-approved"] },
+      });
+    } finally {
+      recorder.finishPendingInput?.("interrupted");
+    }
+  });
+
   it("removes stale managed delivery receipts when the final replacement is empty", async () => {
     const dir = tempDirs.make("openclaw-user-turn-managed-delivery-empty-");
     const target = createSqliteTranscriptTarget({ dir });

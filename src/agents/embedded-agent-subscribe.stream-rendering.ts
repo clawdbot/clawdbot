@@ -95,8 +95,8 @@ type StreamRenderingParams = {
   emitBlockReply: EmbeddedAgentSubscribeContext["emitBlockReply"];
   settleBlockReplyDeliveries: (options?: { retryFailures?: boolean }) => void | Promise<void>;
   currentPendingBlockReplyTasks: () => Promise<void>[];
-  pushAssistantText: (text: string) => void;
-  shouldSkipAssistantText: (text: string) => boolean;
+  pushAssistantText: (text: string, normalizedText?: string) => void;
+  shouldSkipAssistantText: (text: string, normalizedText?: string) => boolean;
 };
 
 export function createStreamRendering({
@@ -159,7 +159,10 @@ export function createStreamRendering({
     if (!scanText) {
       return "";
     }
-    const codeSpans = buildCodeSpanIndex(scanText, inlineStateStart, fenceStateStart);
+    const codeSpans =
+      scanText === fenceInput
+        ? initialCodeSpans
+        : buildCodeSpanIndex(scanText, inlineStateStart, fenceStateStart);
 
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
@@ -256,7 +259,10 @@ export function createStreamRendering({
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
-    const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
+    const finalCodeSpans =
+      processed === scanText
+        ? codeSpans
+        : buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
     if (!params.enforceFinalTag) {
       stateLocal.inlineCode = finalCodeSpans.inlineState;
       stateLocal.fence = finalCodeSpans.fenceState;
@@ -425,7 +431,7 @@ export function createStreamRendering({
       return;
     }
 
-    if (shouldSkipAssistantText(chunk)) {
+    if (shouldSkipAssistantText(chunk, normalizedChunk)) {
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
@@ -433,7 +439,7 @@ export function createStreamRendering({
     }
 
     if (!params.onBlockReply) {
-      pushAssistantText(chunk);
+      pushAssistantText(chunk, normalizedChunk);
       markBlockReplyTextHandled();
       return;
     }
@@ -469,7 +475,7 @@ export function createStreamRendering({
         state.deliveredBlockReplyTexts[deliveredTextSlot] = cleanedText;
       }
     };
-    pushAssistantText(chunk);
+    pushAssistantText(chunk, normalizedChunk);
     emitBlockReply(
       {
         text: cleanedText,

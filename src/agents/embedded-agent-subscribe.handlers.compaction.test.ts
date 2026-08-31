@@ -1,14 +1,17 @@
 // Compaction handler tests cover session-store reconciliation and lifecycle
 // logging for automatic and manual embedded run compactions.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import {
   readCompactionCount,
   seedSessionStore,
-  waitForCompactionCount,
 } from "./embedded-agent-subscribe.compaction-test-helpers.js";
+import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   handleCompactionEnd,
   handleCompactionStart,
@@ -23,7 +26,6 @@ function createCompactionContext(params: {
   sessionKey: string;
   agentId?: string;
   initialCount: number;
-  onAgentEvent?: EmbeddedAgentSubscribeContext["params"]["onAgentEvent"];
   info?: (message: string, meta?: Record<string, unknown>) => void;
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
@@ -39,7 +41,7 @@ function createCompactionContext(params: {
       sessionKey: params.sessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
-      onAgentEvent: params.onAgentEvent,
+      onAgentEvent: undefined,
     },
     state: {
       compactionInFlight: true,
@@ -348,37 +350,95 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
-  it("reconciles the session store after a successful compaction end event", async () => {
+  it.each([
+    {
+      name: "default subscription floor",
+      options: {},
+      expectedCount: 2,
+      expectedEventCount: 2,
+    },
+    {
+      name: "explicit subscription floor",
+      options: { compactionCountOwner: "subscription" },
+      expectedCount: 2,
+      expectedEventCount: 2,
+    },
+    {
+      name: "caller-owned accounting",
+      options: { compactionCountOwner: "caller" },
+      expectedCount: 1,
+      expectedEventCount: 2,
+    },
+    {
+      name: "detached subscription",
+      options: { sessionPersistence: "detached" },
+      expectedCount: 1,
+      expectedEventCount: 0,
+    },
+  ] as const)("preserves local compaction facts under $name", async (testCase) => {
+    const { options, expectedCount, expectedEventCount } = testCase;
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      compactionCount: 1,
-    });
+    const agentId = "test-agent";
+    const runId = `run-compaction-owner-${randomUUID()}`;
+    const sessionKey = `agent:${agentId}:${runId}`;
+    try {
+      await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
+      const before = structuredClone(
+        loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+      );
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        ...options,
+        runId,
+        sessionId: "session-1",
+        sessionKey,
+        agentId,
+        config: { session: { store: storePath } },
+        sessionExtras: { messages: [] },
+        onAgentEvent,
+      });
+      try {
+        emit(completedCompactionEnd());
+        emit(completedCompactionEnd());
+        await subscription.waitForPendingEvents();
+        await vi.dynamicImportSettled();
+        // Join the writer queue after detached imports without advancing the seeded floor.
+        await reconcileSessionStoreCompactionCountAfterSuccess({
+          sessionKey,
+          agentId,
+          configStore: storePath,
+          observedCompactionCount: 1,
+        });
 
-    const ctx = createCompactionContext({
-      storePath,
-      sessionKey,
-      initialCount: 1,
-    });
-
-    handleCompactionEnd(ctx, completedCompactionEnd());
-
-    await waitForCompactionCount({
-      storePath,
-      sessionKey,
-      expected: 2,
-    });
-
-    expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
-    expect(ctx.log.debug).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "[compaction-attribution] end runId=run-test sessionKey=main trigger=budget outcome=compacted willRetry=false compactionCount.before=1 compactionCount.after=2 compactionCount.delta=1",
-      ),
-    );
+        expect(subscription.getCompactionCount()).toBe(2);
+        expect(subscription.getLastCompactionTokensAfter()).toBe(50);
+        expect(onAgentEvent).toHaveBeenCalledTimes(2);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: expect.objectContaining({
+            phase: "end",
+            completed: true,
+            willRetry: false,
+            outcome: "completed",
+          }),
+        });
+        const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
+          (event) => event.runId === runId,
+        );
+        expect(events).toHaveLength(expectedEventCount);
+        expect(events.every((event) => event.kind === "compacted")).toBe(true);
+        const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+        expect(after?.compactionCount).toBe(expectedCount);
+        if (expectedCount === 1) {
+          expect(after).toEqual(before);
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("emits terminal compaction attribution data for count deltas", async () => {
@@ -425,6 +485,11 @@ describe("handleCompactionEnd", () => {
         compactionCountDelta: 1,
       },
     });
+    expect(ctx.log.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[compaction-attribution] end runId=run-test sessionKey=main trigger=overflow outcome=compacted willRetry=true compactionCount.before=4 compactionCount.after=5 compactionCount.delta=1",
+      ),
+    );
   });
 
   it("clears stale assistant usage before compaction and preserves fresh usage after it", async () => {

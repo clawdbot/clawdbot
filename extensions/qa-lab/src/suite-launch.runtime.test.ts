@@ -18,12 +18,14 @@ const {
   crablineRuntimeLoads,
   prepareDockerE2eEnvironment,
   replaceFileAtomicMock,
+  runPluginCommandWithTimeout,
   runQaFlowSuite,
   runQaTestFileScenarios,
 } = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
   prepareDockerE2eEnvironment: vi.fn(),
   replaceFileAtomicMock: vi.fn(),
+  runPluginCommandWithTimeout: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
@@ -47,6 +49,8 @@ vi.mock("./test-file-scenario-docker-batch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./test-file-scenario-docker-batch.js")>()),
   prepareDockerE2eEnvironment,
 }));
+
+vi.mock("openclaw/plugin-sdk/run-command", () => ({ runPluginCommandWithTimeout }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
@@ -246,6 +250,8 @@ describe("qa suite runtime launcher", () => {
     runQaTestFileScenarios.mockReset();
     prepareDockerE2eEnvironment.mockReset();
     prepareDockerE2eEnvironment.mockResolvedValue(undefined);
+    runPluginCommandWithTimeout.mockReset();
+    runPluginCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
     runQaFlowSuite.mockImplementation(
       async (
         params:
@@ -1200,6 +1206,7 @@ describe("qa suite runtime launcher", () => {
       },
     });
     expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
     const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
     expect(call).toMatchObject({
@@ -1222,6 +1229,47 @@ describe("qa suite runtime launcher", () => {
         ],
       }),
     );
+  });
+
+  it("prepares a missing native runtime before marking the child prebuilt", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-prepared-vitest-");
+    const aiRuntimePath = path.join(repoRoot, "packages/ai/dist/internal/runtime.mjs");
+    runPluginCommandWithTimeout.mockImplementation(async ({ argv }) => {
+      if (argv.includes("tsdown.ai.config.ts")) {
+        await fs.mkdir(path.dirname(aiRuntimePath), { recursive: true });
+        await fs.writeFile(aiRuntimePath, "export {};\n", "utf8");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      await expect(fs.stat(aiRuntimePath)).resolves.toBeDefined();
+      return await defaultTestFileImplementation(params);
+    });
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/prepared-vitest",
+      scenarioIds: ["auth-profile-doctor-migration-safety"],
+    });
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "prepared-vitest", "vitest"),
+      }),
+    );
+    expect(runQaTestFileScenarios.mock.calls[0]?.[0]).not.toHaveProperty("envMode");
+    expect(runPluginCommandWithTimeout.mock.calls.map(([options]) => options.argv)).toEqual([
+      [
+        process.execPath,
+        "--import",
+        "tsx",
+        "scripts/tsdown-build.mts",
+        "--config",
+        "tsdown.ai.config.ts",
+      ],
+    ]);
   });
 
   it("projects a skipped native producer as a skipped unified scenario", async () => {
@@ -1994,6 +2042,27 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("leaves nested E2E script runtime preparation to the script owner", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-script-runtime-owner-");
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/script-runtime-owner",
+      scenarioIds: ["managed-gateway-service-lifecycle"],
+    });
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
+    expect(call.scenarios).toEqual([
+      expect.objectContaining({
+        id: "managed-gateway-service-lifecycle",
+        execution: expect.objectContaining({ kind: "script" }),
+      }),
+    ]);
+    expect(call).not.toHaveProperty("env");
+    expect(call).not.toHaveProperty("envMode");
+  });
+
   it("streams native owner progress without exposing child output to CI", async () => {
     const repoRoot = await makeTempRepo("qa-suite-safe-native-progress-");
     vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
@@ -2190,6 +2259,23 @@ describe("qa suite runtime launcher", () => {
 
     expect(prepareDockerE2eEnvironment).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares the Docker candidate before a script-owned Docker lane", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-script-docker-prep-");
+    const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
+    prepareDockerE2eEnvironment.mockResolvedValueOnce(preparedEnv);
+
+    await runQaSuite({ repoRoot, scenarioIds: ["cli-onboarding"] });
+
+    expect(prepareDockerE2eEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarios: [expect.objectContaining({ id: "cli-onboarding" })],
+      }),
+    );
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({ env: preparedEnv, envMode: "replace" }),
+    );
   });
 
   it("keeps selected evidence order and successful siblings when a parallel script rejects", async () => {

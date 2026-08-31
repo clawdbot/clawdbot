@@ -536,6 +536,69 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
   });
 
+  it("carries a group's configured skill scope on the inbound context", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: {
+        ...account,
+        config: {
+          groups: {
+            "group-1": { skills: ["triage"], systemPrompt: "Stay on triage" },
+          },
+        },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Stay on triage");
+  });
+
+  it("keeps an empty group skill scope as a scope rather than dropping it", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: [] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual([]);
+  });
+
+  it("carries the same group skill scope when a postback answers the group", async () => {
+    const event = createPostbackEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLinePostbackContext({
+      event,
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+  });
+
+  it("leaves a direct chat without a group skill scope", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toBeUndefined();
+  });
+
   it("keeps non-text message contexts fail-closed for command auth", async () => {
     const event = createMessageEvent(
       { type: "user", userId: "user-audio" },

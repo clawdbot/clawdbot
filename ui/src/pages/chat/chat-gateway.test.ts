@@ -318,6 +318,20 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       phase: "preparing_workspace",
     });
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: "Done" },
+    });
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "status",
+      phase: "preparing_workspace",
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunStartup).toBeNull();
   });
 
   it("shows startup status until the first chat delta and ignores late status", () => {
@@ -606,6 +620,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("adopts canonical global deltas for the selected agent main alias", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       sessionKey: "agent:work:main",
       chatRunId: null,
       chatStream: null,
@@ -627,6 +642,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: null,
@@ -737,6 +753,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("adopts the run id when the selected main alias receives canonical live deltas", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: null,
       chatStream: null,
@@ -757,6 +774,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("accepts final events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "Live reply",
@@ -2096,6 +2114,21 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
+  it("keeps error emoji in live run state for the WebUI presentation owner", () => {
+    const diagnostic = "⚠️ 🛠️ Exec failed (exit 1): command failed.";
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: diagnostic,
+      }),
+    ).toBe("error");
+    expect(state.chatRunError).toEqual({ summary: diagnostic, runId: "run-1" });
+  });
+
   it("uses server guidance when an error follows a source-reply final", () => {
     const state = createState({
       sessionKey: "main",
@@ -2821,7 +2854,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith("chat.startup", {
       agentId: "research",
       sessionKey: "global",
-      limit: 100,
+      limit: 400,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
@@ -2904,11 +2937,11 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "agent:main:first",
-      limit: 100,
+      limit: 400,
     });
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "agent:main:second",
-      limit: 100,
+      limit: 400,
     });
   });
 
@@ -2958,7 +2991,7 @@ describe("loadChatHistory filtering", () => {
 
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "main",
-      limit: 100,
+      limit: 400,
     });
   });
 });
@@ -2991,7 +3024,7 @@ describe("loadChatHistory retry handling", () => {
 
     expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       sessionKey: "main",
-      limit: 100,
+      limit: 400,
     });
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -3101,7 +3134,7 @@ describe("loadChatHistory retry handling", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 100,
+      limit: 400,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -3137,6 +3170,7 @@ describe("loadChatHistory retry handling", () => {
     history: unknown[];
     visible: unknown[];
     expected: unknown[];
+    inputRunIds?: string[];
     state?: Partial<ChatState>;
     verify?: (state: ChatState) => void;
   };
@@ -3153,6 +3187,7 @@ describe("loadChatHistory retry handling", () => {
           history: [persisted],
           visible: [persisted, pending],
           expected: [persisted, pending],
+          inputRunIds: ["latest-run"],
         };
       },
     },
@@ -3176,6 +3211,7 @@ describe("loadChatHistory retry handling", () => {
           history: [first, persisted],
           visible: [first, pending],
           expected: [first, persisted, pending],
+          inputRunIds: ["third-run"],
         };
       },
     },
@@ -3190,7 +3226,12 @@ describe("loadChatHistory retry handling", () => {
         const pending = createTextChatMessage("user", "already persisted", {
           idempotencyKey: "persisted-run:user",
         });
-        return { history: [persisted], visible: [pending], expected: [persisted] };
+        return {
+          history: [persisted],
+          visible: [pending],
+          expected: [persisted],
+          inputRunIds: ["persisted-run"],
+        };
       },
     },
     {
@@ -3244,13 +3285,14 @@ describe("loadChatHistory retry handling", () => {
           history: [persisted],
           visible: [persisted, pending],
           expected: [persisted, pending],
+          inputRunIds: ["active-run"],
           state: stream,
           verify: (state) => expect(state).toMatchObject(stream),
         };
       },
     },
   ])("$name", async (fixture) => {
-    const { history, visible, expected, state: overrides, verify } = fixture.create();
+    const { history, visible, expected, inputRunIds, state: overrides, verify } = fixture.create();
     const { request, state } = createResolvedHistoryState(
       { messages: history },
       {
@@ -3261,7 +3303,11 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 100 });
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 400,
+      ...(inputRunIds ? { inputRunIds } : {}),
+    });
     expect(state.chatMessages).toEqual(expected);
     verify?.(state);
   });
@@ -3903,8 +3949,14 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
-  it("coalesces same-session history while a proven pending send changes local messages", async () => {
-    const { history, request, state } = createDeferredHistoryState();
+  it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {
+    const staleHistory = createDeferred<HistoryResult>();
+    const currentHistory = createDeferred<HistoryResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockImplementationOnce(() => currentHistory.promise);
+    const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
     const pending = createTextChatMessage("user", "new local ask", {
@@ -3916,18 +3968,30 @@ describe("loadChatHistory retry handling", () => {
       message: pending,
     });
     const secondLoad = loadChatHistory(state);
+    const thirdLoad = loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls).toEqual([
+      ["chat.history", { sessionKey: "main", limit: 400 }],
+      [
+        "chat.history",
+        { sessionKey: "main", limit: 400, inputRunIds: ["same-session-pending-run"] },
+      ],
+    ]);
     expect(state.chatMessages).toEqual([pending]);
+
+    staleHistory.resolve(createAssistantHistory("stale history"));
+    await firstLoad;
+    expect(state.chatMessages).toEqual([pending]);
+    expect(state.chatLoading).toBe(true);
 
     const persisted = createTextChatMessage("assistant", "persisted history", {
       id: "same-session-history-assistant",
       seq: 1,
     });
-    history.resolve({ messages: [persisted] });
-    await Promise.all([firstLoad, secondLoad]);
+    currentHistory.resolve({ messages: [persisted] });
+    await Promise.all([secondLoad, thirdLoad]);
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([persisted, pending]);
     expect(state.chatLoading).toBe(false);
   });

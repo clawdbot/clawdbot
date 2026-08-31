@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -275,6 +276,41 @@ describe("loadWebMedia", () => {
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   }
+
+  it.each(["local", "localhost"])(
+    "loads encoded %s file URLs from reply directives",
+    async (host) => {
+      const fileName = "café 100% image.png";
+      const filePath = path.join(fixtureRoot, fileName);
+      await fs.writeFile(filePath, TINY_PNG_BUFFER);
+      const fileUrl = pathToFileURL(filePath).href.replace(
+        /^file:\/\//u,
+        host === "localhost" ? "file://localhost" : "FILE:",
+      );
+      const reply = parseReplyDirectives(`Here is your image.\nMEDIA:${fileUrl}`);
+
+      expect(reply.text).toBe("Here is your image.");
+      expect(reply.mediaUrls).toHaveLength(1);
+      const mediaUrl = expectDefined(reply.mediaUrls?.[0], "parsed file URL attachment");
+      const media = await loadWebMedia(mediaUrl, createLocalWebMediaOptions());
+      expect(media.buffer).toEqual(TINY_PNG_BUFFER);
+      expect(media.fileName).toBe(fileName);
+      expect(media.contentType).toBe("image/png");
+    },
+  );
+
+  it.each([
+    "file://remote.example/share/image.png",
+    "file:///tmp/image%2Fname.png",
+    "file:///tmp/image%5Cname.png",
+    "file:///tmp/image%GG.png",
+  ])("keeps native file URL validation after reply parsing: %s", async (fileUrl) => {
+    const reply = parseReplyDirectives(`MEDIA:${fileUrl}`);
+    const mediaUrl = expectDefined(reply.mediaUrls?.[0], "parsed file URL attachment");
+    await expect(loadWebMedia(mediaUrl, createLocalWebMediaOptions())).rejects.toMatchObject({
+      code: "invalid-file-url",
+    });
+  });
 
   async function loadDocumentWithHostRead(fileName: string, body: Buffer | string) {
     const textFile = path.join(fixtureRoot, fileName);

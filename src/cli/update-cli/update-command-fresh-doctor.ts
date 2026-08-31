@@ -19,7 +19,7 @@ import {
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
-} from "./update-command-service.js";
+} from "./update-command-service-env.js";
 
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 

@@ -21,6 +21,7 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
+import { resolveGitRoot } from "./update-install-root.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -226,15 +227,14 @@ async function isLocklessOpenClawNpmInstall(params: {
   }
 }
 
-async function detectGitRoot(root: string): Promise<string | null> {
-  const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
-    timeoutMs: 4000,
-  }).catch(() => null);
-  if (!res || res.code !== 0) {
-    return null;
+/** Classify installation ownership without reading Git history or dependency state. */
+export async function resolveUpdateInstallKind(
+  root: string | null,
+): Promise<"git" | "package" | "unknown"> {
+  if (!root) {
+    return "unknown";
   }
-  const top = res.stdout.trim();
-  return top ? path.resolve(top) : null;
+  return (await resolveGitRoot(runCommandWithTimeout, [root], 4000, root)) ? "git" : "package";
 }
 
 async function checkGitUpdateStatus(params: {
@@ -533,26 +533,23 @@ export async function resolveNpmChannelTag(params: {
       ? { tag: resolved.selector, version: resolved.version }
       : { tag: channelTag, version: null, reason: resolved.reason };
   }
-  const channelStatus = await fetchNpmTagVersion({
-    tag: channelTag,
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
+  const fetchTag = (tag: string) =>
+    fetchNpmTagVersion({
+      tag,
+      timeoutMs: params.timeoutMs,
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      runCommand: params.runCommand,
+    });
   if (params.channel !== "beta") {
-    return channelStatus;
+    return await fetchTag(channelTag);
   }
 
-  const latestStatus = await fetchNpmTagVersion({
-    tag: "latest",
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
+  const [channelStatus, latestStatus] = await Promise.all([
+    fetchTag(channelTag),
+    fetchTag("latest"),
+  ]);
   if (!latestStatus.version) {
     return channelStatus;
   }
@@ -611,12 +608,11 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const rootRealpath = await fs.realpath(root).catch(() => root);
-  const [detectedPackageManager, gitRoot] = await Promise.all([
+  const [detectedPackageManager, installKind] = await Promise.all([
     detectPackageManager(root),
-    detectGitRoot(root),
+    resolveUpdateInstallKind(root),
   ]);
-  const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const isGit = installKind === "git";
   const packageManager =
     !isGit &&
     (await isLocklessOpenClawNpmInstall({
@@ -626,7 +622,6 @@ export async function checkUpdateStatus(params: {
       ? "npm"
       : detectedPackageManager;
 
-  const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
     isGit
       ? checkGitUpdateStatus({

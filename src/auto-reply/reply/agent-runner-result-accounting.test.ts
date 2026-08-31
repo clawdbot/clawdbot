@@ -8,9 +8,9 @@ const state = vi.hoisted(() => ({
   dispatchPostCompactionDelegates: vi.fn(),
   emitContinuationCompactionReleasedSpan: vi.fn(),
   formatCurrentSpanContinuationTraceparent: vi.fn<() => string | undefined>(),
-  incrementRunCompactionCount: vi.fn(),
+  incrementCompactionCount: vi.fn(),
   recordNoOpRearmOutcome: vi.fn(),
-  persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
+  persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleContinuation: vi.fn(),
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
@@ -63,9 +63,12 @@ vi.mock("./agent-runner-core.js", () => ({
   }),
 }));
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: (...args: unknown[]) => state.incrementRunCompactionCount(...args),
-  persistRunSessionUsage: (params: unknown) => state.persistRunSessionUsage(params),
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: (...args: unknown[]) => state.incrementCompactionCount(...args),
+}));
+
+vi.mock("./session-usage.js", () => ({
+  persistSessionUsageUpdate: (params: unknown) => state.persistSessionUsageUpdate(params),
 }));
 
 vi.mock("./no-op-rearm-guard.js", async (importOriginal) => {
@@ -231,7 +234,7 @@ beforeEach(() => {
     queuedDelegates: 1,
     droppedDelegates: 0,
   });
-  state.incrementRunCompactionCount.mockResolvedValue(7);
+  state.incrementCompactionCount.mockResolvedValue(7);
   state.scheduleContinuation.mockResolvedValue(undefined);
   state.resolveContextTokensForModel.mockReturnValue(200_000);
   state.formatCurrentSpanContinuationTraceparent.mockReturnValue(undefined);
@@ -300,7 +303,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(state.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessId: "codex",
         contextTokensUsed: 1_000_000,
@@ -362,7 +365,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(state.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessId: "legacy-runtime",
         contextTokensUsed: 512_000,
@@ -376,7 +379,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(state.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         contextTokensUsed: 200_000,
         contextTokensSource: "resolved-v1",
@@ -412,7 +415,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(state.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         providerUsed: "openai",
         modelUsed: "gpt-4o",

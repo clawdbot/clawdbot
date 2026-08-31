@@ -1,3 +1,4 @@
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
@@ -40,8 +41,21 @@ export function isContinuationWrappedRunResult(
   );
 }
 
+/** Presentation counts include target-less events; only captured durable facts may be persisted. */
+export type AgentTurnCompaction = {
+  count: number;
+  durable: Array<Extract<CompactionAccountingFact, { kind: "durable" }>>;
+};
+
+type AbortedAgentTurn = {
+  kind: "aborted";
+  reason: "user" | "restart" | "superseded";
+  compaction?: AgentTurnCompaction;
+};
+
 /** Internal fallback-cycle result before caller-facing settlement projection. */
 export type AgentTurnInternalResult =
+  | AbortedAgentTurn
   | {
       kind: "completed";
       result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -71,7 +85,6 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
-  abortReason?: "user" | "restart";
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   continueWorkRequests?: ContinueWorkRequest[];
   compactionTraceparent?: string;
@@ -79,6 +92,7 @@ type SettledAgentTurnBase = {
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;
+  compaction?: AgentTurnCompaction;
   didLogHeartbeatStrip: boolean;
   directlySentBlockKeys?: Set<string>;
   directlySentBlockPayloads?: ReplyPayload[];
@@ -103,9 +117,10 @@ export type AgentTurnExecutionResult = {
   runId: string;
   outcome:
     | SettledAgentTurn
-    | { kind: "aborted"; reason: "user" | "restart" }
+    | AbortedAgentTurn
     | {
         kind: "rejected";
+        compaction?: AgentTurnCompaction;
         payload: ReplyPayload;
         resolved?: { provider: string; model: string };
         postCompactionModelFailure?: true;

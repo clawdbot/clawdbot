@@ -6,19 +6,19 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateProgress } from "./progress.js";
-import { resolveGitInstallDir, type UpdateCommandOptions } from "./shared.js";
 import {
   checkTargetDatabaseSchemas,
-  createBeforeGitMutation,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
-  updateGitInstall,
-} from "./update-command-git.js";
+} from "./schema-preflight.js";
+import { resolveGitInstallDir, type UpdateCommandOptions } from "./shared.js";
+import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
 import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { runPackageInstallUpdate } from "./update-command-package.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
   createAggregateErrorWithCause,
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -27,7 +27,6 @@ import {
   resolvePreparedGatewayUpdatePolicy,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
-  type ManagedServiceRootRedirect,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";

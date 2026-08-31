@@ -21,7 +21,7 @@ import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
-import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
+import { getLatestCompactionEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
 import type { SettingsManager } from "./settings-manager.js";
 
@@ -48,9 +48,11 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: () => void;
+  private onContextReplaced?: (tokensAfter: number) => void;
 
-  [agentSessionSetContextReplacementHook](callback: (() => void) | undefined): void {
+  [agentSessionSetContextReplacementHook](
+    callback: ((tokensAfter: number) => void) | undefined,
+  ): void {
     this.onContextReplaced = callback;
   }
 
@@ -270,27 +272,23 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       summary: capCompactionSummary(compactionResult.summary),
     };
 
-    this.sessionManager.appendCompaction(
+    const compactionEntryId = this.sessionManager.appendCompaction(
       compactionResult.summary,
       compactionResult.firstKeptEntryId,
       compactionResult.tokensBefore,
       compactionResult.details,
       fromExtension,
     );
-    const newEntries = this.sessionManager.getEntries();
     const sessionContext = this.sessionManager.buildSessionContext();
     // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
     // Sanitize at assignment so every continuation driver receives replay-safe history.
     this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-    // The retry loop can continue before queued subscribers observe compaction_end.
-    // Invalidate context-bound state synchronously with the authoritative replacement.
-    this.onContextReplaced?.();
+    // Commit accounting and invalidation must precede awaited extension work;
+    // cancellation there can prevent the public completed event from reaching its owner.
+    this.onContextReplaced?.(estimateContextTokens(this.agent.state.messages).tokens);
 
-    const savedCompactionEntry = newEntries.find(
-      (e) => e.type === "compaction" && e.summary === compactionResult.summary,
-    ) as CompactionEntry | undefined;
-
-    if (this.currentExtensionRunner && savedCompactionEntry) {
+    const savedCompactionEntry = this.sessionManager.getEntry(compactionEntryId);
+    if (this.currentExtensionRunner && savedCompactionEntry?.type === "compaction") {
       await this.currentExtensionRunner.emit({
         type: "session_compact",
         compactionEntry: savedCompactionEntry,

@@ -19,7 +19,6 @@ export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { k
 
 export type SessionListRowContext = {
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
-  storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingMetadataByModelRef: Map<string, GatewayModelThinkingProfile>;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;

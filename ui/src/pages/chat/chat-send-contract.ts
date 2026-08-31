@@ -43,6 +43,7 @@ export type ChatHost = ChatInputHistoryState &
     chatVerboseLevel: string | null;
     chatStreamStartedAt: number | null;
     chatAttachments: ChatAttachment[];
+    selectedChatSessionIncognito?: boolean;
     chatQueue: ChatQueueItem[];
     /** Pane-local row draft while a queued message remains held in the outbox. */
     chatQueuedEdit?: QueuedMessageEdit | null;
@@ -50,7 +51,6 @@ export type ChatHost = ChatInputHistoryState &
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;
     chatRunStartup?: ChatRunStartupState | null;
-    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: ChatRunError | null;

@@ -22,6 +22,7 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  voicesByModel?: Record<string, readonly string[]>;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
   defaultModel: string | null;
@@ -255,8 +256,10 @@ function renderModelRow(props: TalkViewProps) {
 
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
-  const { speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  if (!provider || provider.voices.length === 0) {
+  const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
+  const voices =
+    provider?.voicesByModel?.[model ?? provider.defaultModel ?? ""] ?? provider?.voices ?? [];
+  if (voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
       description: t("talkPage.voice.description"),
@@ -265,8 +268,8 @@ function renderVoiceRow(props: TalkViewProps) {
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
-    ...provider.voices.map((value) => ({ value, label: value })),
-    ...(voice && !provider.voices.includes(voice) ? [{ value: voice, label: voice }] : []),
+    ...voices.map((value) => ({ value, label: value })),
+    ...(voice && !voices.includes(voice) ? [{ value: voice, label: voice }] : []),
   ];
   return renderTalkSelectRow({
     title: t("talkPage.voice.title"),

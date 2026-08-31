@@ -73,6 +73,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -747,6 +748,7 @@ const config = {
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.
       "native-host-entry.ts!",
+      "relay-daemon-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
       "chrome-extension/options.js!",

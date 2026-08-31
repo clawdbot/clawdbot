@@ -41,6 +41,7 @@ import {
   hasRetiredAgentStateLeaseSchema,
   hasPendingMemoryChunkMetadataMigration,
   migrateRetiredAgentStateLeaseSchema,
+  migratedSessionColumn,
   ensureSessionKeyContractSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
@@ -70,6 +71,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { hasPendingInputConsumptionColumnMigration } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
@@ -77,14 +79,6 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type MigratedSessionEntry = Record<string, unknown>;
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
-
-function migratedSessionColumn(
-  columns: ReadonlySet<string>,
-  columnName: string,
-  fallback: string,
-): string {
-  return columns.has(columnName) ? columnName : fallback;
-}
 
 function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
   // The pre-landing sessions_search branch tracked JSONL file watermarks and
@@ -538,6 +532,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       hasRetiredAgentStateLeaseSchema(database) ||
       hasPendingSessionConversationRouteContextColumn(database) ||
       hasPendingSessionTranscriptContextEligibilityColumn(database) ||
+      hasPendingInputConsumptionColumnMigration(database) ||
       hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {

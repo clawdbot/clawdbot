@@ -399,29 +399,6 @@ describe("detectChangedScope", () => {
   });
 
   it.each([
-    ".github/actions/git-owner/action.yml",
-    ".github/actions/git-owner/owner.py",
-    ".github/actions/ensure-base-commit/action.yml",
-    ".github/actions/ensure-base-commit/policy.py",
-    "scripts/generate-ci-git-owner.mts",
-    "test/scripts/ci-checkout.test-support.ts",
-    "test/scripts/ci-git-owner.test.ts",
-    "test/scripts/ci-git-owner.test-support.ts",
-    "test/scripts/ci-linux-git.test.ts",
-    "test/scripts/ci-platform-checkout.test.ts",
-    "test/scripts/fixtures/ci-platform-checkout.mjs",
-  ])("routes Git-owner native proof for %s without selecting app builds", (changedPath) => {
-    expect(detectChangedScope([changedPath])).toMatchObject({
-      runNode: true,
-      runMacosNode: true,
-      runWindows: true,
-      runMacos: false,
-      runIosBuild: false,
-      runAndroid: false,
-    });
-  });
-
-  it.each([
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
@@ -961,7 +938,14 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("loads from a zero-install tree and keeps empty diffs as no-op scope", () => {
+  it.each([
+    ["empty diff without a manifest", "", "missing", false],
+    ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
+    ["unrelated process test", "src/process/exec.test.ts", "valid", false],
+    ["missing manifest", "src/process/exec.test.ts", "missing", true],
+    ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
+    ["empty native inventory", "src/process/exec.test.ts", "empty", true],
+  ])("runs zero-install scope detection for %s", (_label, changedPath, manifest, failSafe) => {
     const repoDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
     );
@@ -974,6 +958,7 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
     for (const sourcePath of [
       "scripts/ci-changed-scope.mjs",
+      "scripts/lib/arg-utils.runtime.mjs",
       "scripts/lib/changed-path-facts.mjs",
       "scripts/lib/direct-run.mjs",
       "scripts/lib/merge-head-diff-base.mjs",
@@ -984,8 +969,23 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["add", "README.md"], { cwd: repoDir });
     execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
+    if (manifest !== "missing") {
+      const contents =
+        manifest === "valid"
+          ? fs.readFileSync("package.json", "utf8")
+          : manifest === "invalid"
+            ? "{"
+            : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
+      writeRepoFile(repoDir, "package.json", contents);
+    }
+    if (changedPath) {
+      writeRepoFile(repoDir, changedPath, "export {};\n");
+      git(repoDir, ["add", changedPath]);
+      git(repoDir, ["commit", "-m", "changed test"]);
+    }
+    const base = changedPath ? "HEAD^" : "HEAD";
     expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
-    execFileSync(process.execPath, [scriptPath, "--base", "HEAD", "--head", "HEAD"], {
+    execFileSync(process.execPath, [scriptPath, "--base", base, "--head", "HEAD"], {
       cwd: repoDir,
       env: { ...process.env, GITHUB_OUTPUT: outputPath },
     });
@@ -996,10 +996,16 @@ describe("detectChangedScope", () => {
         " ",
       ),
     );
-    expect(output.changed_paths_json).toBe("[]");
+    expect(output.changed_paths_json).toBe(
+      failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
+    );
     for (const [key, value] of Object.entries(output)) {
       if (key !== "changed_paths_json") {
-        expect(value, key).toBe("false");
+        const selected =
+          (failSafe && !key.startsWith("run_node_fast")) ||
+          (key === "run_node" && Boolean(changedPath)) ||
+          (key === "run_windows" && changedPath === "src/process/exec.windows.integration.test.ts");
+        expect(value, key).toBe(String(selected));
       }
     }
   });

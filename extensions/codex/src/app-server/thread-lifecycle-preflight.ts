@@ -3,7 +3,7 @@ import {
   formatErrorMessage,
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import {
@@ -76,11 +76,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
       ? undefined
-      : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
+      : await buildCodexUserMcpServersThreadConfigPatchForRun({
+          run: params.params,
+          cwd: params.cwd,
           agentId: params.agentId ?? params.params.agentId,
-          agentDir: params.params.agentDir,
           allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
-          toolOverrides: params.params.toolOverrides,
+          warn: (message) => embeddedAgentLog.warn(message),
           onServerUnavailable: (serverName, error) =>
             embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
               serverName,

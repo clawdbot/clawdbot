@@ -405,7 +405,7 @@ describe("update global helpers", () => {
         );
         await fs.mkdir(pkgRoot, { recursive: true });
 
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
+        const runCommand = vi.fn(createNpmRootRunner({ defaultNpmRoot: cellarRoot }));
 
         await expect(
           resolveGlobalInstallTarget({
@@ -421,6 +421,7 @@ describe("update global helpers", () => {
           packageRoot: pkgRoot,
           npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
+        expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["npm", "--version"]]);
       });
     });
   });
@@ -472,7 +473,7 @@ describe("update global helpers", () => {
         const pkgRoot = path.join(base, "checkout", "node_modules", "openclaw");
         await fs.mkdir(pkgRoot, { recursive: true });
 
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: nvmRoot });
+        const runCommand = vi.fn(createNpmRootRunner({ defaultNpmRoot: nvmRoot }));
 
         await expect(
           resolveGlobalInstallTarget({
@@ -488,6 +489,7 @@ describe("update global helpers", () => {
           packageRoot: path.join(nvmRoot, "openclaw"),
           npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
+        expect(runCommand.mock.calls.map(([argv]) => argv)).toContainEqual(["npm", "root", "-g"]);
       });
     });
   });
