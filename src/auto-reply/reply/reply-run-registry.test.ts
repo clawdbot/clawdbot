@@ -130,16 +130,23 @@ async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("reply run registry", () => {
-  it("distinguishes hidden allowlist intersections in steering authority", () => {
-    const first = createQueueTestRun({ prompt: "first" });
-    const second = createQueueTestRun({ prompt: "second" });
-    first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
+  it.each(["agent:agent:main", "global"])(
+    "distinguishes hidden allowlist intersections in steering authority for %s",
+    (sessionKey) => {
+      const first = createQueueTestRun({ prompt: "first" });
+      const second = createQueueTestRun({ prompt: "second" });
+      for (const run of [first, second]) {
+        run.run.sessionKey = sessionKey;
+        run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+      }
+      first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+      second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
 
-    expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(second),
-    );
-  });
+      expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
+        resolveFollowupRunToolAuthorityFingerprint(second),
+      );
+    },
+  );
 
   it.each([
     {

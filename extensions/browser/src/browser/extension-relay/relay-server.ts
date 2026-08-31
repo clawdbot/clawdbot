@@ -8,9 +8,11 @@ import {
   readRequestBodyWithLimit,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { randomRelayId } from "./auth-v2-crypto.js";
+import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
@@ -19,18 +21,14 @@ import {
   getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
   parseExtensionRelayResource,
-  parseRelayAuthHello,
-  parseRelayAuthResponse,
   parseRelayHttpChallengeRequest,
   parseRelayHttpCompleteRequest,
   parseStrictJsonObject,
   type BrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
-import {
-  boundedRawDataByteLength,
-  handlePreAuthWebSocketUpgrade,
-  MAX_WEBSOCKET_AUTH_MESSAGE_BYTES,
-} from "./preauth-websocket-guard.js";
+import { RELAY_OWNER_PATH, relayOwnerResource } from "./owner-protocol.js";
+import { attachRelayOwner } from "./owner-server.js";
+import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import { parseExtensionMessage } from "./relay-protocol.js";
@@ -40,6 +38,8 @@ import {
   requestExtensionProtocolToken,
   requestProtocols,
 } from "./relay-request.js";
+
+export { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
@@ -68,6 +68,7 @@ type HttpAuthState =
     };
 
 export type ExtensionRelayHandle = {
+  ownership: "owned";
   port: number;
   token: string;
   allowLegacyAuth: boolean;
@@ -174,10 +175,14 @@ async function readAuthBody(req: IncomingMessage): Promise<string | null> {
 
 function bindSocket(
   ws: WebSocket,
-  handlers: { onMessage: (raw: string) => void; onClose: () => void },
+  handlers: { onMessage: (raw: string) => void; onClose: () => void | Promise<void> },
 ): void {
   ws.on("message", (data) => handlers.onMessage(rawDataToString(data)));
-  ws.on("close", handlers.onClose);
+  ws.on("close", () => {
+    void Promise.resolve(handlers.onClose()).catch((error: unknown) =>
+      log.warn(`Client cleanup incomplete: ${String(error)}`),
+    );
+  });
   ws.on("error", (err) => log.warn(`relay socket error: ${String(err)}`));
 }
 
@@ -218,140 +223,17 @@ export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSo
   });
 }
 
-export function authenticateExtensionWebSocket(params: {
-  ws: WebSocket;
-  authority: BrowserRelayAuthV2Authority;
-  resource: string;
-  prepareAuthenticated: () => Promise<() => void>;
-  removePreAuthGuard?: () => void;
-}): void {
-  const { ws, authority } = params;
-  let stage: "hello" | "response" | "authenticated" | "failed" = "hello";
-  let preAuthGuardActive = true;
-  const removePreAuthGuard = () => {
-    if (!preAuthGuardActive) {
-      return;
-    }
-    preAuthGuardActive = false;
-    params.removePreAuthGuard?.();
-  };
-  const timer = setTimeout(() => {
-    stage = "failed";
-    ws.off("message", onMessage);
-    ws.close(4008, "browser relay auth timeout");
-    ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  timer.unref?.();
-  const release = () => {
-    clearTimeout(timer);
-    removePreAuthGuard();
-    authority.releaseConnection(ws);
-  };
-  if (
-    !authority.registerPendingConnection(ws, () => {
-      ws.close(4003, "browser relay key rotated");
-    })
-  ) {
-    clearTimeout(timer);
-    ws.close(4013, "browser relay auth capacity reached");
-    return;
-  }
-  ws.once("close", release);
-  const fail = (code: number, reason: string) => {
-    if (stage === "failed") {
-      return;
-    }
-    stage = "failed";
-    clearTimeout(timer);
-    ws.off("message", onMessage);
-    ws.close(code, reason);
-    const terminateTimer = setTimeout(() => ws.terminate(), 100);
-    terminateTimer.unref?.();
-  };
-  const onMessage = (data: RawData, isBinary: boolean) => {
-    if (isBinary) {
-      fail(4003, "binary browser relay auth frames are not allowed");
-      return;
-    }
-    if (
-      boundedRawDataByteLength(data, MAX_WEBSOCKET_AUTH_MESSAGE_BYTES) >
-      MAX_WEBSOCKET_AUTH_MESSAGE_BYTES
-    ) {
-      fail(4003, "browser relay auth frame is too large");
-      return;
-    }
-    const raw = rawDataToString(data);
-    const parsed = parseStrictJsonObject(raw);
-    if (stage === "hello") {
-      const hello = parseRelayAuthHello(parsed);
-      if (!hello) {
-        fail(4003, "invalid browser relay auth hello");
-        return;
-      }
-      const challenge = authority.issueChallenge(ws, hello, {
-        role: "extension",
-        transport: "websocket",
-        method: "GET",
-        resource: params.resource,
-        flow: "extension",
-      });
-      if (!challenge) {
-        fail(4003, "browser relay auth rejected");
-        return;
-      }
-      stage = "response";
-      ws.send(JSON.stringify(challenge));
-      return;
-    }
-    if (stage === "response") {
-      const response = parseRelayAuthResponse(parsed);
-      if (!response) {
-        fail(4003, "invalid browser relay auth response");
-        return;
-      }
-      const completed = authority.completeChallenge(ws, response);
-      if (!completed) {
-        fail(4003, "browser relay auth proof failed");
-        return;
-      }
-      stage = "authenticated";
-      // The proof deadline owns only challenge completion. Promotion is now
-      // authoritative, so cold Browser/Gateway preparation must not race it.
-      clearTimeout(timer);
-      removePreAuthGuard();
-      void params
-        .prepareAuthenticated()
-        .then((attach) => {
-          if (ws.readyState !== 1) {
-            return;
-          }
-          ws.off("message", onMessage);
-          attach();
-          ws.send(JSON.stringify(completed.ok), (err) => {
-            if (err) {
-              ws.close(1011, "browser relay auth acknowledgement failed");
-            }
-          });
-        })
-        .catch((err: unknown) => {
-          log.warn(`browser relay post-auth preparation failed: ${String(err)}`);
-          fail(1011, "browser relay unavailable after authentication");
-        });
-      return;
-    }
-    fail(4003, "unexpected browser relay auth frame");
-  };
-  ws.on("message", onMessage);
-}
-
 export async function startExtensionRelayServer(params: {
   port: number;
+  profileName?: string;
   token: string;
   allowLegacyAuth?: boolean;
   onStateChange?: () => void;
 }): Promise<ExtensionRelayHandle> {
   const allowLegacyAuth = params.allowLegacyAuth ?? true;
   const internalToken = crypto.randomBytes(32).toString("base64url");
+  const owner = randomRelayId();
+  let retired = false;
   if (readExtensionRelayToken() === params.token) {
     getBrowserRelayAuthV2Authority(params.token);
   }
@@ -363,6 +245,7 @@ export async function startExtensionRelayServer(params: {
   const httpStates = new WeakMap<Duplex, HttpAuthState>();
   const socketAuthorities = new WeakMap<Duplex, BrowserRelayAuthV2Authority>();
   const authSockets = new Set<Duplex>();
+  const ownerConnections = new Map<WebSocket, () => Promise<void>>();
 
   const currentAuthority = (): BrowserRelayAuthV2Authority | null => {
     const liveToken = readExtensionRelayToken();
@@ -590,8 +473,64 @@ export async function startExtensionRelayServer(params: {
 
   server.on("upgrade", (req, socket, head) => {
     const path = (req.url ?? "/").split("?")[0];
+    if (retired) {
+      destroySocket(socket, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      return;
+    }
     if (!hasLoopbackHostHeader(req)) {
       destroySocket(socket, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    if (path === RELAY_OWNER_PATH) {
+      const resource = params.profileName
+        ? relayOwnerResource(resolvedPort(), params.profileName)
+        : null;
+      const authority = currentAuthority();
+      const protocols = requestProtocols(req);
+      if (
+        !resource ||
+        req.url !== resource ||
+        !authority ||
+        readExtensionRelayToken() !== params.token ||
+        retired ||
+        protocols.length !== 1 ||
+        protocols[0] !== BROWSER_RELAY_EXTENSION_SUBPROTOCOL
+      ) {
+        destroySocket(socket, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        return;
+      }
+      handlePreAuthWebSocketUpgrade({
+        wss,
+        req,
+        socket,
+        head,
+        onUpgrade: (ws, removePreAuthGuard) =>
+          authenticateExtensionWebSocket({
+            ws,
+            authority,
+            resource: `${resource}&owner=${owner}`,
+            binding: { role: "cdp", flow: "owner" },
+            removePreAuthGuard,
+            prepareAuthenticated: async () => () => {
+              if (retired || readExtensionRelayToken() !== params.token) {
+                throw new Error("Relay owner retired");
+              }
+              const closeOwner = attachRelayOwner({
+                ws,
+                bridge,
+                allowLegacyAuth,
+                isCurrent: () => !retired && readExtensionRelayToken() === params.token,
+              });
+              ownerConnections.set(ws, closeOwner);
+              ws.once("close", () => {
+                void closeOwner().then(
+                  () => ownerConnections.delete(ws),
+                  () => {},
+                );
+              });
+            },
+          }),
+      });
       return;
     }
     if (path === "/extension") {
@@ -697,24 +636,32 @@ export async function startExtensionRelayServer(params: {
   };
 
   return {
+    ownership: "owned",
     port: resolvedPort(),
     token: params.token,
     allowLegacyAuth,
     internalToken,
     bridge,
     close: async () => {
-      for (const socket of authSockets) {
-        clearSocketState(socket);
-        socket.destroy();
+      retired = true;
+      try {
+        await Promise.all([...ownerConnections.values()].map((closeOwner) => closeOwner()));
+      } finally {
+        // This process owns physical retirement even when native cleanup fails.
+        // Failed leases get no acknowledgement; the cleanup error still reaches the owner.
+        for (const socket of authSockets) {
+          clearSocketState(socket);
+          socket.destroy();
+        }
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+        bridge.dispose();
+        wss.close();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      bridge.dispose();
-      wss.close();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     },
   };
 }

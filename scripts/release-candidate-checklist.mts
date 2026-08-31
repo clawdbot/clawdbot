@@ -27,6 +27,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { validateReleasePreflightTagIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import {
   dedicatedSectionVersionForTag,
@@ -849,26 +850,63 @@ export function validateTrustedToolingPin({
   return pinnedToolingSha;
 }
 
-export function validateNpmPreflightRunSource({
-  workflowRun,
-  workflowRef,
-  isTrustedWorkflowAncestor = gitIsAncestor,
-}: {
-  workflowRun: { headSha: string };
-  workflowRef: string;
-  isTrustedWorkflowAncestor?: (ancestor: string, target: string) => boolean;
-}) {
+export async function validateNpmPreflightRunSource(
+  {
+    repository,
+    runId,
+    workflowRun,
+    workflowRef,
+    isTrustedWorkflowAncestor = gitIsAncestor,
+  }: {
+    repository: string;
+    runId: string;
+    workflowRun: Omit<RunInfo, "jobs" | "url">;
+    workflowRef: string;
+    isTrustedWorkflowAncestor?: (ancestor: string, target: string) => boolean;
+  },
+  apiOptions: GithubApiOptions = {},
+) {
+  const [workflowPath, fullRef] = String(workflowRun.workflowPath).split("@", 2);
+  if (
+    String(workflowRun.databaseId) !== runId ||
+    !Number.isSafeInteger(workflowRun.runAttempt) ||
+    workflowRun.runAttempt < 1 ||
+    workflowRun.repository !== repository ||
+    workflowRun.workflowName !== "OpenClaw NPM Release" ||
+    workflowPath !== ".github/workflows/openclaw-npm-release.yml" ||
+    workflowRun.event !== "workflow_dispatch" ||
+    workflowRun.status !== "completed" ||
+    workflowRun.conclusion !== "success" ||
+    !/^[a-f0-9]{40}$/u.test(workflowRun.headSha)
+  ) {
+    throw new Error(`npm preflight run ${runId} has invalid workflow identity`);
+  }
+  const ref = workflowRun.headBranch ?? "";
+  const protectedTag = workflowRef === "main" && ref.startsWith("release-publish/");
+  const expectedFullRef = `refs/${protectedTag ? "tags" : "heads"}/${ref}`;
+  if ((!protectedTag && ref !== workflowRef) || (fullRef && fullRef !== expectedFullRef)) {
+    throw new Error(`npm preflight run ${runId} workflow ref mismatch`);
+  }
   const trustedRef = `refs/remotes/origin/${workflowRef}`;
   if (!isTrustedWorkflowAncestor(workflowRun.headSha, trustedRef)) {
     throw new Error(
       `npm preflight workflow SHA ${workflowRun.headSha} is not reachable from trusted ${workflowRef}`,
     );
   }
-  return {
-    status: "passed",
-    headSha: workflowRun.headSha,
-    workflowRef,
-  };
+  if (protectedTag) {
+    const [tagRef, branches] = await Promise.all([
+      githubApi(`repos/${repository}/git/ref/tags/${ref}`, apiOptions),
+      githubApi(`repos/${repository}/git/matching-refs/heads/${ref}`, apiOptions),
+    ]);
+    validateReleasePreflightTagIdentity({
+      branches,
+      workflowRef: ref,
+      workflowFullRef: expectedFullRef,
+      workflowSha: workflowRun.headSha,
+      tagRef,
+    });
+  }
+  return { status: "passed", headSha: workflowRun.headSha, workflowRef: ref };
 }
 
 function candidateContributionRecordPullRequests(
@@ -1338,7 +1376,12 @@ function summarizeFailedRun(info: RunInfo) {
 async function waitForSuccessfulRun(
   repo: string,
   runId: string,
-  expected: { allowShaPinnedWorkflowRef?: boolean; workflowName: string; workflowRef: string },
+  expected: {
+    allowShaPinnedWorkflowRef?: boolean;
+    workflowName: string;
+    workflowRef: string;
+    validateSource?: (info: RunInfo) => ReturnType<typeof validateNpmPreflightRunSource>;
+  },
 ) {
   let lastState = "";
   for (;;) {
@@ -1367,6 +1410,9 @@ async function waitForSuccessfulRun(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
+      if (expected.validateSource) {
+        return { run: info, source: await expected.validateSource(info) };
+      }
       const acceptsPinnedWorkflow =
         expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
       if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
@@ -1374,7 +1420,7 @@ async function waitForSuccessfulRun(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
       }
-      return info;
+      return { run: info, source: undefined };
     }
     await wait(30_000);
   }
@@ -1453,8 +1499,11 @@ export function buildPublishCommand(
     fullReleaseRunAttempt?: number;
     npmTelegramRunId?: string;
   },
+  npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
 ) {
-  const workflowRef = options.tag.includes("-alpha.") ? options.workflowRef : "main";
+  const workflowRef =
+    npmPreflightSource?.workflowRef ??
+    (options.tag.includes("-alpha.") ? options.workflowRef : "main");
   if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
     throw new Error(
       "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
@@ -1769,7 +1818,7 @@ async function runTelegramIfNeeded(
     harness_ref: options.workflowRef,
     provider_mode: options.telegramProviderMode,
   });
-  const runLocal = await waitForSuccessfulRun(options.repo, runId, {
+  const { run: runLocal } = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: options.workflowRef,
   });
@@ -1905,19 +1954,26 @@ async function main() {
     npmPreflightRunId: options.npmPreflightRunId,
   });
 
-  const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
+  const { run: fullRun } = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
     workflowRef: options.workflowRef,
     allowShaPinnedWorkflowRef: true,
   });
-  const npmRun = await waitForSuccessfulRun(options.repo, options.npmPreflightRunId, {
-    workflowName: "OpenClaw NPM Release",
-    workflowRef: options.workflowRef,
-  });
-  const npmPreflightSource = validateNpmPreflightRunSource({
-    workflowRun: { headSha: npmRun.headSha },
-    workflowRef: options.workflowRef,
-  });
+  const { run: npmRun, source: npmPreflightSource } = await waitForSuccessfulRun(
+    options.repo,
+    options.npmPreflightRunId,
+    {
+      workflowName: "OpenClaw NPM Release",
+      workflowRef: options.workflowRef,
+      validateSource: (workflowRun) =>
+        validateNpmPreflightRunSource({
+          repository: options.repo,
+          runId: options.npmPreflightRunId,
+          workflowRun,
+          workflowRef: options.workflowRef,
+        }),
+    },
+  );
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
@@ -2060,11 +2116,14 @@ async function main() {
     "scripts/plugin-clawhub-release-plan.ts",
     options,
   );
-  const publishCommand = buildPublishCommand({
-    ...options,
-    fullReleaseRunAttempt: fullRun.runAttempt,
-    npmTelegramRunId: npmTelegram.runId,
-  });
+  const publishCommand = buildPublishCommand(
+    {
+      ...options,
+      fullReleaseRunAttempt: fullRun.runAttempt,
+      npmTelegramRunId: npmTelegram.runId,
+    },
+    npmPreflightSource,
+  );
   const evidence = {
     version: 1,
     tag: options.tag,

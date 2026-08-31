@@ -3,6 +3,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
+  RawModelCostConfig,
   ThinkingLevelMap,
 } from "../llm/types.js";
 import { isStringOption } from "../utils/string-readers.js";
@@ -166,24 +167,7 @@ export type ModelDefinitionConfig = {
   /** Supported input modalities for routing and media-tool selection. */
   input: Array<"text" | "image" | "video" | "audio">;
   /** Token pricing in USD per million tokens. */
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    /** Optional tiered pricing.  When present, cost calculation uses
-     *  per-tier rates instead of the flat rates above.  Prices are
-     *  USD / million tokens; ranges are half-open `[start, end)` on the
-     *  input-token axis. */
-    tieredPricing?: Array<{
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
-      range: [number, number] | [number];
-    }>;
-  };
+  cost: RawModelCostConfig;
   /** Provider/native maximum context window in tokens. */
   contextWindow?: number;
   /**

@@ -271,7 +271,7 @@ suite.define(() => {
     });
   });
 
-  it("separates model shortcuts from numeric search input by focus", async () => {
+  it("separates model shortcuts, search input, and composer typing by focus", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       await installMockGateway(page, { models: MODELS });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -351,6 +351,10 @@ suite.define(() => {
       await page.keyboard.press("1");
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
+
+      await modelSelect.focus();
+      await page.keyboard.type("1");
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
     });
   });
 

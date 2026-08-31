@@ -188,24 +188,32 @@ describe("sessions-list-tool", () => {
     );
   });
 
-  it("lists unspawned same-agent sessions from the canonical main session under tree visibility", async () => {
-    mocks.gatewayCall.mockResolvedValue({
-      sessions: [
-        sessionRow("agent:main:main", "main"),
-        sessionRow("agent:main:slack:channel:team-room", "channel"),
-      ],
-    });
+  it.each([
+    { requester: "agent:main:main", visibility: "tree" as const },
+    { requester: "agent:main:cron:organize", visibility: undefined },
+  ])(
+    "lists unspawned same-agent sessions from $requester with $visibility visibility",
+    async ({ requester, visibility }) => {
+      mocks.gatewayCall.mockResolvedValue({
+        sessions: [
+          sessionRow("agent:main:main", "main"),
+          sessionRow("agent:main:slack:channel:team-room", "channel"),
+          sessionRow("agent:other:main", "main", "other"),
+          sessionRow("agent:main:dashboard:incognito-private"),
+        ],
+      });
 
-    const result = await createSessionsListTool({
-      agentSessionKey: "agent:main:main",
-      config: { ...VALID_CONFIG, tools: { sessions: { visibility: "tree" } } },
-    }).execute("main-tree", {});
+      const result = await createSessionsListTool({
+        agentSessionKey: requester,
+        config: { ...VALID_CONFIG, tools: { sessions: { visibility } } },
+      }).execute("main-tree", {});
 
-    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
-      "agent:main:main",
-      "agent:main:slack:channel:team-room",
-    ]);
-  });
+      expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+        "agent:main:main",
+        "agent:main:slack:channel:team-room",
+      ]);
+    },
+  );
 
   it("keeps a sandboxed main session clamped to spawned rows", async () => {
     mocks.gatewayCall.mockImplementation(async (request: unknown) => {

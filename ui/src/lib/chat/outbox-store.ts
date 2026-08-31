@@ -174,7 +174,7 @@ export function resolvePendingComposerSessions(
     if (!source) {
       continue;
     }
-    const resolved = resolveStoredChatOutboxScope(state, source.sessionKey, source.agentId);
+    const resolved = resolveUiConversationIdentity(state, source.sessionKey, source.agentId);
     const nextKey = storedChatOutboxScopeKey(resolved);
     const { awaitingDefaults: _, ...session } = pending;
     const destination = store.sessions[nextKey];
@@ -211,21 +211,13 @@ export function resolvePendingComposerSessions(
   return migrated;
 }
 
-export function resolveStoredChatOutboxScope(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): StoredChatOutboxScope {
-  return resolveUiConversationIdentity(state, sessionKey, agentIdOverride);
-}
-
 export function captureChatOutboxAdmission(
   state: ChatComposerScope,
   sessionKey: string,
   agentId?: string,
 ) {
   return {
-    scope: resolveStoredChatOutboxScope(state, sessionKey, agentId),
+    scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
   };
 }
@@ -260,7 +252,9 @@ function holdComposerRecovery(
   }
   for (const item of queue ?? []) {
     const owner = item.attachmentPayload?.recoveryScope;
-    groups.set(owner, [...(groups.get(owner) ?? []), item]);
+    const rows = groups.get(owner) ?? [];
+    rows.push(item);
+    groups.set(owner, rows);
   }
   for (const [owner, rows] of groups) {
     store.recovery[`${id}:${JSON.stringify(owner ?? null)}`] = {
@@ -414,7 +408,9 @@ export function readStoredOutboxStore(
           ) {
             return true;
           }
-          identified.set(identifiedKey, [...(identified.get(identifiedKey) ?? []), item]);
+          const rows = identified.get(identifiedKey) ?? [];
+          rows.push(item);
+          identified.set(identifiedKey, rows);
           return false;
         });
         for (const [identifiedKey, queue] of identified) {
@@ -547,13 +543,14 @@ export function writeStoredOutboxStore(
   if (pendingLegacyTransfers.has(store) && retained.length < entries.length) {
     throw new Error("Chat outbox migration exceeds retention; source retained");
   }
-  const payload = JSON.stringify({
+  const retainedStore: StoredComposerState = {
     version: 4,
     gatewayOwner: target.gatewayOwner,
     sessions: Object.fromEntries(retained),
     recovery: store.recovery,
     ...(store.legacyReceipts ? { legacyReceipts: store.legacyReceipts } : {}),
-  });
+  };
+  const payload = JSON.stringify(retainedStore);
   // Verification precedes deleting any legacy source, including quota/no-op writes.
   storage.setItem(target.key, payload);
   if (storage.getItem(target.key) !== payload) {
@@ -569,7 +566,7 @@ export function writeStoredOutboxStore(
     }
   }
   pendingLegacyTransfers.delete(store);
-  retireRemovedOutboxPayloads(storage, target, previous, payload);
+  retireRemovedOutboxPayloads(storage, target, previous, retainedStore);
 }
 
 // Cleanup follows a verified metadata commit, never a credential-filtered view.
@@ -577,7 +574,7 @@ function retireRemovedOutboxPayloads(
   storage: Storage,
   target: ComposerStorageTarget,
   previous: string | null,
-  current: string | null,
+  current: StoredComposerState | null,
 ): void {
   if (!previous) {
     return;
@@ -592,11 +589,10 @@ function retireRemovedOutboxPayloads(
     ) {
       return;
     }
-    const references = (raw: string | null) => {
-      if (raw === null) {
+    const references = (value: unknown) => {
+      if (value === null) {
         return [];
       }
-      const value: unknown = JSON.parse(raw);
       if (
         !isRecord(value) ||
         value.version !== 4 ||
@@ -640,7 +636,7 @@ function retireRemovedOutboxPayloads(
       });
     };
     const remaining = new Set(references(current).map((ref) => ref.key));
-    const removed = references(previous).filter((ref) => !remaining.has(ref.key));
+    const removed = references(JSON.parse(previous)).filter((ref) => !remaining.has(ref.key));
     if (removed.length) {
       void removeOutboxPayloads(removed);
     }

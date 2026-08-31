@@ -12,7 +12,7 @@ import type {
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   readQueuedMessageById,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -125,23 +125,21 @@ export function captureChatConnectionOwner(
 export function updateQueuedSendItem(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
-  sessionKey: string,
   id: string,
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return storageMode === "memory"
     ? updateVolatileQueuedMessage(host, id, update, { retryable: true })
-    : updateQueuedMessageForSession(host, sessionKey, id, update);
+    : updateQueuedMessage(host, id, update);
 }
 
 export function deliveryStateWriter(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
-  sessionKey: string,
   id: string,
 ) {
   return (sendState: ChatQueueItem["sendState"], sendError?: string) =>
-    updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+    updateQueuedSendItem(host, storageMode, id, (item) => ({
       ...item,
       sendError,
       sendState,
@@ -156,7 +154,7 @@ export function finishChatDeliveryAdmission(
   options?: QueuedChatSendOptions,
 ): ChatQueueItem | QueuedChatSendResult {
   const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
+  const setState = deliveryStateWriter(host, storageMode, item.id);
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   const current = readQueuedMessageById(host, item.id);
   if (!current) {
@@ -229,6 +227,7 @@ export async function prepareQueuedChatPayload(
   const connectionIsCurrent = captureChatConnectionOwner(host);
   const ownerIsCurrent = captureOutboxPayloadOwner(host);
   const original = queued;
+  const sessionKey = original.sessionKey ?? queuedSessionKey;
   const payload = await prepareOutboxPayload(host, original);
   const current = readQueuedMessageById(host, id);
   if (
@@ -242,47 +241,32 @@ export async function prepareQueuedChatPayload(
     isQueuedMessageBeingEdited(host, id)
   ) {
     if (payload.status === "ready" && !original.attachmentPayload) {
-      retireOutboxPayload(payload.item);
+      retireOutboxPayload(payload.update);
     }
     return "pending";
   }
   if (payload.status === "failed") {
     const failed = failOutboxPayload(current, payload.reason);
-    updateQueuedMessageForSession(host, original.sessionKey ?? queuedSessionKey, id, () => failed);
-    surfaceChatDeliveryFailure(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      original.agentId,
-      failed.sendError,
-    );
+    updateQueuedMessage(host, id, () => failed);
+    surfaceChatDeliveryFailure(host, sessionKey, original.agentId, failed.sendError);
     return "failed";
   }
-  const hydrated = payload.item;
+  const hydrated = { ...original, ...payload.update };
   if (
     hydrated.attachmentPayload?.key !== original.attachmentPayload?.key &&
     hydrated.sendState === "unconfirmed"
   ) {
-    updateQueuedMessageForSession(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      id,
-      () => payload.item,
-    );
+    updateQueuedMessage(host, id, () => hydrated);
     return "pending";
   }
   if (
     (!original.attachmentPayload || original.attachmentStorageError) &&
-    !updateQueuedMessageForSession(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      id,
-      () => payload.item,
-    )
+    !updateQueuedMessage(host, id, () => hydrated)
   ) {
     if (!original.attachmentPayload) {
-      retireOutboxPayload(payload.item);
+      retireOutboxPayload(payload.update);
     }
     return "pending";
   }
-  return payload.item;
+  return hydrated;
 }

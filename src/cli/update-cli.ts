@@ -14,11 +14,6 @@ import type {
   UpdateStatusOptions,
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
-import { updateStatusCommand } from "./update-cli/status.js";
-import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
-import { updateWizardCommand } from "./update-cli/wizard.js";
-
-export { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand };
 export type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
@@ -108,6 +103,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
+        const { updateFinalizeCommand } = await import("./update-cli/update-command-finalize.js");
         await updateFinalizeCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
           channel:
@@ -194,6 +190,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts: CommanderUpdateOptions) => {
       try {
+        const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
@@ -223,6 +220,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(
       createUpdateLeafAction(async (opts, command) => {
+        const { updateWizardCommand } = await import("./update-cli/wizard.js");
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
           acceptCapabilities:
@@ -252,6 +250,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(
       createUpdateLeafAction(async (opts, command) => {
+        const { updateStatusCommand } = await import("./update-cli/status.js");
         await updateStatusCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),

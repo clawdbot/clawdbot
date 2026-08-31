@@ -260,6 +260,47 @@ describe("IMAP watcher protocol boundary", () => {
   );
 
   it.each([
+    { boundary: "snippet", body: `${"x".repeat(239)}🙂tail`, maxBytes: 20_000, truncated: false },
+    ...[400, 401, 402, 403].map((maxBytes) => ({
+      boundary: `UTF-8 byte budget ${maxBytes}`,
+      body: `${"A".repeat(100)}${"🙂".repeat(50)}`,
+      maxBytes,
+      truncated: true,
+    })),
+  ])(
+    "preserves Unicode through fetched mail at the $boundary limit",
+    async ({ body, maxBytes, truncated }) => {
+      const { server, state, dispatchHookAgentTurn } = await startWatcher({
+        account: { includeBody: true, maxBytes },
+      });
+      server.append(
+        `From: trusted@example.com\r\nSubject: Unicode limits\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
+      );
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+      const call = dispatchHookAgentTurn.mock.calls[0]?.[0];
+      if (!call) {
+        throw new Error("expected an admitted email prompt");
+      }
+      const { message } = call;
+      expect(message).toContain("Subject: Unicode limits");
+      expect(Buffer.byteLength(message)).toBeLessThanOrEqual(maxBytes);
+      expect(Buffer.from(message).toString("utf8")).toBe(message);
+      expect(message).not.toContain("\ufffd");
+      expect(
+        message.endsWith("[truncated: email content exceeded the configured byte limit]"),
+      ).toBe(truncated);
+      if (!truncated) {
+        expect(message.split("\n").find((line) => line.startsWith("Snippet: "))).toBe(
+          `Snippet: ${"x".repeat(239)}`,
+        );
+      }
+    },
+  );
+
+  it.each([
     ["From: trusted@example.com, attacker@evil.example", "invalid-from", "unknown"],
     ["From: attacker@evil.example", "sender-not-allowed", "evil.example"],
   ])(

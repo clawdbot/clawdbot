@@ -123,9 +123,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "1fe2f4081877bb12b7f7ed355349f98b8a0a6882";
-    const legacyKovaRef = "1fe2f4081877bb12b7f7ed355349f98b8a0a6882";
-    const trustedLiveKovaRef = "1fe2f4081877bb12b7f7ed355349f98b8a0a6882";
+    const canonicalKovaRef = "81919463ef9620722373c813192c688573f2b533";
+    const legacyKovaRef = "81919463ef9620722373c813192c688573f2b533";
+    const trustedLiveKovaRef = "81919463ef9620722373c813192c688573f2b533";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -540,13 +540,19 @@ describe("OpenClaw performance workflow", () => {
 
   it("builds only the QA and startup artifacts required by source probes", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-    const build =
+    const typedBuild =
       "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance";
+    const nativeBuild = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
 
-    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
-    expect(run).toContain(build);
+    expect(run).toContain("scripts/profile-extension-memory.{mts,mjs}");
+    expect(run).toContain("scripts/build-all.mts --help");
+    expect(run).toContain("scripts/build-all.mjs --help");
+    expect(run).toContain("sourcePerformance");
+    expect(run).toContain(typedBuild);
+    expect(run).toContain(nativeBuild);
     expect(run).toContain("pnpm build");
-    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf(typedBuild)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf(nativeBuild)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 

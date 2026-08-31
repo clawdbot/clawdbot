@@ -40,6 +40,7 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
@@ -180,7 +181,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (reconciledLocalCompletion) {
       void retryReconnectableQueuedChatSends(state);
     } else if (this.presented) {
-      state.requestUpdate?.();
+      // Share the event handler's frame; synchronous roster publication must
+      // not force a transcript redraw for every incoming session update.
+      requestChatPageUpdate(state, "animation-frame");
     }
   }
 

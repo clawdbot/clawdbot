@@ -48,6 +48,59 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes setup consent to Advanced with its disclosure open", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "discovery access",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                accessMode: { type: "string", title: "Setup Discovery Access" },
+              },
+            },
+          },
+        },
+        value: {},
+        uiHints: { "wizard.accessMode": { advanced: false } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        label: "Setup",
+        search: "?section=wizard&advanced=1",
+        hash: "#config-section-wizard",
+      }),
+    ]);
+  });
+
+  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
+    "does not offer machine-owned %s in search",
+    (key) => {
+      expect(
+        findSettingsSearchBlocks({
+          query: "internal bookkeeping",
+          schema: {
+            type: "object",
+            properties: {
+              wizard: {
+                type: "object",
+                properties: {
+                  [key]: { type: "string", title: "Internal Bookkeeping" },
+                  accessMode: { type: "string" },
+                },
+              },
+            },
+          },
+          value: { wizard: { [key]: "internal bookkeeping" } },
+          uiHints: {},
+        }),
+      ).toEqual([]);
+    },
+  );
+
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "mcp",

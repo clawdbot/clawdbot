@@ -76,7 +76,6 @@ suite.define(() => {
           await page
             .locator(".chat-pane-cache__pane--active")
             .getByRole("alert")
-            .locator("summary")
             .getByText("The original message is unavailable.", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.message.get", 1);

@@ -1,11 +1,11 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -20,7 +20,7 @@ import {
 } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
@@ -107,7 +107,7 @@ describe("staged chat attachment pane handoff", () => {
       activePaneId: "p2",
     } satisfies ChatSplitLayout;
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(current, current.sessionKey),
+      resolveUiConversationIdentity(current, current.sessionKey),
     );
 
     closeStagedPane(pane.context, root, layout, pane.paneId);
@@ -145,7 +145,7 @@ describe("staged chat attachment pane handoff", () => {
     const reopened = storedAttachment("reopened");
     current.chatAttachments = [reopened];
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(current, current.sessionKey),
+      resolveUiConversationIdentity(current, current.sessionKey),
     );
 
     pane.disconnectedCallback();
@@ -249,7 +249,9 @@ describe("staged chat attachment pane handoff", () => {
     handoff.prepare({
       owner,
       paneId: "p1",
-      scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(remount, remount.sessionKey)),
+      scopeKey: storedChatOutboxScopeKey(
+        resolveUiConversationIdentity(remount, remount.sessionKey),
+      ),
       attachments: [],
       fallbacks: {
         collision: {

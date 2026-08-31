@@ -624,6 +624,30 @@ describe("skill experience review prompt", () => {
 });
 
 describe("skill experience review preparation", () => {
+  it.each([
+    { agentId: "direct", eligible: true },
+    { agentId: "isolated", eligible: false },
+  ])("rechecks $agentId sandbox policy for global reviews", async ({ agentId, eligible }) => {
+    const params = completedRun({ sessionKey: "global" });
+    params.ctx.agentId = agentId;
+    params.ctx.foregroundPromptContext.agentId = agentId;
+    const result = await prepareSkillExperienceReviewCandidate(
+      { ctx: params.ctx },
+      {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+      },
+    );
+
+    expect(result !== undefined).toBe(eligible);
+  });
+
   it("keeps an eligible foreground candidate", async () => {
     const params = completedRun();
     await expect(

@@ -1,5 +1,8 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
@@ -685,24 +688,49 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
+      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
+        await import("../../infra/diagnostics-timeline.js");
+      const tempDirs = createTempDirTracker();
+      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
+      let timelineAtLogFlush: string | undefined;
+      close.mockImplementationOnce(async () => {
+        emitDiagnosticsTimelineEvent(
+          { type: "mark", name: "gateway.stop" },
+          {
+            env: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+            },
+          },
+        );
+      });
       flushLogger.mockImplementationOnce(async () => {
         expect(runtime.exit).not.toHaveBeenCalled();
+        timelineAtLogFlush = existsSync(timelinePath)
+          ? readFileSync(timelinePath, "utf8")
+          : undefined;
       });
 
-      sigterm();
+      try {
+        sigterm();
 
-      await expect(exited).resolves.toBe(0);
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway stopping",
-        restartExpectedMs: null,
-      });
-      expect(start).toHaveBeenCalledWith({
-        startupStartedAt: expect.any(Number),
-        requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-      expect(flushLogger).toHaveBeenCalledOnce();
-      expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+        await expect(exited).resolves.toBe(0);
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(start).toHaveBeenCalledWith({
+          startupStartedAt: expect.any(Number),
+          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(flushLogger).toHaveBeenCalledOnce();
+        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
+        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      } finally {
+        flushDiagnosticsTimeline();
+        tempDirs.cleanup();
+      }
     });
   });
 

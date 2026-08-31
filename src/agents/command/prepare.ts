@@ -8,6 +8,7 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -50,7 +51,6 @@ import {
 } from "./attempt-execution.shared.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
-import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -122,7 +122,7 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+  const cfg = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -234,11 +234,11 @@ export async function prepareAgentCommandExecution(
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
-    clone: false,
   });
   const {
     sessionId,
     sessionKey,
+    sessionEntry: sessionEntryRaw,
     storePath,
     isNewSession,
     previousSessionId,
@@ -246,24 +246,17 @@ export async function prepareAgentCommandExecution(
     persistedVerbose,
   } = sessionResolution;
   const harnessSessionError = sessionKey
-    ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
+    ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
     : undefined;
   if (harnessSessionError) {
     throw new Error(harnessSessionError);
   }
   const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
-  if (
-    isOneShotModelRun &&
-    sessionKey &&
-    sessionResolution.sessionEntry?.modelSelectionLocked === true
-  ) {
+  if (isOneShotModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
     throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
   }
-  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
-    sessionKey,
-    sessionEntry: sessionResolution.sessionEntry,
-    sessionStore: sessionResolution.sessionStore,
-  });
+  const sessionStore: Record<string, InternalSessionEntry> =
+    sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });

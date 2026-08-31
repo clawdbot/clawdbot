@@ -183,12 +183,15 @@ export function renderChatQueue(props: ChatQueueProps) {
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
-  // Applying settings belongs to the queue as a whole. Connection loss is the
-  // exceptional per-item delivery state operators need to see on every row.
+  // Attempted sends live in the transcript but still own their FIFO position.
+  // Keep their unresolved delivery visible beside the messages they block.
+  const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
-      ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-      : null;
+    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+      : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
+        ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+        : null;
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`

@@ -15,6 +15,11 @@ const deviceTargets = [
   { name: "selected", value: "device:paired-runner", target: { deviceId: "paired-runner" } },
   { name: "automatic", value: "auto-device", target: { autoDevice: true } },
 ];
+const gitRepository = {
+  branches: [{ kind: "local", name: "main" }],
+  defaultBranch: "main",
+  repositoryStatus: "git",
+};
 
 suite.define(() => {
   it("spaces destination section headings consistently", async () => {
@@ -95,6 +100,7 @@ suite.define(() => {
           profiles: [],
         },
         "sessions.create": { key: sessionKey },
+        "worktrees.branches": gitRepository,
         "sessions.list": createdSessionListResult(sessionKey),
         "sessions.dispatch": {
           ok: true,
@@ -176,6 +182,7 @@ suite.define(() => {
         methodResponses: {
           "environments.list": { environments: [environment], profiles: [] },
           "sessions.create": { key: "agent:main:stale-device-capacity" },
+          "worktrees.branches": gitRepository,
         },
       });
 
@@ -331,11 +338,7 @@ suite.define(() => {
         workspaceGit: true,
         methodResponses: {
           "environments.list": catalog,
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          "worktrees.branches": gitRepository,
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
@@ -582,11 +585,7 @@ suite.define(() => {
             ],
             profiles: [],
           },
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          "worktrees.branches": gitRepository,
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
           "sessions.send": { runId: "run-device-recovery", status: "started" },
         },

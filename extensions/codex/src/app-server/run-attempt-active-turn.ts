@@ -390,6 +390,27 @@ export async function activateCodexAttemptTurn(
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    permissionChangeOwner: params.permissionChange?.owner,
+    applyPermissionMode: async (
+      mode: NonNullable<typeof params.permissionMode> | null,
+      revokeApprovals: () => void,
+    ) => {
+      if (
+        !params.permissionChange ||
+        terminalState.terminalOutcomeFrozen ||
+        params.abortSignal?.aborted ||
+        (!state.permissionChangeRestart && (state.completed || runAbortController.signal.aborted))
+      ) {
+        return false;
+      }
+      const applied = params.permissionChange.request(mode);
+      state.permissionChangeRestart ??= "requested";
+      // A policy replacement cancels this native turn, not the admitted outer
+      // run. Its successor must be prepared only after native stop and cleanup.
+      runAbortController.abort("permission-change");
+      revokeApprovals();
+      return await applied;
+    },
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
     queueMessage,
@@ -444,26 +465,25 @@ export async function activateCodexAttemptTurn(
       })().finally(completeTurn);
       return;
     }
-    const interrupted = interruptTurn(activeTurnId);
-    if (terminalState.explicitCancellationObserved) {
-      // turn/completed ends the turn, not its native background terminals.
-      // Keep this attempt's route and lease until thread-scoped cleanup settles.
-      state.abortCleanup = interrupted.then(async (confirmed) => {
-        if (!confirmed) {
-          throw new Error(
-            "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
-          );
-        }
-        await terminateCodexBackgroundTerminals(
-          resourceState.client,
-          resourceState.thread.threadId,
+    state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
+      if (!terminalState.explicitCancellationObserved && !state.permissionChangeRestart) {
+        return;
+      }
+      if (!confirmed) {
+        throw new Error(
+          state.permissionChangeRestart
+            ? "Permission change could not confirm the previous Codex turn stopped."
+            : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
         );
-      });
-    }
-    const cancellation = terminalState.explicitCancellationObserved
-      ? state.abortCleanup
-      : interrupted;
-    void cancellation.then(completeTurn, (error: unknown) => {
+      }
+      // turn/completed leaves native terminals running under their old policy.
+      // Keep the route and lease until cancellation or policy replacement cleans them up.
+      await terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId);
+      if (state.permissionChangeRestart) {
+        state.permissionChangeRestart = "confirmed";
+      }
+    });
+    void state.abortCleanup.then(completeTurn, (error: unknown) => {
       embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
       completeTurn();
     });
@@ -471,6 +491,9 @@ export async function activateCodexAttemptTurn(
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {
     abortListener();
+  } else if (params.permissionChange && !params.permissionChange.applied()) {
+    state.permissionChangeRestart = "requested";
+    runAbortController.abort("permission-change");
   }
   return {
     activeTurnId,

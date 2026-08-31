@@ -59,7 +59,7 @@ async function prepare(host: ReturnType<typeof hostFor>, id: string, sessionKey 
   if (result.status !== "ready") {
     throw new Error("Expected complete stored payload");
   }
-  const { attachmentStorageError: _, ...stored } = result.item;
+  const { attachmentStorageError: _, ...stored } = { ...item, ...result.update };
   return {
     ...stored,
     attachments: item.attachments?.map(({ id: attachmentId, mimeType, fileName, sizeBytes }) => ({
@@ -90,7 +90,7 @@ async function expectBytes(host: ReturnType<typeof hostFor>, item: ChatQueueItem
   const result = await prepareOutboxPayload(host, item, "handoff");
   expect(result.status).toBe("ready");
   expect(
-    result.status === "ready" ? result.item.attachments?.map(getChatAttachmentDataUrl) : [],
+    result.status === "ready" ? result.update.attachments?.map(getChatAttachmentDataUrl) : [],
   ).toEqual([dataUrl]);
 }
 

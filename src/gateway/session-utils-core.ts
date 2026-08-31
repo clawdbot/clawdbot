@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   type ModelCostConfig,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
@@ -228,7 +228,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   if (!cost) {
     return undefined;
   }
-  const estimated = estimateUsageCost({
+  const estimated = estimateAggregateUsageCost({
     usage: {
       ...(input !== undefined ? { input } : {}),
       ...(output !== undefined ? { output } : {}),

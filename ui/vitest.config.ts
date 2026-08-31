@@ -71,6 +71,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/share-build",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
+  },
+  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },
@@ -98,6 +102,7 @@ const sharedUiTestConfig = {
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
   "src/pages/chat/chat-responsive.browser.test.ts",
+  "src/pages/chat/chat-working-indicator.browser.test.ts",
   "src/pages/chat/chat-composer-undo-redo.browser.test.ts",
   "src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "src/components/form-controls.browser.test.ts",

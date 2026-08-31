@@ -1,12 +1,12 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   uiProofArtifactDir,
 } from "./session-management.test-support.ts";

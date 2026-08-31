@@ -51,7 +51,6 @@ export type ChatHost = ChatInputHistoryState &
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;
     chatRunStartup?: ChatRunStartupState | null;
-    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: ChatRunError | null;

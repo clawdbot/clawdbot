@@ -254,12 +254,18 @@ function createFixture() {
       uncompactedEffectiveTools: [],
     },
     toolPolicy: {
-      baseline: { activeToolNames: ["read"], catalogEntries: [] },
-      effectiveTools: [{ name: "read" }],
-      uncompactedEffectiveTools: [{ name: "read" }],
-      tools: [{ name: "read" }],
-      codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
+      current: {
+        activeToolNames: ["read"],
+        effectiveTools: [{ name: "read" }],
+        uncompactedEffectiveTools: [{ name: "read" }],
+        tools: [{ name: "read" }],
+        coreReadAuthorized: true,
+      },
+      apply(toolsAllow: string[] | undefined) {
+        Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
+        return this.current;
+      },
+      refresh: vi.fn(),
     },
     preflight: {
       compactionReplayEnabled: false,

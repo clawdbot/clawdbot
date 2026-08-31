@@ -1,5 +1,5 @@
 // Disposable migration spool: never registered, resumed, or read by the runtime.
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,7 +72,7 @@ export class SqliteSessionImportStage {
 
   *iterateUnseenEvents(source: number): Generator<TranscriptEvent, void, boolean> {
     for (const row of this.rows(source)) {
-      const eventHash = createHash("sha256").update(row.eventJson).digest();
+      const eventHash = hash("sha256", row.eventJson, "buffer");
       // Hash narrows the lookup; exact bytes decide equality even under a hash collision.
       if (this.findSeen.get(eventHash, row.eventJson) !== undefined) {
         continue;
@@ -87,6 +87,6 @@ export class SqliteSessionImportStage {
   }
 
   addSeen(eventJson: string): void {
-    this.insertSeen.run(createHash("sha256").update(eventJson).digest(), eventJson);
+    this.insertSeen.run(hash("sha256", eventJson, "buffer"), eventJson);
   }
 }

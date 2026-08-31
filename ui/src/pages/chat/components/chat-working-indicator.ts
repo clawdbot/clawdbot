@@ -4,7 +4,6 @@ import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
@@ -39,21 +38,12 @@ function formatTurnRecapDuration(ms: number): string {
   return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
-// 0 is a valid count (command-only turns); only null/undefined means "unknown".
+// Keep counts exact so small response updates remain visible above 1,000 tokens.
+// 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
     ? t("chat.turnRecap.tokensOne")
-    : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
-}
-
-function renderLiveOutputTokens(outputTokens: number | null | undefined) {
-  if (outputTokens === null || outputTokens === undefined) {
-    return nothing;
-  }
-  return html`
-    <span aria-hidden="true">·</span>
-    <span class="chat-working-indicator__tokens">${outputTokensLabel(outputTokens)}</span>
-  `;
+    : t("chat.turnRecap.tokens", { count: outputTokens.toLocaleString(i18n.getLocale()) });
 }
 
 export function renderChatWorkingIndicator(
@@ -67,9 +57,13 @@ export function renderChatWorkingIndicator(
 ) {
   const waitingApproval = options.waitingApproval === true;
   const continuation = options.presentation === "continuation";
-  // Streaming tokens are the real liveness signal; the whimsical phrase only
-  // covers the stretch before any usage data exists.
-  const hasTokens = options.outputTokens !== null && options.outputTokens !== undefined;
+  const statusLabel = waitingApproval
+    ? t("chat.waitingForApproval")
+    : options.startupLabel || t("common.working");
+  const working = !waitingApproval && !options.startupLabel;
+  // Providers report exact usage at response boundaries, not per text delta.
+  // Keep the latest count visible while the run continues through tools.
+  const outputTokens = options.outputTokens;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -91,41 +85,37 @@ export function renderChatWorkingIndicator(
             </div>
           `}
       <span class="chat-working-indicator__status">
+        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
         ${waitingApproval
-          ? html`<span>${t("chat.waitingForApproval")}</span>`
-          : options.startupLabel
+          ? nothing
+          : html`
+              <openclaw-elapsed-time
+                class="chat-working-indicator__elapsed"
+                .startMs=${part.startedAt}
+              ></openclaw-elapsed-time>
+            `}
+        ${outputTokens !== null && outputTokens !== undefined
+          ? html`
+              <span aria-hidden="true">·</span>
+              <span class="chat-working-indicator__tokens">${outputTokensLabel(outputTokens)}</span>
+            `
+          : working
             ? html`
-                <span>${options.startupLabel}</span>
-                <openclaw-elapsed-time
-                  class="chat-working-indicator__elapsed"
+                <openclaw-working-phrase
+                  aria-hidden="true"
                   .startMs=${part.startedAt}
-                ></openclaw-elapsed-time>
-                ${renderLiveOutputTokens(options.outputTokens)}
+                  .seed=${part.key}
+                ></openclaw-working-phrase>
               `
-            : html`
-                <span class=${continuation ? "" : "sr-only"}>${t("common.working")}</span>
-                <openclaw-elapsed-time
-                  class="chat-working-indicator__elapsed"
-                  .startMs=${part.startedAt}
-                ></openclaw-elapsed-time>
-                ${hasTokens
-                  ? renderLiveOutputTokens(options.outputTokens)
-                  : html`
-                      <openclaw-working-phrase
-                        aria-hidden="true"
-                        .startMs=${part.startedAt}
-                        .seed=${part.key}
-                      ></openclaw-working-phrase>
-                    `}
-              `}
+            : nothing}
       </span>
     </div>
   `;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how
- * long the turn took (and its output tokens when the terminal patch carried
- * them). Sticky until the next run replaces it. */
+ * long the turn took and its latest known output usage. Sticky until the
+ * next run replaces it. */
 export function renderTurnRecapRow(
   recap: TurnRecap,
   options: { presentation?: "standalone" | "continuation" } = {},

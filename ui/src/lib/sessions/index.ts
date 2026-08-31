@@ -528,10 +528,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isSessionStateEvent(event)) {
       return;
     }
-    swarmActivity.observe(event.payload);
-    const decoratedResult = decorateRows(state.result);
-    if (decoratedResult !== state.result) {
-      publish({ ...state, result: decoratedResult });
+    if (swarmActivity.observe(event.payload)) {
+      const decoratedResult = decorateRows(state.result);
+      if (decoratedResult !== state.result) {
+        publish({ ...state, result: decoratedResult });
+      }
     }
     const { eventInfo, reconciled, claimChanged } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,

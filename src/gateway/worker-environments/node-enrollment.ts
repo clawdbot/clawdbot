@@ -1,5 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
@@ -9,7 +10,7 @@ import {
   resolvePairingGatewayUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
-import type { WorkerNodeEnrollment } from "../../plugins/types.js";
+import type { WorkerNodeEnrollment, WorkerNodeRuntimePreparation } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
 import { WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH } from "../gateway-http-route-contracts.js";
@@ -39,7 +40,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, { close: () => void }>();
-  const enrollmentClosers = new WeakMap<WorkerNodeEnrollment, () => void>();
+  const enrollmentClosers = new WeakMap<WorkerNodeRuntimePreparation, () => void>();
   const commandRunner = async (argv: string[], runOptions: { timeoutMs: number }) =>
     await runCommandWithTimeout(argv, { timeoutMs: runOptions.timeoutMs });
 
@@ -57,7 +58,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       throw new Error(url.error ?? "Cloud node bootstrap cannot resolve the Gateway address");
     }
     preparationSignal.throwIfAborted();
-    const artifact = await options.prepareArtifact(record, enrollmentSignal);
+    const artifact = await options.prepareArtifact(record, preparationSignal);
     preparationSignal.throwIfAborted();
     const tlsFingerprint = url.url.startsWith("wss://")
       ? url.source?.startsWith("gateway.bind=")
@@ -69,8 +70,9 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     return { artifact, url: url.url, tlsFingerprint };
   };
 
-  const begin = async (record: WorkerEnvironmentRecord): Promise<WorkerNodeEnrollment> => {
+  const reserve = (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
     signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
     const admission = options.store.get(record.environmentId);
     if (
       admission?.state !== "provisioning" ||
@@ -84,7 +86,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     // cannot cancel or replace an enrollment admitted after it.
     active.get(record.environmentId)?.close();
     const enrollmentAbort = new AbortController();
-    const enrollmentSignal = AbortSignal.any([signal, enrollmentAbort.signal]);
+    const enrollmentSignal = AbortSignal.any([
+      signal,
+      enrollmentAbort.signal,
+      ...(operationSignal ? [operationSignal] : []),
+    ]);
     const binding = {
       close: () => {
         if (active.get(record.environmentId) === binding) {
@@ -94,8 +100,81 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       },
     };
     active.set(record.environmentId, binding);
+    const current = () => {
+      enrollmentSignal.throwIfAborted();
+      const live = options.store.get(record.environmentId);
+      if (
+        active.get(record.environmentId) !== binding ||
+        live?.state !== "provisioning" ||
+        live.destroyRequestedAtMs !== null ||
+        live.provisionOperationId !== record.provisionOperationId ||
+        live.ownerEpoch !== record.ownerEpoch
+      ) {
+        throw new Error("Worker node enrollment is no longer provisioning");
+      }
+      return live;
+    };
+    return { binding, enrollmentSignal, current };
+  };
+
+  const grantRuntime = (
+    prepared: Awaited<ReturnType<typeof prepare>>,
+    enrollmentSignal: AbortSignal,
+    isAuthorized: () => boolean,
+  ): WorkerNodeRuntimePreparation => {
+    const artifact = prepared.artifact;
+    const capability = options.transfer.prepare({
+      artifact,
+      isAuthorized,
+      signal: enrollmentSignal,
+    });
+    const url = new URL(prepared.url);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.pathname = `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/${artifact.tarballSha256}`;
+    url.search = "";
+    url.hash = "";
+    return {
+      nodeBootstrap: {
+        url: url.toString(),
+        token: capability.token,
+        sha256: artifact.tarballSha256,
+        bytes: artifact.tarballBytes,
+        openclawVersion: artifact.openclawVersion,
+        enabledPluginIds: artifact.enabledPluginIds,
+        ...(prepared.tlsFingerprint ? { tlsFingerprint: prepared.tlsFingerprint } : {}),
+      },
+      signal: enrollmentSignal,
+    };
+  };
+
+  const prepareRuntime = async (
+    record: WorkerEnvironmentRecord,
+    operationSignal?: AbortSignal,
+  ): Promise<WorkerNodeRuntimePreparation> => {
+    const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
+      const owner = current();
+      const runtime = grantRuntime(prepared, enrollmentSignal, () => {
+        const live = current();
+        return live.nodeSetupId === owner.nodeSetupId && live.nodeDeviceId === owner.nodeDeviceId;
+      });
+      enrollmentClosers.set(runtime, binding.close);
+      return runtime;
+    } catch (error) {
+      binding.close();
+      throw error;
+    }
+  };
+
+  const begin = async (
+    record: WorkerEnvironmentRecord,
+    operationSignal?: AbortSignal,
+  ): Promise<WorkerNodeEnrollment> => {
+    const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
+    try {
+      const prepared = await prepare(record, enrollmentSignal);
+      requireCurrent();
       let current = options.store.ensureNodeEnrollment(record.environmentId);
       if (
         current.state !== "provisioning" ||
@@ -120,7 +199,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           setupId: current.nodeSetupId,
           profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
-        enrollmentSignal.throwIfAborted();
+        requireCurrent();
         if (issued.status === "completed") {
           current = options.store.ensureNodeEnrollment(record.environmentId);
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
@@ -138,7 +217,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             localTlsFingerprint: options.getLocalTlsFingerprint?.(),
             runCommandWithTimeout: commandRunner,
           });
-          enrollmentSignal.throwIfAborted();
+          requireCurrent();
           if (!resolved.ok) {
             throw new Error(resolved.error);
           }
@@ -168,30 +247,15 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           live.nodeDeviceId === owner.nodeDeviceId
         );
       };
-      const artifact = prepared.artifact;
-      const capability = options.transfer.prepare({
-        artifact,
-        isAuthorized,
-        signal: enrollmentSignal,
-      });
-      const url = new URL(gatewayUrl);
-      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-      url.pathname = `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/${artifact.tarballSha256}`;
-      url.search = "";
-      url.hash = "";
       const enrollment: WorkerNodeEnrollment = {
         ...mode,
-        openclawVersion: artifact.openclawVersion,
-        nodeBootstrap: {
-          url: url.toString(),
-          token: capability.token,
-          sha256: artifact.tarballSha256,
-          bytes: artifact.tarballBytes,
-          openclawVersion: artifact.openclawVersion,
-          enabledPluginIds: artifact.enabledPluginIds,
-          ...(tlsFingerprint ? { tlsFingerprint } : {}),
-        },
-        displayName: `Cloud worker ${owner.profileId}`.slice(0, 64),
+        ...grantRuntime(
+          { ...prepared, url: gatewayUrl, tlsFingerprint },
+          enrollmentSignal,
+          isAuthorized,
+        ),
+        openclawVersion: prepared.artifact.openclawVersion,
+        displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
@@ -265,8 +329,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepare: async (record: WorkerEnvironmentRecord) => {
       await prepare(record);
     },
+    prepareRuntime,
     begin,
     retire,
+    closeRuntime: (preparation: WorkerNodeRuntimePreparation) =>
+      enrollmentClosers.get(preparation)?.(),
     close: (enrollment: WorkerNodeEnrollment) => enrollmentClosers.get(enrollment)?.(),
     stop: () => {
       controller.abort();

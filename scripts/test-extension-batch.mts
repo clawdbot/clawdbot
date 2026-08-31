@@ -3,6 +3,7 @@
 // Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import pMap from "p-map";
+import { waitForever } from "../src/cli/wait.ts";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -368,10 +369,9 @@ export async function runExtensionBatchPlan(
         process.off("SIGINT", onSignal);
         if (termination.signal) {
           process.kill(process.pid, termination.signal);
-          // Give the re-raised signal a turn before a CLI caller exits with the numeric result.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          // Keep the loop alive for dependency signal handlers to finish cleanup
+          // and re-raise; a numeric return can win the race with signal delivery.
+          await waitForever();
         }
       }
     }

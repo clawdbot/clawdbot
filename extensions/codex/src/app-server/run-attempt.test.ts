@@ -3044,6 +3044,101 @@ describe("runCodexAppServerAttempt", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tool_search");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("function_call_output");
   });
+  it.each(["none", "heartbeat", "ordinary", "authorized"])(
+    "keeps private native history out of prompt acquisition and clones (%s)",
+    async (kind) => {
+      const marker = "synthetic-native-payload:";
+      const privateText = marker + "x".repeat(1024 * 1024);
+      const hook = vi.fn(() => ({ prependContext: "hook context" }));
+      initializeGlobalHookRunner(
+        createMockPluginRegistry(
+          kind === "none"
+            ? []
+            : [
+                {
+                  hookName:
+                    kind === "heartbeat" ? "heartbeat_prompt_contribution" : "before_prompt_build",
+                  ...(kind === "authorized" ? { requiresToolAuthority: true as const } : {}),
+                  handler: hook,
+                },
+              ],
+        ),
+      );
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(params, path.join(tempDir, "memory.sqlite"), "session-1");
+      await appendSqliteHistoryMessage(params, {
+        ...userMessage("previous visible request", 1),
+        __openclaw: { upstreamUserText: privateText },
+      } as ReturnType<typeof userMessage>);
+      const originalParse = JSON.parse;
+      let privateParseBytes = 0;
+      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes(marker)) {
+          privateParseBytes += text.length;
+        }
+        return originalParse(text, reviver);
+      });
+      const originalClone = structuredClone;
+      let historyClones = 0;
+      let privateCloneBytes = 0;
+      const cloneSpy = vi
+        .spyOn(globalThis, "structuredClone")
+        .mockImplementation((value, options) => {
+          const seen = new WeakSet<object>();
+          const visit = (node: unknown): void => {
+            if (typeof node === "string" && node.startsWith(marker)) {
+              privateCloneBytes += node.length;
+            }
+            if (!node || typeof node !== "object" || seen.has(node)) {
+              return;
+            }
+            seen.add(node);
+            if (
+              "role" in node &&
+              node.role === "user" &&
+              "content" in node &&
+              Array.isArray(node.content) &&
+              node.content[0]?.text === "previous visible request"
+            ) {
+              historyClones += 1;
+            }
+            for (const child of Object.values(node)) {
+              visit(child);
+            }
+          };
+          visit(value);
+          return originalClone(value, options);
+        });
+      try {
+        const harness = createStartedThreadHarness();
+        if (kind === "heartbeat") {
+          params.trigger = "heartbeat";
+        }
+        if (kind === "authorized") {
+          params.toolAuthorityFingerprint = "synthetic-authority";
+        }
+        const run = runCodexAppServerAttempt(params);
+        await harness.waitForMethod("turn/start");
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await run;
+        expect(privateParseBytes).toBe(0);
+        expect(privateCloneBytes).toBe(0);
+        if (kind === "none" || kind === "heartbeat") {
+          expect(historyClones).toBe(0);
+        } else {
+          expect(historyClones).toBeGreaterThan(0);
+        }
+        if (kind !== "none") {
+          expect(hook).toHaveBeenCalled();
+        }
+      } finally {
+        parseSpy.mockRestore();
+        cloneSpy.mockRestore();
+      }
+    },
+  );
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const llmInput = vi.fn();
     const beforePromptBuild = vi.fn(async () => ({

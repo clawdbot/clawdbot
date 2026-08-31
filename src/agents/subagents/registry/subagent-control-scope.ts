@@ -1,5 +1,4 @@
 /** Controller identity, authorization, and controlled-run read scope. */
-import { sortSubagentRuns } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isSubagentSessionKey,
@@ -18,6 +17,7 @@ import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.j
 import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { sortSubagentRuns } from "./subagent-run-view.js";
 
 /** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
@@ -148,7 +148,7 @@ export function listControlledSubagentRuns(
 
 export function ensureSubagentControllerOwnsRun(params: {
   cfg: OpenClawConfig;
-  controller: ResolvedSubagentController;
+  controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
   entry: SubagentRunRecord;
 }) {
   const owner = params.entry.controllerSessionKey?.trim() || params.entry.requesterSessionKey;
@@ -161,17 +161,6 @@ export function ensureSubagentControllerOwnsRun(params: {
     return undefined;
   }
   return "Subagents can only control runs spawned from their own session.";
-}
-
-export function isFinishedSubagentRunForSteer(
-  entry: SubagentRunRecord,
-  hasPendingDescendants: boolean,
-) {
-  return (
-    Boolean(entry.execution.endedAt) &&
-    entry.pauseReason !== "sessions_yield" &&
-    !hasPendingDescendants
-  );
 }
 
 export function getLatestOwnedSubagentRun(

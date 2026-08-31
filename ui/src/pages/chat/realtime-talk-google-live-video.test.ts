@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
 
 class FakeGoogleLiveWebSocket extends EventTarget {
@@ -58,7 +59,7 @@ class FakeAudioContext {
   async close(): Promise<void> {}
 }
 
-function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
+async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
   return new GoogleLiveRealtimeTalkTransport(
     {
       provider: "google",
@@ -76,6 +77,7 @@ function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: strin
       },
     },
     {
+      input: await prepareRealtimeTalkTestInput(),
       callbacks,
       client: { request: vi.fn(), addEventListener: vi.fn() } as never,
       sessionKey: "main",
@@ -166,7 +168,7 @@ describe("Google Live Video Talk", () => {
       .mockReturnValue("data:image/jpeg;base64,gemini-camera-frame");
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onStatus, onVideoStream });
+    const transport = await createTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
     expect(getUserMedia).toHaveBeenCalledOnce();
@@ -298,7 +300,7 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onVideoStream });
+    const transport = await createTransport({ onVideoStream });
 
     await startTransport(transport);
     await transport.setVideoEnabled(true);
@@ -330,7 +332,7 @@ describe("Google Live Video Talk", () => {
     });
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockReturnValueOnce(cameraPending);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    const transport = createTransport({});
+    const transport = await createTransport({});
 
     await startTransport(transport);
     const enabling = transport.setVideoEnabled(true);
@@ -375,7 +377,7 @@ describe("Google Live Video Talk", () => {
         throw new Error("stream callback failed");
       }
     });
-    const transport = createTransport({ onVideoStream });
+    const transport = await createTransport({ onVideoStream });
     const ws = await startTransport(transport);
     await transport.setVideoEnabled(true);
 
@@ -424,7 +426,7 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onVideoStream }, "front");
+    const transport = await createTransport({ onVideoStream }, "front");
 
     await startTransport(transport);
     await transport.setVideoEnabled(true);
@@ -474,7 +476,7 @@ describe("Google Live Video Talk", () => {
     });
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onStatus, onVideoStream });
+    const transport = await createTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
     onStatus.mockClear();

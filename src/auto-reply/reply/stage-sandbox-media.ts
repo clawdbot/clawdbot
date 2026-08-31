@@ -48,6 +48,7 @@ export async function stageSandboxMedia(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
@@ -67,6 +68,7 @@ export async function stageSandboxMedia(params: {
     ? null
     : await ensureSandboxWorkspaceForSession({
         config: cfg,
+        agentId: params.agentId,
         sessionKey,
         workspaceDir,
       });

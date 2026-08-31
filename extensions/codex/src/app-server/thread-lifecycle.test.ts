@@ -1717,28 +1717,48 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
-  it("does not overwrite native supervised turn settings", () => {
-    const params = createAttemptParams({ provider: "anthropic" });
-    params.thinkLevel = "off";
-    const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
-    params.model = {
-      ...createCodexTestModel("anthropic"),
-      compat,
-    };
-    const request = buildTurnStartParams(params, {
-      threadId: "thread-supervised",
-      cwd: "/repo",
-      model: "native-model",
-      modelProvider: "native-provider",
-      appServer: createAppServerOptions() as never,
-      preserveNativeTurnSettings: true,
-    });
+  it.each([undefined, "Permission change. Continue with updated permissions."])(
+    "does not overwrite native supervised turn settings (notice: %s)",
+    (notice) => {
+      const params = createAttemptParams({ provider: "anthropic" });
+      params.thinkLevel = "off";
+      const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
+      params.model = {
+        ...createCodexTestModel("anthropic"),
+        compat,
+      };
+      if (notice) {
+        params.permissionChange = {
+          owner: {},
+          baseExecOverrides: {},
+          notice,
+          request: vi.fn(),
+          applied: () => true,
+          recordApplied: vi.fn(),
+        };
+      }
+      const request = buildTurnStartParams(params, {
+        threadId: "thread-supervised",
+        cwd: "/repo",
+        model: "native-model",
+        modelProvider: "native-provider",
+        appServer: createAppServerOptions() as never,
+        preserveNativeTurnSettings: true,
+      });
 
-    expect(request).not.toHaveProperty("model");
-    expect(request).not.toHaveProperty("effort");
-    expect(request).not.toHaveProperty("collaborationMode");
-    expect(request).not.toHaveProperty("personality");
-  });
+      expect(request).not.toHaveProperty("model");
+      expect(request).not.toHaveProperty("effort");
+      expect(request).not.toHaveProperty("collaborationMode");
+      expect(request).not.toHaveProperty("personality");
+      expect(request.additionalContext).toEqual(
+        notice
+          ? {
+              openclaw_permission_change: { kind: "application", value: notice },
+            }
+          : undefined,
+      );
+    },
+  );
 
   it("honors an explicit top-level reviewer on thread start and resume", () => {
     const appServer = {

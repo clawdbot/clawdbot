@@ -163,30 +163,28 @@ function writeWatermark(
   sessionId: string,
   watermark: SessionTranscriptProjectionState,
   now: number,
+  updateExisting = false,
 ): SessionTranscriptProjectionState {
+  const kysely = getIndexKysely(db);
+  const values = {
+    active_event_count: watermark.activeEventCount,
+    active_message_count: watermark.activeMessageCount,
+    indexed_seq: watermark.indexedSeq,
+    leaf_event_id: watermark.leafEventId,
+    needs_rebuild: watermark.needsRebuild ? 1 : 0,
+    updated_at: now,
+  };
   executeSqliteQuerySync(
     db,
-    getIndexKysely(db)
-      .insertInto("session_transcript_index_state")
-      .values({
-        session_id: sessionId,
-        active_event_count: watermark.activeEventCount,
-        active_message_count: watermark.activeMessageCount,
-        indexed_seq: watermark.indexedSeq,
-        leaf_event_id: watermark.leafEventId,
-        needs_rebuild: watermark.needsRebuild ? 1 : 0,
-        updated_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.column("session_id").doUpdateSet({
-          active_event_count: watermark.activeEventCount,
-          active_message_count: watermark.activeMessageCount,
-          indexed_seq: watermark.indexedSeq,
-          leaf_event_id: watermark.leafEventId,
-          needs_rebuild: watermark.needsRebuild ? 1 : 0,
-          updated_at: now,
-        }),
-      ),
+    updateExisting
+      ? kysely
+          .updateTable("session_transcript_index_state")
+          .set(values)
+          .where("session_id", "=", sessionId)
+      : kysely
+          .insertInto("session_transcript_index_state")
+          .values({ session_id: sessionId, ...values })
+          .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values)),
   );
   return watermark;
 }
@@ -266,13 +264,7 @@ export function createTranscriptIndexAppenderInTransaction(
         // transcripts): stay unindexed until reconcile rebuilds the session.
         return true;
       }
-      watermark = applyForwardIndex(db, sessionId, params, {
-        activeEventCount: 0,
-        activeMessageCount: 0,
-        indexedSeq: -1,
-        leafEventId: null,
-        needsRebuild: false,
-      });
+      watermark = applyForwardIndex(db, sessionId, params, watermark);
       return false;
     }
     if (watermark.needsRebuild) {
@@ -328,7 +320,7 @@ function applyForwardIndex(
   db: DatabaseSync,
   sessionId: string,
   params: TranscriptIndexAppend,
-  watermark: SessionTranscriptProjectionState,
+  watermark: SessionTranscriptProjectionState | undefined,
 ): SessionTranscriptProjectionState {
   const entry = extractTranscriptIndexEntry(params.event, params.createdAt);
   if (entry) {
@@ -338,10 +330,10 @@ function applyForwardIndex(
   const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
   if (projectsActiveEvent) {
     insertActiveEventRow(db, {
-      activePosition: watermark.activeEventCount,
+      activePosition: watermark?.activeEventCount ?? 0,
       contextEligible: transcriptEventContextEligibility(params.event),
       eventSeq: params.seq,
-      messagePosition: projectsMessage ? watermark.activeMessageCount : null,
+      messagePosition: projectsMessage ? (watermark?.activeMessageCount ?? 0) : null,
       sessionId,
     });
   }
@@ -353,13 +345,16 @@ function applyForwardIndex(
     db,
     sessionId,
     {
-      activeEventCount: watermark.activeEventCount + (projectsActiveEvent ? 1 : 0),
-      activeMessageCount: watermark.activeMessageCount + (projectsMessage ? 1 : 0),
+      activeEventCount: (watermark?.activeEventCount ?? 0) + (projectsActiveEvent ? 1 : 0),
+      activeMessageCount: (watermark?.activeMessageCount ?? 0) + (projectsMessage ? 1 : 0),
       indexedSeq: params.seq,
-      leafEventId: advancesLeaf ? params.eventId : watermark.leafEventId,
+      leafEventId: advancesLeaf ? params.eventId : (watermark?.leafEventId ?? null),
       needsRebuild: false,
     },
     params.createdAt,
+    // The synchronous appender owns this row until its batch ends; initialization
+    // still upserts, while subsequent events avoid repeated conflict resolution.
+    watermark !== undefined,
   );
 }
 

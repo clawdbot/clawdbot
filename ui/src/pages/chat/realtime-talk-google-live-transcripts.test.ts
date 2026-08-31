@@ -9,13 +9,14 @@ import {
   startTransport,
 } from "./realtime-talk-google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 
 describe("Google Live browser transcript finality", () => {
   installGoogleLiveTestFixture();
 
   it("finalizes both live 3.1 spoken turns before the session closes", async () => {
     const onTranscript = vi.fn();
-    const transport = createTransport({ onTranscript });
+    const transport = await createTransport({ onTranscript });
     const ws = await startTransport(transport);
     for (const [input, output] of [
       ["Please reply with the single word glacier.", "Glacier."],
@@ -50,7 +51,12 @@ describe("Google Live browser transcript finality", () => {
         ),
         model: "gemini-2.5-flash-native-audio-preview-12-2025",
       },
-      { callbacks: { onTranscript }, client: createClient(), sessionKey: "main" },
+      {
+        input: await prepareRealtimeTalkTestInput(),
+        callbacks: { onTranscript },
+        client: createClient(),
+        sessionKey: "main",
+      },
     );
     const ws = await startTransport(transport);
     for (const transcription of [{ text: "Last " }, { text: "words" }, { finished: true }]) {
@@ -94,7 +100,7 @@ describe("Google Live browser transcript finality", () => {
     async ({ boundary }) => {
       const onTranscript = vi.fn();
       const onTalkEvent = vi.fn();
-      const transport = createTransport({ onTranscript, onTalkEvent });
+      const transport = await createTransport({ onTranscript, onTalkEvent });
       const ws = await startTransport(transport);
       onTalkEvent.mockClear();
       for (const serverContent of [
@@ -128,7 +134,7 @@ describe("Google Live browser transcript finality", () => {
   it("releases the UTF-8 transcript budget on finality and closes on overflow without persisting a partial", async () => {
     const onTranscript = vi.fn();
     const onStatus = vi.fn();
-    const transport = createTransport({ onTranscript, onStatus });
+    const transport = await createTransport({ onTranscript, onStatus });
     const ws = await startTransport(transport);
     const atLimit = "é".repeat(128 * 1024);
     for (const outputTranscription of [
