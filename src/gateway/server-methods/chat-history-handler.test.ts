@@ -81,6 +81,9 @@ describe("chat history consumption receipts", () => {
             { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
           ];
           expect(page.inputReceipts).toEqual(expected);
+          expect(page.inputConsumptions).toEqual([
+            { runId: "source-a", consumedByEventId: aggregate.inputId },
+          ]);
           expect(page.pendingInputs).toEqual({ items: [], total: 0 });
           expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
           const delta = await call({ inputRunIds, cursor: page.deltaCursor });
@@ -104,6 +107,7 @@ describe("chat history consumption receipts", () => {
           }
           const retainedPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(retainedPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
+          expect(retainedPage.inputConsumptions).toEqual([]);
           expect(retainedPage.pendingInputs).toMatchObject({
             total: 21,
             items: [{ runId: "retained-20" }],

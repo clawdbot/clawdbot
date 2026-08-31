@@ -345,6 +345,11 @@ async function handleChatHistoryRequest({
         )
       : []
     : undefined;
+  const inputConsumptions = inputReceipts?.flatMap((receipt) =>
+    receipt.state === "consumed"
+      ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
+      : [],
+  );
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -591,7 +596,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
-      ...(inputReceipts ? { inputReceipts } : {}),
+      ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -608,7 +613,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
-    ...(inputReceipts ? { inputReceipts } : {}),
+    ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

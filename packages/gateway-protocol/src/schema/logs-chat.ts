@@ -81,6 +81,16 @@ export const ChatInputReceiptsSchema = Type.Array(
 );
 export type ChatInputReceipts = Static<typeof ChatInputReceiptsSchema>;
 
+/** Consumed-only compatibility projection for existing v4 clients. */
+export const ChatInputConsumptionsSchema = Type.Array(
+  closedObject({
+    runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+    consumedByEventId: NonEmptyString,
+  }),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
+
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
  * payloads. There is no continuation loop: more than 200 raw events or the byte
@@ -96,6 +106,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   metadata: Type.Optional(Type.Unknown()),
   pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
   inputReceipts: Type.Optional(ChatInputReceiptsSchema),
+  inputConsumptions: Type.Optional(ChatInputConsumptionsSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */
