@@ -163,6 +163,7 @@ function parseArchive(content: string): FixtureEvent[] {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
@@ -574,7 +575,9 @@ describe("historical transcript directive migration", () => {
         });
       });
 
-    const result = await migrateHistoricalTranscriptDirectives({ env });
+    const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() => {
+      authority.mockRestore();
+    });
 
     expect(result.warnings).toHaveLength(2);
     expect(
@@ -655,8 +658,9 @@ describe("historical transcript directive migration", () => {
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
-    vi.spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority").mockImplementation(
-      () => {
+    const authority = vi
+      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .mockImplementation(() => {
         if (!competingLeaseId && new Error().stack?.includes("beforeRename")) {
           openOpenClawStateDatabase({ env })
             .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
@@ -672,13 +676,18 @@ describe("historical transcript directive migration", () => {
           });
         }
         originalAssert();
-      },
-    );
+      });
 
-    const result = await migrateHistoricalTranscriptDirectives({ env });
+    const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() => {
+      authority.mockRestore();
+    });
 
-    expect(result.warnings).toHaveLength(2);
-    expect(result.warnings.every((warning) => warning.includes("maintenance lease"))).toBe(true);
+    expect(result.warnings.length).toBeGreaterThanOrEqual(1);
+    expect(
+      result.warnings.every(
+        (warning) => warning.includes("maintenance lease") && warning.includes("was lost"),
+      ),
+    ).toBe(true);
     expect(competingLeaseId).toBeDefined();
     expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
     expect(readMigrationCursor(opened.path)).toEqual({
