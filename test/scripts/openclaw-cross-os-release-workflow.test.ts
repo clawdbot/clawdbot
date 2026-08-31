@@ -175,9 +175,13 @@ describe("cross-OS release checks workflow", () => {
     expect(baseline.run).toContain("contents/package.json?ref=${TARGET_SHA}");
     expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
     expect(baseline.run).toContain('--target-context-ref "$TARGET_CONTEXT_REF"');
+    expect(baseline.run).toContain('echo "value=${baseline#openclaw@}"');
     expect(installSmoke.needs).toEqual(["resolve_target"]);
     expect(installSmoke.with?.update_baseline_version).toBe(
       "${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}",
+    );
+    expect(readFileSync("scripts/docker/install-sh-smoke/run.sh", "utf8")).toContain(
+      '"${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"',
     );
   });
 

@@ -846,7 +846,7 @@ jobs:
           baseline="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
             --candidate-version "$candidate_version" \
             --target-context-ref "$TARGET_CONTEXT_REF")"
-          echo "value=${baseline}" >> "$GITHUB_OUTPUT"
+          echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
         env:
