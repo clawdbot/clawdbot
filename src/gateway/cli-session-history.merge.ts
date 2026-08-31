@@ -29,10 +29,13 @@ type ComparableHistoryMessage = {
   // CLI turn facts, derived from the same single read of each raw field, so
   // turn-level suppression adds no second pass over the messages.
   isCliAggregate?: boolean;
-  hasNonTextContent?: boolean;
   isToolResultOnly?: boolean;
-  provider?: string;
-  importedFrom?: string;
+  // The native turn a persisted aggregate flattens, as recorded by its producer.
+  cliNativeTurn?: CliNativeTurnRef;
+  // Native record identity of an imported row, kept apart from the composite
+  // dedupe key so aggregate matching can name a single record.
+  externalId?: string;
+  cliSessionId?: string;
   // Set when this imported block belongs to a turn that replaced a persisted
   // aggregate: it is then the only copy of that text, so weak text dedupe must
   // not discard it against an unrelated local message repeating it.
@@ -59,28 +62,24 @@ function normalizeContentBlockType(block: unknown): string | undefined {
   return normalized ? normalized.replace(/_/g, "") : undefined;
 }
 
-// One walk over the content blocks yields every fact the merge needs from them:
-// the display text, whether the row carries non-text blocks, and whether it is
-// the tool-result-only shape that continues an assistant turn.
+// One walk over the content blocks yields both facts the merge needs from them:
+// the display text, and whether the row is the tool-result-only shape that
+// continues an assistant turn rather than starting a new one.
 function summarizeContent(rawContent: unknown): {
-  hasNonText: boolean;
   textParts: string[];
   toolResultOnly: boolean;
 } {
   const directText = readStringValue(rawContent);
   if (directText !== undefined) {
-    return { hasNonText: false, textParts: [directText], toolResultOnly: false };
+    return { textParts: [directText], toolResultOnly: false };
   }
   if (!Array.isArray(rawContent)) {
-    return { hasNonText: false, textParts: [], toolResultOnly: false };
+    return { textParts: [], toolResultOnly: false };
   }
   const textParts: string[] = [];
-  let hasNonText = false;
   let toolResultOnly = rawContent.length > 0;
   for (const block of rawContent) {
-    const type = normalizeContentBlockType(block);
-    hasNonText ||= type !== undefined && type !== "text";
-    toolResultOnly &&= type === "toolresult";
+    toolResultOnly &&= normalizeContentBlockType(block) === "toolresult";
     if (block && typeof block === "object" && "text" in block) {
       const blockText = readStringValue(block.text);
       if (blockText !== undefined) {
@@ -88,7 +87,7 @@ function summarizeContent(rawContent: unknown): {
       }
     }
   }
-  return { hasNonText, textParts, toolResultOnly };
+  return { textParts, toolResultOnly };
 }
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
@@ -181,7 +180,7 @@ function prepareComparableMessage(
     timestamp?: unknown;
     api?: unknown;
     idempotencyKey?: unknown;
-    provider?: unknown;
+    cliNativeTurn?: unknown;
   };
   const role = readStringValue(record.role);
   const content = summarizeContent(record.content);
@@ -204,10 +203,10 @@ function prepareComparableMessage(
     text: comparableText.text,
     timestamp: asFiniteNumber(record.timestamp),
     isCliAggregate: isPersistedCliAggregate(record.api, record.idempotencyKey),
-    hasNonTextContent: content.hasNonText,
     isToolResultOnly: role === "user" && content.toolResultOnly,
-    provider: normalizeOptionalString(record.provider),
-    importedFrom,
+    cliNativeTurn: readCliNativeTurnRef(record.cliNativeTurn),
+    externalId: normalizeOptionalString(meta?.externalId),
+    cliSessionId: normalizeOptionalString(meta?.cliSessionId),
     entryId: normalizeOptionalString(meta?.id),
     hasImageMediaFacts: hasPersistedImageMediaFacts(role, meta),
   };
@@ -326,95 +325,75 @@ function isPersistedCliAggregate(rawApi: unknown, rawIdempotencyKey: unknown): b
   );
 }
 
+type CliNativeTurnRef = {
+  cliSessionId: string;
+  terminalRecordId: string;
+};
+
+/**
+ * Reads the producer-owned link from a persisted aggregate to the native turn
+ * it flattens. The CLI runner records it at the one point that sees both; an
+ * aggregate written before that existed, or by a backend with no native
+ * transcript, simply carries nothing and is never replaced.
+ */
+function readCliNativeTurnRef(value: unknown): CliNativeTurnRef | undefined {
+  const record = asOptionalRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const cliSessionId = normalizeOptionalString(record.cliSessionId);
+  const terminalRecordId = normalizeOptionalString(record.terminalRecordId);
+  return cliSessionId && terminalRecordId ? { cliSessionId, terminalRecordId } : undefined;
+}
+
+type ImportedAssistantTurn = {
+  cliSessionId?: string;
+  text: string;
+  entries: ComparableHistoryMessage[];
+};
+
 type PartialAssistantTurn = {
   fragments: string[];
   entries: ComparableHistoryMessage[];
-  hasNonTextContent: boolean;
-  importedFrom?: string;
-  terminalTimestamp?: number;
 };
-
-type AggregateCandidate = {
-  entry: ComparableHistoryMessage;
-  timestamp: number;
-};
-
-type TurnGroup = {
-  aggregateCandidates: AggregateCandidate[];
-  turns: { terminalTimestamp: number; entries: ComparableHistoryMessage[] }[];
-};
-
-// Keyed by the text a covering aggregate carries and then by producer, so each
-// aggregate reaches its candidates with two lookups instead of a scan that
-// grows with the imported history.
-type ImportedTurnIndex = Map<string, Map<string, TurnGroup>>;
-
-function resolveTurnGroup(index: ImportedTurnIndex, text: string, provider: string): TurnGroup {
-  let byProvider = index.get(text);
-  if (!byProvider) {
-    byProvider = new Map();
-    index.set(text, byProvider);
-  }
-  let group = byProvider.get(provider);
-  if (!group) {
-    group = { aggregateCandidates: [], turns: [] };
-    byProvider.set(provider, group);
-  }
-  return group;
-}
 
 /**
- * Indexes the imported assistant turns by the aggregate text that would cover
- * them. Reads no raw fields: every fact comes from the prepared entries.
+ * Indexes imported assistant turns by the native record their last message came
+ * from, which is the identity the producer stamped on the matching aggregate.
+ * Reads no raw fields: every fact comes from the prepared entries.
  */
 function indexImportedAssistantTurns(
   importedEntries: ComparableHistoryMessage[],
-): ImportedTurnIndex {
-  const index: ImportedTurnIndex = new Map();
+): Map<string, ImportedAssistantTurn> {
+  const index = new Map<string, ImportedAssistantTurn>();
   let current: PartialAssistantTurn | undefined;
   const closeTurn = (): void => {
     const turn = current;
     current = undefined;
-    if (!turn || turn.fragments.length === 0) {
+    const terminal = turn?.entries.at(-1);
+    // Only a turn whose last message kept its native record id can be named by
+    // an aggregate, and a turn already indexed under that id is not a new one.
+    if (!turn || !terminal?.externalId || index.has(terminal.externalId)) {
       return;
     }
-    // Turns that can never cover an aggregate stay out of the index instead of
-    // being re-rejected once per aggregate: no timestamp to place them in the
-    // dedupe window, no provider to match, or — for a lone text-only fragment —
-    // an exact-equality case the per-message dedupe already resolves by
-    // keeping the local copy.
-    if (turn.terminalTimestamp === undefined || turn.importedFrom === undefined) {
-      return;
-    }
-    if (turn.fragments.length < 2 && !turn.hasNonTextContent) {
-      return;
-    }
-    resolveTurnGroup(index, turn.fragments.join(" "), turn.importedFrom).turns.push({
-      terminalTimestamp: turn.terminalTimestamp,
+    index.set(terminal.externalId, {
+      ...(terminal.cliSessionId ? { cliSessionId: terminal.cliSessionId } : {}),
+      text: turn.fragments.join(" "),
       entries: turn.entries,
     });
   };
   for (const entry of importedEntries) {
     if (entry.role === "assistant") {
-      current ??= { fragments: [], entries: [], hasNonTextContent: false };
+      current ??= { fragments: [], entries: [] };
       current.entries.push(entry);
       if (entry.text !== undefined) {
         current.fragments.push(entry.text);
-      }
-      current.hasNonTextContent ||= entry.hasNonTextContent === true;
-      current.importedFrom ??= entry.importedFrom;
-      if (
-        entry.timestamp !== undefined &&
-        (current.terminalTimestamp === undefined || entry.timestamp > current.terminalTimestamp)
-      ) {
-        current.terminalTimestamp = entry.timestamp;
       }
       continue;
     }
     // A tool result the importer could not pair stays a user-role record, but
     // it continues the surrounding assistant turn rather than starting a new one.
     if (current && entry.isToolResultOnly) {
-      current.hasNonTextContent = true;
       continue;
     }
     closeTurn();
@@ -424,66 +403,43 @@ function indexImportedAssistantTurns(
 }
 
 /**
- * Pairs each persisted aggregate with the imported turn it duplicates. The
- * aggregate is written once the CLI turn completes, so within one text and
- * producer the two sides are matched in timestamp order: the earliest turn that
- * completed no more than the dedupe window before an aggregate owns it. Pairing
- * is one-to-one, so two genuinely repeated replies with identical text are only
- * both suppressed when the import actually holds both turns.
+ * Resolves each persisted aggregate against the native turn its producer named.
+ * Identity is the stamped record id, never text or timing, so an aggregate is
+ * only ever replaced by the turn it was actually written from. The text
+ * comparison that follows is a completeness check on that identified pair: a
+ * trimmed or partially imported turn no longer carries the aggregate's text,
+ * and the aggregate is kept as the durable copy.
  */
 function findCoveredAggregates(
   localEntries: ComparableHistoryMessage[],
   importedEntries: ComparableHistoryMessage[],
 ): Set<ComparableHistoryMessage> {
-  const groups = indexImportedAssistantTurns(importedEntries);
+  const turns = indexImportedAssistantTurns(importedEntries);
+  const covered = new Set<ComparableHistoryMessage>();
+  const claimedTurns = new Set<string>();
   for (const entry of localEntries) {
-    if (
-      entry.role !== "assistant" ||
-      entry.isCliAggregate !== true ||
-      // A local row that already carries an external identity came from a
-      // previous import, so it is not a locally persisted aggregate.
-      entry.externalIdentityKey !== undefined ||
-      entry.provider === undefined ||
-      entry.text === undefined ||
-      entry.timestamp === undefined
-    ) {
+    if (entry.role !== "assistant" || entry.isCliAggregate !== true) {
       continue;
     }
-    groups
-      .get(entry.text)
-      ?.get(entry.provider)
-      ?.aggregateCandidates.push({ entry, timestamp: entry.timestamp });
-  }
-
-  const covered = new Set<ComparableHistoryMessage>();
-  for (const byProvider of groups.values()) {
-    for (const group of byProvider.values()) {
-      if (group.aggregateCandidates.length === 0) {
-        continue;
-      }
-      group.turns.sort((left, right) => left.terminalTimestamp - right.terminalTimestamp);
-      group.aggregateCandidates.sort((left, right) => left.timestamp - right.timestamp);
-      let turnIndex = 0;
-      let aggregateIndex = 0;
-      while (turnIndex < group.turns.length && aggregateIndex < group.aggregateCandidates.length) {
-        const turn = group.turns[turnIndex]!;
-        const aggregate = group.aggregateCandidates[aggregateIndex]!;
-        const elapsed = aggregate.timestamp - turn.terminalTimestamp;
-        if (elapsed < 0) {
-          aggregateIndex += 1;
-          continue;
-        }
-        if (elapsed > DEDUPE_TIMESTAMP_WINDOW_MS) {
-          turnIndex += 1;
-          continue;
-        }
-        covered.add(aggregate.entry);
-        for (const entry of turn.entries) {
-          entry.claimedAggregate = true;
-        }
-        turnIndex += 1;
-        aggregateIndex += 1;
-      }
+    // A local row that already carries an external identity came from a
+    // previous import, so it is not a locally persisted aggregate.
+    const ref = entry.externalIdentityKey === undefined ? entry.cliNativeTurn : undefined;
+    // Turns are consumed one-to-one: a second aggregate naming the same record
+    // is a different turn the import does not hold.
+    if (!ref || claimedTurns.has(ref.terminalRecordId)) {
+      continue;
+    }
+    const turn = turns.get(ref.terminalRecordId);
+    if (!turn || turn.cliSessionId !== ref.cliSessionId) {
+      continue;
+    }
+    if (entry.text === undefined || turn.text !== entry.text) {
+      continue;
+    }
+    claimedTurns.add(ref.terminalRecordId);
+    covered.add(entry);
+    for (const claimed of turn.entries) {
+      claimed.claimedAggregate = true;
     }
   }
   return covered;
@@ -513,13 +469,16 @@ export function mergeImportedChatHistoryMessages(params: {
   );
   // The aggregate and the imported native blocks are two shapes of the same
   // turn, so per-message equality can never pair them and the turn renders
-  // twice (openclaw/openclaw#123792). Dropping the covered aggregate keeps the
-  // native blocks, which are the copy that carries the tool calls.
+  // twice (openclaw/openclaw#123792). The producer records which native turn
+  // each aggregate flattens, so the duplicate is resolved by that recorded
+  // identity; dropping the covered aggregate keeps the native blocks, which
+  // are the copy that carries the tool calls.
   //
   // Grouping needs every imported row prepared up front, which only pays for
-  // itself when a local aggregate could actually be covered. A session without
-  // one keeps the lazy, skip-on-identity path below exactly as it is.
-  const importedEntries = localEntries.some((entry) => entry.isCliAggregate)
+  // itself when some local aggregate actually names a native turn. Every other
+  // session — including every aggregate persisted before the producer recorded
+  // that link — keeps the lazy, skip-on-identity path below exactly as it is.
+  const importedEntries = localEntries.some((entry) => entry.cliNativeTurn)
     ? params.importedMessages.map((message, index) =>
         prepareComparableMessage(
           message,
