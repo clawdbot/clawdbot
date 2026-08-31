@@ -6,14 +6,14 @@ scenario:
   coverage:
     primary:
       - channels.outbound-group-reply
-  objective: Preserve attributed HTML block boundaries and literal code through a real Telegram group message-tool delivery.
+  objective: Preserve attributed HTML block boundaries and literal code in Telegram message-tool replies while recording auxiliary progress.
   gatewayConfigPatch:
     messages:
       groupChat:
         visibleReplies: message_tool
   successCriteria:
     - The mock provider calls message(action=send) with the complete attributed HTML and literal code.
-    - Default Telegram delivery sends exactly one Bot API message with both block boundaries and an escaped inline code element.
+    - Default Telegram delivery sends one payload reply with both block boundaries and an escaped inline code element; auxiliary progress remains recorded.
     - Each group turn settles with exactly one durably recorded successful message-tool result.
   docsRefs:
     - docs/channels/telegram.md
@@ -24,6 +24,7 @@ scenario:
     - extensions/telegram/src/telegram-text-delivery.ts
   execution:
     kind: flow
+    retryCount: 0
     channel: telegram
     suiteIsolation: isolated
     isolationReason: The message-tool-only group policy and per-case session counts belong to this delivery proof.
@@ -32,6 +33,7 @@ scenario:
       requiredProviderMode: mock-openai
       requiredChannelDriver: crabline
       senderId: "100001"
+      replyPrefix: before
       cases:
         - name: attributed paragraph
           conversationId: "-1001234567891"
@@ -98,7 +100,7 @@ flow:
                   - ref: state
                   - lambda:
                       params: [candidate]
-                      expr: "candidate.direction === 'outbound' && candidate.conversation.id === fixture.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId"
+                      expr: "candidate.direction === 'outbound' && candidate.conversation.id === fixture.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId && candidate.text.startsWith(config.replyPrefix)"
                   - 45000
               - assert:
                   expr: outbound.text === fixture.expected
@@ -121,10 +123,13 @@ flow:
               - set: replies
                 value:
                   expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === fixture.conversationId)"
+              - set: payloadReplies
+                value:
+                  expr: "replies.filter((message) => message.text.startsWith(config.replyPrefix))"
               - assert:
-                  expr: replies.length === 1
-                  message: the group turn must deliver exactly one visible reply
+                  expr: payloadReplies.length === 1
+                  message: the group turn must deliver exactly one payload reply
               - set: proofs
                 value:
-                  expr: "proofs.concat([{ case: fixture.name, sessionKey, providerToolText: toolRequest.plannedToolArgs.message, botApiText: outbound.text, outboundMessages: replies.length, successfulMessageTools: transcriptSummary.successfulToolCallCounts.message }])"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', transport: 'Crabline Telegram Bot API', richMessages: 'default', cases: proofs })"
+                  expr: "proofs.concat([{ case: fixture.name, sessionKey, providerToolText: toolRequest.plannedToolArgs.message, botApiText: outbound.text, payloadReplies: payloadReplies.length, auxiliaryChannelEvents: replies.filter((message) => !message.text.startsWith(config.replyPrefix)).map((message) => ({ id: message.id, text: message.text, deleted: message.deleted === true })), successfulMessageTools: transcriptSummary.successfulToolCallCounts.message }])"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', transport: 'Crabline Telegram Bot API', richMessages: 'default', replyCorrelation: 'stable input prefix', cases: proofs })"
