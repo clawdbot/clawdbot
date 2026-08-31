@@ -390,6 +390,59 @@ describe("gateway-status command", () => {
     requireRecord(firstTarget.summary, "first target summary");
   });
 
+  it("stops probe phases when discovery exhausts the overall deadline", async () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: { mode: "local", auth: { token: "ltok" } },
+    } as never);
+    discoverGatewayBeacons.mockImplementationOnce(async (opts: unknown) => {
+      const deadlineMs = (opts as { deadlineMs?: number }).deadlineMs;
+      expect(deadlineMs).toBe(11_000);
+      now = deadlineMs ?? now;
+      return [];
+    });
+    const { runtime } = createRuntimeCapture();
+
+    try {
+      await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(startSshPortForward).not.toHaveBeenCalled();
+  });
+
+  it("passes positive remaining budgets to tunnel setup and probes", async () => {
+    let now = 20_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    resolveSshConfig.mockImplementationOnce(async () => {
+      now += 200;
+      return null;
+    });
+    discoverGatewayBeacons.mockImplementationOnce(async () => {
+      now += 100;
+      return [];
+    });
+    const { runtime } = createRuntimeCapture();
+
+    try {
+      await runGatewayStatus(runtime, {
+        timeout: "1000",
+        json: true,
+        ssh: "me@studio",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(requireSshForwardCall().timeoutMs).toBe(700);
+    expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(700);
+  });
+
   it("does not run Windows LAN firewall diagnostics during fast gateway status", async () => {
     readBestEffortConfig.mockResolvedValueOnce({
       gateway: {
@@ -1076,7 +1129,8 @@ describe("gateway-status command", () => {
     expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(15_000);
   });
 
-  it("uses --port for the local loopback probe target", async () => {
+  it("uses --port for the local loopback probe target within the remaining budget", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(30_000);
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     probeGateway.mockClear();
     readBestEffortConfig.mockResolvedValueOnce({
@@ -1087,7 +1141,11 @@ describe("gateway-status command", () => {
       },
     } as never);
 
-    await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
+    try {
+      await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     expect(runtimeErrors).toHaveLength(0);
     expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
@@ -1138,11 +1196,16 @@ describe("gateway-status command", () => {
     ]);
   });
 
-  it("passes the full caller timeout through to active configured remote probes", async () => {
+  it("bounds active configured remote probes by the remaining caller timeout", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(40_000);
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();
 
-    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+    try {
+      await runGatewayStatus(runtime, { timeout: "15000", json: true });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     const remoteProbeCall = requireProbeCall("wss://remote.example:18789");
     expect(remoteProbeCall.timeoutMs).toBe(15_000);

@@ -38,6 +38,7 @@ export async function runGatewayStatusProbePass(params: {
     sshAuto?: boolean;
   };
   overallTimeoutMs: number;
+  deadlineMs: number;
   discoveryTimeoutMs: number;
   wideAreaDomain?: string | null;
   baseTargets: GatewayStatusTarget[];
@@ -46,6 +47,7 @@ export async function runGatewayStatusProbePass(params: {
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
   localTlsFingerprint?: string;
+  now?: () => number;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -53,27 +55,39 @@ export async function runGatewayStatusProbePass(params: {
   sshTunnelStarted: boolean;
   sshTunnelError: string | null;
 }> {
-  const discoveryPromise = discoverGatewayBeacons({
-    timeoutMs: params.discoveryTimeoutMs,
-    wideAreaDomain: params.wideAreaDomain,
-  });
+  const now = params.now ?? Date.now;
+  const remainingMs = () => Math.floor(params.deadlineMs - now());
+  const discoveryBudget = Math.min(params.discoveryTimeoutMs, remainingMs());
+  const discoveryPromise =
+    discoveryBudget > 0
+      ? discoverGatewayBeacons({
+          timeoutMs: discoveryBudget,
+          deadlineMs: params.deadlineMs,
+          wideAreaDomain: params.wideAreaDomain,
+          now,
+        })
+      : Promise.resolve([]);
 
   let sshTarget = params.sshTarget;
   let sshTunnelError: string | null = null;
   let sshTunnelStarted = false;
 
   const tryStartTunnel = async () => {
-    if (!sshTarget) {
+    if (!sshTarget || remainingMs() <= 0) {
       return null;
     }
     try {
       const { startSshPortForward } = await params.loadSshTunnelModule();
+      const tunnelBudget = Math.min(1500, remainingMs());
+      if (tunnelBudget <= 0) {
+        return null;
+      }
       const tunnel = await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
         localPortPreferred: params.remotePort,
         remotePort: params.remotePort,
-        timeoutMs: Math.min(1500, params.overallTimeoutMs),
+        timeoutMs: tunnelBudget,
       });
       sshTunnelStarted = true;
       return tunnel;
@@ -88,6 +102,15 @@ export async function runGatewayStatusProbePass(params: {
   const [discovery, tunnelFirst] = await Promise.all([discoveryTask, tunnelTask]);
 
   if (!sshTarget && params.opts.sshAuto) {
+    if (remainingMs() <= 0) {
+      return {
+        discovery,
+        probed: [],
+        sshTarget,
+        sshTunnelStarted,
+        sshTunnelError,
+      };
+    }
     const { parseSshTarget } = await params.loadSshTunnelModule();
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
@@ -125,10 +148,20 @@ export async function runGatewayStatusProbePass(params: {
   try {
     const probed = await Promise.all(
       targets.map(async (target) => {
+        if (remainingMs() <= 0) {
+          return null;
+        }
         const authResolution = await resolveAuthForTarget(params.cfg, target, {
           token: readStringValue(params.opts.token),
           password: readStringValue(params.opts.password),
         });
+        const probeBudget = Math.min(
+          resolveProbeBudgetMs(params.overallTimeoutMs, target),
+          remainingMs(),
+        );
+        if (probeBudget <= 0) {
+          return null;
+        }
         const probe = await probeGateway({
           url: target.url,
           config: params.cfg,
@@ -147,7 +180,7 @@ export async function runGatewayStatusProbePass(params: {
             target.kind === "localLoopback" && target.url.startsWith("wss://")
               ? params.localTlsFingerprint
               : undefined,
-          timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
+          timeoutMs: probeBudget,
         });
         return {
           target,
@@ -161,7 +194,7 @@ export async function runGatewayStatusProbePass(params: {
 
     return {
       discovery,
-      probed,
+      probed: probed.filter((entry): entry is GatewayStatusProbedTarget => entry !== null),
       sshTarget,
       sshTunnelStarted,
       sshTunnelError,

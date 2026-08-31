@@ -66,10 +66,12 @@ export function resolveGatewayDiscoveryEndpoint(
 
 type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
+  deadlineMs?: number;
   domains?: string[];
   wideAreaDomain?: string | null;
   platform?: NodeJS.Platform;
   run?: typeof runCommandWithTimeout;
+  now?: () => number;
 };
 
 const DEFAULT_TIMEOUT_MS = 2000;
@@ -307,15 +309,24 @@ async function discoverViaDnsSd(
   domain: string,
   timeoutMs: number,
   run: typeof runCommandWithTimeout,
+  remainingMs?: () => number,
 ): Promise<GatewayBonjourBeacon[]> {
+  const browseBudget = remainingMs ? Math.min(timeoutMs, remainingMs()) : timeoutMs;
+  if (browseBudget <= 0) {
+    return [];
+  }
   const browse = await run(["dns-sd", "-B", GATEWAY_SERVICE_TYPE, domain], {
-    timeoutMs,
+    timeoutMs: browseBudget,
   });
   const instances = parseDnsSdBrowse(browse.stdout);
   const results: GatewayBonjourBeacon[] = [];
   for (const instance of instances) {
+    const resolveBudget = remainingMs ? Math.min(timeoutMs, remainingMs()) : timeoutMs;
+    if (resolveBudget <= 0) {
+      break;
+    }
     const resolved = await run(["dns-sd", "-L", instance, GATEWAY_SERVICE_TYPE, domain], {
-      timeoutMs,
+      timeoutMs: resolveBudget,
     });
     const parsed = parseDnsSdResolve(resolved.stdout, instance);
     if (parsed) {
@@ -329,12 +340,13 @@ async function discoverWideAreaViaTailnetDns(
   domain: string,
   timeoutMs: number,
   run: typeof runCommandWithTimeout,
+  now: () => number = Date.now,
 ): Promise<GatewayBonjourBeacon[]> {
   if (!domain || domain === "local.") {
     return [];
   }
-  const startedAt = Date.now();
-  const remainingMs = () => timeoutMs - (Date.now() - startedAt);
+  const startedAt = now();
+  const remainingMs = () => timeoutMs - (now() - startedAt);
 
   const tailscaleCandidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
   let ips: string[] = [];
@@ -575,6 +587,9 @@ export async function discoverGatewayBeacons(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const platform = opts.platform ?? process.platform;
   const run = opts.run ?? runCommandWithTimeout;
+  const now = opts.now ?? Date.now;
+  const deadlineMs = opts.deadlineMs;
+  const remainingMs = deadlineMs === undefined ? undefined : () => Math.floor(deadlineMs - now());
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
@@ -585,7 +600,7 @@ export async function discoverGatewayBeacons(
   try {
     if (platform === "darwin") {
       const perDomain = await Promise.allSettled(
-        domains.map(async (domain) => await discoverViaDnsSd(domain, timeoutMs, run)),
+        domains.map(async (domain) => await discoverViaDnsSd(domain, timeoutMs, run, remainingMs)),
       );
       const discovered = perDomain.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
 
@@ -595,9 +610,16 @@ export async function discoverGatewayBeacons(
         : false;
 
       if (wantsWideArea && !hasWideArea && wideAreaDomain) {
-        const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
-          () => [],
-        );
+        const fallbackBudget = remainingMs ? Math.min(timeoutMs, remainingMs()) : timeoutMs;
+        if (fallbackBudget <= 0) {
+          return discovered;
+        }
+        const fallback = await discoverWideAreaViaTailnetDns(
+          wideAreaDomain,
+          fallbackBudget,
+          run,
+          now,
+        ).catch(() => []);
         return [...discovered, ...fallback];
       }
 

@@ -60,6 +60,7 @@ export async function gatewayStatusCommand(
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
   const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs);
+  const deadlineMs = Date.now() + overallTimeoutMs;
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
@@ -85,13 +86,17 @@ export async function gatewayStatusCommand(
   }
 
   if (sshTarget) {
-    const resolved = await resolveSshTarget({
-      rawTarget: sshTarget,
-      identity: sshIdentity,
-      overallTimeoutMs,
-      loadSshConfigModule,
-      loadSshTunnelModule,
-    });
+    const remainingMs = Math.floor(deadlineMs - Date.now());
+    const resolved =
+      remainingMs > 0
+        ? await resolveSshTarget({
+            rawTarget: sshTarget,
+            identity: sshIdentity,
+            overallTimeoutMs: remainingMs,
+            loadSshConfigModule,
+            loadSshTunnelModule,
+          })
+        : null;
     if (resolved) {
       sshTarget = resolved.target;
       if (!sshIdentity && resolved.identity) {
@@ -118,6 +123,7 @@ export async function gatewayStatusCommand(
         cfg,
         opts,
         overallTimeoutMs,
+        deadlineMs,
         discoveryTimeoutMs,
         wideAreaDomain,
         baseTargets,

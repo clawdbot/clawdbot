@@ -134,6 +134,8 @@ describe("bonjour-discovery", () => {
     expect(browseCalls.map((c) => c.argv[3])).toContain("local.");
     expect(browseCalls.map((c) => c.argv[3])).toContain(WIDE_AREA_DOMAIN);
     expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
+    const resolveCalls = calls.filter((c) => c.argv[0] === "dns-sd" && c.argv[1] === "-L");
+    expect([...new Set(resolveCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
   it("decodes dns-sd octal escapes in TXT displayName", async () => {
@@ -188,6 +190,79 @@ describe("bonjour-discovery", () => {
     expect(beacon.instanceName).toBe("Studio Gateway");
     expect(beacon.displayName).toBe("Peter’s Mac Studio");
     expect(beacon.txt?.displayName).toBe("Peter’s Mac Studio");
+  });
+
+  it("shrinks Darwin resolve budgets against an aggregate deadline", async () => {
+    let now = 1_000;
+    const resolveBudgets: number[] = [];
+    const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
+      if (argv[1] === "-B") {
+        now += 100;
+        return {
+          stdout: [
+            "Add 2 3 local. _openclaw-gw._tcp. First Gateway",
+            "Add 2 3 local. _openclaw-gw._tcp. Second Gateway",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      resolveBudgets.push(options.timeoutMs);
+      now += 300;
+      return {
+        stdout: `${argv[2]}._openclaw-gw._tcp. can be reached at gateway.local:18789`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      };
+    });
+
+    await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 1_000,
+      deadlineMs: 2_000,
+      domains: ["local."],
+      run: run as unknown as typeof runCommandWithTimeout,
+      now: () => now,
+    });
+
+    expect(resolveBudgets).toEqual([900, 600]);
+  });
+
+  it("does not start another Darwin resolve after the aggregate deadline", async () => {
+    let now = 1_000;
+    const resolvedInstances: string[] = [];
+    const run = vi.fn(async (argv: string[]) => {
+      if (argv[1] === "-B") {
+        return {
+          stdout: [
+            "Add 2 3 local. _openclaw-gw._tcp. First Gateway",
+            "Add 2 3 local. _openclaw-gw._tcp. Second Gateway",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+      resolvedInstances.push(argv[2] ?? "");
+      now = 2_000;
+      return { stdout: "", stderr: "", code: 0, signal: null, killed: false };
+    });
+
+    await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 1_000,
+      deadlineMs: 2_000,
+      domains: ["local."],
+      run: run as unknown as typeof runCommandWithTimeout,
+      now: () => now,
+    });
+
+    expect(resolvedInstances).toEqual(["First Gateway"]);
   });
 
   it("rejects malformed and out-of-range advertised ports", async () => {
