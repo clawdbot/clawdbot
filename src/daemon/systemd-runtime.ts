@@ -26,6 +26,7 @@ import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 type SystemdServiceInfo = {
+  loadState?: string;
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -43,6 +44,10 @@ type SystemdServiceInfo = {
 function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
+  const loadState = entries.loadstate;
+  if (loadState) {
+    info.loadState = loadState;
+  }
   const activeState = entries.activestate;
   if (activeState) {
     info.activeState = activeState;
@@ -154,7 +159,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ];
   const res =
     installed?.scope === "system"
@@ -181,6 +186,12 @@ export async function readSystemdServiceRuntime(
         : "unknown";
   return {
     status,
+    // `systemctl show` succeeds for absent units. Preserve stopped status for
+    // staged definitions, but only affirm absence when no definition exists.
+    ...(normalizeLowercaseStringOrEmpty(parsed.loadState) === "not-found" &&
+    activeState === "inactive"
+      ? { missingUnit: !installed }
+      : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,

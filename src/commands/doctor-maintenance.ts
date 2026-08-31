@@ -1,4 +1,4 @@
-/** Coordinates explicit Doctor migrations with the managed Gateway lifecycle. */
+/** Coordinates explicit Doctor repair with the managed Gateway lifecycle. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -13,8 +13,11 @@ import {
   type PreManagedServiceStop,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import { createConfigIO } from "../config/io.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import {
+  resolveConfiguredAgentDatabaseCandidatePaths,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
@@ -22,8 +25,6 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
-import { detectLegacyStateMigrations } from "../infra/state-migrations.doctor.js";
-import { prepareLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
@@ -31,7 +32,6 @@ import {
   OpenClawDatabaseSchemaPreflightError,
 } from "../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db-schema-repair.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
@@ -39,7 +39,7 @@ import {
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 
-async function needsDoctorMaintenance(env: NodeJS.ProcessEnv): Promise<boolean> {
+async function assertDoctorMaintenanceSchemasCompatible(env: NodeJS.ProcessEnv): Promise<void> {
   // Core-only materialization avoids plugin runtime/state loading before the
   // current Gateway has relinquished ownership. Keep config env changes local.
   const snapshot = await createConfigIO({
@@ -54,25 +54,19 @@ async function needsDoctorMaintenance(env: NodeJS.ProcessEnv): Promise<boolean> 
       state: OPENCLAW_STATE_SCHEMA_VERSION,
       agent: OPENCLAW_AGENT_SCHEMA_VERSION,
     },
-    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+    configuredAgentDatabaseTargets: (registeredAgentDatabases) =>
+      resolveConfiguredAgentDatabaseTargets(cfg, {
+        env,
+        registeredDatabases: registeredAgentDatabases,
+      }),
+    configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(cfg, {
+      env,
+    }),
     verifyCurrentSchemaShape: true,
   });
   if (schemas.incompatible.length > 0) {
     throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible, { operation: "doctor" });
   }
-  if (
-    schemas.indeterminate.length > 0 ||
-    detectOpenClawStateDatabaseSchemaMigrations({ env }).length > 0
-  ) {
-    return true;
-  }
-  const detected = await detectLegacyStateMigrations({
-    cfg,
-    env,
-    doctorOnlyStateMigrations: true,
-    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: cfg, env }),
-  });
-  return detected.preview.length > 0;
 }
 
 function assertDoctorServiceSelection(env: NodeJS.ProcessEnv, serviceEnv: NodeJS.ProcessEnv): void {
@@ -120,9 +114,9 @@ export async function beginDoctorMaintenance(params: {
     return undefined;
   }
   const env = { ...process.env };
-  if (!(await needsDoctorMaintenance(env))) {
-    return undefined;
-  }
+  // Repair discovery can execute plugins and open writable state. Establish
+  // ownership for every explicit repair before running those inspections.
+  await assertDoctorMaintenanceSchemasCompatible(env);
   let stopped: PreManagedServiceStop | undefined;
   const coordinators: Array<{ release(): void }> = [];
   const release = async () => {
@@ -139,6 +133,7 @@ export async function beginDoctorMaintenance(params: {
   try {
     if (
       params.root &&
+      isDefaultInstallIdentity(env) &&
       !isServiceRepairExternallyManaged() &&
       (await shouldManageGatewayService(env))
     ) {
@@ -166,7 +161,7 @@ export async function beginDoctorMaintenance(params: {
         });
         assertDoctorMaintenanceInspection(stopped, env);
         if (stopped.stopped) {
-          params.runtime.log("Stopped the managed Gateway for Doctor state migration.");
+          params.runtime.log("Stopped the managed Gateway for Doctor repair.");
         }
       } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
         params.runtime.log(
@@ -221,7 +216,7 @@ export async function beginDoctorMaintenance(params: {
           `Doctor repaired state, but the managed Gateway did not become ready: ${renderRestartDiagnostics(health).join(" ")}. Run ${formatCliCommand("openclaw gateway status --deep", env)}.`,
         );
       }
-      params.runtime.log("Gateway restarted and verified after Doctor state migration.");
+      params.runtime.log("Gateway restarted and verified after Doctor repair.");
     },
   };
 }

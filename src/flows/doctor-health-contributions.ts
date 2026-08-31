@@ -430,7 +430,7 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { note } = await loadNoteModule();
   if (ctx.gatewayMaintenanceActive) {
-    note("Gateway health will be checked after state migration.", "Gateway");
+    note("Gateway health will be checked after Doctor repair.", "Gateway");
     ctx.gatewayHealthSkipped = true;
     ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
     return;
