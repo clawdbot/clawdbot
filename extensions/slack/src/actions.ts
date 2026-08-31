@@ -80,17 +80,6 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-export type SlackBookmark = {
-  id?: string;
-  title?: string;
-  link?: string;
-  emoji?: string;
-  type?: string;
-  channel_id?: string;
-  date_created?: number;
-  date_updated?: number;
-};
-
 function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfig): string {
   if (explicit?.trim()) {
     const token = resolveSlackBotToken(explicit);
@@ -230,7 +219,7 @@ function hasSlackPlatformError(err: unknown, code: string): boolean {
   return (data as { error?: unknown }).error === code;
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+export async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
   if (opts.client) {
     return opts.client;
   }
@@ -624,56 +613,7 @@ export async function listSlackPins(
   return (result.items ?? []) as SlackPin[];
 }
 
-export async function addSlackChannelBookmark(
-  channelId: string,
-  title: string,
-  link: string,
-  opts: SlackActionClientOpts & { emoji?: string } = {},
-): Promise<SlackBookmark> {
-  const client = await getClient(opts, "write");
-  const result = await client.bookmarks.add({
-    channel_id: channelId,
-    title,
-    link,
-    type: "link",
-    ...(opts.emoji ? { emoji: opts.emoji } : {}),
-  });
-  return (result.bookmark ?? {}) as SlackBookmark;
-}
-
-export async function listSlackChannelBookmarks(
-  channelId: string,
-  opts: SlackActionClientOpts = {},
-): Promise<SlackBookmark[]> {
-  const client = await getClient(opts);
-  const result = await client.bookmarks.list({ channel_id: channelId });
-  return (result.bookmarks ?? []) as SlackBookmark[];
-}
-
-export async function editSlackChannelBookmark(
-  channelId: string,
-  bookmarkId: string,
-  opts: SlackActionClientOpts & { title?: string; link?: string; emoji?: string } = {},
-): Promise<SlackBookmark> {
-  const client = await getClient(opts, "write");
-  const result = await client.bookmarks.edit({
-    channel_id: channelId,
-    bookmark_id: bookmarkId,
-    ...(opts.title ? { title: opts.title } : {}),
-    ...(opts.link ? { link: opts.link } : {}),
-    ...(opts.emoji ? { emoji: opts.emoji } : {}),
-  });
-  return (result.bookmark ?? {}) as SlackBookmark;
-}
-
-export async function removeSlackChannelBookmark(
-  channelId: string,
-  bookmarkId: string,
-  opts: SlackActionClientOpts = {},
-): Promise<void> {
-  const client = await getClient(opts, "write");
-  await client.bookmarks.remove({ channel_id: channelId, bookmark_id: bookmarkId });
-}
+export * from "./actions-bookmarks.js";
 
 type SlackFileInfoSummary = {
   id?: string;
