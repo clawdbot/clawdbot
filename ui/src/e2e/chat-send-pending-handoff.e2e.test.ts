@@ -1,5 +1,4 @@
 // Control UI E2E tests cover the pending-send bubble handoff to authoritative history.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -223,25 +222,27 @@ function isHealthyImageFrame(frame: FrameSample): boolean {
 
 suite.define(() => {
   it("does not replay a retired user bubble after a later history page omits it", async () => {
-    const proofDir = path.join(
-      process.cwd(),
-      ".artifacts/chat-input-ownership",
-      `receipt-replay-${Date.now()}`,
-    );
-    await mkdir(proofDir, { recursive: true });
+    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? suite.artifactDir
+      : undefined;
     await suite.withPage(
-      { viewport: { height: 800, width: 1200 }, recordVideo: { dir: proofDir } },
+      {
+        viewport: { height: 800, width: 1200 },
+        ...(proofDir ? { recordVideo: { dir: proofDir } } : {}),
+      },
       async ({ page: currentPage }) => {
+        const captureProof = (filename: string) =>
+          proofDir ? currentPage.screenshot({ path: path.join(proofDir, filename) }) : undefined;
         const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
         const { runId } = await openChatAndSubmitProbe(currentPage, gateway);
-        await currentPage.screenshot({ path: path.join(proofDir, "01-submitted.png") });
+        await captureProof("01-submitted.png");
         await finishRunAndSettle(currentPage, gateway, runId, {
           role: "user",
           content: [{ type: "text", text: PROBE_TEXT }],
           timestamp: Date.now(),
           __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
         });
-        await currentPage.screenshot({ path: path.join(proofDir, "02-canonical.png") });
+        await captureProof("02-canonical.png");
 
         const laterMessage = {
           role: "assistant",
@@ -273,7 +274,7 @@ suite.define(() => {
         await currentPage.getByText("Later history window.", { exact: true }).waitFor();
         const probe = currentPage.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
         await expect.poll(() => probe.count()).toBe(0);
-        await currentPage.screenshot({ path: path.join(proofDir, "03-later-page.png") });
+        await captureProof("03-later-page.png");
 
         await startFrameSampler(currentPage);
         await gateway.emitChatFinal({ runId, text: "Run complete." });
@@ -281,7 +282,7 @@ suite.define(() => {
         // retirement and trailing history reconciliation, not just the first tick.
         await currentPage.waitForTimeout(500);
         const frames = await stopFrameSampler(currentPage);
-        await currentPage.screenshot({ path: path.join(proofDir, "04-terminal-replay.png") });
+        await captureProof("04-terminal-replay.png");
         expect(frames.length).toBeGreaterThan(0);
         expect(frames.filter((frame) => frame.present)).toEqual([]);
         expect(await probe.count()).toBe(0);
