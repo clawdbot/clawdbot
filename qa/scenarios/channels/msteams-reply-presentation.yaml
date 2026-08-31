@@ -6,7 +6,9 @@ scenario:
   coverage:
     primary:
       - microsoft-teams.native-approval-cards
-  objective: Verify the Microsoft Teams inbound reply path resolves a reply's portable presentation into an Adaptive Card, and still keeps the producer's authored fallback text when Teams cannot render that presentation natively.
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify the Microsoft Teams inbound reply path resolves a reply's portable presentation, and keeps the producer's own text whenever a card would carry nothing Teams can render.
   successCriteria:
     - A /status reply reaches the Teams direct conversation through the loopback Bot Framework Connector.
     - No activity in that reply carries an Adaptive Card attachment, because every structured block degraded to text.
@@ -29,6 +31,7 @@ scenario:
     isolationReason: Drives a Teams direct conversation and leaves a pending question open until the step resolves it.
     summary: Send /status in a Teams direct conversation through the real Gateway and the real Microsoft Teams plugin, then inspect the activities that reached the loopback Bot Framework Connector.
     config:
+      requiredProviderMode: mock-openai
       conversationId: msteams-reply-authored-fallback-dm
       cardConversationId: msteams-reply-presentation-card
       command: /status
@@ -47,6 +50,9 @@ flow:
   steps:
     - name: keeps the authored status body and sends no card
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario reads markers only the mock provider answers
         - call: waitForGatewayHealthy
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
@@ -143,4 +149,4 @@ flow:
             expr: "config.promptNeedles.every((needle) => promptActivities.some((message) => String(message.text ?? '').includes(needle)))"
             message:
               expr: "`the reply lost the prose that tells the user how to answer: ${JSON.stringify(promptActivities.map((message) => message.text))}`"
-      detailsExpr: "`activities=${promptActivities.length} cards=0 first=${String(promptActivity.text ?? '').split('\\n')[0]}`"
+      detailsExpr: "`activities=${promptActivities.length} cards=${promptActivities.filter((message) => (message.attachments ?? []).some((attachment) => attachment.mimeType === config.adaptiveCardContentType)).length} first=${String(promptActivity.text ?? '').split('\\n')[0]}`"

@@ -1,12 +1,10 @@
 // Msteams plugin module implements presentation behavior.
 import {
   adaptMessagePresentationForChannel,
-  isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
   type MessagePresentation,
-  type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -170,9 +168,6 @@ export function renderMSTeamsPresentationPayload(params: {
   };
 }
 
-const countPresentationDataBlocks = (blocks: readonly MessagePresentationBlock[]): number =>
-  blocks.filter((block) => block.type === "table" || block.type === "chart").length;
-
 /** Reads the Adaptive Card a resolved reply carries, if any. */
 export const readMSTeamsPresentationCard = (payload: ReplyPayload) =>
   asOptionalRecord(asOptionalRecord(payload.channelData?.msteams)?.presentationCard);
@@ -203,18 +198,6 @@ export function prepareMSTeamsReplyPayload(
     presentation,
     capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   });
-  // Core's rule before its own renderer, applied so both Teams paths agree: once every
-  // data block has degraded to text and nothing interactive remains, the producer's
-  // authored fallback beats block flattening.
-  if (
-    textIsFallback &&
-    payload.text?.trim() &&
-    !presentation.blocks.some(isMessagePresentationInteractiveBlock) &&
-    countPresentationDataBlocks(presentation.blocks) > 0 &&
-    countPresentationDataBlocks(adapted.blocks) === 0
-  ) {
-    return rest;
-  }
   // The gate asks whether this reply fits one activity, so it reads the reply's own text
   // even when the card will not carry it: fallback prose still holds the mention entity
   // only the text path can send. A reply that fails it keeps the text path and degrades

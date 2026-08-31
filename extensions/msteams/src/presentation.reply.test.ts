@@ -294,6 +294,18 @@ describe("msteams reply presentation", () => {
     expect(renderReply({ text: SILENT_REPLY_TOKEN, presentation: PRESENTATION })).toEqual([]);
   });
 
+  it("does not let a silent reply reach the user through the control prose either", () => {
+    // Media blocks the card, so the controls degrade to text - and that rendering used to
+    // fold the sentinel into its first line, where the exact-match check no longer saw it.
+    const messages = renderReply({
+      text: SILENT_REPLY_TOKEN,
+      mediaUrl: "https://example.com/log.png",
+      presentation: PRESENTATION,
+    });
+
+    expect(messages).toEqual([{ mediaUrl: "https://example.com/log.png" }]);
+  });
+
   it("keeps the card's text as the message's delivered content", () => {
     const [message] = renderReply({ text: "Deploy finished", presentation: PRESENTATION });
 

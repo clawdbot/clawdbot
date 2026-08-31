@@ -128,6 +128,57 @@ describe("createTeamsReplyStreamController presentation remainders", () => {
     ).toEqual({ text: undefined, presentation: { blocks: [buttons] } });
   });
 
+  it("drops a streamed reply's buttons when Teams has no card action for them", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "Where should this deploy?\n\n- Staging" });
+
+    // ask_user's buttons carry `question` actions. Teams renders them as text, and that
+    // text is part of the prose the stream just delivered.
+    expect(
+      ctrl.preparePayload({
+        text: "Where should this deploy?\n\n- Staging",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Staging",
+                  action: {
+                    type: "question" as const,
+                    questionId: "deploy-target",
+                    optionValue: "Staging",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps only the media when a streamed fallback reply also carries some", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "Deploy finished\n\n- Open run" });
+
+    // A card cannot share an activity with media, so nothing native is left to send and
+    // re-rendering the controls as prose would repeat what the stream already showed.
+    expect(
+      ctrl.preparePayload({
+        text: "Deploy finished\n\n- Open run",
+        mediaUrl: "https://example.com/log.png",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+        },
+      }),
+    ).toEqual({ text: undefined, mediaUrl: "https://example.com/log.png" });
+  });
+
   it("drops a streamed reply's select, which Teams renders as the prose it just sent", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });

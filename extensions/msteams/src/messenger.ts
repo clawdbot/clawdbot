@@ -231,10 +231,22 @@ export function renderReplyPayloadsToMessages(
       channel: "msteams",
     });
 
-  for (const rawPayload of replies) {
+  for (const sourcePayload of replies) {
     // Core resolves presentations in the outbound send pipeline only, so replies the
     // monitor delivers itself still carry portable controls. Resolving here - the reply
     // path's one renderer - runs after the stream took the text Teams already showed.
+    // A silent reply is a sentinel, not content. Drop it - and the controls core attached
+    // to it - before the presentation is resolved: afterwards the sentinel is either a
+    // card body or folded into the prose the controls degrade to, and the exact-match
+    // check further down no longer recognises it. Media on the same payload still goes.
+    const rawPayload = isSilentReplyText(sourcePayload.text?.trim(), SILENT_REPLY_TOKEN)
+      ? {
+          ...sourcePayload,
+          text: undefined,
+          presentation: undefined,
+          presentationTextMode: undefined,
+        }
+      : sourcePayload;
     const payload = prepareMSTeamsReplyPayload(rawPayload, {
       renderCardText: (text) => {
         // A card is one activity: it cannot be chunked, and its body cannot carry the
@@ -255,10 +267,6 @@ export function renderReplyPayloadsToMessages(
       // text; it stays on the message as the content delivery records report. Fallback
       // prose is stripped from the card but is still what the message conveys.
       const content = payload.text ?? rawPayload.text;
-      // A silent reply is a sentinel, not content: it must not become the card's body.
-      if (isSilentReplyText(content?.trim(), SILENT_REPLY_TOKEN)) {
-        continue;
-      }
       out.push({ card, ...(content ? { text: content } : {}) });
       continue;
     }
