@@ -3,8 +3,7 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
-import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
+import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
@@ -200,17 +199,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!lifecycleGeneration) {
       return;
     }
-    const data = recordAgentRunOutputTokens({
+    const data = emitAgentRunOutputTokens({
       runId: params.runId,
       lifecycleGeneration,
       outputTokens,
-      emit: (usage) =>
-        emitAgentEventIfCurrent({
-          runId: params.runId,
-          lifecycleGeneration,
-          stream: "usage",
-          data: usage,
-        }),
     });
     if (!data || !params.onAgentEvent) {
       return;
@@ -423,6 +415,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();
+    state.toolAutoDeliveryMediaUrls.clear();
     state.pendingToolAudioAsVoice = false;
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
@@ -634,6 +627,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getToolAutoDeliveryMediaUrls: () => [...state.toolAutoDeliveryMediaUrls],
     hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,

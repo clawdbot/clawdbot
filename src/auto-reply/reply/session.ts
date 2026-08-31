@@ -68,7 +68,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";

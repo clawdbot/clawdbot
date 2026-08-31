@@ -206,12 +206,15 @@ function canSelfServeLocalPaths(params: {
   }
   const policySessionKey = resolveRuntimePolicySessionKey({
     cfg: params.cfg,
+    agentId: params.agentId,
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
   const sandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: policySessionKey,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: policySessionKey,
   }).sandboxed;
   if (
     (sandboxed && !params.stagedPathsAvailable) ||
@@ -555,6 +558,7 @@ export async function getReplyFromConfig(
       stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
       }),
@@ -1247,6 +1251,7 @@ export async function getReplyFromConfig(
         ctx,
         sessionCtx,
         cfg,
+        agentId,
         sessionKey,
         workspaceDir,
       }),

@@ -11,7 +11,7 @@ import { afterEach, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 
 export const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 export const LEASE_ID = operationLeaseId(OPERATION_ID);
@@ -105,9 +105,9 @@ export function createWarmProvider(
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
         return commandResult({
           stdout: JSON.stringify({
-            localState: "available",
+            localState: "metadata_available",
             providerState: "available",
-            nextAction: "fork",
+            nextAction: "fork_or_delete",
           }),
         });
       }
@@ -130,7 +130,7 @@ export function createWarmProvider(
 }
 
 export function openWarmImageStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmImageRecord>("crabbox", {
+  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
     namespace: "warm-images",
     maxEntries: 128,
     overflowPolicy: "reject-new",

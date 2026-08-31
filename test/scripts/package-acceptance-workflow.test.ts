@@ -1281,7 +1281,59 @@ type ProtectedPreflightConsumerParams = {
   liveTagSha?: string;
   preflightHeadBranch: string;
   preflightHeadSha: string;
+  producerBranches?: unknown[];
+  producerTagSha?: string;
+  producerTagType?: string;
+  mainComparisonStatus?: string;
+  publisherComparisonStatus?: string;
 };
+
+const PREFLIGHT_PRODUCER_GH_CASES = `
+case "$2" in
+  */contents/scripts/*)
+    source="\${2#*/contents/scripts/}"
+    source="\${source%%\\?*}"
+    base64 < "$MOCK_REPO_ROOT/scripts/$source"
+    exit 0
+    ;;
+  */git/ref/tags/*)
+    if [[ "$*" == *"--jq .object"* ]]; then
+      printf '%s\\n' "$MOCK_REMOTE_TAG_SHA"
+    else
+      printf '%s\\n' "$MOCK_PRODUCER_TAG"
+    fi
+    exit 0
+    ;;
+  */git/matching-refs/heads/*)
+    printf '%s\\n' "$MOCK_PRODUCER_BRANCHES"
+    exit 0
+    ;;
+  */compare/*)
+    if [[ "$2" == *"...main" ]]; then
+      printf '{"status":"%s"}\\n' "$MOCK_MAIN_COMPARISON"
+    else
+      printf '{"status":"%s"}\\n' "$MOCK_PUBLISHER_COMPARISON"
+    fi
+    exit 0
+    ;;
+esac
+`;
+
+function preflightProducerFixtureEnv(params: ProtectedPreflightConsumerParams) {
+  return {
+    MOCK_REPO_ROOT: REPO_ROOT,
+    MOCK_PRODUCER_TAG: JSON.stringify({
+      ref: `refs/tags/${params.preflightHeadBranch}`,
+      object: {
+        sha: params.producerTagSha ?? params.preflightHeadSha,
+        type: params.producerTagType ?? "commit",
+      },
+    }),
+    MOCK_PRODUCER_BRANCHES: JSON.stringify(params.producerBranches ?? []),
+    MOCK_MAIN_COMPARISON: params.mainComparisonStatus ?? "ahead",
+    MOCK_PUBLISHER_COMPARISON: params.publisherComparisonStatus ?? "ahead",
+  };
+}
 
 function runReleasePublishPreflightConsumerGuard(params: ProtectedPreflightConsumerParams) {
   const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
@@ -1302,6 +1354,7 @@ if [[ "$1" == "run" && "$2" == "download" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" ]]; then
+  ${PREFLIGHT_PRODUCER_GH_CASES}
   printf '%s\\n' "$MOCK_PREFLIGHT_RUN"
   exit 0
 fi
@@ -1313,6 +1366,7 @@ exit 64
     cwd: workdir,
     encoding: "utf8",
     env: {
+      ...preflightProducerFixtureEnv(params),
       GITHUB_OUTPUT: resolve(workdir, "github-output"),
       GITHUB_REF: params.currentRef,
       GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -1343,6 +1397,15 @@ function runOpenClawNpmPreflightConsumerGuard(params: ProtectedPreflightConsumer
   const workdir = tempDirs.make("openclaw-npm-preflight-consumer-");
   const binDir = resolve(workdir, "bin");
   mkdirSync(binDir);
+  const toolingDir = resolve(workdir, "trusted-workflow/scripts");
+  mkdirSync(resolve(toolingDir, "lib"), { recursive: true });
+  for (const source of [
+    "npm-preflight-tooling-identity.mjs",
+    "release-tooling-identity.mjs",
+    "lib/record-shared.mjs",
+  ]) {
+    copyFileSync(resolve(REPO_ROOT, "scripts", source), resolve(toolingDir, source));
+  }
   writeFileSync(
     resolve(binDir, "gh"),
     `#!/usr/bin/env bash
@@ -1352,10 +1415,7 @@ if [[ "$1" == "run" && "$2" == "view" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" ]]; then
-  if [[ "$2" == *"/git/ref/tags/"* ]]; then
-    printf '%s\\n' "$MOCK_REMOTE_TAG_SHA"
-    exit 0
-  fi
+  ${PREFLIGHT_PRODUCER_GH_CASES}
   printf '1\\n'
   exit 0
 fi
@@ -1381,6 +1441,9 @@ exit 64
   writeFileSync(
     resolve(binDir, "node"),
     `#!/usr/bin/env bash
+if [[ "$1" == *"/npm-preflight-tooling-identity.mjs" ]]; then
+  exec "$MOCK_NODE_EXECUTABLE" "$@"
+fi
 cat >/dev/null
 `,
     { mode: 0o755 },
@@ -1389,6 +1452,8 @@ cat >/dev/null
     cwd: workdir,
     encoding: "utf8",
     env: {
+      ...preflightProducerFixtureEnv(params),
+      MOCK_NODE_EXECUTABLE: process.execPath,
       EXPECTED_EXTENDED_STABLE_BRANCH: "",
       GITHUB_OUTPUT: resolve(workdir, "github-output"),
       GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -2039,79 +2104,39 @@ describe("package acceptance workflow", () => {
     }
   });
 
-  it("binds aggregate preflight consumption to the exact protected tooling tag and SHA", () => {
-    const workflowSha = "a".repeat(40);
-    const workflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    const valid = runReleasePublishPreflightConsumerGuard({
-      currentRef: `refs/tags/${workflowTag}`,
-      currentWorkflowSha: workflowSha,
-      preflightHeadBranch: workflowTag,
-      preflightHeadSha: workflowSha,
-    });
-    expect(valid.status, valid.stderr).toBe(0);
+  it.each([
+    ["aggregate", runReleasePublishPreflightConsumerGuard],
+    ["core npm", runOpenClawNpmPreflightConsumerGuard],
+  ] as const)(
+    "binds %s historical preflight consumption to independent producer provenance",
+    (_name, run) => {
+      const producerSha = "a".repeat(40);
+      const producerTag = `release-publish/${producerSha.slice(0, 12)}-123`;
+      const publisherSha = "b".repeat(40);
+      const params = {
+        currentRef: `refs/tags/release-publish/${publisherSha.slice(0, 12)}-456`,
+        currentWorkflowSha: publisherSha,
+        preflightHeadBranch: producerTag,
+        preflightHeadSha: producerSha,
+      };
+      const valid = run(params);
+      expect(valid.status, valid.stderr).toBe(0);
 
-    for (const rejected of [
-      {
-        currentRef: `refs/tags/${workflowTag}`,
-        preflightHeadBranch: `${workflowTag}-wrong`,
-        preflightHeadSha: workflowSha,
-      },
-      {
-        currentRef: `refs/tags/${workflowTag}`,
-        preflightHeadBranch: workflowTag,
-        preflightHeadSha: "b".repeat(40),
-      },
-      {
-        currentRef: `refs/heads/${workflowTag}`,
-        preflightHeadBranch: workflowTag,
-        preflightHeadSha: workflowSha,
-      },
-    ]) {
-      const result = runReleasePublishPreflightConsumerGuard({
-        ...rejected,
-        currentWorkflowSha: workflowSha,
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("exact protected release-publish tag");
-    }
-  });
-
-  it("binds core npm preflight consumption to the exact protected tooling tag and SHA", () => {
-    const workflowSha = "a".repeat(40);
-    const workflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    const valid = runOpenClawNpmPreflightConsumerGuard({
-      currentRef: `refs/tags/${workflowTag}`,
-      currentWorkflowSha: workflowSha,
-      preflightHeadBranch: workflowTag,
-      preflightHeadSha: workflowSha,
-    });
-    expect(valid.status, valid.stderr).toBe(0);
-
-    for (const rejected of [
-      {
-        currentRef: `refs/tags/${workflowTag}`,
-        preflightHeadBranch: `${workflowTag}-wrong`,
-        preflightHeadSha: workflowSha,
-      },
-      {
-        currentRef: `refs/tags/${workflowTag}`,
-        preflightHeadBranch: workflowTag,
-        preflightHeadSha: "b".repeat(40),
-      },
-      {
-        currentRef: `refs/heads/${workflowTag}`,
-        preflightHeadBranch: workflowTag,
-        preflightHeadSha: workflowSha,
-      },
-    ]) {
-      const result = runOpenClawNpmPreflightConsumerGuard({
-        ...rejected,
-        currentWorkflowSha: workflowSha,
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("exact protected release-publish tag");
-    }
-  });
+      for (const rejected of [
+        { preflightHeadBranch: `${producerTag}-wrong` },
+        { preflightHeadSha: "c".repeat(40) },
+        { producerTagSha: "c".repeat(40) },
+        { producerTagType: "tag" },
+        { producerBranches: [{ ref: `refs/heads/${producerTag}` }] },
+        { mainComparisonStatus: "diverged" },
+        { publisherComparisonStatus: "behind" },
+      ]) {
+        const result = run({ ...params, ...rejected });
+        expect(result.status, JSON.stringify(rejected)).toBe(1);
+        expect(result.stderr).toMatch(/protected|reachable/u);
+      }
+    },
+  );
 
   it("rejects a protected tooling tag moved after request validation and environment approval", () => {
     const workflowSha = "a".repeat(40);
@@ -3257,7 +3282,6 @@ printf 'core_failed=%s\n' "$failed"
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
-    expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
     expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
       "published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}",
@@ -3743,7 +3767,7 @@ printf 'core_failed=%s\n' "$failed"
     }
   });
 
-  it("keeps exhaustive update migration as a separate manual package gate", () => {
+  it("defaults update migration to stable with optional historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
@@ -3752,7 +3776,12 @@ printf 'core_failed=%s\n' "$failed"
     expect(workflow).toContain("source: ref");
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain("docker_lanes: update-migration");
-    expect(workflow).toContain("default: all-since-2026.4.23");
+    expect(
+      readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs?.baselines,
+    ).toMatchObject({
+      default: "",
+      required: false,
+    });
     expect(workflow).toContain("default: plugin-deps-cleanup");
     expect(workflow).toContain("telegram_mode: none");
     expect(workflow).toContain("secrets: inherit");
@@ -5755,9 +5784,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
-    expect(workflow).toContain(
-      "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
-    );
+    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBeUndefined();
     expect(workflow).toContain(
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );

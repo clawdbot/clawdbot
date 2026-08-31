@@ -12,15 +12,11 @@ import {
   type SessionEntryCanonicalReplacement,
 } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
-import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { ensureSessionGroupRegistered } from "../session-groups.js";
-import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
@@ -32,23 +28,24 @@ import {
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
   prepareSessionPatchWorktreeTransition,
+  releaseSessionPatchArchive,
   type SessionPatchArchivePreparation,
   type SessionPatchArchiveTarget,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
+import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
 import {
   createCommitGuard,
   sessionChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
-import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
-import { resolveSessionWorkerPlacementPatchError, sessionLog } from "./sessions-shared.js";
+import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
+import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -66,6 +63,7 @@ type PreparedPatchTarget = SessionPatchArchiveTarget & {
   archivePreparation?: SessionPatchArchivePreparation;
   index: number;
   targetAgentId: string;
+  permissionChange?: ActiveSessionPermissionChange;
 };
 
 type MutationOutcome =
@@ -99,6 +97,10 @@ async function executeSessionPatchMutations(params: {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
+  const permissionRuntime =
+    "permissionMode" in params.patch
+      ? await import("./sessions-patch-permissions.runtime.js")
+      : undefined;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
@@ -131,6 +133,7 @@ async function executeSessionPatchMutations(params: {
   }
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
+  const permissionErrors = new Map<number, ErrorShape>();
   const prepared: PreparedPatchTarget[] = [];
   const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
@@ -250,40 +253,47 @@ async function executeSessionPatchMutations(params: {
   };
 
   if (prepared.length > 0) {
+    const releaseArchiveDrains = async () =>
+      prepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
     try {
+      // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
+      await Promise.all(
+        prepared
+          .filter((target) => target.fullPatch.archived === true)
+          .map(async (target) => {
+            try {
+              const result = await prepareSessionPatchArchive({
+                cfg,
+                commitGuard: params.targets[target.index]!.commitGuard,
+                context: params.context,
+                loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
+                ...(pluginOwnerId ? { pluginOwnerId } : {}),
+                target,
+              });
+              if (result.ok) {
+                target.archivePreparation = result.value;
+              } else {
+                outcomes[target.index] = result;
+              }
+            } catch (error) {
+              outcomes[target.index] = {
+                ok: false,
+                error: unexpectedPatchError(target.key, error),
+              };
+            }
+          }),
+      );
       await runExclusiveSessionLifecycleMutation({
         targets: prepared.map((target) => ({
           scope: target.storePath,
           identities: target.lifecycleIdentities,
         })),
         prepare: async () => {
-          await Promise.all(
-            prepared
-              .filter((target) => target.fullPatch.archived === true)
-              .map(async (target) => {
-                try {
-                  const result = await prepareSessionPatchArchive({
-                    cfg,
-                    commitGuard: params.targets[target.index]!.commitGuard,
-                    context: params.context,
-                    loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
-                    ...(pluginOwnerId ? { pluginOwnerId } : {}),
-                    target,
-                  });
-                  if (result.ok) {
-                    target.archivePreparation = result.value;
-                  } else {
-                    outcomes[target.index] = result;
-                  }
-                } catch (error) {
-                  outcomes[target.index] = {
-                    ok: false,
-                    error: unexpectedPatchError(target.key, error),
-                  };
-                }
-              }),
-          );
+          for (const target of prepared) {
+            target.archivePreparation?.drain.handoffToMutation();
+          }
         },
+        finalize: releaseArchiveDrains,
         run: async () => {
           const groups = new Map<string, PreparedPatchTarget[]>();
           for (const target of prepared) {
@@ -491,6 +501,20 @@ async function executeSessionPatchMutations(params: {
                           });
                           worktreeTransitions.set(target.index, transition);
                         }
+                        if (permissionRuntime && existingEntry?.sessionId) {
+                          const permission = permissionRuntime.prepareSessionPatchPermissionChange({
+                            context: params.context,
+                            sessionId: existingEntry.sessionId,
+                            sessionKey: target.canonicalKey,
+                            agentId: target.targetAgentId,
+                            assertCurrent: params.targets[target.index]!.commitGuard,
+                          });
+                          if (!permission.ok) {
+                            projectedOutcomes.push(permission);
+                            continue;
+                          }
+                          target.permissionChange = permission.change;
+                        }
                         const previousSessionKeys = candidateKeys.filter(
                           (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],
                         );
@@ -537,82 +561,45 @@ async function executeSessionPatchMutations(params: {
               }
             }),
           );
+          // Keep runtime acknowledgement in the mutation lane. A second browser
+          // must not persist a newer mode and then have this older update win.
+          for (const target of prepared) {
+            const outcome = outcomes[target.index];
+            if (!target.permissionChange || !outcome?.ok || !outcome.applied) {
+              continue;
+            }
+            const error = await target.permissionChange.apply(outcome.entry.permissionMode ?? null);
+            if (error) {
+              permissionErrors.set(target.index, error);
+            }
+          }
         },
       });
     } finally {
       for (const target of prepared) {
-        try {
-          target.archivePreparation?.drain.release();
-        } catch (error) {
-          sessionLog.warn(
-            `sessions.patch: archive drain release failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
-          );
-        }
+        target.permissionChange?.finish();
       }
+      await releaseArchiveDrains();
     }
   }
 
-  let patched = false;
-  const archivedSessionKeys = new Set<string>();
-  for (const target of prepared) {
-    const outcome = outcomes[target.index];
-    if (!outcome?.ok || !outcome.applied) {
-      continue;
-    }
-    triggerSessionPatchHook({
-      cfg,
-      sessionEntry: outcome.entry,
-      sessionKey: target.canonicalKey,
-      patch: target.fullPatch,
-    });
-    persistSessionPatchModelSelection({
-      cfg,
-      callerScopes,
-      entry: outcome.entry,
-      patch: target.fullPatch,
-      sessionKey: target.canonicalKey,
-      targetAgentId: target.targetAgentId,
-    });
-    emitSessionsChanged(params.context, {
-      sessionKey: target.canonicalKey,
-      ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
-      reason: "patch",
-    });
-    patched = true;
-    if (target.fullPatch.archived === true) {
-      archivedSessionKeys.add(target.canonicalKey);
-    }
-  }
+  await publishSessionPatchEffects({
+    cfg,
+    context: params.context,
+    callerScopes,
+    callerCanManageCron,
+    category: params.patch.category,
+    targets: prepared.flatMap((target) => {
+      const outcome = outcomes[target.index];
+      return outcome?.ok && outcome.applied ? [{ target, entry: outcome.entry }] : [];
+    }),
+  });
 
-  const category = params.patch.category;
-  if (patched && typeof category === "string" && category.trim()) {
-    // A first-use category is a group-catalog mutation: clients reload the
-    // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" });
-    }
+  // Runtime application can fail after commit. Publish every saved field's
+  // normal effects before returning the application error to the caller.
+  for (const [index, error] of permissionErrors) {
+    outcomes[index] = { ok: false, error };
   }
-  if (callerCanManageCron && archivedSessionKeys.size > 0) {
-    try {
-      const disabledBySession = await disableCronJobsBoundToSessions({
-        cron: params.context.cron,
-        cfg,
-        sessionKeys: [...archivedSessionKeys],
-      });
-      for (const [sessionKey, disabledJobIds] of disabledBySession) {
-        if (disabledJobIds.length > 0) {
-          sessionLog.info(
-            `sessions.patch: disabled cron jobs bound to archived session ${sessionKey}: ${disabledJobIds.join(", ")}`,
-          );
-        }
-      }
-    } catch (error) {
-      sessionLog.warn(
-        `sessions.patch: failed to disable cron jobs for archived sessions: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-
   return {
     ok: true,
     cfg,

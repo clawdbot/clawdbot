@@ -222,7 +222,7 @@ suite.define(() => {
         );
         expect(transcriptRequest?.params).toEqual({
           sessionKey: runningSubagent.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
@@ -393,7 +393,7 @@ suite.define(() => {
         );
         expect(childHistoryRequest?.params).toEqual({
           sessionKey: first.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
 
         await gateway.emitGatewayEvent("task", {

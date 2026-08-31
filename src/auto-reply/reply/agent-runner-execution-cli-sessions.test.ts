@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
@@ -24,6 +25,7 @@ import {
   expectMockCallArgFields,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
@@ -522,9 +524,10 @@ describe("executeAgentTurn: CLI session routing", () => {
       MediaTypes: ["image/png"],
     } as never;
     followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder(preparedUserTurnMessage);
+    const storePath = makeTestSessionStorePath();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: 1,
     };
     const activeSessionStore = { main: sessionEntry };
@@ -534,7 +537,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       commandBody: "runtime prompt",
       transcriptCommandBody: "display prompt",
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath,
       getActiveSessionEntry: () => activeSessionStore.main,
     });
 
@@ -546,12 +549,12 @@ describe("executeAgentTurn: CLI session routing", () => {
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
       persistAssistantTranscript: true,
-      storePath: "/tmp/sessions.json",
+      storePath,
       sessionTarget: {
         agentId: "main",
         sessionId: "session",
         sessionKey: "main",
-        storePath: "/tmp/sessions.json",
+        storePath,
       },
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");

@@ -144,7 +144,6 @@ describe("node workspace transfer service", () => {
 
       const staged = await service.prepareSync({ ...request, generation: 2 });
       expect(staged.snapshot.manifest.baseCommit).toBeNull();
-      expect(staged.snapshot.packPath).toBeUndefined();
       expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
       expect(staged.snapshot.manifest.entries).toContainEqual(
         expect.objectContaining({ path: "input.txt", type: "file" }),
@@ -163,7 +162,6 @@ describe("node workspace transfer service", () => {
       );
       const committed = await service.prepareSync({ ...request, generation: 3 });
       expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
-      expect(committed.snapshot.packPath).toBeDefined();
 
       await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
       await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(

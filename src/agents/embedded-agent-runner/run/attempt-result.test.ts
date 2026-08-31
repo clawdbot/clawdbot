@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
 
 function completeResult(params?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
@@ -15,6 +18,8 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  toolAutoDeliveryMediaUrls?: string[];
+  messagingToolSentMediaUrls?: string[];
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
   toolMetas?: Array<{
@@ -32,6 +37,7 @@ function completeResult(params?: {
   return completeEmbeddedAttemptResult({
     attempt: {
       runId: "run-1",
+      admittedRunContext: { operationalRunInstance: TEST_OPERATIONAL_RUN_INSTANCE },
       sessionId: "session-1",
       provider: "test",
       modelId: "model",
@@ -52,11 +58,12 @@ function completeResult(params?: {
       getLastToolError: () => undefined,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
-      getMessagingToolSentMediaUrls: () => [],
+      getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
       getMessagingToolSourceReplyPayloads: () => [],
       getPendingToolMediaReply: () => params?.pendingToolMediaReply,
+      getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
       getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
       getSuccessfulCronAdds: () => [],
       getVisibleBlockReplyCount: () => 0,
@@ -327,6 +334,29 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+    const autoDeliveryResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        autoDeliveryResult,
+        autoDeliveryResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
+    const alreadySentResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+      messagingToolSentMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        alreadySentResult,
+        alreadySentResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual([]);
   });
 
   it("projects the latest MCP App channel view without result data", () => {

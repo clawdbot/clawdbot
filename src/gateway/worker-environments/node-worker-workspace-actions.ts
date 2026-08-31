@@ -7,6 +7,7 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import {
   measureLocalWorkspaceReconciliation,
   pruneWorkspaceHashMemo,
@@ -167,16 +168,11 @@ export function createNodeWorkerWorkspaceActions(params: {
         if (accepted.manifestRef === expectedRemoteRef) {
           return;
         }
-        const baseSnapshot = params.workspaceTransfer.getSnapshot(
-          params.environmentId,
-          request.baseManifestRef,
-        );
         const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
           manifest: accepted.manifest,
           manifestRef: accepted.manifestRef,
           rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
           root: await fsp.realpath(request.localPath),
-          ...(baseSnapshot?.packPath ? { packPath: baseSnapshot.packPath } : {}),
         });
         try {
           const published = await exec({
@@ -309,11 +305,13 @@ export function createNodeWorkerWorkspaceActions(params: {
           signal: params.ownerSignal,
         });
         try {
-          const originStartedAt = performance.now();
-          const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
-          recordNodeSyncPath(params.environmentId, params.sessionId, origin, originStartedAt);
-          if (origin.kind === "synced") {
-            return await workspace.finalizeSync(request, origin.result);
+          if (!request.projectKey) {
+            const originStartedAt = performance.now();
+            const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
+            recordNodeSyncPath(params.environmentId, params.sessionId, origin, originStartedAt);
+            if (origin.kind === "synced") {
+              return await workspace.finalizeSync(request, origin.result);
+            }
           }
           const transferred = await exec({
             argv: ["openclaw-internal-workspace-transfer"],
@@ -321,6 +319,14 @@ export function createNodeWorkerWorkspaceActions(params: {
               direction: "download",
               token: prepared.token,
               manifestRef: prepared.snapshot.manifestRef,
+              ...(request.projectKey && prepared.snapshot.manifest.baseCommit
+                ? {
+                    seedKey: workerProjectSeedKey({
+                      key: request.projectKey,
+                      baseCommit: prepared.snapshot.manifest.baseCommit,
+                    }),
+                  }
+                : {}),
             },
             timeoutMs: 10 * 60_000,
             transportRetry: "never",

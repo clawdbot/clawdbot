@@ -156,7 +156,11 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
   const direct = diagnosticSessionStates.get(key);
-  const sessionIdEntry = ref.sessionId ? findStateEntryBySessionId(ref.sessionId) : undefined;
+  // This owner merges id aliases before assigning them; an exact direct hit is already canonical.
+  const sessionIdEntry =
+    ref.sessionId && direct?.sessionId !== ref.sessionId
+      ? findStateEntryBySessionId(ref.sessionId)
+      : undefined;
   const existing = direct ?? sessionIdEntry?.[1];
   if (existing) {
     if (direct && sessionIdEntry && sessionIdEntry[1] !== direct) {

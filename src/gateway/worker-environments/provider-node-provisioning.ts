@@ -1,5 +1,10 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerLease, WorkerNodeEnrollment, WorkerProvider } from "../../plugins/types.js";
+import type {
+  WorkerLease,
+  WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
+  WorkerProvider,
+} from "../../plugins/types.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentTransitionPatch } from "./store.js";
@@ -12,6 +17,8 @@ type WorkerNodeProvisioningOptions = Pick<
   | "store"
   | "isStopping"
   | "prepareNodeBootstrap"
+  | "prepareNodeRuntime"
+  | "closeNodeRuntime"
   | "prepareNodeEnrollment"
   | "closeNodeEnrollment"
   | "ensureNodeWorkerBundle"
@@ -73,22 +80,66 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       return undefined;
     }
     const prepareNodeEnrollment = options.prepareNodeEnrollment;
+    const prepareNodeRuntime = options.prepareNodeRuntime;
     if (!prepareNodeEnrollment) {
       throw new Error("Worker node enrollment runtime is unavailable");
     }
     let open = true;
+    const controller = new AbortController();
+    let runtime: WorkerNodeRuntimePreparation | undefined;
+    let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
     let enrollment: WorkerNodeEnrollment | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
+    const assertCurrent = () => {
+      const current = options.store.get(record.environmentId);
+      if (
+        !open ||
+        options.isStopping() ||
+        current?.state !== "provisioning" ||
+        current.destroyRequestedAtMs !== null ||
+        current.provisionOperationId !== record.provisionOperationId ||
+        current.ownerEpoch !== record.ownerEpoch
+      ) {
+        controller.abort();
+        throw new DOMException("Worker provisioning operation is closed", "AbortError");
+      }
+    };
     return {
+      prepareRuntime: prepareNodeRuntime
+        ? async () => {
+            assertCurrent();
+            if (pending) {
+              throw new Error("Worker node enrollment has already begun");
+            }
+            pendingRuntime ??= prepareNodeRuntime(record, controller.signal).then((prepared) => {
+              try {
+                assertCurrent();
+                if (pending) {
+                  throw new Error("Worker node enrollment has already begun");
+                }
+              } catch (error) {
+                options.closeNodeRuntime?.(prepared);
+                throw error;
+              }
+              runtime = prepared;
+              return prepared;
+            });
+            return await pendingRuntime;
+          }
+        : undefined,
       begin: async () => {
-        if (!open || options.isStopping()) {
-          throw new Error("Worker provisioning operation is closed");
+        assertCurrent();
+        if (runtime) {
+          options.closeNodeRuntime?.(runtime);
+          runtime = undefined;
         }
-        pending ??= prepareNodeEnrollment(record).then((prepared) => {
+        pending ??= prepareNodeEnrollment(record, controller.signal).then((prepared) => {
           // A provider timeout can close this operation during artifact preparation.
-          if (!open || options.isStopping()) {
+          try {
+            assertCurrent();
+          } catch (error) {
             options.closeNodeEnrollment?.(prepared);
-            throw new Error("Worker provisioning operation is closed");
+            throw error;
           }
           enrollment = prepared;
           return prepared;
@@ -97,8 +148,14 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       },
       close: () => {
         open = false;
+        controller.abort();
+        if (runtime) {
+          options.closeNodeRuntime?.(runtime);
+          runtime = undefined;
+        }
         if (enrollment) {
           options.closeNodeEnrollment?.(enrollment);
+          enrollment = undefined;
         }
       },
     };

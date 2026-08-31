@@ -55,6 +55,7 @@ export function buildGatewaySessionEventFields(params: {
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
+    permissionModePending: sessionRow.permissionModePending ?? false,
     ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
       ? { sessionRoot: sessionRow.sessionRoot }
       : {}),

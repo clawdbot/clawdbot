@@ -1,10 +1,41 @@
-// Gateway concurrency benchmark tests cover CLI parsing and bounded percentile summaries.
+// Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
 import { spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
+
+function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
+  return {
+    controlUi: [],
+    durationMs: 10,
+    freshConnection: { error: null, latencyMs: 25, ok: true },
+    history: [],
+    memory: {
+      after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
+      before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
+      peakRssMb: 210,
+    },
+    messageSubscriptions: [],
+    messageSubscriptionsDuringLoad: [],
+    modelRequestCount: 1,
+    probeWarmup: { durationMs: 2, samples: [] },
+    pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
+    readyz: [],
+    sessionSeedDurationMs: 2,
+    sessionsList: [],
+    sessionUpdates: [],
+    setupDurationMs: 3,
+    turnCount: 8,
+    turnsDurationMs: 5,
+    ...overrides,
+  };
+}
 
 describe("gateway concurrency benchmark script", () => {
   it("parses benchmark controls without booting a gateway", () => {
@@ -111,34 +142,48 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
-  it("aggregates plugin metadata scans across measured runs", () => {
-    const createRun = (count: number, durations: number[]) => ({
-      controlUi: [],
-      durationMs: 10,
-      freshConnection: { error: null, latencyMs: 25, ok: true },
-      history: [],
-      memory: {
-        after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
-        before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
-        peakRssMb: 210,
-      },
-      messageSubscriptions: [],
-      messageSubscriptionsDuringLoad: [],
-      modelRequestCount: 1,
-      probeWarmup: { durationMs: 2, samples: [] },
-      pluginMetadataScans: {
-        count,
-        durationMs: testing.summarizeNumbers(durations),
-        totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
-      },
-      readyz: [],
-      sessionSeedDurationMs: 2,
-      sessionsList: [],
-      sessionUpdates: [],
-      setupDurationMs: 3,
-      turnCount: 1,
-      turnsDurationMs: 5,
+  it("does not report missing or incomplete timeline evidence as zero scans", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, "");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, '{"type":"span.end","name":"plugins.metadata.scan"');
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
     });
+  });
+
+  it("counts load spans by emission time even when buffered setup spans arrive later", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      const spans = [999, 1_000, 1_500, 2_000, 2_001].map((timestamp) => ({
+        schemaVersion: "openclaw.diagnostics.v1",
+        type: "span.end",
+        name: "plugins.metadata.scan",
+        durationMs: 10,
+        timestamp: new Date(timestamp).toISOString(),
+      }));
+      await writeFile(file, spans.map((span) => JSON.stringify(span)).join("\n") + "\n");
+
+      expect(
+        testing.summarizePluginMetadataScans(
+          testing.readDiagnosticsTimelineSpans(file, { from: 1_000, through: 2_000 }),
+        ),
+      ).toMatchObject({ count: 3, totalDurationMs: 30 });
+      await writeFile(file, JSON.stringify({ ...spans[0], timestamp: "invalid" }) + "\n");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow("invalid diagnostics");
+    });
+  });
+
+  it("aggregates plugin metadata scans across measured runs", () => {
+    const createRun = (count: number, durations: number[]) =>
+      createBenchmarkRun({
+        pluginMetadataScans: {
+          count,
+          durationMs: testing.summarizeNumbers(durations),
+          totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
+        },
+      });
 
     expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
       gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
@@ -159,6 +204,80 @@ describe("gateway concurrency benchmark script", () => {
       p99: 100,
     });
     expect(testing.summarizeNumbers([])).toBeNull();
+  });
+
+  it.each([
+    ["readyz", "readyz"],
+    ["controlUi", "Control UI"],
+    ["sessionsList", "sessions.list"],
+    ["history", "chat.history"],
+    ["messageSubscriptionsDuringLoad", "sessions.messages.subscribe"],
+    ["sessionUpdates", "sessions.patch"],
+  ] as const)("enforces the control budget for measured %s probes", (field, name) => {
+    const options = testing.parseOptions(["--max-control-ms", "2000"]);
+    const probe: BenchmarkRun["readyz"][number] = {
+      atMs: 0,
+      cpuCoreRatio: null,
+      degraded: null,
+      degradedSinceMs: null,
+      delayP99Ms: null,
+      error: null,
+      latencyMs: 2_000,
+      ok: true,
+      status: 200,
+      utilization: null,
+    };
+    const run = createBenchmarkRun({ [field]: [probe] });
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
+
+    probe.latencyMs = 2_576;
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      `Gateway ${name} probe exceeded 2000ms: ok=true latencyMs=2576.0 error=none`,
+    ]);
+
+    probe.latencyMs = 10;
+    probe.ok = false;
+    probe.error = "request failed";
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      `Gateway ${name} probe exceeded 2000ms: ok=false latencyMs=10.0 error=request failed`,
+    ]);
+    expect(testing.summarizeRuns([run]).budgetViolations).toEqual([]);
+  });
+
+  it("keeps setup probes outside the control budget and handshakes under their own budget", () => {
+    const slowProbe = { atMs: 0, error: null, latencyMs: 5_000, ok: true };
+    const slowReady = {
+      ...slowProbe,
+      cpuCoreRatio: null,
+      degraded: null,
+      degradedSinceMs: null,
+      delayP99Ms: null,
+      status: 200,
+      utilization: null,
+    };
+    const run = createBenchmarkRun({
+      freshConnection: slowProbe,
+      messageSubscriptions: [slowProbe],
+      probeWarmup: {
+        durationMs: 10_000,
+        samples: [{ controlUi: slowReady, readyz: slowReady, sessionsList: slowProbe }],
+      },
+      sessionSeedDurationMs: 10_000,
+      setupDurationMs: 20_000,
+      turnsDurationMs: 30_000,
+    });
+    const options = testing.parseOptions(["--max-control-ms", "2000"]);
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
+    options.maxHandshakeMs = 2_000;
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      "fresh Gateway connection exceeded 2000ms: ok=true latencyMs=5000.0 error=none",
+    ]);
+    run.freshConnection = { error: null, latencyMs: 2_000, ok: true };
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
+    run.freshConnection = { error: "unauthorized", latencyMs: 10, ok: false };
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      "fresh Gateway connection exceeded 2000ms: ok=false latencyMs=10.0 error=unauthorized",
+    ]);
   });
 
   it.each([
@@ -196,29 +315,7 @@ describe("gateway concurrency benchmark script", () => {
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
     const deadlines: number[] = [];
-    const sample = {
-      controlUi: [],
-      durationMs: 10,
-      freshConnection: { error: null, latencyMs: 25, ok: true },
-      history: [],
-      memory: {
-        after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
-        before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
-        peakRssMb: 210,
-      },
-      messageSubscriptions: [],
-      messageSubscriptionsDuringLoad: [],
-      modelRequestCount: 1,
-      pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
-      probeWarmup: { durationMs: 2, samples: [] },
-      readyz: [],
-      sessionSeedDurationMs: 2,
-      sessionsList: [],
-      sessionUpdates: [],
-      setupDurationMs: 3,
-      turnCount: 8,
-      turnsDurationMs: 5,
-    };
+    const sample = createBenchmarkRun();
 
     const runs = await testing.runBenchmarkSamples({
       now: (() => {

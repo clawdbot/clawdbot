@@ -53,17 +53,17 @@ const sharedManagementActions = [
   "Rename…",
   "Assign to me",
   "Assign to…",
-  "Set icon",
-  "Fork",
-  "Copy session ID",
+  "Icon & color",
+  "Fork conversation",
+  "Copy",
+  "Open in",
   "Move to group",
   "Archive session",
   "Delete…",
 ] as const;
-const compactManagementActions = sharedManagementActions
-  .filter((label) => label !== "Assign to me")
-  // Compact mode folds icon and color into one drill-down row.
-  .map((label) => (label === "Set icon" ? "Icon & color" : label));
+const compactManagementActions = sharedManagementActions.filter(
+  (label) => label !== "Assign to me",
+);
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
@@ -126,6 +126,7 @@ suite.define(() => {
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).hover();
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
@@ -149,6 +150,7 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).hover();
         await action.click();
         await dialog.waitFor({ state: "visible" });
         const socketCount = await gateway.getSocketCount();
@@ -219,6 +221,10 @@ suite.define(() => {
           fullPage: true,
           path: path.join(artifactDir, "03-mobile-menu.png"),
         });
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
+        await dropdown
+          .getByText("Continue in terminal…", { exact: true })
+          .waitFor({ state: "visible" });
       },
     );
   });

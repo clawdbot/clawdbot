@@ -57,8 +57,13 @@ describe("sanitizeForPlainText", () => {
 
   // --- block elements -----------------------------------------------------
 
-  it("converts <p> and <div> to newlines", () => {
-    expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
+  it.each([
+    ["<p>paragraph</p>", "\nparagraph\n"],
+    ['before<p class="x">inside</p>after', "before\ninside\nafter"],
+    ['before<div id="y">inside</div>after', "before\ninside\nafter"],
+    ["before<DIV id='y' title='a>b'>inside</DIV>after", "before\ninside\nafter"],
+  ])("preserves block boundaries in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   it("converts headings to bold text with newlines", () => {

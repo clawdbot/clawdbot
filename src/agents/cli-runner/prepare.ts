@@ -282,6 +282,7 @@ async function resolveCliSkillsPrompt(params: {
 }): Promise<string> {
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
     config: params.config,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
   });

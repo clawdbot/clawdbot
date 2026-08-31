@@ -172,6 +172,62 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+### Source tests and subprocess builds
+
+Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
+and runtime parents on TypeScript. Importing a declared subprocess entrypoint
+compiles the fixed test entry set and its workspace dependencies into one fresh
+invocation directory under `.artifacts/vitest-workers/`.
+
+The seven application subprocess entries run as plain Node JavaScript without a
+TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
+route ownership, the service relay, its POSIX and Windows anchors, and the memory
+plugin's KNN child. The same generation also compiles the fake-backend TUI
+fixture's four runtime roots together: the real TUI, embedded reply producer,
+reply metadata reader, and outbound normalizer. Shared chunks preserve their
+module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
+launches them with `--import tsx` for their own syntax, while Bun handles that
+syntax natively without the Node loader. Only their runtime imports change.
+Application/package build entries and Vitest source parents stay unchanged. This
+does not convert Worker-thread entries or arbitrary source CLI fixtures.
+
+Preparation is lazy across both projects and shards. Config imports, listing
+tests, and tiny tests that do not import these declarations do not load the
+subprocess compiler or compile workers. A shard that needs a declaration requests the
+outer runner's single build through its existing Node IPC channel during module
+collection, before fixture hooks and readiness deadlines. Every finite invocation
+that needs a declaration pays for this fixed entry set; preparation timing is
+reported separately from child execution. The runner starts one short-lived native
+Node or Bun compiler child and joins it before returning the verified manifest to
+borrowers. The compiler module graph lives in that child, not the long-lived runner
+or Vitest worker. No shard can select a different build graph or adopt another invocation's output. The outer
+runner retains the generation until child close and process-group cleanup
+finish, then verifies it before reporting success. Standalone Vitest and watch runs retain
+source execution: its public close hooks run concurrently with pool shutdown,
+so compilation and artifact deletion require the repository runner's ownership.
+A lost owner or failed build fails the run.
+Disposal cancels pending compilation and joins it and every borrower before
+removing the directory. An uncertain compiler or borrower join retains the
+generation and fails the run. Abnormal termination can also leave an unused
+directory; later runs never adopt it.
+
+Every preparation compiles current source; checkout `dist/` is neither an input
+nor a fallback. Build errors, missing artifacts, and changes to recorded build
+inputs fail the run. Compilation includes the native subprocess fixtures before
+they impose resource limits. Third-party dependencies remain external except for
+the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
+native helpers in its own private tree, using the package runtime's loader-relative
+layout. The package itself shares one native tree between runtime entries and its
+sealed worker; it does not copy a second tree beside that worker. The helpers'
+original source hashes are pinned before copying and verified alongside compiler
+output; missing or altered assets fail verification. The default stays off, and
+the existing `off`/`auto`/`require` opt-ins retain their behavior.
+
+Watch mode deliberately keeps the existing live-source path, including tsx for
+Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
+reads current source rather than reusing a compiled snapshot. Existing Vitest
+watch dependency tracking still determines when tests rerun.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -327,7 +383,7 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:mcp-channels`                                                              | Seeded Gateway container plus a client container spawning `openclaw mcp serve`: routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge (assertion reads raw stdio MCP frames directly).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `pnpm test:docker:upgrade-survivor`                                                          | Installs the packed tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider/channel keys, starts a loopback Gateway, checks agents/channel config/plugin allowlists/workspace/session state/stale legacy plugin dependency state/startup/RPC status survive.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `pnpm test:docker:published-upgrade-survivor`                                                | Installs `openclaw@latest` by default, seeds realistic existing-user files, configures via a baked `openclaw config set` recipe, updates to the packed tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, checks `/healthz`, `/readyz`, RPC status. Override with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, expand a matrix with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, or add scenario fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` (includes `configured-plugin-installs` and `stale-source-plugin-shadow`). Package Acceptance exposes these as `published_upgrade_survivor_baseline(s)` / `_scenarios` and resolves meta tokens like `last-stable-4` or `all-since-2026.4.23`. |
-| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at `openclaw@2026.4.23` by default. The `Update Migration` workflow expands this with `baselines=all-since-2026.4.23` to prove configured-plugin dependency cleanup outside Full Release CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at the latest stable release by default. The `Update Migration` workflow pins that baseline before fanout; pass `baselines=all-since-2026.4.23` for an explicit historical cleanup replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pnpm test:docker:plugins`                                                                   | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Sandbox compatibility lanes

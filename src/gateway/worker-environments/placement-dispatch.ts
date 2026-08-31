@@ -265,12 +265,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
           )
         : await environments.create(
             request.profileId,
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
           );
       return await startup.continueProvisionedDispatch({
         request,

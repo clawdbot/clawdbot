@@ -74,7 +74,6 @@ extensions/browser/src/browser/extension-install.ts	3
 extensions/browser/src/browser/extension-native-host.ts	1
 extensions/browser/src/browser/extension-native-protocol.ts	1
 extensions/browser/src/browser/extension-relay/auth-v2.ts	10
-extensions/browser/src/browser/extension-relay/relay-auth.ts	1
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	9
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	4
 extensions/browser/src/browser/output-files.ts	1
@@ -224,7 +223,7 @@ extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/sandbox-guard.ts	2
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/session-binding.ts	4
-extensions/codex/src/app-server/session-history.ts	6
+extensions/codex/src/app-server/session-history.ts	4
 extensions/codex/src/app-server/settled-turn-context.ts	3
 extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/side-question.ts	8
@@ -1184,7 +1183,7 @@ extensions/slack/src/native-data-blocks.ts	1
 extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/post-message-identity.ts	1
 extensions/slack/src/probe.ts	2
-extensions/slack/src/progress-blocks.ts	2
+extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
 extensions/slack/src/reply-blocks.ts	9
 extensions/slack/src/resolve-channels.ts	1
@@ -1866,7 +1865,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	22
+src/agents/failover-error.ts	15
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -1968,7 +1967,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	24
-src/agents/session-transcript-repair.ts	15
+src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-inspection.ts	2
@@ -2207,7 +2206,7 @@ src/auto-reply/reply/session.ts	3
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
 src/auto-reply/reply/stage-sandbox-media.ts	1
-src/auto-reply/reply/strip-inbound-meta.ts	5
+src/auto-reply/reply/strip-inbound-meta.ts	4
 src/auto-reply/reply/system-event-session-key.ts	1
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1
@@ -2480,7 +2479,7 @@ src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-model-catalog.ts	1
 src/commands/doctor-plugin-registry.ts	1
-src/commands/doctor-post-upgrade.ts	5
+src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
 src/commands/doctor-sandbox-legacy-registry.ts	8
@@ -2701,7 +2700,6 @@ src/config/sessions/session-sqlite-target.ts	3
 src/config/sessions/session-store-config.ts	2
 src/config/sessions/session-suggestion-store.ts	4
 src/config/sessions/session-transcript-projection-rebuild.ts	6
-src/config/sessions/session-transcript-read-fence.ts	1
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/session-transcript-search.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
@@ -3295,7 +3293,6 @@ src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
 src/logging/logger.ts	14
-src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3
@@ -3404,7 +3401,7 @@ src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-live-runtime.ts	2
-src/plugin-sdk/provider-catalog-shared.ts	4
+src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	6
@@ -3455,7 +3452,7 @@ src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
 src/plugins/contracts/tts-contract-suites.ts	31
-src/plugins/conversation-binding.ts	2
+src/plugins/conversation-binding.ts	1
 src/plugins/current-plugin-metadata-snapshot.ts	1
 src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
@@ -4022,7 +4019,7 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	5
+ui/src/pages/chat/chat-history.ts	3
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2

@@ -203,6 +203,7 @@ export async function resolveSubagentChildPlan(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,

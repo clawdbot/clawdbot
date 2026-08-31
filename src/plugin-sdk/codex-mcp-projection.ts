@@ -6,7 +6,9 @@ import { pinExecToolTarget } from "../agents/exec-tool-target-pinning.js";
 import type { AgentHarnessHostCapabilities } from "../agents/harness/host-capability-types.js";
 import {
   resolveAgentHarnessScheduledToolProjectionCapability,
+  resolveAgentHarnessTtsProvenanceTransferCapability,
   type AgentHarnessScheduledToolProjectionFactory,
+  type AgentHarnessTtsProvenanceTransfer,
 } from "../agents/harness/host-private-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type {
@@ -17,12 +19,23 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
+export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
 
 /** Resolve the private scheduled-tool projection issuer for the Codex harness owner. */
 export function resolveCodexScheduledToolProjectionFactory(
   hostCapabilities: AgentHarnessHostCapabilities,
 ): CodexScheduledToolProjectionFactory | undefined {
   return resolveAgentHarnessScheduledToolProjectionCapability({
+    hostCapabilities,
+    ownerPluginId: "codex",
+  });
+}
+
+/** Resolve private TTS delivery transfer for the bundled Codex harness owner. */
+export function resolveCodexTtsProvenanceTransfer(
+  hostCapabilities: AgentHarnessHostCapabilities,
+): CodexTtsProvenanceTransfer | undefined {
+  return resolveAgentHarnessTtsProvenanceTransferCapability({
     hostCapabilities,
     ownerPluginId: "codex",
   });

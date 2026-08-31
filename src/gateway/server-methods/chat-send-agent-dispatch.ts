@@ -225,8 +225,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     }
     emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
   };
+  const dispatchAdmission = {
+    run: <T>(operation: () => Promise<T>) =>
+      gatewayWorkAdmission.run(() =>
+        userTurnRecorder.withPendingInput
+          ? userTurnRecorder.withPendingInput(operation)
+          : operation(),
+      ),
+  };
   const dispatch = replyDispatch
-    .runAgentMediaTranscript(gatewayWorkAdmission, () =>
+    .runAgentMediaTranscript(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {

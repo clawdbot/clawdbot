@@ -126,8 +126,14 @@ export function guardSessionManager(
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
+    // Accepted source bytes already passed the plugin hook before ACK. Only
+    // core redaction and visibility still run when the native turn consumes them.
+    const skipUserWriteHook =
+      skipBeforeMessageWriteHooks ||
+      (message.role === "user" &&
+        queuedUserTurnTranscriptRecorder?.getPendingInputMessage?.() !== undefined);
     if (
-      (!skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) ||
+      (!skipUserWriteHook && hookRunner?.hasHooks("before_message_write")) ||
       prepareAssistantTranscriptMessage
     ) {
       const preparedMessage =
@@ -139,7 +145,7 @@ export function guardSessionManager(
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
         prepareAssistantTranscriptMessage,
-        skipBeforeMessageWriteHooks,
+        skipBeforeMessageWriteHooks: skipUserWriteHook,
       });
       if (!next) {
         runtimeUserMessageByPersistedMessage.delete(event.message);
@@ -260,11 +266,7 @@ export function guardSessionManager(
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      if (persistence.anchor) {
-        recorder?.markRuntimePersisted(message, persistence.anchor);
-      } else {
-        recorder?.markRuntimePersisted(message);
-      }
+      recorder?.markRuntimePersisted(message, persistence.anchor);
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {

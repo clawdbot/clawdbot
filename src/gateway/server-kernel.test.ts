@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -376,6 +377,7 @@ describe("createGatewayKernel", () => {
       ).resolves.toEqual({ runId: "kernel-run", status: "ok", summary: "cached" });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
+      flushDiagnosticsTimeline();
       const timeline = (await fs.readFile(timelinePath, "utf8"))
         .trim()
         .split("\n")
@@ -430,6 +432,7 @@ describe("createGatewayKernel", () => {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
+          flushDiagnosticsTimeline();
           await state.cleanup();
         } finally {
           if (capturedLoadedPluginRegistry) {

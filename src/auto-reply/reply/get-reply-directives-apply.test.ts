@@ -1,10 +1,14 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
+import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createTypingController } from "./typing.js";
 
 const mocks = vi.hoisted(() => ({
   handleDirective: vi.fn(),
@@ -31,6 +35,107 @@ beforeEach(() => {
 });
 
 describe("applyInlineDirectiveOverrides", () => {
+  it("returns the elevated denial for a prepared global owner", async () => {
+    const ctx = buildTestCtx({
+      Body: "/elevated on",
+      CommandBody: "/elevated on",
+      CommandAuthorized: true,
+      SessionKey: "global",
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+    const result = await resolveReplyDirectives({
+      ctx,
+      cfg: {
+        agents: { ownership: "explicit", entries: { target: {}, other: {} } },
+        tools: { elevated: { enabled: false } },
+      },
+      agentId: "target",
+      agentDir: "/tmp/target-agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionCtx: ctx,
+      sessionEntry: { sessionId: "global-session", updatedAt: 1 },
+      sessionStore: {},
+      sessionKey: "global",
+      sessionScope: "global",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "/elevated on",
+      resetTriggered: false,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: createTypingController({}),
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: expect.stringContaining("elevated is not available") },
+    });
+    expect(mocks.handleDirective).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prepared global owner through directive application and context budgeting", async () => {
+    const { result } = await applyMixedDirectives({
+      body: "hello /verbose on",
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      sessionKey: "global",
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(mocks.handleDirective).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
+  it("uses the prepared global owner for directive runtime policy", () => {
+    const params = {
+      cfg: {
+        session: { scope: "global" as const },
+        agents: { ownership: "explicit" as const, entries: { target: {}, other: {} } },
+      },
+      agentId: "target",
+      sessionKey: "global",
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SenderId: "sender",
+        AccountId: "default",
+      }),
+    };
+
+    const result = resolveDirectiveRuntimeContext(params);
+
+    expect(result.activeAgentId).toBe("target");
+    expect(result.runtimePolicySessionKey).toBe("agent:target:telegram:default:direct:sender");
+  });
+
+  it("keeps the active agent when an independent directive policy belongs to another agent", () => {
+    const result = resolveDirectiveRuntimeContext({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            target: { sandbox: { mode: "off" } },
+            main: { sandbox: { mode: "all" } },
+          },
+        },
+      },
+      agentId: "target",
+      sessionKey: "agent:target:main",
+      ctx: buildTestCtx({ RuntimePolicySessionKey: "agent:main:group" }),
+    });
+
+    expect(result.activeAgentId).toBe("target");
+    expect(result.runtimePolicySessionKey).toBe("agent:main:group");
+    expect(result.runtimeIsSandboxed).toBe(true);
+  });
+
   it.each([
     {
       rejectedRef: "ollama/Gemma4-26b-a4-it-gguf",
