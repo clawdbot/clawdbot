@@ -287,6 +287,12 @@ export type MemoryPluginCapability = {
 export type MemoryPluginCapabilityRegistration = {
   pluginId: string;
   capability: MemoryPluginCapability;
+  /**
+   * Registrar-provided memory slot ownership. Only the slot owner may displace
+   * earlier fields during resolution; undeclared registrations contribute what
+   * the owner lacks but never take over its runtime or consolidation surface.
+   */
+  memorySlotSelected?: boolean;
 };
 
 export type SessionDiscussionState = "none" | "available" | "open";

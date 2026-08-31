@@ -44,20 +44,30 @@ export function resolveMemoryCapabilityRegistration(
 ): MemoryPluginCapabilityRegistration | undefined {
   let effective: MemoryPluginCapabilityRegistration | undefined;
   for (const registration of registrations) {
-    const existing = effective?.capability;
-    // An artifact bridge layers onto the selected memory runtime without taking ownership of it.
-    const preserveExisting =
-      existing &&
-      Boolean(registration.capability.publicArtifacts) &&
-      !registration.capability.promptBuilder &&
-      !registration.capability.flushPlanResolver &&
-      !registration.capability.runtime;
+    const existing = effective;
+    if (!existing) {
+      effective = registration;
+      continue;
+    }
+    // The memory slot owner outranks registration order: a dreaming sidecar or
+    // artifact bridge contributes fields the owner lacks, but never displaces
+    // the owner's runtime or consolidation surface, no matter which loader
+    // order registered the two plugins. Registration order still decides every
+    // other pairing (both undeclared, both declared, or a later declared
+    // owner), matching the shipped last-registration-wins contract that
+    // per-scope re-registration depends on.
+    const owner =
+      existing.memorySlotSelected === true && registration.memorySlotSelected !== true
+        ? existing
+        : registration;
+    const contributor = owner === existing ? registration : existing;
     effective = {
-      pluginId: registration.pluginId,
+      pluginId: owner.pluginId,
       capability: {
-        ...(preserveExisting ? existing : {}),
-        ...registration.capability,
+        ...contributor.capability,
+        ...owner.capability,
       },
+      memorySlotSelected: owner.memorySlotSelected,
     };
   }
   return effective;

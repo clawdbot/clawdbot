@@ -42,6 +42,7 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -384,7 +385,22 @@ describe("loadOpenClawPlugins", () => {
         label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
-          setupBundledDreamingMemoryPlugins();
+          // Active Memory grants private-transcript recall by resolved plugin id,
+          // so the real bundled sidecar must not lend its recall declarations to
+          // the resolved slot owner.
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `module.exports = {
+              id: "memory-core",
+              kind: "memory",
+              register(api) {
+                api.registerMemoryCapability({
+                  deterministicRecallToolName: "memory_search",
+                  supportsPrivateTranscriptRecall: true,
+                  promptBuilder: () => ["sidecar prompt"],
+                });
+              },
+            };`,
+          });
 
           return loadOpenClawPlugins({
             cache: false,
@@ -407,6 +423,11 @@ describe("loadOpenClawPlugins", () => {
           expect(lance?.status).toBe("loaded");
           expect(lance?.memorySlotSelected).toBe(true);
           expect(core?.memorySlotSelected).not.toBe(true);
+          const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+          expect(resolved?.pluginId).toBe("memory-core");
+          expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+          expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+          expect(resolved?.capability.promptBuilder).toBeDefined();
         },
       },
       {
