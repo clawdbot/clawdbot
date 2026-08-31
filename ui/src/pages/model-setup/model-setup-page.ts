@@ -75,6 +75,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
+  private wizardReturnFocus: HTMLElement | null = null;
   private readonly firstRun = new FirstRunSetup({
     context: () => this.context,
     routeData: () => this.routeData,
@@ -233,6 +234,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     }
     if (changed.has("activationState") && this.activationState.phase !== "idle") {
       revealModelSetupFeedback(this.renderRoot);
+    }
+    if (this.wizardState.phase !== "idle") {
+      this.querySelector("openclaw-modal-dialog")?.setReturnFocusTarget(this.wizardReturnFocus);
     }
     this.iconLoader.reconcile();
     this.firstRun.start();
@@ -497,6 +501,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       (this.wizard.state.phase === "idle" && this.firstRun.unresolved)
     ) {
       return;
+    }
+    if (this.wizard.state.phase === "idle") {
+      // Disabling the initiating control can blur it before the modal opens.
+      const active = this.ownerDocument.activeElement;
+      this.wizardReturnFocus =
+        active instanceof HTMLElement && this.contains(active) ? active : null;
     }
     const generation = ++this.wizardMutationGeneration;
     this.wizardMutationActive = true;
