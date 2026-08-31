@@ -1,41 +1,39 @@
 // Profile Extension Memory tests cover profile extension memory script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter, once } from "node:events";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  inspectManagedProcessGroup,
+  waitForManagedProcessGroupExit,
+} from "../../scripts/lib/managed-child-process.mts";
 import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
+import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
-
-async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error("timed out waiting for condition");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
+const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
-  return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
+  return spawnSync(process.execPath, ["--import", TSX_PRELOAD, SCRIPT_PATH, ...args], {
     cwd,
     encoding: "utf8",
+    // Fixture cwd controls artifacts; source imports still need the repository's aliases.
+    env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
   });
 }
 
@@ -48,27 +46,75 @@ function extractReportPath(stdout: string) {
   return reportPath;
 }
 
-async function waitForChildExit(
+async function cleanupProfileFixture(
+  root: string,
   child: ReturnType<typeof spawn>,
-  timeoutMs = 8_000,
-): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      new Promise<{ status: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (status, signal) => resolve({ status, signal }));
-      }),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  closed: Promise<unknown>,
+  descendantPidPath: string,
+  detached = true,
+): Promise<void> {
+  let childClosed = false;
+  let descendantPid: number | undefined;
+  await runQaGatewayFixture(
+    async () => {
+      if (!child.pid || (!detached && (child.exitCode !== null || child.signalCode !== null))) {
+        return;
+      }
+      try {
+        // The non-detached runner owns its case groups: let its SIGTERM handler
+        // stop them before exit instead of orphaning them with SIGKILL.
+        process.kill(detached ? -child.pid : child.pid, detached ? "SIGKILL" : "SIGTERM");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          throw error;
+        }
+      }
+    },
+    () => {
+      if (detached) {
+        killPidIfAlive(child.pid);
+      }
+    },
+    async () => {
+      await withTestTimeout(
+        closed,
+        5_000,
+        `profile child did not close; retained fixture: ${root}`,
+      );
+      childClosed = true;
+    },
+    async () => {
+      if (!existsSync(descendantPidPath)) {
+        return;
+      }
+      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+      killPidIfAlive(descendantPid);
+    },
+    async () => {
+      // A failed signal is not proof of exit. Retain PID files until the owned
+      // processes and the child's output are verified stopped.
+      await runQaGatewayFixture(
+        async () => {
+          if (descendantPid) {
+            await waitForDead(descendantPid, 5_000);
+          }
+        },
+        async () => {
+          if (!detached || !child.pid) {
+            return;
+          }
+          await waitForManagedProcessGroupExit(child, 5_000, { errorPolicy: "indeterminate" });
+          expect(
+            inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }),
+            `retained fixture: ${root}`,
+          ).toBe("dead");
+        },
+      );
+      if (childClosed) {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 }
 
 describe("scripts/profile-extension-memory", () => {
@@ -126,6 +172,95 @@ describe("scripts/profile-extension-memory", () => {
       expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
       expect(result.stderr).not.toContain("dist/extensions");
       expect(result.stderr).not.toContain("at ");
+    }
+  });
+
+  it.each([
+    {
+      name: "package-local output without a root dist tree",
+      files: ["extensions/external/dist/index.js"],
+      selected: ["external"],
+      expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
+    },
+    {
+      name: "nested output in the root plugin tree",
+      files: ["dist/extensions/external/dist/index.js"],
+      selected: ["external"],
+      expected: [{ dir: "external", file: "dist/extensions/external/dist/index.js" }],
+    },
+    ...[true, false].map((selected) => ({
+      name: `mixed internal and external output (${selected ? "selected" : "default"})`,
+      files: ["dist/extensions/internal/index.js", "extensions/external/dist/index.js"],
+      selected: selected ? ["internal", "external"] : [],
+      expected: [
+        { dir: "external", file: "extensions/external/dist/index.js" },
+        { dir: "internal", file: "dist/extensions/internal/index.js" },
+      ],
+    })),
+    ...["index.js", "dist/index.js"].map((rootEntry) => ({
+      name: `one canonical root ${rootEntry} when both builds exist`,
+      files: [`dist/extensions/external/${rootEntry}`, "extensions/external/dist/index.js"],
+      selected: ["external", "external"],
+      expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
+    })),
+    {
+      name: "source-only plugins excluded from default enumeration",
+      files: ["dist/extensions/internal/index.js"],
+      selected: [],
+      expected: [{ dir: "internal", file: "dist/extensions/internal/index.js" }],
+    },
+  ])("profiles $name", ({ files, selected, expected }) => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-")));
+    try {
+      for (const relativeFile of [
+        ...files,
+        "extensions/external/index.ts",
+        "extensions/internal/index.ts",
+        "extensions/source-only/index.ts",
+      ]) {
+        const file = path.join(root, relativeFile);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
+          "utf8",
+        );
+      }
+      const reportPath = path.join(root, "report.json");
+      const result = runProfileExtensionMemory(
+        [
+          ...selected.flatMap((id) => ["--extension", id]),
+          "--concurrency",
+          "1",
+          "--json",
+          reportPath,
+        ],
+        root,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).not.toContain("cliStartup");
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      expect(report.selectedExtensions).toEqual(expected.map(({ dir }) => dir));
+      expect(report.results).toEqual(
+        expected.map(({ dir, file }) =>
+          expect.objectContaining({
+            dir,
+            file: path.join(root, file),
+            status: "ok",
+            maxRssMb: expect.any(Number),
+          }),
+        ),
+      );
+      expect(report.combined).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
+      expect(report.counts).toEqual({
+        totalEntries: expected.length,
+        ok: expected.length,
+        fail: 0,
+        timeout: 0,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -291,50 +426,58 @@ describe("scripts/profile-extension-memory", () => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-timeout-"));
       const hookPath = path.join(root, "rss-hook.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
-      let descendantPid = 0;
-      try {
-        writeFileSync(hookPath, "", "utf8");
-        const descendantScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("");
-        const body = [
-          "const childProcess = await import('node:child_process');",
-          "const fs = await import('node:fs');",
-          "const descendant = childProcess.spawn(process.execPath, [",
-          "  '--input-type=module',",
-          `  '--eval', ${JSON.stringify(descendantScript)},`,
-          "], { stdio: 'ignore' });",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const resultPromise = runCase({
-          body,
-          env: process.env,
-          hookPath,
-          name: "timeout-descendant",
-          repoRoot: root,
-          shutdownGraceMs: 100,
-          timeoutMs: 250,
-        });
+      let cleanup = async () => rmSync(root, { recursive: true, force: true });
+      await runQaGatewayFixture(
+        async () => {
+          writeFileSync(hookPath, "", "utf8");
+          const descendantScript = [
+            "import { writeFileSync } from 'node:fs';",
+            "process.on('SIGTERM', () => {});",
+            "setInterval(() => {}, 1000);",
+            `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+          ].join("");
+          const body = [
+            "const childProcess = await import('node:child_process');",
+            "childProcess.spawn(process.execPath, [",
+            "  '--input-type=module',",
+            `  '--eval', ${JSON.stringify(descendantScript)},`,
+            "], { stdio: 'ignore' });",
+            "setInterval(() => {}, 1000);",
+          ].join("\n");
+          const child = spawn(
+            process.execPath,
+            ["--import", hookPath, "--input-type=module", "--eval", body],
+            { cwd: root, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+          );
+          const childClosed = new Promise<void>((resolve) => {
+            child.once("close", () => resolve());
+          });
+          cleanup = () => cleanupProfileFixture(root, child, childClosed, descendantPidPath);
+          await once(child, "spawn");
+          const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+          expect(Number.isInteger(descendantPid)).toBe(true);
+          expect(isProcessAlive(descendantPid)).toBe(true);
 
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-
-        await expect(resultPromise).resolves.toMatchObject({
-          name: "timeout-descendant",
-          signal: "SIGKILL",
-          timedOut: true,
-        });
-        await waitForCondition(() => !isProcessAlive(descendantPid));
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { recursive: true, force: true });
-      }
+          // Start the timeout only once a real descendant exists, independent of host startup load.
+          const resultPromise = runCase({
+            body,
+            env: process.env,
+            hookPath,
+            name: "timeout-descendant",
+            repoRoot: root,
+            shutdownGraceMs: 100,
+            timeoutMs: 250,
+            spawnImpl: () => child,
+          });
+          await expect(resultPromise).resolves.toMatchObject({
+            name: "timeout-descendant",
+            signal: "SIGKILL",
+            timedOut: true,
+          });
+          await waitForDead(descendantPid, 5_000);
+        },
+        () => cleanup(),
+      );
     },
   );
 
@@ -345,74 +488,65 @@ describe("scripts/profile-extension-memory", () => {
       const hookPath = path.join(root, "rss-hook.mjs");
       const runnerPath = path.join(root, "parent-signal-runner.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
-      let descendantPid = 0;
-      try {
-        writeFileSync(hookPath, "", "utf8");
-        const descendantScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("");
-        const body = [
-          "const childProcess = await import('node:child_process');",
-          "const fs = await import('node:fs');",
-          "const descendant = childProcess.spawn(process.execPath, [",
-          "  '--input-type=module',",
-          `  '--eval', ${JSON.stringify(descendantScript)},`,
-          "], { stdio: 'ignore' });",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        writeFileSync(
-          runnerPath,
-          [
-            `const { runCase } = await import(${JSON.stringify(
-              pathToFileURL(path.resolve("scripts/profile-extension-memory.mts")).href,
-            )});`,
-            "void runCase({",
-            `  body: ${JSON.stringify(body)},`,
-            "  env: process.env,",
-            `  hookPath: ${JSON.stringify(hookPath)},`,
-            "  name: 'parent-signal-descendant',",
-            `  repoRoot: ${JSON.stringify(root)},`,
-            "  shutdownGraceMs: 100,",
-            "  timeoutMs: 30000,",
-            "});",
-          ].join("\n"),
-          "utf8",
-        );
-        const runner = spawn(process.execPath, [runnerPath], {
-          stdio: "ignore",
-        });
-
-        try {
-          await waitForCondition(() => {
-            if (!existsSync(descendantPidPath)) {
-              return false;
-            }
-            const candidatePid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-            if (!Number.isInteger(candidatePid) || candidatePid <= 0) {
-              return false;
-            }
-            descendantPid = candidatePid;
-            return true;
+      let cleanup = async () => rmSync(root, { recursive: true, force: true });
+      await runQaGatewayFixture(
+        async () => {
+          writeFileSync(hookPath, "", "utf8");
+          const descendantScript = [
+            "process.on('SIGTERM', () => {});",
+            "setInterval(() => {}, 1000);",
+          ].join("");
+          const body = [
+            "const childProcess = await import('node:child_process');",
+            "const fs = await import('node:fs');",
+            "const descendant = childProcess.spawn(process.execPath, [",
+            "  '--input-type=module',",
+            `  '--eval', ${JSON.stringify(descendantScript)},`,
+            "], { stdio: 'ignore' });",
+            `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+            "setInterval(() => {}, 1000);",
+          ].join("\n");
+          writeFileSync(
+            runnerPath,
+            [
+              `const { runCase } = await import(${JSON.stringify(
+                pathToFileURL(path.resolve("scripts/profile-extension-memory.mts")).href,
+              )});`,
+              "void runCase({",
+              `  body: ${JSON.stringify(body)},`,
+              "  env: process.env,",
+              `  hookPath: ${JSON.stringify(hookPath)},`,
+              "  name: 'parent-signal-descendant',",
+              `  repoRoot: ${JSON.stringify(root)},`,
+              "  shutdownGraceMs: 100,",
+              "  timeoutMs: 30000,",
+              "});",
+            ].join("\n"),
+            "utf8",
+          );
+          const runner = spawn(process.execPath, ["--import", TSX_PRELOAD, runnerPath], {
+            stdio: "ignore",
           });
+
+          const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+            (resolve) => {
+              runner.once("close", (code, signal) => resolve({ code, signal }));
+            },
+          );
+          cleanup = () =>
+            cleanupProfileFixture(root, runner, runnerClosed, descendantPidPath, false);
+          await once(runner, "spawn");
+          const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
           expect(isProcessAlive(descendantPid)).toBe(true);
 
-          const runnerExit = waitForChildExit(runner);
           process.kill(runner.pid!, "SIGTERM");
-          await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-          await waitForCondition(() => !isProcessAlive(descendantPid));
-        } finally {
-          if (runner.pid && isProcessAlive(runner.pid)) {
-            process.kill(runner.pid, "SIGKILL");
-          }
-        }
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { recursive: true, force: true });
-      }
+          await expect(
+            withTestTimeout(runnerClosed, 8_000, "profile runner did not close"),
+          ).resolves.toEqual({ code: 143, signal: null });
+          await waitForDead(descendantPid, 5_000);
+        },
+        () => cleanup(),
+      );
     },
   );
 });

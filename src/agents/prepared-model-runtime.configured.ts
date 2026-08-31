@@ -19,6 +19,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveAgentEntry } from "./agent-scope-config.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
@@ -89,6 +90,7 @@ export function collectPreparedModelRuntimeProviderIds(
   credentials: Readonly<AuthStorageData>,
   includeCredentialProviders: boolean,
   configuredModelRefs: readonly ConfiguredModelRef[] = collectConfiguredModelRefs(config),
+  agentId?: string,
 ): string[] {
   const providerIds = new Set<string>();
   const addProviderId = (value: string) => {
@@ -107,6 +109,14 @@ export function collectPreparedModelRuntimeProviderIds(
     if (separator > 0) {
       addProviderId(ref.value.slice(0, separator));
     }
+    addProviderId(
+      resolveConfiguredModelHarnessRuntime({
+        config,
+        modelRef: ref.value,
+        agentId,
+        includeImplicitRuntimePreferences: false,
+      }) ?? "",
+    );
   }
   return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }

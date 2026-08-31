@@ -147,6 +147,7 @@ describe("mutable allowlist table helpers", () => {
     expect(detector("demo:user:U123")).toBe(false);
     expect(detector("demo:alice")).toBe(true);
     expect(detector("*")).toBe(false);
+    expect(detector("accessGroup:operators")).toBe(false);
   });
 });
 
@@ -173,6 +174,7 @@ describe("createRestrictSendersChannelSecurity", () => {
       mentionGated: false,
       findingTitle: "LINE security warning",
       policyPathSuffix: "dmPolicy",
+      classifyEntryAuthentication: () => "asserted",
       dmRouting,
     });
 
@@ -195,7 +197,18 @@ describe("createRestrictSendersChannelSecurity", () => {
       allowFromPath: "channels.line.",
       approveHint: formatPairingApproveHint("line"),
       normalizeEntry: undefined,
+      classifyEntryAuthentication: expect.any(Function),
     });
+
+    expect(
+      security
+        .resolveDmPolicy?.({
+          cfg: {},
+          accountId: "default",
+          account: { accountId: "default" },
+        })
+        ?.classifyEntryAuthentication?.("line:user:abc"),
+    ).toBe("asserted");
 
     expect(
       security.collectWarnings?.({

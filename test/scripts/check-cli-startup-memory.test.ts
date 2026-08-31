@@ -335,8 +335,12 @@ describe("check-cli-startup-memory", () => {
     expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
     expect(new Set(seenHomes).size).toBe(seenArgs.length);
     for (const args of seenArgs) {
-      expect(args[0]).toBe("--import");
-      expect(args[1]).toMatch(/^file:/u);
+      // The bench entry runs the launcher in-process instead of preloading an
+      // --import hook, which would disable the dist ESM resolve fast path and
+      // measure a non-default resolution configuration.
+      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
+      expect(args[0]).not.toBe("--import");
+      expect(args[1]).not.toBe("openclaw.mjs");
     }
   });
 });

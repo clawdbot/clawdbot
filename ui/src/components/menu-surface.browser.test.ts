@@ -135,3 +135,55 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(dropdown.contains(hit)).toBe(true);
   });
 });
+
+describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
+  it.each([
+    ["session-menu__item", "keyboard"],
+    ["session-menu__item", "pointer"],
+    ["sidebar-customize-menu__item", "keyboard"],
+    ["sidebar-customize-menu__item", "pointer"],
+  ])("keeps %s highlighted during %s submenu navigation", async (className, input) => {
+    await useDesktopViewport();
+    const { page, userEvent } = await import("vitest/browser");
+    const dropdown = document.createElement("wa-dropdown");
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.textContent = "Actions";
+    const parent = document.createElement("wa-dropdown-item");
+    parent.className = className;
+    parent.append("Parent");
+    const child = document.createElement("wa-dropdown-item");
+    child.className = className;
+    child.slot = "submenu";
+    child.textContent = "Child";
+    parent.append(child);
+    const sibling = document.createElement("wa-dropdown-item");
+    sibling.className = className;
+    sibling.textContent = "Other action";
+    dropdown.append(trigger, parent, sibling);
+    document.body.append(dropdown);
+    const swatch = document.createElement("div");
+    swatch.style.backgroundColor = "var(--bg-hover)";
+    document.body.append(swatch);
+    const highlight = getComputedStyle(swatch).backgroundColor;
+
+    await page.elementLocator(trigger).click();
+    await expect.poll(() => document.activeElement).toBe(parent);
+    if (input === "keyboard") {
+      await userEvent.keyboard("{ArrowRight}");
+    } else {
+      await page.elementLocator(parent).hover();
+      await page.elementLocator(child).hover();
+    }
+    await expect.poll(() => document.activeElement).toBe(child);
+    await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe(highlight);
+
+    await userEvent.keyboard("{ArrowLeft}");
+    await expect.poll(() => document.activeElement).toBe(parent);
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => document.activeElement).toBe(sibling);
+    await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  });
+});

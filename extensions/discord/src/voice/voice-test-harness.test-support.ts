@@ -1,8 +1,8 @@
 import { PassThrough } from "node:stream";
 import { DAVESession } from "@discordjs/voice";
-import { expectDefined } from "@openclaw/normalization-core";
 import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -15,9 +15,9 @@ import {
   type MockCallSource,
   requireRecord,
   type TestRealtimeBridgeParams,
-  type TestRealtimeSessionEntry,
 } from "./manager.e2e.test-support.js";
 import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
+import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 const {
@@ -37,6 +37,7 @@ const {
   textToSpeechMock,
   logVerboseMock,
   loggerWarnMock,
+  loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -108,6 +109,7 @@ function buildVoiceTestHarness() {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
     loggerWarnMock.mockClear();
+    loggerErrorMock.mockClear();
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
@@ -255,38 +257,12 @@ function buildVoiceTestHarness() {
   const getSessionEntry = (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
     guildId = "g1",
-  ): TestRealtimeSessionEntry => {
-    const entry = (
-      manager as unknown as { sessions: Map<string, TestRealtimeSessionEntry> }
-    ).sessions.get(guildId);
+  ): VoiceSessionEntry => {
+    const entry = (manager as unknown as { sessions: Map<string, VoiceSessionEntry> }).sessions.get(
+      guildId,
+    );
     if (!entry) {
       throw new Error(`expected Discord voice session for guild ${guildId}`);
-    }
-    if (!Object.hasOwn(entry, "realtime")) {
-      const realtimeLifecycle = () =>
-        (
-          entry as unknown as {
-            realtimeLifecycle:
-              | { status: "inactive" | "stopped" }
-              | { status: "starting" | "active"; instance: unknown };
-          }
-        ).realtimeLifecycle;
-      Object.defineProperties(entry, {
-        pendingRealtime: {
-          configurable: true,
-          get: () => {
-            const lifecycle = realtimeLifecycle();
-            return lifecycle.status === "starting" ? lifecycle.instance : undefined;
-          },
-        },
-        realtime: {
-          configurable: true,
-          get: () => {
-            const lifecycle = realtimeLifecycle();
-            return lifecycle.status === "active" ? lifecycle.instance : undefined;
-          },
-        },
-      });
     }
     return entry;
   };
@@ -317,16 +293,18 @@ function buildVoiceTestHarness() {
     ).following;
 
   const beginSpeakerTurn = (
-    entry: TestRealtimeSessionEntry,
-    params: {
-      extraSystemPrompt?: string;
-      senderIsOwner?: boolean;
-      speakerLabel?: string;
+    entry: VoiceSessionEntry,
+    params: Partial<VoiceRealtimeSpeakerContext> & {
       userId?: string;
+      initialAudio?: Buffer | null;
     } = {},
   ) => {
+    const lifecycle = entry.realtimeLifecycle;
+    if (lifecycle.status !== "active") {
+      throw new Error(`expected active Discord realtime session, got ${lifecycle.status}`);
+    }
     const senderIsOwner = params.senderIsOwner ?? true;
-    const turn = entry.realtime?.beginSpeakerTurn(
+    const turn = lifecycle.instance.beginSpeakerTurn(
       {
         extraSystemPrompt: params.extraSystemPrompt,
         senderIsOwner,
@@ -334,7 +312,10 @@ function buildVoiceTestHarness() {
       },
       params.userId ?? (senderIsOwner ? "u-owner" : "u-guest"),
     );
-    turn?.sendInputAudio(Buffer.alloc(8));
+    // Null preserves cases that start provider output before sending the first speaker audio.
+    if (params.initialAudio !== null) {
+      turn.sendInputAudio(params.initialAudio ?? Buffer.alloc(8));
+    }
     return turn;
   };
 
@@ -640,6 +621,7 @@ function buildVoiceTestHarness() {
     textToSpeechMock,
     logVerboseMock,
     loggerWarnMock,
+    loggerErrorMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,

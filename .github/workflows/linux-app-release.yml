@@ -45,6 +45,9 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,13 +61,39 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 120s git fetch --quiet origin main
-          tag_sha=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
-          if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
-            echo "Tag ${RELEASE_TAG} (${tag_sha}) is not reachable from main; Linux bundles ship for main-based releases only."
-            exit 1
-          fi
-          echo "tag_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          release_tag = os.environ["RELEASE_TAG"]
+          run_git(
+              workspace,
+              "fetch",
+              "--quiet",
+              "origin",
+              "main",
+              timeout=120,
+              reclaim_locks=True,
+          )
+          tag_sha = git_output(
+              workspace,
+              "rev-parse",
+              f"refs/tags/{release_tag}^{{commit}}",
+          ).rstrip("\n")
+          try:
+              run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")
+          except GitFailure:
+              print(
+                  f"Tag {release_tag} ({tag_sha}) is not reachable from main; "
+                  "Linux bundles ship for main-based releases only."
+              )
+              raise SystemExit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag_sha={tag_sha}\n")
+          PYTHON
 
       - name: Ensure matching GitHub release exists
         env:

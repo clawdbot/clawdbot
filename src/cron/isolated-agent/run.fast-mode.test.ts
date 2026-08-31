@@ -1,5 +1,5 @@
 // Fast mode tests cover isolated cron run behavior in fast execution mode.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
@@ -160,6 +160,10 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
@@ -185,39 +189,54 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
-  it("does not repeat deleteAfterRun cleanup after dispatch already handled it", async () => {
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: true,
-      mode: "announce",
-      channel: "messagechat",
-      to: "test-target",
-    });
-    dispatchCronDeliveryMock.mockImplementationOnce(
-      ({ deliveryPayloads, summary, outputText, synthesizedText }) => ({
-        delivered: true,
-        deliveryAttempted: true,
-        cronRunSessionCleanupAttempted: true,
-        summary,
-        outputText,
-        synthesizedText,
-        deliveryPayloads,
-      }),
-    );
+  it.each([false, true])(
+    "leaves transcript cleanup with dispatch when it rejects=%s",
+    async (rejects) => {
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "messagechat",
+        to: "test-target",
+      });
+      dispatchCronDeliveryMock.mockImplementationOnce(
+        ({ deliveryPayloads, summary, outputText, synthesizedText }) => {
+          if (rejects) {
+            throw new Error("delivery receipt store unavailable");
+          }
+          return {
+            delivered: true,
+            deliveryAttempted: true,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        },
+      );
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        job: makeIsolatedAgentJobFixture({
-          deleteAfterRun: true,
-          delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
-          payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
+            deleteAfterRun: true,
+            delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+            payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+          }),
         }),
-      }),
-    );
+      );
 
-    expect(result.status).toBe("ok");
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      expect(result.status).toBe(rejects ? "error" : "ok");
+      if (rejects) {
+        expect(result.error).toBe("delivery receipt store unavailable");
+      }
+      expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
+        sessionId: "test-session-id",
+        reason: "isolated-cron-dispose",
+        onError: expect.any(Function),
+      });
+    },
+  );
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({

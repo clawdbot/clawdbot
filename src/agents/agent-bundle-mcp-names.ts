@@ -11,6 +11,20 @@ export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
 const TOOL_NAME_MAX_TOTAL = 64;
 
+/** Builds stable node-ID prefixes capped at 32 characters. */
+export function sanitizeNodeIdFragment(value: string): string {
+  const fragment = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  if (!fragment) {
+    return "node";
+  }
+  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
+}
+
 function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number): string {
   const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
   const normalized = cleaned || fallback;

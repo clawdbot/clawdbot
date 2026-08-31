@@ -170,9 +170,14 @@ async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   );
 }
 
-async function publishBundle(destination: string, staging: string): Promise<void> {
+async function publishBundle(
+  destination: string,
+  staging: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const prior = `${destination}.previous-${process.pid}-${randomUUID()}`;
   let movedPrior = false;
+  signal?.throwIfAborted();
   try {
     await fsp.rename(destination, prior);
     movedPrior = true;
@@ -182,6 +187,8 @@ async function publishBundle(destination: string, staging: string): Promise<void
     }
   }
   try {
+    // Cancellation after moving the old install must restore it through the same rollback path.
+    signal?.throwIfAborted();
     await fsp.rename(staging, destination);
   } catch (error) {
     if (movedPrior) {
@@ -257,54 +264,57 @@ export class NodeWorkerBundleInstaller {
         params.signal?.throwIfAborted();
         const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
         const destination = path.join(bundlesRoot, input.build.bundleHash);
-        if (await validateInstalledBundle(destination, input.build)) {
-          if (input.bundlePrewarm) {
-            await this.#prewarmBundle(destination, params.signal);
-          }
-          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-          return structuredClone(input.build);
-        }
-        await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
-        await removeStaleInstallStaging(bundlesRoot);
-        const operationRoot = await fsp.mkdtemp(
-          path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
-        );
-        try {
-          const archivePath = path.join(operationRoot, "bundle.tgz");
-          const staging = path.join(operationRoot, "root");
-          await downloadBundle({
-            gatewayUrl: params.gatewayUrl,
-            gatewayTlsFingerprint: params.gatewayTlsFingerprint,
-            gatewayCloudflareAccess: params.gatewayCloudflareAccess,
-            input,
-            destination: archivePath,
-            signal: params.signal,
-          });
-          await extractWorkerBundleArchive({
-            tarballPath: archivePath,
-            destination: staging,
-            expectedBundleHash: input.build.bundleHash,
-            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-          });
-          const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
+        const installed = await validateInstalledBundle(destination, input.build);
+        params.signal?.throwIfAborted();
+        if (!installed) {
+          await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
+          await removeStaleInstallStaging(bundlesRoot);
+          const operationRoot = await fsp.mkdtemp(
+            path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
+          );
           try {
-            await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
-            await receipt.sync();
+            const archivePath = path.join(operationRoot, "bundle.tgz");
+            const staging = path.join(operationRoot, "root");
+            params.signal?.throwIfAborted();
+            await downloadBundle({
+              gatewayUrl: params.gatewayUrl,
+              gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+              gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+              input,
+              destination: archivePath,
+              signal: params.signal,
+            });
+            params.signal?.throwIfAborted();
+            await extractWorkerBundleArchive({
+              tarballPath: archivePath,
+              destination: staging,
+              expectedBundleHash: input.build.bundleHash,
+              limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+            });
+            params.signal?.throwIfAborted();
+            const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
+            try {
+              params.signal?.throwIfAborted();
+              await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
+              await receipt.sync();
+            } finally {
+              await receipt.close();
+            }
+            await publishBundle(destination, staging, params.signal);
+            if (!(await validateInstalledBundle(destination, input.build))) {
+              throw new Error("published worker bundle failed validation");
+            }
           } finally {
-            await receipt.close();
+            await fsp.rm(operationRoot, { recursive: true, force: true });
           }
-          await publishBundle(destination, staging);
-          if (!(await validateInstalledBundle(destination, input.build))) {
-            throw new Error("published worker bundle failed validation");
-          }
-          if (input.bundlePrewarm) {
-            await this.#prewarmBundle(destination, params.signal);
-          }
-          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-          return structuredClone(input.build);
-        } finally {
-          await fsp.rm(operationRoot, { recursive: true, force: true });
         }
+        params.signal?.throwIfAborted();
+        if (input.bundlePrewarm) {
+          await this.#prewarmBundle(destination, params.signal);
+        }
+        params.signal?.throwIfAborted();
+        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
+        return structuredClone(input.build);
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
           throw error;

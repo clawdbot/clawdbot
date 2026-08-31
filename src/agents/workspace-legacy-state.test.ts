@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   assertNoUnmigratedWorkspaceState,
+  assertWorkspaceStateMigrationReady,
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -145,6 +146,33 @@ describe("legacy workspace reset cleanup", () => {
     expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
       /run openclaw doctor --fix/u,
     );
+  });
+
+  it("rechecks every workspace at lifecycle boundaries after runtime cached absence", async () => {
+    const context = setup();
+    const workspaceDirs = [context.workspaceDir, path.join(context.homeDir, "secondary")];
+    for (const workspaceDir of workspaceDirs) {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      assertNoUnmigratedWorkspaceState({ workspaceDir });
+      await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), '{"version":1}');
+    }
+    expect(() =>
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs,
+        env: context.env,
+        homedir: context.homedir,
+      }),
+    ).toThrow(`${workspaceDirs.join(", ")}; run openclaw doctor --fix`);
+    for (const workspaceDir of workspaceDirs) {
+      await fs.unlink(path.join(workspaceDir, "openclaw-workspace-state.json"));
+    }
+    expect(() =>
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs,
+        env: context.env,
+        homedir: context.homedir,
+      }),
+    ).not.toThrow();
   });
 
   it("checks canonical legacy markers when configuration uses a symlink alias", async () => {

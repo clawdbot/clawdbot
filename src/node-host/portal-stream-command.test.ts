@@ -18,7 +18,9 @@ async function listenGateway(
   });
   wss.on("connection", onConnection);
   await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+    // Reserve both families so this HTTP peer cannot take the IPv6 target's
+    // numeric port on IPv4 and win localhost connection selection.
+    server.listen({ port: 0, host: "::", ipv6Only: false }, resolve);
   });
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -156,6 +158,17 @@ describe("node worker portal stream command", () => {
   );
 
   it("closes an attached Gateway socket without a readiness frame when loopback refuses", async () => {
+    let attached = false;
+    let closed = false;
+    const frames: unknown[] = [];
+    // Allocate the Gateway first so it cannot reuse the released target port.
+    const gatewayUrl = await listenGateway((ws) => {
+      attached = true;
+      ws.on("message", (data) => frames.push(data));
+      ws.once("close", () => {
+        closed = true;
+      });
+    });
     const unavailable = net.createServer();
     await new Promise<void>((resolve) => {
       unavailable.listen(0, "127.0.0.1", resolve);
@@ -171,17 +184,6 @@ describe("node worker portal stream command", () => {
           return;
         }
         resolve();
-      });
-    });
-
-    let attached = false;
-    let closed = false;
-    const frames: unknown[] = [];
-    const gatewayUrl = await listenGateway((ws) => {
-      attached = true;
-      ws.on("message", (data) => frames.push(data));
-      ws.once("close", () => {
-        closed = true;
       });
     });
 

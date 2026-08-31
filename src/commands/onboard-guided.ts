@@ -25,6 +25,7 @@ import {
   type SetupCandidateFailure,
   tryCandidate,
 } from "./onboard-guided-manual.js";
+import { enableDefaultOnboardingInternalHooks } from "./onboard-hooks.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
@@ -596,6 +597,7 @@ async function runGuidedOnboardingFlow(
           ...(localSetup?.status === "pending"
             ? { assertCommitPreconditions: assertLocalSetupOwner }
             : {}),
+          ...(!opts.skipHooks ? { finalizeConfig: enableDefaultOnboardingInternalHooks } : {}),
           surface: "cli",
           runtime,
         }),

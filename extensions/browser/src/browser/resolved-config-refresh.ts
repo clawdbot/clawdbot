@@ -103,7 +103,8 @@ function applyResolvedConfig(
       !lifecycle?.transitionReason &&
       !lifecycle?.cleanupRelays.has(relay) &&
       profile?.driver === "extension" &&
-      profile.cdpPort === relay.port
+      profile.cdpPort === relay.port &&
+      relay.ownership !== "borrowed"
     ) {
       extensionRelayInternalTokens[name] = relay.internalToken;
     }
@@ -117,6 +118,8 @@ function applyResolvedConfig(
     // Only an exact live relay owns its process-local CDP credential; stale
     // config snapshots must never resurrect closed or replaced credentials.
     extensionRelayInternalTokens,
+    // Config refresh must not erase the lifecycle's key while a relay is starting.
+    extensionRelayToken: current.resolved.extensionRelayToken,
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);

@@ -1,7 +1,12 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import {
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+} from "../prompt-cache-observability.js";
 import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
@@ -10,6 +15,8 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
+type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
+type PromptOptions = Parameters<PromptActiveSession>[1];
 
 function createSession() {
   const state = {
@@ -61,6 +68,49 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it.each([
+    { skipPreparedUserTurnMessage: false, expectedKey: "persisted-current-user" },
+    { skipPreparedUserTurnMessage: true, expectedKey: undefined },
+  ])(
+    "passes persisted user identity when prepared-user skipping is $skipPreparedUserTurnMessage",
+    async ({ skipPreparedUserTurnMessage, expectedKey }) => {
+      const { activeSession } = createSession();
+      const input = createBaseInput();
+      const persistedUser = {
+        role: "user" as const,
+        content: "transcript prompt",
+        idempotencyKey: "persisted-current-user",
+        timestamp: 1,
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: persistedUser,
+        target: async () => undefined,
+      });
+      recorder.markRuntimePersisted(persistedUser);
+      const promptActiveSession = vi.fn(
+        async (_prompt: string, _options?: PromptOptions) => undefined,
+      );
+
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          sessionId,
+          skipPreparedUserTurnMessage,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession,
+        promptActiveSession,
+      });
+
+      const promptOptions = promptActiveSession.mock.calls[0]?.[1];
+      if (expectedKey) {
+        expect(promptOptions).toMatchObject({ persistedUserIdempotencyKey: expectedKey });
+      } else {
+        expect(promptOptions).not.toHaveProperty("persistedUserIdempotencyKey");
+      }
+    },
+  );
+
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();
@@ -199,5 +249,82 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(
       originalHugeResult?.role === "toolResult" ? originalHugeResult.content : undefined,
     ).toEqual([{ type: "text", text: oversized }]);
+  });
+
+  it("records aggregate truncation on a provider-bound cache break", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const promptCacheKey = `${sessionId}:aggregate-truncation`;
+    const observation = {
+      sessionId,
+      promptCacheKey,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: input.systemPrompt,
+      tools: [],
+    } as const;
+    beginPromptCacheObservation(observation);
+    completePromptCacheObservation({
+      sessionId,
+      promptCacheKey,
+      usage: { cacheRead: 8_000 },
+    });
+    beginPromptCacheObservation(observation);
+    activeSession.agent.state.messages = [
+      { role: "user", content: "call tools", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "aggregate-a",
+        toolName: "read",
+        content: [{ type: "text", text: "a".repeat(6_000) }],
+        isError: false,
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "aggregate-b",
+        toolName: "read",
+        content: [{ type: "text", text: "b".repeat(6_000) }],
+        isError: false,
+        timestamp: 3,
+      },
+      // Real dispatch pins a non-tool carrier after tool results, so the fresh
+      // batch is not trailing-protected and aggregate recovery can engage.
+      { role: "user", content: "continue", timestamp: 4 },
+    ] as AgentMessage[];
+    activeSession.agent.streamFn = (() => undefined as never) as StreamFn;
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      attempt: { sessionId, promptCacheKey },
+      activeSession,
+      toolResultAggregateMaxChars: 6_000,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(
+      completePromptCacheObservation({
+        sessionId,
+        promptCacheKey,
+        usage: { cacheRead: 2_000 },
+      }),
+    ).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 2_000,
+      changes: [
+        {
+          code: "aggregateToolResultTruncation",
+          detail: "aggregate tool-result truncation changed provider prompt",
+        },
+      ],
+    });
   });
 });

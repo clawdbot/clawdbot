@@ -10,6 +10,7 @@ import type {
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
+  HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
@@ -39,10 +40,12 @@ export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
+export const HEARTBEAT_SKIP_CHANNEL_NOT_READY = "channel-not-ready";
 const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
@@ -211,6 +214,17 @@ function mergePendingWakeReasons(
   return merged;
 }
 
+function* pendingTargetsBeforeGlobal(globalWakeGroup: PendingWakeGroup) {
+  // Selection only updates/deletes the current target, with no callbacks or
+  // awaits. Keep target insertion order without materializing the whole queue.
+  for (const entry of pendingWakes) {
+    if (entry[0] !== GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) {
+      yield entry;
+    }
+  }
+  yield [GLOBAL_HEARTBEAT_WAKE_TARGET_KEY, globalWakeGroup] as const;
+}
+
 function takePendingWakeBatch(maxGroups: number, now = performance.now()): ReadyWakeGroup[] {
   if (maxGroups <= 0) {
     return [];
@@ -243,10 +257,9 @@ function takePendingWakeBatch(maxGroups: number, now = performance.now()): Ready
   const readyGroups: Array<{ targetKey: string; group: PendingWakeGroup }> = [];
   const pendingEntries = globalBarrierReady
     ? flushPendingCoalescing
-      ? [...pendingWakes.entries()].toSorted(
-          ([leftTarget], [rightTarget]) =>
-            Number(leftTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) -
-            Number(rightTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY),
+      ? pendingTargetsBeforeGlobal(
+          // SAFETY: Readiness rejects an absent global group.
+          globalWakeGroup as PendingWakeGroup,
         )
       : [[GLOBAL_HEARTBEAT_WAKE_TARGET_KEY, globalWakeGroup as PendingWakeGroup] as const]
     : pendingWakes.entries();
@@ -406,12 +419,13 @@ function queuePendingWakeReason(params: {
 }
 
 function resolveHeartbeatRetrySchedule(
-  pendingWake: PendingWakeReason,
+  pendingWake: Pick<HeartbeatWakeRequest, "intent">,
   result: Extract<HeartbeatRunResult, { status: "skipped" }>,
 ): { delayMs: number; deferWakeOnly: boolean } {
   const now = Date.now();
   const deferWakeOnly =
     result.reason === HEARTBEAT_SKIP_PREEMPTED ||
+    result.reason === HEARTBEAT_SKIP_CHANNEL_NOT_READY ||
     (result.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT &&
       (pendingWake.intent === "scheduled" || pendingWake.intent === "task"));
   return {
@@ -426,7 +440,7 @@ function resolveHeartbeatRetrySchedule(
 }
 
 function retryPendingWake(
-  pendingWake: PendingWakeReason,
+  pendingWake: Parameters<typeof queuePendingWakeReason>[0],
   retrySchedule: { delayMs: number; deferWakeOnly: boolean } = {
     delayMs: DEFAULT_RETRY_MS,
     deferWakeOnly: false,
@@ -620,7 +634,6 @@ function schedulePendingWakes(readyDelayMs: number) {
       ? pendingGlobalImmediateWake.immediateBarrierSequence
       : undefined;
   let earliestNotBeforeMs = Number.POSITIVE_INFINITY;
-  let hasReadyWake = false;
   for (const [targetKey, group] of pendingWakes) {
     if (activeWakeTargets.has(targetKey)) {
       continue;
@@ -656,15 +669,13 @@ function schedulePendingWakes(readyDelayMs: number) {
       }
       const nextReadyAtMs = Math.max(pending.readyAtMs ?? 0, pending.notBeforeMs ?? 0);
       if (nextReadyAtMs <= now) {
-        hasReadyWake = true;
-      } else {
-        earliestNotBeforeMs = Math.min(earliestNotBeforeMs, nextReadyAtMs);
+        schedule(readyDelayMs);
+        return;
       }
+      earliestNotBeforeMs = Math.min(earliestNotBeforeMs, nextReadyAtMs);
     }
   }
-  if (hasReadyWake) {
-    schedule(readyDelayMs);
-  } else if (Number.isFinite(earliestNotBeforeMs)) {
+  if (Number.isFinite(earliestNotBeforeMs)) {
     schedule(earliestNotBeforeMs - now);
   }
 }
@@ -747,5 +758,15 @@ export function requestHeartbeat(opts: {
       readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
     });
     schedule(coalesceMs);
+  });
+}
+
+/** Transfers a direct attempt to the wake owner's existing retry lifecycle. */
+export function requestHeartbeatRetry(
+  wake: HeartbeatWakeRequest,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
+) {
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    retryPendingWake(wake, resolveHeartbeatRetrySchedule(wake, result));
   });
 }

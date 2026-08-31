@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import {
   ChannelType,
+  MessageFlags,
   PermissionFlagsBits,
   type RESTGetAPIGuildEmojisResult,
 } from "discord-api-types/v10";
@@ -12,7 +13,9 @@ import type { GatewayPlugin } from "../internal/gateway.js";
 import { createInternalTestClient } from "../internal/test-builders.test-support.js";
 import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
+import { sendDiscordComponentMessage as realSendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
+import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { discordGuildActionRuntime, discordModerationActionRuntime } from "./runtime-deps.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
@@ -2252,6 +2255,42 @@ describe("handleDiscordMessagingAction", () => {
       "",
       expect.objectContaining({ embeds }),
     );
+  });
+
+  it("delivers stringified components through the full messaging action to REST", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    discordMessagingActionRuntime.sendDiscordComponentMessage = ((recipient, spec, options) =>
+      realSendDiscordComponentMessage(recipient, spec, {
+        ...options,
+        rest: loopback.rest,
+      })) as typeof realSendDiscordComponentMessage;
+    try {
+      await handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "fallback text",
+          components: JSON.stringify({ blocks: [{ type: "text", text: "Gateway proof" }] }),
+        },
+        enableAllActions,
+      );
+
+      const post = loopback.requests.find((request) => request.method === "POST");
+      expect(post).toBeDefined();
+      const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
+      expect(body.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(body.components).toEqual([
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "fallback text" },
+            { type: 10, content: "Gateway proof" },
+          ],
+        },
+      ]);
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("ignores empty components objects for regular media sends", async () => {

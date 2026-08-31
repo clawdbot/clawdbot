@@ -8,16 +8,18 @@ import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
-  setCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -56,22 +58,24 @@ function createSnapshot(
         },
       ]
     : [];
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
     ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
     ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -212,7 +216,7 @@ describe("current plugin metadata snapshot", () => {
     outerRegistry.providers.push({
       pluginId: "outer",
       source: "test",
-      provider: { id: "outer", label: "Outer", auth: [] },
+      provider: { id: "outer", label: "Outer", auth: [], classifyFailoverReason: () => "billing" },
     });
     outerRegistry.trustedToolPolicies = [
       {
@@ -257,6 +261,12 @@ describe("current plugin metadata snapshot", () => {
                   [],
                 );
                 expect(resolveProviderRuntimePlugin({ provider: "outer" })).toBeUndefined();
+                expect(
+                  classifyProviderFailoverSignalWithPlugin({
+                    provider: "outer",
+                    context: { provider: "outer", errorMessage: "fixture failure" },
+                  }),
+                ).toBeUndefined();
                 expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
                 throw new Error("inner generation failed");
               },
@@ -271,6 +281,12 @@ describe("current plugin metadata snapshot", () => {
           ).toBe(outerSnapshot);
           expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(outerRegistry);
           expect(resolveProviderRuntimePlugin({ provider: "outer" })?.id).toBe("outer");
+          expect(
+            classifyProviderFailoverSignalWithPlugin({
+              provider: "outer",
+              context: { provider: "outer", errorMessage: "fixture failure" },
+            }),
+          ).toBe("billing");
           expect(
             getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
           ).toEqual(["outer-policy"]);
@@ -751,7 +767,7 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
 
     const replacedLease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
-    setCurrentPluginMetadataSnapshot(newer);
+    setGatewayPluginMetadataSnapshot(newer);
     expect(replacedLease.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBe(newer);
   });

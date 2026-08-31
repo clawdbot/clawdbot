@@ -57,7 +57,6 @@ describe("deliverMatrixReplies file boundary", () => {
       roomId: "!room:example.org",
       client,
       runtime: runtimeEnv,
-      textLimit: 4000,
       replyToMode: "off",
       mediaLocalRoots: [tempDir],
     });
