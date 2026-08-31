@@ -110,65 +110,52 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   return { defaultAgentId, ordered };
 }
 
-async function createHealthSessionStoreReader() {
+async function createHealthSessionStoreReader(agentIds: readonly string[]) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
+  const { readSessionStoreSummaryReadOnly } =
+    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  return createStatusSessionStoreReader((scope) => {
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
     try {
-      return listSessionEntriesReadOnly({ ...scope, clone: false, projection: "list" });
+      return readSessionStoreSummaryReadOnly(scope, options);
     } catch (error) {
       if (!isTransientSqliteError(error)) {
         throw error;
       }
       // Health is best-effort: one empty snapshot beats repeated transient lock failures.
-      return [];
+      return { count: 0, recent: [], byAgent: new Map() };
     }
   });
 }
 
-function projectHealthSessions(path: string, sessions: SessionEntrySummary[]) {
-  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
-  for (const { sessionKey: key, entry } of sessions) {
-    const session = { key, updatedAt: entry.updatedAt ?? 0 };
-    const insertAt = recentSessions.findIndex(
-      (recentSession) => session.updatedAt > recentSession.updatedAt,
-    );
-    // Health returns only five rows. Keep the projection bounded while scanning
-    // so refreshes never sort the complete session snapshot.
-    if (insertAt >= 0) {
-      recentSessions.splice(insertAt, 0, session);
-      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
-        recentSessions.pop();
-      }
-    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
-      recentSessions.push(session);
-    }
-  }
-  const recent = recentSessions.map((session) => ({
-    key: session.key,
-    updatedAt: session.updatedAt || null,
-    age: session.updatedAt ? Date.now() - session.updatedAt : null,
+function projectHealthSessions(
+  path: string,
+  summary: { count: number; recent: SessionEntrySummary[] },
+) {
+  const recent = summary.recent.map(({ sessionKey: key, entry }) => ({
+    key,
+    updatedAt: entry.updatedAt || null,
+    age: entry.updatedAt ? Date.now() - entry.updatedAt : null,
   }));
   return {
     path,
-    count: sessions.length,
+    count: summary.count,
     recent,
   } satisfies HealthSummary["sessions"];
 }
 
 async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const reader = await createHealthSessionStoreReader();
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
   const store = reader.read(storePath, agentId);
-  return projectHealthSessions(store.path, store.sessions);
+  return projectHealthSessions(store.path, store);
 }
 
-/** Projects borrowed rows synchronously before returning the owned health summaries. */
+/** Shares one bounded session snapshot across every configured agent in this collection. */
 export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
 ): Promise<AgentHealthSummary[]> {
-  const reader = await createHealthSessionStoreReader();
+  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
   return ordered.map((entry) => {
     const store = reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
@@ -179,7 +166,7 @@ export async function buildHealthAgentSummaries(
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-      sessions: projectHealthSessions(store.path, store.sessions),
+      sessions: projectHealthSessions(store.path, store),
     };
   });
 }
