@@ -401,9 +401,6 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       return true;
     }
     return !hasActiveAgentDatabaseLease(params.agentId, params.env);
-  } catch {
-    // The fenced migration owns validation and user-facing diagnostics.
-    return true;
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
