@@ -174,11 +174,16 @@ async function finishPreparedManualRun(
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
         receiptSettlementDisposition = "owner-unavailable";
       }
-      coreResult = authorCronRunCompletion(state, executionJob, {
-        status: "error",
-        error:
-          err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
-      });
+      coreResult = {
+        ...authorCronRunCompletion(state, executionJob, {
+          status: "error",
+          error:
+            err instanceof CronRunReceiptRevisionError
+              ? err.message
+              : normalizeCronRunErrorText(err),
+        }),
+        ...(taskRunId ? { taskRunId } : {}),
+      };
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
