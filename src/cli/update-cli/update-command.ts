@@ -3401,7 +3401,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     });
     return;
   }
-  const switchToGit = requestedChannel === "dev" && installKind !== "git";
+  // A configured dev channel is a Git checkout too. A one-off package tag
+  // deliberately stays package-scoped, unless the caller explicitly selects dev.
+  const explicitTag = normalizeTag(opts.tag);
+  const switchToGit =
+    installKind !== "git" &&
+    (requestedChannel === "dev" || (selectedChannel === "dev" && explicitTag === null));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
@@ -3411,7 +3416,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const devTargetRef =
     channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
 
-  const explicitTag = normalizeTag(opts.tag);
   if (channel === "extended-stable" && explicitTag) {
     await reportPreMutationUpdateFailure({
       root,

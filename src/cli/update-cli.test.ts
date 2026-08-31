@@ -5608,6 +5608,47 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it("routes a stored dev channel from a package install to the git update flow", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    mockPackageInstallStatus(packageRoot);
+    const config = { update: { channel: "dev" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      resolved: config,
+      sourceConfig: config,
+      runtimeConfig: config,
+      config,
+    });
+    await updateCommand({ dryRun: true, json: true, restart: false });
+
+    const preview = lastWriteJsonCall() as
+      | { updateInstallKind?: string; switchToGit?: boolean }
+      | undefined;
+    expect(preview?.updateInstallKind).toBe("git");
+    expect(preview?.switchToGit).toBe(true);
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
+  it("keeps a stored-dev package install on the package path for a one-off tag", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    mockPackageInstallStatus(packageRoot);
+    const config = { update: { channel: "dev" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      resolved: config,
+      sourceConfig: config,
+      runtimeConfig: config,
+      config,
+    });
+
+    await updateCommand({ tag: "latest", yes: true, restart: false });
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expectPackageInstallSpec("openclaw@latest");
+  });
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
