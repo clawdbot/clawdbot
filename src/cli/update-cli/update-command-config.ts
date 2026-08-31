@@ -247,9 +247,9 @@ export async function persistValidatedDowngradeConfig(
     snapshot.valid &&
     shouldWarnOnTouchedVersion(VERSION, snapshot.sourceConfig.meta?.lastTouchedVersion)
   ) {
-    // After target-owned convergence, commit even an unchanged config through the
-    // normal validator/writer. Its version stamp keeps later restarts usable after
-    // a same-channel downgrade without bypassing the newer-config guard.
+    // Strict target validation permits this write even when Doctor execution failed.
+    // Committing unchanged config through its normal writer stamps the target version,
+    // so same-channel downgrades retain ordinary restart eligibility.
     await withPluginLifecycleLease({}, async () => {
       await mutateConfigFileWithRetry({ mutate: () => undefined });
     });

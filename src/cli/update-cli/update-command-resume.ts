@@ -136,9 +136,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     timeoutMs: params.timeoutMs,
   });
   const { pluginUpdate } = completed;
-  if (pluginUpdate.status !== "error") {
-    await persistValidatedDowngradeConfig(completed.configSnapshot);
-  }
+  await persistValidatedDowngradeConfig(completed.configSnapshot);
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],

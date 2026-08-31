@@ -276,9 +276,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
-  if (pluginUpdate.status !== "error") {
-    await persistValidatedDowngradeConfig(configSnapshot);
-  }
+  await persistValidatedDowngradeConfig(configSnapshot);
 
   if (opts.deferCompletionCache) {
     phaseTimings.push({
