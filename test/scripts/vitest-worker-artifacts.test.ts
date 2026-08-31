@@ -641,11 +641,11 @@ describe("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
-            import {resolveProviderRuntimePluginHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/provider-hook-runtime.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
             const {buildEmbeddedRunPayloads} = await import(process.argv[2]);
+            const {resolveProviderRuntimePluginHandle} = await import(process.argv[3]);
             const imported = performance.now();
             assert.deepEqual(observed(),[], 'importing classifier code must not materialize the provider');
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null);
@@ -670,7 +670,13 @@ describe("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
-            const call = () => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const call = () => {
+              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              if (${scope === "scoped"}) {
+                assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
+              }
+              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+            };
             const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
             const callMs = performance.now()-callStarted;
             const records = observed();
@@ -697,7 +703,18 @@ describe("fresh compiled subprocess invocation", () => {
                   ),
             );
             const result = await node(
-              [...resolveRuntimeWorkerArgv(pathToFileURL(probe)), url.href],
+              [
+                ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
+                url.href,
+                pathToFileURL(
+                  mode === "source"
+                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
+                    : path.join(
+                        owner.descriptor.directory,
+                        "dist/plugins/provider-hook-runtime.js",
+                      ),
+                ).href,
+              ],
               root,
               {
                 ...process.env,
