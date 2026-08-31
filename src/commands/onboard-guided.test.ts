@@ -1018,7 +1018,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({}, runtime, deps);
+    await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();

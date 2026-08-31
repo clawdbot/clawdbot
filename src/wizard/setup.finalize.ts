@@ -295,7 +295,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
     );
   }
 
-  if (process.platform === "linux" && systemdAvailable) {
+  // Foreground setup must not enable lingering as a side effect of skipping the service.
+  if (process.platform === "linux" && systemdAvailable && opts.installDaemon !== false) {
     const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,

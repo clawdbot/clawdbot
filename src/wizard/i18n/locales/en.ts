@@ -282,6 +282,26 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      quickstartSilentFailures:
+        "{count} detected option(s) did not respond; continuing with the verified route.",
+      laneQuestion: "How would you like to start? Continuing accepts the security note.",
+      laneQuickLabel: "Quick start (recommended)",
+      laneQuickHint: "Find AI access on this machine, verify it, then open the web dashboard.",
+      laneCustomLabel: "Custom setup",
+      laneCustomHint: "Walk through every setup option.",
+      quickstartRoute: "Using {label}. You can change it later in the dashboard or setup wizard.",
+      quickstartManual:
+        "Quick start found no usable AI access. Let’s connect a provider with custom setup.",
+      quickstartDashboard: "Dashboard: {url}",
+      quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
+      quickstartBackground:
+        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartReopen:
+        "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
+      quickstartBrowserUnavailable:
+        "The browser handoff did not finish. The Gateway is still running; open the dashboard when you are ready.",
+      quickstartGatewayPending:
+        "The Gateway is not reachable yet. Keep this terminal open and run openclaw gateway status to check startup.",
       accessFullHint: "Recommended. I look for AI apps and keys on this machine and test them.",
       accessFullLabel: "Full access — find everything automatically",
       accessGuardedHint: "I ask once before looking around, or you configure manually.",

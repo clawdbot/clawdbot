@@ -15,7 +15,19 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-Local mode (default) walks you through:
+Fresh local guided onboarding first shows the security notice and one choice:
+**Quick start** or **Custom setup**. Either choice accepts the notice. Quick
+start reuses detected AI access, verifies it, saves config, and opens the web
+dashboard with a foreground Gateway. It uses agent name `main` and full access,
+leaves telemetry consent unset, and skips route confirmation, memory import,
+and app recommendations. **Ctrl+C** stops the Gateway without removing config;
+`openclaw gateway install` enables background operation later.
+
+Custom setup keeps the full guided prompts. If quick start finds no usable
+route, it switches to manual provider setup and continues the full guided flow,
+including Gateway service installation. See [Guided default](/start/wizard#guided-default).
+
+The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
 
 - Workspace location and bootstrap files
 - Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
@@ -30,6 +42,9 @@ Remote mode configures this machine to connect to a Gateway elsewhere. It does
 not install or modify anything on the remote host.
 
 ## Local flow details
+
+These steps describe the classic wizard. The guided quick-start lane is
+described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
 <Steps>
   <Step title="Setup mode">

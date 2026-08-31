@@ -15,9 +15,9 @@ import type {
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { requestTelemetryConsent, requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
+import { requestGuidedOnboardingConsent } from "./onboard-guided-consent.js";
 import {
   activationLines,
   formatSetupCandidateFailure,
@@ -63,6 +63,7 @@ export type GuidedOnboardingDeps = {
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
   /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
   runBrowserHandoff?: typeof runBrowserHatchHandoff;
+  runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
   platform?: NodeJS.Platform;
 };
 
@@ -70,6 +71,7 @@ export type GuidedAccessMode = "full" | "guarded";
 
 type GuidedOnboardingHandoff =
   | { workspace: string; next: "browser" }
+  | { workspace: string; next: "foreground-gateway" }
   | { workspace: string; next: "hatch"; local: boolean }
   | { workspace: string; next: "chat"; agentName?: string };
 
@@ -99,25 +101,6 @@ async function openSystemAgentChat(
       );
     });
   await runChat(workspace, runtime, acceptRisk, agentName);
-}
-
-async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<string | undefined> {
-  const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt;
-  if (!securityAcknowledgedAt) {
-    return undefined;
-  }
-  const { mutateConfigFileWithRetry } = await import("../config/config.js");
-  const committed = await mutateConfigFileWithRetry({
-    mutate: (draft) => {
-      if (!draft.wizard?.securityAcknowledgedAt) {
-        draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
-      }
-      if (config.telemetry?.consentedAt && !draft.telemetry?.consentedAt) {
-        draft.telemetry = config.telemetry;
-      }
-    },
-  });
-  return committed.nextConfig.wizard?.securityAcknowledgedAt;
 }
 
 async function runGuidedOnboardingFlow(
@@ -164,38 +147,29 @@ async function runGuidedOnboardingFlow(
   // Capture receipt ownership before risk acknowledgement creates the config;
   // otherwise a concurrent fresh run could be mistaken for stale reset state.
   const previousLocalSetup = localOnboarding?.readLocalOnboardingState(snapshot.path);
-  let acknowledgedConfig = await requireRiskAcknowledgement({
+  const offerQuickstart =
+    custodianMode &&
+    (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    opts.nonInteractive !== true &&
+    opts.skipUi !== true &&
+    opts.tui !== true;
+  const consent = await requestGuidedOnboardingConsent({
     opts,
     prompter,
     config: existingConfig,
+    offerQuickstart,
+    persistRiskAcknowledgement: deps.persistRiskAcknowledgement,
   });
-  acknowledgedConfig = await requestTelemetryConsent({
-    opts,
-    prompter,
-    config: acknowledgedConfig,
-  });
-  let securityAcknowledgedAt = acknowledgedConfig.wizard?.securityAcknowledgedAt;
-  if (
-    !existingConfig.wizard?.securityAcknowledgedAt ||
-    (!existingConfig.telemetry?.consentedAt && acknowledgedConfig.telemetry?.consentedAt)
-  ) {
-    const persistedAcknowledgement = await (
-      deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement
-    )(acknowledgedConfig);
-    if (persistedAcknowledgement) {
-      securityAcknowledgedAt = persistedAcknowledgement;
-      acknowledgedConfig = {
-        ...acknowledgedConfig,
-        wizard: { ...acknowledgedConfig.wizard, securityAcknowledgedAt },
-      };
-    }
-  }
-  const onboardingSecurityAcknowledgedAt = securityAcknowledgedAt;
-  if (!onboardingSecurityAcknowledgedAt) {
-    throw new Error("Local onboarding requires its persisted security acknowledgement.");
-  }
+  let { quickstart } = consent;
+  const { config: acknowledgedConfig, securityAcknowledgedAt: onboardingSecurityAcknowledgedAt } =
+    consent;
   const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(snapshot);
-  const firstAgent = await promptFirstOnboardingAgent(hasAuthoredRoster, opts.agentName, prompter);
+  const firstAgent = await promptFirstOnboardingAgent(
+    hasAuthoredRoster,
+    opts.agentName,
+    prompter,
+    quickstart,
+  );
 
   // Reset removes config but keeps SQLite. Only the original, pre-acknowledgement
   // snapshot distinguishes a new installation from an interrupted previous run.
@@ -243,7 +217,7 @@ async function runGuidedOnboardingFlow(
   // Remote-gateway onboarding (chat handoff) discovers on the gateway host and
   // keeps its legacy flow; the local-consent question would be misleading there.
   let accessMode: GuidedAccessMode = "full";
-  if (custodianMode) {
+  if (custodianMode && !quickstart) {
     const accessChoice = await prompter.select<string>({
       message: t("wizard.guided.accessQuestion"),
       options: [
@@ -263,9 +237,9 @@ async function runGuidedOnboardingFlow(
       initialValue: existingConfig.wizard?.accessMode === "guarded" ? "guarded" : "full",
     });
     accessMode = accessChoice === "guarded" ? "guarded" : "full";
-    if (existingConfig.wizard?.accessMode !== accessMode) {
-      await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
-    }
+  }
+  if (custodianMode && existingConfig.wizard?.accessMode !== accessMode) {
+    await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
   }
 
   // Inference is the only prerequisite for OpenClaw. Use the caller's or
@@ -447,18 +421,28 @@ async function runGuidedOnboardingFlow(
     // persisted; "see other options" reopens the full picker on top of it.
     if (ladderFailures.length > 0) {
       await prompter.note(
-        t("wizard.guided.silentFailures", { count: String(ladderFailures.length) }),
+        t(quickstart ? "wizard.guided.quickstartSilentFailures" : "wizard.guided.silentFailures", {
+          count: String(ladderFailures.length),
+        }),
         t("wizard.guided.aiAccessTitle"),
       );
     }
-    const routeChoice = await prompter.select<string>({
-      message: t("wizard.guided.routeConfirm", { label: successLabel }),
-      options: [
-        { value: "use", label: t("wizard.guided.routeUse", { label: successLabel }) },
-        { value: "other", label: t("wizard.guided.routeOther") },
-      ],
-      initialValue: "use",
-    });
+    if (quickstart) {
+      await prompter.note(
+        t("wizard.guided.quickstartRoute", { label: successLabel }),
+        t("wizard.guided.aiAccessTitle"),
+      );
+    }
+    const routeChoice = quickstart
+      ? "use"
+      : await prompter.select<string>({
+          message: t("wizard.guided.routeConfirm", { label: successLabel }),
+          options: [
+            { value: "use", label: t("wizard.guided.routeUse", { label: successLabel }) },
+            { value: "other", label: t("wizard.guided.routeOther") },
+          ],
+          initialValue: "use",
+        });
     if (routeChoice === "other") {
       // The quiet summary promised the details here; show them before the picker.
       if (ladderFailures.length > 0) {
@@ -486,6 +470,10 @@ async function runGuidedOnboardingFlow(
       }
     }
   } else if (!resultLines) {
+    if (quickstart) {
+      await prompter.note(t("wizard.guided.quickstartManual"), t("wizard.guided.aiAccessTitle"));
+      quickstart = false;
+    }
     if (ladderFailures.length > 0) {
       const failureLines = ladderFailures.map(formatSetupCandidateFailure);
       await prompter.note(
@@ -599,6 +587,7 @@ async function runGuidedOnboardingFlow(
             : {}),
           ...(!opts.skipHooks ? { finalizeConfig: enableDefaultOnboardingInternalHooks } : {}),
           surface: "cli",
+          ...(quickstart ? { installDaemon: false } : {}),
           runtime,
         }),
       );
@@ -638,7 +627,7 @@ async function runGuidedOnboardingFlow(
       return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
     }
   }
-  if (wantsDiscovery) {
+  if (wantsDiscovery && !quickstart) {
     // Import destinations come from the final persisted agent workspace. Importing
     // before setup apply strands memories when first run specifies --workspace.
     const runMemoryImport =
@@ -670,6 +659,10 @@ async function runGuidedOnboardingFlow(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : appliedWorkspace;
+  if (quickstart) {
+    await prompter.outro(t("wizard.guided.setupDone"));
+    return { workspace: hatchWorkspace, next: "foreground-gateway" };
+  }
   if (opts.skipUi === true) {
     await prompter.outro(t("wizard.guided.complete"));
     return null;
@@ -750,6 +743,16 @@ export async function runGuidedOnboarding(
   }, runtime);
   const handoff = state.handoff;
   if (!handoff) {
+    return;
+  }
+  if (handoff.next === "foreground-gateway") {
+    const runForegroundGateway =
+      deps.runForegroundGateway ??
+      (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
+    await runForegroundGateway({
+      runtime,
+      ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
+    });
     return;
   }
   // Interactive surfaces start only after the wizard lifecycle restores stdin
