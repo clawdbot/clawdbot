@@ -445,7 +445,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
 
     async capture(
-      context: LeaseContext & { profile: CrabboxProfile },
+      context: LeaseContext & { profile: CrabboxProfile; forkedCheckpointId?: string },
       prepareSource?: () => Promise<void>,
     ): Promise<boolean> {
       assertCurrent(context);
@@ -480,7 +480,12 @@ export function createCrabboxWarmImageManager(dependencies: {
             return;
           }
           if (existing.image) {
-            const state = await verifyImage(context, existing.image.checkpointId);
+            // The successful fork already attested this image. A concurrently replaced
+            // image still needs its own verification before capture or retirement.
+            const state =
+              context.forkedCheckpointId === existing.image.checkpointId
+                ? "available"
+                : await verifyImage(context, existing.image.checkpointId);
             if (state === "missing" && !pinned(existing, existing.image.checkpointId)) {
               await deleteImage(context, key, existing);
               existing = openStore().lookup(key)!;
@@ -561,6 +566,8 @@ export function createCrabboxWarmImageManager(dependencies: {
                 "native",
                 "--wait=false",
                 "--json",
+                // Daytona requires explicit permission to stop the scrubbed source for capture.
+                ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
                 ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
               ],
               checkpointCaptureTimeoutMs(context.provider),
@@ -644,7 +651,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       return captured;
     },
 
-    async allocate(context: AllocationContext): Promise<void> {
+    async allocate(context: AllocationContext): Promise<WarmAllocationRecord["choice"]> {
       assertCurrent(context);
       if (context.profile.warmImage) {
         assertCrabboxWarmImageMigrationReady();
@@ -683,7 +690,7 @@ export function createCrabboxWarmImageManager(dependencies: {
                 }
               : undefined,
           );
-          return;
+          return owner.choice;
         }
       }
       assertCurrent(context);
@@ -698,6 +705,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (result.termination !== "exit" || result.code !== 0) {
         throw crabboxCommandError("warmup", result);
       }
+      return { kind: "cold" };
     },
   };
 }
