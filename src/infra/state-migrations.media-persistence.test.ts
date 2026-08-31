@@ -436,6 +436,10 @@ describe("legacy media persistence doctor migration", () => {
           )
           .get(),
       ).toEqual({ name: "session_suggestions" });
+      expect(
+        (after.prepare("SELECT COUNT(*) AS count FROM sqlite_stat1").get() as { count: number })
+          .count,
+      ).toBeGreaterThan(0);
       const row = after
         .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
         .get("legacy") as { event_json: string };
@@ -444,6 +448,37 @@ describe("legacy media persistence doctor migration", () => {
       expect(message["__openclaw"]).toMatchObject({
         media: [expect.objectContaining({ path: "/media/a.png" })],
       });
+    } finally {
+      after.close();
+    }
+  });
+
+  it("refreshes planner statistics for an already-current agent database", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-current-stats-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      eventsBySession: {
+        current: [
+          createEvent({
+            id: "event-1",
+            parentId: null,
+            timestamp: 1000,
+            message: { role: "user", content: "current" },
+          }),
+        ],
+      },
+    });
+
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+    const { DatabaseSync } = requireNodeSqlite();
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        (after.prepare("SELECT COUNT(*) AS count FROM sqlite_stat1").get() as { count: number })
+          .count,
+      ).toBeGreaterThan(0);
     } finally {
       after.close();
     }

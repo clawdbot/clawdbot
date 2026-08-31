@@ -356,6 +356,12 @@ function createMigrationDatabaseHandle(
   };
 }
 
+function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
+  // This short-lived Doctor connection has no query history. The 0x10000 bit checks
+  // every table; analysis_limit also bounds work on supported pre-3.46 SQLite builds.
+  database.exec("PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+}
+
 function migrateAgentDatabase(params: {
   agentId: string;
   beforeTransaction?: () => void;
@@ -423,6 +429,7 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+        refreshAgentDatabasePlannerStatistics(database);
         return { ...detected, initialVersion, finalVersion: userVersion };
       }
     }
@@ -473,6 +480,7 @@ function migrateAgentDatabase(params: {
       },
     );
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
+    refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
       initialVersion,
