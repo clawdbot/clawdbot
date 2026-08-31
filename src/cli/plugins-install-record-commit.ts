@@ -24,6 +24,7 @@ import {
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
   resolveRetainedManagedNpmInstallPackageInfo,
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "../plugins/managed-npm-retention.js";
@@ -114,15 +115,19 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   previousRecord?: PluginInstallRecord;
   nextRecord?: PluginInstallRecord;
 }): string | null {
-  if (params.previousRecord?.source !== "npm" || params.nextRecord?.source !== "npm") {
+  if (params.previousRecord?.source !== "npm") {
     return null;
   }
   const previousInstallPath = params.previousRecord.installPath?.trim();
-  const nextInstallPath = params.nextRecord.installPath?.trim();
-  if (!previousInstallPath || !nextInstallPath) {
+  const nextInstallPath = params.nextRecord?.installPath?.trim();
+  if (!previousInstallPath || (params.nextRecord && params.nextRecord.source !== "npm")) {
     return null;
   }
-  if (installPathsOverlap(previousInstallPath, nextInstallPath)) {
+  if (
+    params.nextRecord &&
+    nextInstallPath &&
+    installPathsOverlap(previousInstallPath, nextInstallPath)
+  ) {
     return null;
   }
 
@@ -145,7 +150,7 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   ) {
     return null;
   }
-  if (installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
+  if (nextInstallPath && installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
     return null;
   }
   return plan.directoryRemoval.target;
@@ -174,17 +179,21 @@ function findReplacementNpmRecordForRemovedRecord(params: {
   return null;
 }
 
-async function markRetainedReplacedManagedNpmInstallRecords(params: {
+async function markRetiredManagedNpmInstallRecords(params: {
   previousInstallRecords: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  retainRemovedNpmInstallRecord?: string;
   createdMarkerPaths: string[];
 }): Promise<void> {
   const markedPreviousPluginIds = new Set<string>();
-  const markReplacement = async (
+  const markRetiredInstall = async (
     pluginId: string,
     previousRecord: PluginInstallRecord | undefined,
     nextRecord: PluginInstallRecord | undefined,
   ) => {
+    if (!nextRecord && pluginId !== params.retainRemovedNpmInstallRecord) {
+      return;
+    }
     const packageDir = resolveRetainedManagedNpmInstallMarkerTarget({
       pluginId,
       previousRecord,
@@ -198,7 +207,10 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
     const marked = await markRetainedManagedNpmInstall({
       packageDir,
       pluginId,
-      reason: "replaced-by-managed-npm-generation-update",
+      reason:
+        nextRecord?.source === "npm"
+          ? "replaced-by-managed-npm-generation-update"
+          : RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
     });
     if (marked && !markerAlreadyExisted) {
       // Record each marker immediately so a later filesystem failure can roll it back.
@@ -208,13 +220,13 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
   };
 
   for (const [pluginId, nextRecord] of Object.entries(params.nextInstallRecords)) {
-    await markReplacement(pluginId, params.previousInstallRecords[pluginId], nextRecord);
+    await markRetiredInstall(pluginId, params.previousInstallRecords[pluginId], nextRecord);
   }
   for (const [pluginId, previousRecord] of Object.entries(params.previousInstallRecords)) {
     if (markedPreviousPluginIds.has(pluginId) || params.nextInstallRecords[pluginId]) {
       continue;
     }
-    await markReplacement(
+    await markRetiredInstall(
       pluginId,
       previousRecord,
       findReplacementNpmRecordForRemovedRecord({
@@ -274,6 +286,7 @@ async function restoreClearedRetainedManagedNpmInstallMarkers(
 async function commitPluginInstallRecordsWithWriter(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  retainRemovedNpmInstallRecord?: string;
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
   commit: ConfigCommit;
@@ -285,9 +298,12 @@ async function commitPluginInstallRecordsWithWriter(params: {
   try {
     await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
     try {
-      await markRetainedReplacedManagedNpmInstallRecords({
+      await markRetiredManagedNpmInstallRecords({
         previousInstallRecords,
         nextInstallRecords: params.nextInstallRecords,
+        ...(params.retainRemovedNpmInstallRecord
+          ? { retainRemovedNpmInstallRecord: params.retainRemovedNpmInstallRecord }
+          : {}),
         // Keep partial progress visible to the outer rollback path.
         createdMarkerPaths: retainedMarkerPaths,
       });
@@ -330,6 +346,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
 export async function commitPluginInstallRecordsWithConfig(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  retainRemovedNpmInstallRecord?: string;
   nextConfig: OpenClawConfig;
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;

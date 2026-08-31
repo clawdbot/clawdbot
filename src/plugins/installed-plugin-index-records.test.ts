@@ -22,6 +22,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import {
+  markRetainedManagedNpmInstall,
+  RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+} from "./managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
@@ -380,6 +384,30 @@ describe("plugin index install records store", () => {
       installPath: discordDir,
       version: "2026.5.2",
     });
+  });
+
+  it("does not recover a managed npm package retained by an explicit uninstall", async () => {
+    const stateDir = makeStateDir();
+    const pluginDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/retained-plugin",
+      pluginId: "retained-plugin",
+      version: "1.0.0",
+    });
+
+    expect(
+      loadInstalledPluginIndexInstallRecordsSync({ stateDir })["retained-plugin"],
+    ).toBeDefined();
+    await markRetainedManagedNpmInstall({
+      packageDir: pluginDir,
+      pluginId: "retained-plugin",
+      reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+    });
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+
+    expect(
+      loadInstalledPluginIndexInstallRecordsSync({ stateDir })["retained-plugin"],
+    ).toBeUndefined();
   });
 
   it("keeps persisted install record metadata over recovered npm records", async () => {

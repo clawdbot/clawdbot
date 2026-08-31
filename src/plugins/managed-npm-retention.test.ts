@@ -7,6 +7,8 @@ import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallMarkerPath,
+  RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
 } from "./managed-npm-retention.js";
 
 describe("managed npm retention", () => {
@@ -68,6 +70,55 @@ describe("managed npm retention", () => {
       ).resolves.toBe(1);
       expect(fs.existsSync(packageDir)).toBe(false);
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["project", "legacy"] as const)(
+    "preserves %s packages retained by an explicit keep-files uninstall",
+    async (layout) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
+      const npmDir = path.join(stateDir, "npm");
+      const projectRoot =
+        layout === "legacy"
+          ? npmDir
+          : resolvePluginNpmGenerationProjectDir({
+              npmDir,
+              packageName: "@openclaw/kept-plugin",
+              generationKey: "kept-plugin-v1",
+            });
+      const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "kept-plugin");
+      fs.mkdirSync(packageDir, { recursive: true });
+      await markRetainedManagedNpmInstall({
+        packageDir,
+        pluginId: "kept-plugin",
+        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+      });
+
+      try {
+        await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
+        expect(fs.existsSync(packageDir)).toBe(true);
+        expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
+      } finally {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("cleans a package when its recovery marker cannot be read", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
+    const npmDir = path.join(stateDir, "npm");
+    const packageDir = path.join(npmDir, "node_modules", "@openclaw", "kept-plugin");
+    fs.mkdirSync(packageDir, { recursive: true });
+    const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "{not-json", "utf8");
+
+    try {
+      await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(1);
+      expect(fs.existsSync(packageDir)).toBe(false);
+      expect(fs.existsSync(markerPath)).toBe(false);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

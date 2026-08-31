@@ -8,6 +8,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
 } from "../plugins/managed-npm-retention.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -232,6 +233,114 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       });
 
       expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retain a normally removed managed npm install", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "kept-plugin-v1",
+      "node_modules",
+      "@openclaw",
+      "kept-plugin",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            "kept-plugin": {
+              source: "npm",
+              spec: "@openclaw/kept-plugin@1.0.0",
+              installPath,
+            },
+          },
+          nextInstallRecords: {},
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a keep-files managed npm uninstall so recovery cannot restore it", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "kept-plugin-v1",
+      "node_modules",
+      "@openclaw",
+      "kept-plugin",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            "kept-plugin": {
+              source: "npm",
+              spec: "@openclaw/kept-plugin@1.0.0",
+              installPath,
+            },
+          },
+          nextInstallRecords: {},
+          retainRemovedNpmInstallRecord: "kept-plugin",
+          nextConfig: {},
+        });
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
+      expect(fs.existsSync(installPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a keep-files marker when the install-record commit rolls back", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "kept-plugin-v1",
+      "node_modules",
+      "@openclaw",
+      "kept-plugin",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: {
+              "kept-plugin": {
+                source: "npm",
+                spec: "@openclaw/kept-plugin@1.0.0",
+                installPath,
+              },
+            },
+            nextInstallRecords: {},
+            retainRemovedNpmInstallRecord: "kept-plugin",
+            nextConfig: {},
+          }),
+        ).rejects.toThrow("config changed");
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -495,7 +604,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       packageDir: installPath,
       pluginId: "codex",
       retainedAt: "2026-04-25T00:00:00.000Z",
-      reason: "test-retained-generation",
+      reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
     });
 
     try {
