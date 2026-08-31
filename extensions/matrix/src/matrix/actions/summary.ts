@@ -51,7 +51,10 @@ function parseMatrixRawEvent(value: unknown): MatrixRawEvent | null {
   };
 }
 
-export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSummary {
+export function summarizeMatrixRawEvent(
+  event: MatrixRawEvent,
+  opts: { selfUserId?: string } = {},
+): MatrixMessageSummary {
   const content = event.content as RoomMessageEventContent;
   const relates = content["m.relates_to"];
   const displayContent =
@@ -83,6 +86,7 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
   return {
     eventId: event.event_id,
     sender: event.sender,
+    ...(opts.selfUserId ? { isSelf: opts.selfUserId === event.sender } : {}),
     body: attachment ? attachment.caption : displayContent.body?.trim() || undefined,
     msgtype: displayContent.msgtype,
     attachment,
@@ -112,6 +116,7 @@ export async function fetchEventSummary(
   client: MatrixClient,
   roomId: string,
   eventId: string,
+  opts: { selfUserId?: string } = {},
 ): Promise<MatrixMessageSummary | null> {
   try {
     const raw = parseMatrixRawEvent(await client.getEvent(roomId, eventId));
@@ -121,11 +126,11 @@ export async function fetchEventSummary(
     if (raw.unsigned?.redacted_because) {
       return null;
     }
-    const pollSummary = await fetchMatrixPollMessageSummary(client, roomId, raw);
+    const pollSummary = await fetchMatrixPollMessageSummary(client, roomId, raw, opts);
     if (pollSummary) {
       return pollSummary;
     }
-    return summarizeMatrixRawEvent(raw);
+    return summarizeMatrixRawEvent(raw, opts);
   } catch {
     // Event not found, redacted, or inaccessible - return null
     return null;

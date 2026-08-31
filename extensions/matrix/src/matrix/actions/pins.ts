@@ -47,12 +47,17 @@ export async function listMatrixPins(
   opts: MatrixActionClientOpts = {},
 ): Promise<{ pinned: string[]; events: MatrixMessageSummary[] }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    // Resolve the reading agent's own MXID so pinned-event summaries carry the
+    // same `isSelf` marker as ordinary room-history reads. Mirrors the pattern
+    // in readMatrixMessages() (client.getUserId()); tolerate clients/mocks that
+    // don't implement getUserId rather than failing the pin listing.
+    const selfUserId = await client.getUserId?.().catch(() => undefined);
     const pinned = await readPinnedEvents(client, resolvedRoom);
     const events = (
       await Promise.all(
         pinned.map(async (eventId) => {
           try {
-            return await fetchEventSummary(client, resolvedRoom, eventId);
+            return await fetchEventSummary(client, resolvedRoom, eventId, { selfUserId });
           } catch {
             return null;
           }

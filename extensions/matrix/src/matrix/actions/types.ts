@@ -41,6 +41,13 @@ export type MatrixActionClientOpts = {
 export type MatrixMessageSummary = {
   eventId?: string;
   sender?: string;
+  /**
+   * True when `sender` matches the reading agent's own resolved Matrix user ID.
+   * Only computed when a `selfUserId` is available to the caller; omitted
+   * (not `false`) when self identity could not be resolved, so callers can
+   * distinguish "known not self" from "unknown".
+   */
+  isSelf?: boolean;
   body?: string;
   msgtype?: string;
   attachment?: MatrixMessageAttachmentSummary;
