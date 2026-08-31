@@ -569,6 +569,7 @@ export async function executePluginOwnedProcess(params: {
       }
       if (next.value.type === "result") {
         terminalResult =
+          terminalResult === "error" ||
           next.value.is_error === true ||
           (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"))
             ? "error"

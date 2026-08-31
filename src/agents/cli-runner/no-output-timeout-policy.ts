@@ -15,7 +15,6 @@ type CliNoOutputTimeoutPolicyParams = {
 
 export const isReplaySafeCliResumeControlOnly = (useResume: boolean, ...unsafe: boolean[]) =>
   useResume && !unsafe.some(Boolean);
-
 export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPolicyParams): {
   deferMs?: number;
   error: FailoverError;

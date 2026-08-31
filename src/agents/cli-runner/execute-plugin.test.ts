@@ -779,13 +779,14 @@ describe("plugin-owned CLI execution host boundary", () => {
         context,
         async function* () {
           yield terminal;
+          yield SUCCESS_RESULT;
           throw new Error("SDK stream closed after the provider error");
         },
         { consumeStdout: output.push.bind(output) },
       ),
     ).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
 
-    expect(output.map((line) => JSON.parse(line))).toEqual([terminal]);
+    expect(output.map((line) => JSON.parse(line))).toEqual([terminal, SUCCESS_RESULT]);
   });
 
   it.each([
