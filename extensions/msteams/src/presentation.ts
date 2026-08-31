@@ -114,9 +114,9 @@ export function buildMSTeamsPresentationCard(params: {
 }
 
 /**
- * Attach the Adaptive Card for an adapted presentation, or null when Teams cannot
- * carry one. A card and a media attachment cannot share one activity, so a reply
- * with media keeps its media and the caller degrades the controls to text.
+ * Attach the Adaptive Card for an adapted presentation, or null when Teams cannot carry
+ * one: a card and a media attachment cannot share an activity, so a reply with media
+ * keeps its media and the caller degrades the controls to text.
  */
 export function renderMSTeamsPresentationPayload(params: {
   payload: ReplyPayload;
@@ -140,22 +140,14 @@ export function renderMSTeamsPresentationPayload(params: {
 const countPresentationDataBlocks = (blocks: readonly MessagePresentationBlock[]): number =>
   blocks.filter((block) => block.type === "table" || block.type === "chart").length;
 
-/** Reads the Adaptive Card a prepared reply carries, if any. */
-export function readMSTeamsPresentationCard(
-  payload: ReplyPayload,
-): Record<string, unknown> | undefined {
-  const card = asOptionalRecord(payload.channelData?.msteams)?.presentationCard;
-  return asOptionalRecord(card);
-}
+/** Reads the Adaptive Card a resolved reply carries, if any. */
+export const readMSTeamsPresentationCard = (payload: ReplyPayload) =>
+  asOptionalRecord(asOptionalRecord(payload.channelData?.msteams)?.presentationCard);
 
 /**
- * Resolve a reply's portable presentation into a Teams Adaptive Card.
- *
- * Core renders presentations inside the outbound send pipeline only, so replies the
- * monitor delivers itself arrive with the controls still portable. Preparing them here
- * keeps both Teams delivery paths on one rendering, and mirrors what core's renderer
- * does when a channel cannot carry the controls natively: degrade them to text rather
- * than drop them.
+ * Resolve a reply's portable presentation into a Teams Adaptive Card, keeping both Teams
+ * delivery paths on one rendering. Mirrors core's renderer, including degrading controls
+ * to text rather than dropping them when Teams cannot carry them natively.
  */
 export function prepareMSTeamsReplyPayload(payload: ReplyPayload): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
@@ -169,9 +161,9 @@ export function prepareMSTeamsReplyPayload(payload: ReplyPayload): ReplyPayload 
     presentation,
     capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   });
-  // Core applies this rule before its own renderer, so both Teams paths keep the
-  // same answer: once every structured data block has degraded to text and nothing
-  // interactive remains, the producer's authored fallback beats block flattening.
+  // Core's rule before its own renderer, applied so both Teams paths agree: once every
+  // data block has degraded to text and nothing interactive remains, the producer's
+  // authored fallback beats block flattening.
   if (
     textIsFallback &&
     payload.text?.trim() &&

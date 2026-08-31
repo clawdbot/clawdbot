@@ -201,16 +201,16 @@ export function createTeamsReplyStreamController(params: {
     return { ...payload, text: remainingText || undefined };
   };
 
-  // A native stream carries the reply's text and nothing else. Media and portable
-  // controls are separate content, so the text-free remainder still goes to block
-  // delivery; dropping the whole payload would drop them with the streamed text.
+  // A native stream carries text and nothing else. Media and portable controls are
+  // separate content, so the text-free remainder still goes to block delivery; dropping
+  // the whole payload would drop them along with the streamed text.
   const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
     const remainder = { ...payload, text: undefined };
     return hasReplyContent(remainder) ? remainder : undefined;
   };
 
-  // Whatever that remainder already delivered must not return through the fallback,
-  // which re-sends only the text the stream may have failed to deliver.
+  // What that remainder already delivered must not return through the fallback, which
+  // re-sends only the text the stream may have failed to deliver.
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
     const {
       mediaUrl: _mediaUrl,

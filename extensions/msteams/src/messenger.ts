@@ -232,15 +232,12 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const rawPayload of replies) {
-    // Core resolves presentations inside the outbound send pipeline only, so replies the
-    // monitor delivers itself still carry portable controls. Resolving at the reply
-    // path's one renderer keeps both Teams paths on the same card, and runs after the
-    // stream controller has taken the text Teams already showed.
+    // Core resolves presentations in the outbound send pipeline only, so replies the
+    // monitor delivers itself still carry portable controls. Resolving here - the reply
+    // path's one renderer - runs after the stream took the text Teams already showed.
     const payload = prepareMSTeamsReplyPayload(rawPayload);
-    // A resolved presentation carries its text inside the card, so the card is the whole
-    // message - the same thing `sendPayload` does on the outbound path. It is also
-    // content in its own right: a controls-only reply has no text or media and would
-    // otherwise be skipped, producing no Teams activity at all.
+    // The card carries this reply's text, so it is the whole message, and it is content
+    // on its own: a controls-only reply would otherwise be skipped as empty.
     const card = readMSTeamsPresentationCard(payload);
     if (card) {
       out.push({ card });
@@ -432,8 +429,8 @@ export async function sendMSTeamsMessages(params: {
   feedbackLoopEnabled?: boolean;
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
-  // A card is content on its own: it carries both the reply's text and its controls,
-  // so a card-only message must not be filtered out as empty.
+  // A card carries both the reply's text and its controls, so a card-only message
+  // must not be filtered out as empty.
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl || m.card,
   );
