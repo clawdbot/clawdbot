@@ -1,5 +1,7 @@
 /** Builds platform-specific log and start hints for daemon status output. */
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
+import { readPersistedLaunchdStderrPath, resolveAdvertisedLaunchdStderr } from "./launchd-stdio.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 export function buildPlatformRuntimeLogHints(params: {
@@ -12,10 +14,15 @@ export function buildPlatformRuntimeLogHints(params: {
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
     const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const advertisedStderr = resolveAdvertisedLaunchdStderr(readPersistedLaunchdStderrPath(env));
+    const stderrHint =
+      advertisedStderr.kind === "file"
+        ? `Launchd stderr (if installed): ${advertisedStderr.path}`
+        : `Launchd stderr (if installed): suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway install", env)}.`;
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
+      stderrHint,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }

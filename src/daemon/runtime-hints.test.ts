@@ -1,9 +1,61 @@
 // Daemon runtime hint tests cover platform-specific daemon guidance.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import { buildPlatformRuntimeLogHints, buildPlatformServiceStartHints } from "./runtime-hints.js";
 
+const { readPersistedLaunchdStderrPath } = vi.hoisted(() => ({
+  readPersistedLaunchdStderrPath: vi.fn(() => null as string | null),
+}));
+
+vi.mock("./launchd-stdio.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./launchd-stdio.js")>();
+  return {
+    ...actual,
+    readPersistedLaunchdStderrPath,
+  };
+});
+
 describe("buildPlatformRuntimeLogHints", () => {
-  it("renders launchd log hints on darwin", () => {
+  it("does not invent gateway.err.log when the LaunchAgent plist is missing", () => {
+    readPersistedLaunchdStderrPath.mockReturnValue(null);
+    expect(
+      buildPlatformRuntimeLogHints({
+        platform: "darwin",
+        env: {
+          HOME: "/Users/test",
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+          OPENCLAW_LOG_PREFIX: "gateway",
+        },
+        systemdServiceName: "openclaw-gateway",
+        windowsTaskName: "OpenClaw Gateway",
+      }),
+    ).toEqual([
+      "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
+      `Launchd stderr (if installed): suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway install")}.`,
+      "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
+    ]);
+  });
+
+  it("does not invent gateway.err.log when the LaunchAgent still discards stderr", () => {
+    readPersistedLaunchdStderrPath.mockReturnValue("/dev/null");
+    const hints = buildPlatformRuntimeLogHints({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+        OPENCLAW_LOG_PREFIX: "gateway",
+      },
+      systemdServiceName: "openclaw-gateway",
+      windowsTaskName: "OpenClaw Gateway",
+    });
+    expect(hints[1]).toContain("suppressed (/dev/null)");
+    expect(hints[1]).not.toContain("gateway.err.log");
+  });
+
+  it("advertises the persisted LaunchAgent stderr path after rewrite", () => {
+    readPersistedLaunchdStderrPath.mockReturnValue(
+      "/Users/test/Library/Logs/openclaw/gateway.err.log",
+    );
     expect(
       buildPlatformRuntimeLogHints({
         platform: "darwin",
