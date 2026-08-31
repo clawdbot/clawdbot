@@ -6,12 +6,9 @@ import OpenClawProtocol
 
 /// Structured "Connect your AI" onboarding step.
 ///
-/// Drives the gateway's `openclaw.setup.detect` / `openclaw.setup.activate`
-/// RPCs: detect reusable AI access (CLI logins, provider credentials, and local model
-/// servers), live-test candidates in the detected order, and automatically fall
-/// through when one fails. Config is only written server-side after a
-/// candidate actually answered, so this page can never strand the user with a
-/// broken model.
+/// Detects reusable AI access and hosts the Gateway's interactive activation
+/// wizard. The Gateway owns capability review and only saves a model after a
+/// live completion; the app preserves route ownership across delayed responses.
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
@@ -820,20 +817,18 @@ extension OnboardingAISetupModel {
             return
         }
         await self.activate(
-            kind: kind,
-            modelRef: candidate.modelRef,
-            label: candidate.label,
-            tryNextCandidateOnFailure: true,
+            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label, tryNextOnFailure: true),
             context: context)
     }
 
     private func activate(
-        kind: String,
-        modelRef: String,
-        label: String,
-        tryNextCandidateOnFailure: Bool,
+        _ request: ActivationRequest,
         context: AttemptContext) async
     {
+        defer {
+            if request.isManual, self.isCurrentAttempt(context) { self.manualTesting = false }
+        }
+        let kind = request.kind
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         guard let lease = serverLease,
               await gateway.isCurrentServerLease(lease)
@@ -845,26 +840,26 @@ extension OnboardingAISetupModel {
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let persistedStateBeforeActivation = self.lastDetectedActivationState
         let requestTimeoutMs = await activationRequestTimeoutMs(for: kind, serverLease: lease)
-        self.selectedKind = kind
-        self.phase = .testing
-        self.statuses[kind] = .testing
-        guard let supportsExactModel = await gateway.supportsServerCapability(
-            .systemAgentSetupModelRef,
-            ifCurrentServerLease: lease),
-            isCurrentAttempt(context),
-            !Task.isCancelled
-        else {
-            requireFreshDetection(after: Self.transportFailure(
-                "The Gateway connection changed. Check for AI accounts again."))
-            return
+        var supportsExactModel = false
+        if !request.isManual {
+            self.selectedKind = kind
+            self.phase = .testing
+            self.statuses[kind] = .testing
+            guard let supported = await gateway.supportsServerCapability(
+                .systemAgentSetupModelRef,
+                ifCurrentServerLease: lease),
+                isCurrentAttempt(context), !Task.isCancelled
+            else {
+                requireFreshDetection(after: Self.transportFailure(
+                    "The Gateway connection changed. Check for AI accounts again."))
+                return
+            }
+            supportsExactModel = supported
         }
         let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        let params = Self.activationParams(
-            kind: kind,
-            modelRef: modelRef,
-            supportsExactModel: supportsExactModel)
+        let params = request.params(supportsExactModel: supportsExactModel)
         // Keychain-unavailable degrades to an unbound per-attempt lease instead
         // of refusing setup: live matching stays attempt-exact, and relaunch
         // repeats activation rather than trusting the receipt, so a broken
@@ -889,8 +884,7 @@ extension OnboardingAISetupModel {
         else {
             let failure = Self.transportFailure(
                 "No Gateway is selected. Select a Gateway, then try again.")
-            self.statuses[kind] = .failed(failure)
-            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
+            self.exposeActivationFailure(failure, for: request)
             self.phase = .ready
             return
         }
@@ -908,16 +902,14 @@ extension OnboardingAISetupModel {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             if result.ok {
                 if let failure = await finishSuccessfulActivation(
-                    kind: kind,
-                    expectedModel: modelRef,
+                    request: request,
+                    result: result,
                     context: context,
                     activationOwner: activationOwner,
                     before: persistedStateBeforeActivation,
-                    originalServerLease: lease,
-                    gatewayRestartRequired: result.gatewayRestartRequired == true)
+                    originalServerLease: lease)
                 {
-                    self.statuses[kind] = .failed(failure)
-                    self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
+                    self.exposeActivationFailure(failure, for: request)
                 }
             } else {
                 guard await self.gateway.isCurrentServerLease(lease) else {
@@ -930,15 +922,14 @@ extension OnboardingAISetupModel {
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 let failure = Self.failure(
-                    label: label,
+                    label: request.label,
                     status: result.status,
                     error: result.error)
-                self.statuses[kind] = .failed(failure)
-                if tryNextCandidateOnFailure {
+                self.exposeActivationFailure(failure, for: request)
+                if request.tryNextOnFailure {
                     await tryNextAfterFailure(of: kind, context: context)
-                } else {
+                } else if !request.isManual {
                     self.phase = .ready
-                    self.detectError = failure
                     self.showManualEntry = !self.manualProviders.isEmpty
                 }
             }
@@ -948,8 +939,7 @@ extension OnboardingAISetupModel {
             // ambiguous. Keep the marker; model-label detection is not proof that
             // this activation and its credential mutation completed safely.
             let failure = Self.transportFailure(error.localizedDescription)
-            self.statuses[kind] = .failed(failure)
-            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
+            self.exposeActivationFailure(failure, for: request)
             if Self.activationFailureIsDefinitive(error) {
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -965,7 +955,7 @@ extension OnboardingAISetupModel {
                 // Unbound (keychain-unavailable) leases cannot prove ownership;
                 // reconciliation's fingerprint guard rejects them and setup
                 // falls through to the deadline probe instead.
-                if !Task.isCancelled,
+                if let modelRef = request.modelRef, !Task.isCancelled,
                    await !(self.gateway.isCurrentServerLease(lease)),
                    await self.reconcileActivationAfterGatewayRestart(
                        kind: kind,
@@ -1058,9 +1048,13 @@ extension OnboardingAISetupModel {
         continuation?.resume(with: result)
     }
 
-    private func exposeActivationFailure(_ failure: Failure, whenTerminal: Bool) {
-        guard whenTerminal else { return }
-        self.detectError = failure
+    private func exposeActivationFailure(_ failure: Failure, for request: ActivationRequest) {
+        if request.isManual {
+            self.manualError = failure
+        } else {
+            self.statuses[request.kind] = .failed(failure)
+            if !request.tryNextOnFailure { self.detectError = failure }
+        }
     }
 
     private func reconcileActivationAfterGatewayRestart(
@@ -1108,16 +1102,18 @@ extension OnboardingAISetupModel {
     }
 
     private func finishSuccessfulActivation(
-        kind: String,
-        expectedModel: String,
+        request: ActivationRequest,
+        result: ActivateResult,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
-        originalServerLease: GatewayConnection.ServerLease,
-        gatewayRestartRequired: Bool) async -> Failure?
+        originalServerLease: GatewayConnection.ServerLease) async -> Failure?
     {
+        if request.isManual { self.manualKey = "" }
+        let kind = request.kind
+        let expectedModel = request.modelRef ?? result.modelRef ?? ""
         let originalLeaseWasReplaced = await !(self.gateway.isCurrentServerLease(originalServerLease))
-        let restartRequired = gatewayRestartRequired || originalLeaseWasReplaced
+        let restartRequired = result.gatewayRestartRequired == true || originalLeaseWasReplaced
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return nil }
         guard restartRequired else {
             self.finishConnected(kind: kind, activationOwner: activationOwner)
@@ -1492,10 +1488,11 @@ extension OnboardingAISetupModel {
                 self.statuses[kind] = .untried
                 Task {
                     await self.activate(
-                        kind: kind,
-                        modelRef: preparedModel,
-                        label: preparedProvider.label,
-                        tryNextCandidateOnFailure: false,
+                        .candidate(
+                            kind: kind,
+                            modelRef: preparedModel,
+                            label: preparedProvider.label,
+                            tryNextOnFailure: false),
                         context: context)
                 }
                 return
@@ -1612,115 +1609,7 @@ extension OnboardingAISetupModel {
         }
         self.manualError = nil
         self.manualTesting = true
-        Task { await self.submitManualKey(key: key, provider: provider, context: context) }
-    }
-
-    private func submitManualKey(
-        key: String,
-        provider: ManualProvider,
-        context: AttemptContext) async
-    {
-        defer {
-            if self.isCurrentAttempt(context) {
-                self.manualTesting = false
-            }
-        }
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        guard let lease = serverLease,
-              await gateway.isCurrentServerLease(lease)
-        else {
-            let failure = Self.transportFailure(
-                "The Gateway connection changed. Check for AI accounts again.")
-            self.manualError = failure
-            self.requireFreshDetection(after: failure)
-            return
-        }
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        let routeFingerprint = await gateway.activationOwnershipFingerprint(
-            ifCurrentServerLease: lease)
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        let requestTimeoutMs = await activationRequestTimeoutMs(for: "api-key", serverLease: lease)
-        let persistedStateBeforeActivation = self.lastDetectedActivationState
-        // Same keychain-unavailable degradation as detected candidates: an
-        // unbound lease keeps the ambiguity window without a resume receipt.
-        let activationOwner = routeFingerprint.map { fingerprint in
-            OnboardingSystemAgentResumeStore.ActivationOwner(
-                id: UUID().uuidString,
-                routeFingerprint: fingerprint)
-        } ?? .unbound()
-        self.pendingActivationOwner = activationOwner
-        self.pendingActivationRequiresFreshActivation = true
-        // Manual activation has the same persist-before-response ambiguity as
-        // detected candidates, so relaunch must inspect exact Gateway truth.
-        guard let activationDeadline = OnboardingSystemAgentResumeStore.markPending(
-            routeIdentity: context.routeIdentity,
-            activationOwner: activationOwner,
-            activationTimeoutMs: requestTimeoutMs,
-            defaults: defaults)
-        else {
-            self.manualError = Self.transportFailure(
-                "No Gateway is selected. Select a Gateway, then try again.")
-            return
-        }
-        guard !Task.isCancelled else {
-            self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-            return
-        }
-        do {
-            let result = try await requestActivation(
-                params: [
-                    "kind": AnyCodable("api-key"),
-                    "authChoice": AnyCodable(provider.id),
-                    "apiKey": AnyCodable(key),
-                ],
-                timeoutMs: requestTimeoutMs,
-                serverLease: lease,
-                context: context)
-            guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-            if result.ok {
-                self.manualKey = ""
-                self.manualError = await self.finishSuccessfulActivation(
-                    kind: "api-key",
-                    expectedModel: result.modelRef ?? "",
-                    context: context,
-                    activationOwner: activationOwner,
-                    before: persistedStateBeforeActivation,
-                    originalServerLease: lease,
-                    gatewayRestartRequired: result.gatewayRestartRequired == true)
-            } else {
-                guard await self.gateway.isCurrentServerLease(lease) else {
-                    self.pendingActivationVerification = false
-                    self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                    self.requireFreshDetection(after: Self.transportFailure(
-                        "The Gateway connection changed while AI setup was finishing. Check again."))
-                    return
-                }
-                self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                self.manualError = Self.failure(
-                    label: provider.label,
-                    status: result.status,
-                    error: result.error)
-            }
-        } catch {
-            guard self.isCurrentAttempt(context) else { return }
-            // A cancellation after request dispatch is ambiguous; keep the
-            // pending marker so relaunch reconciles against this exact route.
-            let failure = Self.transportFailure(error.localizedDescription)
-            self.manualError = failure
-            if Self.activationFailureIsDefinitive(error) {
-                self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                if await !(self.gateway.isCurrentServerLease(lease)) {
-                    self.requireFreshDetection(after: failure)
-                }
-            } else {
-                self.retainAmbiguousActivation(
-                    ifOwnedBy: context,
-                    activationOwner: activationOwner,
-                    activationDeadline: activationDeadline)
-            }
-        }
+        Task { await self.activate(.manual(key: key, provider: provider), context: context) }
     }
 
     /// A retired socket invalidates every candidate and provider record learned

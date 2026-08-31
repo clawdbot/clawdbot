@@ -4,6 +4,56 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension OnboardingAISetupModel {
+    enum ActivationRequest {
+        case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
+        case manual(key: String, provider: ManualProvider)
+
+        var kind: String {
+            switch self {
+            case let .candidate(kind, _, _, _): kind
+            case .manual: "api-key"
+            }
+        }
+
+        var modelRef: String? {
+            switch self {
+            case let .candidate(_, modelRef, _, _): modelRef
+            case .manual: nil
+            }
+        }
+
+        var label: String {
+            switch self {
+            case let .candidate(_, _, label, _): label
+            case let .manual(_, provider): provider.label
+            }
+        }
+
+        var isManual: Bool {
+            if case .manual = self { true } else { false }
+        }
+
+        var tryNextOnFailure: Bool {
+            switch self {
+            case let .candidate(_, _, _, tryNext): tryNext
+            case .manual: false
+            }
+        }
+
+        @MainActor
+        func params(supportsExactModel: Bool) -> [String: AnyCodable] {
+            switch self {
+            case let .candidate(kind, modelRef, _, _):
+                OnboardingAISetupModel.activationParams(
+                    kind: kind,
+                    modelRef: modelRef,
+                    supportsExactModel: supportsExactModel)
+            case let .manual(key, provider):
+                ["kind": AnyCodable("api-key"), "authChoice": AnyCodable(provider.id), "apiKey": AnyCodable(key)]
+            }
+        }
+    }
+
     struct PersistedActivationState: Equatable {
         let setupComplete: Bool
         let configuredModel: String?
