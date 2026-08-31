@@ -371,7 +371,12 @@ describe("worker session tool send delivery", () => {
     finishDispatch();
     const result = await pending;
 
-    expect(result.resultJson).toMatch(/authority changed|lost ownership/u);
+    // The send already entered the tool, which can queue directly without a Gateway RPC.
+    // Later authority loss must preserve that attempt's uncertainty and prevent replay.
+    expect(result.resultJson).toContain("outcome is unknown");
+    expect((await send("authority-closes-after-policy")).resultJson).toContain(
+      "outcome is unknown",
+    );
     expect(delivered).toHaveBeenCalledOnce();
     expect(gatewayRequest).not.toHaveBeenCalled();
   });

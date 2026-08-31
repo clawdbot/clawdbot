@@ -1,6 +1,6 @@
 import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChatHistoryResult } from "../../pages/chat/chat-history.ts";
+import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import {
   chatMessagesContainQueuedSend,
   readChatInputReceipt,
