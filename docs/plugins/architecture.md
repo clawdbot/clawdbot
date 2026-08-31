@@ -369,7 +369,7 @@ That avoids baking one provider's video assumptions into core. The plugin owns t
 
 Video generation already uses that same sequence: core owns the typed capability contract and runtime helper, and vendor plugins register `api.registerVideoGenerationProvider(...)` implementations against it.
 
-Need a concrete rollout checklist? See [Capability Cookbook](/tools/capability-cookbook).
+Need a concrete rollout checklist? See [Adding capabilities](/plugins/adding-capabilities).
 
 ## Contracts and enforcement
 

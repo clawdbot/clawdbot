@@ -575,22 +575,24 @@ export async function spawnAcpDirect(
         requesterSessionKey: requesterInternalKey,
         agentId: targetAgentId,
       });
-      if (effectiveStreamToParent && parentSessionKey) {
-        state.parentRelay = startAcpSpawnParentStreamRelay({
-          runId: childIdem,
-          parentSessionKey,
-          childSessionKey: sessionKey,
-          childSessionId: state.initializedSession.sessionId,
-          agentId: targetAgentId,
-          env: parentRelayStateEnv,
-          mainKey: cfg.session?.mainKey,
-          sessionScope: cfg.session?.scope,
-          eventRouting: parentEventRouting,
-          deliveryContext: parentDeliveryCtx,
-          emitStartNotice: false,
-          cfg,
-        });
-      }
+      const startParentRelay = (runId: string) =>
+        effectiveStreamToParent && parentSessionKey
+          ? startAcpSpawnParentStreamRelay({
+              runId,
+              parentSessionKey,
+              childSessionKey: sessionKey,
+              childSessionId: state.initializedSession.sessionId,
+              agentId: targetAgentId,
+              env: parentRelayStateEnv,
+              mainKey: cfg.session?.mainKey,
+              sessionScope: cfg.session?.scope,
+              eventRouting: parentEventRouting,
+              deliveryContext: parentDeliveryCtx,
+              emitStartNotice: false,
+              cfg,
+            })
+          : undefined;
+      state.parentRelay = startParentRelay(childIdem);
       const response = await launchAcpChildThroughGateway({
         task: params.task,
         sessionKey,
@@ -618,22 +620,9 @@ export async function spawnAcpDirect(
         }),
       });
       const runId = readGatewayRunId(response) ?? childIdem;
-      if (state.parentRelay && runId !== childIdem && parentSessionKey) {
+      if (state.parentRelay && runId !== childIdem) {
         state.parentRelay.dispose();
-        state.parentRelay = startAcpSpawnParentStreamRelay({
-          runId,
-          parentSessionKey,
-          childSessionKey: sessionKey,
-          childSessionId: state.initializedSession.sessionId,
-          agentId: targetAgentId,
-          env: parentRelayStateEnv,
-          mainKey: cfg.session?.mainKey,
-          sessionScope: cfg.session?.scope,
-          eventRouting: parentEventRouting,
-          deliveryContext: parentDeliveryCtx,
-          emitStartNotice: false,
-          cfg,
-        });
+        state.parentRelay = startParentRelay(runId);
       }
       state.parentRelay?.notifyStarted();
       return { runId };

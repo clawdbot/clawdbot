@@ -440,48 +440,31 @@ describe("getReplyFromConfig message hooks", () => {
     },
   );
 
-  it("promotes the staged document path for a sandboxed external conversation", async () => {
-    const stagedPath = "media/inbound/report.docx";
-    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
-      staged: new Map([[0, stagedPath]]),
-    });
-    const enable = await runLocalPathSelfServeCase({
-      ctx: {
-        ...hostDocumentCtx,
-        OriginatingChannel: "telegram",
-        AccountId: "default",
-        SenderId: "42",
-      },
-      cfg: {
-        agents: {
-          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-          list: [{ id: "main", default: true }],
+  it.each([true, false])(
+    "enables sandboxed document self-service only after staging succeeds (%s)",
+    async (staged) => {
+      const stagedPaths = new Map(staged ? [[0, "media/inbound/report.docx"]] : []);
+      vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({ staged: stagedPaths });
+      const enable = await runLocalPathSelfServeCase({
+        ctx: {
+          ...hostDocumentCtx,
+          OriginatingChannel: "telegram",
+          AccountId: "default",
+          SenderId: "42",
         },
-      },
-    });
-    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
-    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main" }),
-    );
-  });
-
-  it("withholds local document self-service when sandbox staging fails", async () => {
-    const enable = await runLocalPathSelfServeCase({
-      ctx: {
-        ...hostDocumentCtx,
-        OriginatingChannel: "telegram",
-        AccountId: "default",
-        SenderId: "42",
-      },
-      cfg: {
-        agents: {
-          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-          list: [{ id: "main", default: true }],
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+            list: [{ id: "main", default: true }],
+          },
         },
-      },
-    });
-    expect(enable).not.toHaveBeenCalled();
-  });
+      });
+      expect(enable.mock.calls).toEqual(staged ? [[expect.any(Array), stagedPaths]] : []);
+      expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main" }),
+      );
+    },
+  );
 
   it("promotes a remote document staged before media understanding", async () => {
     const remotePath = "/remote/report.docx";

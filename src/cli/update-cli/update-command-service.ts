@@ -83,6 +83,10 @@ const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
+const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
+  "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
+const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
+  "Gateway service inspection is unavailable. Refusing to mutate code while automatic restart is enabled; run `openclaw gateway status --deep` and retry when service access is restored. To use `--no-restart`, stop the Gateway manually before the update, then restart it manually afterward.";
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -146,9 +150,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
   const { command } = state;
   const unavailable = (): ManagedGatewayUpdateVerdict => ({
     kind: "unavailable",
-    message:
-      "Gateway service management skipped: its owner or runtime could not be inspected. " +
-      "Code update can continue; run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.",
+    message: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE,
   });
   if (!command) {
     return !state.installed && !state.running && state.runtime?.missingUnit
@@ -413,6 +415,17 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
+  const markInspectionUnavailable = (
+    base: PreManagedServiceStop,
+    message: string,
+  ): PreManagedServiceStop =>
+    params.shouldRestart
+      ? {
+          ...base,
+          serviceMutationAllowed: false,
+          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+        }
+      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -433,13 +446,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return {
-      ...uninspected,
-      serviceMutationAllowed: false,
-      serviceMutationSkipMessage:
-        "Gateway service management skipped: inspection is unavailable. Code update can continue; " +
-        "run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.",
-    };
+    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
   }
   const serviceUpdateVerdict = await inspectManagedGatewayServiceBeforeUpdate({
     root: params.root,
@@ -454,11 +461,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return {
-      ...inspected,
-      serviceMutationAllowed: false,
-      serviceMutationSkipMessage: serviceUpdateVerdict.message,
-    };
+    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {
@@ -596,7 +599,9 @@ export function shouldBlockMutableUpdateFromGatewayServiceEnv(params: {
     isGatewayServiceEnv(process.env) &&
     (!stopState?.inspected ||
       (!stopState.stopped &&
-        (!stopState.runtimeInspected || (stopState.running && !stopState.blockMessage))))
+        (!stopState.runtimeInspected ||
+          (stopState.running &&
+            (!stopState.blockMessage || stopState.serviceUpdateVerdict?.kind === "unavailable")))))
   );
 }
 

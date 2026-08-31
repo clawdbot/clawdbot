@@ -44,7 +44,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const sessionAcpMeta = sessionStoreEntry.sessionKey
-    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+    ? readAcpSessionMeta({
+        cfg,
+        agentId: sessionStoreEntry.agentId,
+        sessionKey: sessionStoreEntry.sessionKey,
+      })
     : undefined;
   const sessionEntryWithAcp =
     sessionAcpMeta && sessionStoreEntry.entry

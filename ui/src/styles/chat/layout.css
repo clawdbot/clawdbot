@@ -1462,12 +1462,6 @@ openclaw-chat-video-player {
   padding: 0;
 }
 
-.chat-assistant-attachment-card--compact,
-.chat-assistant-attachment-card--blocked {
-  display: block;
-  padding: 0;
-}
-
 .chat-assistant-attachment-card--blocked {
   color: var(--text);
 }
@@ -1647,9 +1641,60 @@ openclaw-chat-video-player {
   width: auto;
   padding: 0 12px;
   border: 1px solid var(--chat-attachment-border, var(--border-strong));
-  color: var(--text);
   font-size: 12px;
   font-weight: 600;
+}
+
+.chat-assistant-attachment-card__title--unavailable {
+  color: var(--muted);
+  text-decoration: line-through color-mix(in srgb, currentColor 35%, transparent) 1px;
+}
+
+.chat-assistant-attachment-card--recoverable {
+  color: var(--warn);
+}
+
+.chat-assistant-attachment-card--definitive {
+  color: var(--danger);
+}
+
+:is(.chat-assistant-attachment-card--recoverable, .chat-assistant-attachment-card--definitive)
+  :is(.chat-assistant-attachment-card__status-meta, .chat-attachment-file-icon) {
+  color: inherit;
+}
+
+.chat-assistant-attachment-card--checking {
+  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
+  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.chat-assistant-attachment-card__status-meta.skeleton {
+  inline-size: clamp(112px, 14vw, 144px);
+  max-inline-size: 100%;
+}
+
+.chat-assistant-attachment-card__action-skeleton {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  inline-size: 64px;
+  block-size: 30px;
+  border-radius: 999px;
+}
+
+.chat-assistant-attachment-card__actions--loading {
+  position: relative;
+  padding-inline-start: 38px;
+  block-size: 30px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-assistant-attachment-card__actions--loading::before {
+  content: attr(data-label);
+  visibility: hidden;
+  padding: 0 12px;
+  border: 1px solid transparent;
 }
 
 @media (hover: hover) and (pointer: fine) {

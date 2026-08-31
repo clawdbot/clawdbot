@@ -488,6 +488,10 @@
     "target": "添加能力（重定向）"
   },
   {
+    "source": "Adding capabilities",
+    "target": "添加能力"
+  },
+  {
     "source": "Adding capabilities (contributor guide)",
     "target": "添加能力（贡献者指南）"
   },
@@ -1862,5 +1866,13 @@
   {
     "source": "Built-in memory",
     "target": "内置记忆"
+  },
+  {
+    "source": "macOS SSH tunnel",
+    "target": "macOS SSH 隧道"
+  },
+  {
+    "source": "Node and tsx startup errors",
+    "target": "Node 和 tsx 启动错误"
   }
 ]

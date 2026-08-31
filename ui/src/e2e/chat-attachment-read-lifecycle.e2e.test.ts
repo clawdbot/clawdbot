@@ -2,11 +2,11 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
 import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-} from "../lib/chat/outbox-store.ts";
-import type { UiSessionDefaultsHost } from "../lib/sessions/session-key.ts";
+  resolveUiConversationIdentity,
+  type UiSessionDefaultsHost,
+} from "../lib/sessions/session-key.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -81,7 +81,7 @@ async function waitForCommittedAttachmentDraft(
         hello: state.hello,
       };
     });
-  const storedScope = resolveStoredChatOutboxScope(defaults, sessionKey);
+  const storedScope = resolveUiConversationIdentity(defaults, sessionKey);
   await waitForCommittedComposerDraft(
     page,
     `chat:v3:${storedChatOutboxScopeKey(storedScope)}`,

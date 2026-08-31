@@ -7,6 +7,7 @@ import {
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
@@ -18,7 +19,6 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
-  readChatQueueForScope,
   readQueuedMessageById,
   updateQueuedMessage,
   updateQueuedMessagesForSession,
@@ -165,16 +165,16 @@ export function moveQueuedChatMessage(
   id: string,
   toIndex: number,
 ): ChatQueueMoveResult {
-  const item = readQueuedMessageById(host, id);
-  if (!item || !isMovableChatQueueItem(item)) {
+  const owner = chatOutboxOwner(host);
+  const located = owner.locate(host, id);
+  if (!located || !isMovableChatQueueItem(located.item)) {
     return "noop";
   }
   if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
     return "rejected";
   }
-  const sessionKey = item.sessionKey ?? host.sessionKey;
-  const scope = readChatQueueForScope(host, sessionKey, item.agentId);
+  const scope = owner.snapshot(host, located.scope);
   // This pane already excludes its own edited row from rendered move indices,
   // but cannot see edits owned by peers. Rebuild that exact offered index space
   // so a peer-edit barrier is distinguishable from an ordinary no-op.
@@ -243,10 +243,15 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   ) {
     return;
   }
-  let outbox = chatOutboxOwner(host).durable(host, item.id);
-  if (!outbox) {
+  const owner = chatOutboxOwner(host);
+  const located = owner.locate(host, item.id);
+  if (!located) {
+    return;
+  }
+  if (!located.durable) {
     const wasVolatile = isVolatileQueuedMessage(host, item.id);
-    if (!admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)) {
+    const admission = { scope: located.scope, awaitingDefaults: !hasUiSessionDefaults(host) };
+    if (!admitQueuedMessageForSession(host, admission, item)) {
       if (
         wasVolatile &&
         !item.localCommandName &&
@@ -278,11 +283,12 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
-  outbox = chatOutboxOwner(host).durable(host, retry.id);
-  if (!outbox) {
+  const retried = owner.locate(host, retry.id);
+  if (!retried?.durable) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
+  const outbox = retried.scope;
   const explicitAdmission = retry.queueMode || retriesFailedDelivery || retriesUnconfirmed;
   const drain = scheduleStoredChatOutboxDrain(
     host,

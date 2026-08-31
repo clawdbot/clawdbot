@@ -219,11 +219,11 @@ Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
 
-If service inspection is unavailable, the code update continues with a warning
-and leaves service control and definition files untouched; it does not assume
-that no service exists. Run `openclaw gateway status --deep`, then restart manually
-when access is restored. Services owned by another install remain untouched.
-`--no-restart` still skips service restart.
+If service inspection is unavailable, a restart-enabled code update refuses to
+mutate the checkout or package tree; it does not assume that no service exists.
+Run `openclaw gateway status --deep` and retry when access is restored. Use
+`--no-restart` only after manually stopping the Gateway, then restart it
+manually after the update. Services owned by another install remain untouched.
 
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current

@@ -85,57 +85,36 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxContext", () => {
-  it.each(["per-sender", "global"] as const)(
-    "does not sandbox the selected main session in %s scope",
-    async (scope) => {
-      const cfg: OpenClawConfig = {
-        session: { scope },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            sandbox: { mode: "non-main", scope: "session" },
+  describe.each([
+    { name: "context", resolve: resolveSandboxContext },
+    { name: "workspace", resolve: ensureSandboxWorkspaceForSession },
+  ])("sandbox $name", ({ resolve }) => {
+    it.each(["per-sender", "global"] as const)(
+      "bypasses the selected main session in %s scope",
+      async (scope) => {
+        const cfg: OpenClawConfig = {
+          session: { scope },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              sandbox: { mode: "non-main", scope: "session" },
+            },
+            entries: { main: {}, other: {} },
           },
-          entries: { main: {}, other: {} },
-        },
-      };
+        };
 
-      const result = await resolveSandboxContext({
-        config: cfg,
-        agentId: "main",
-        sessionKey: scope === "global" ? "global" : "agent:main:main",
-        workspaceDir: "/tmp/openclaw-test",
-      });
+        const result = await resolve({
+          config: cfg,
+          agentId: "main",
+          sessionKey: scope === "global" ? "global" : "agent:main:main",
+          workspaceDir: "/tmp/openclaw-test",
+        });
 
-      expect(result).toBeNull();
-    },
-    15_000,
-  );
-
-  it.each(["per-sender", "global"] as const)(
-    "does not create a sandbox workspace for the selected main session in %s scope",
-    async (scope) => {
-      const cfg: OpenClawConfig = {
-        session: { scope },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            sandbox: { mode: "non-main", scope: "session" },
-          },
-          entries: { main: {}, other: {} },
-        },
-      };
-
-      const result = await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        agentId: "main",
-        sessionKey: scope === "global" ? "global" : "agent:main:main",
-        workspaceDir: "/tmp/openclaw-test",
-      });
-
-      expect(result).toBeNull();
-    },
-    15_000,
-  );
+        expect(result).toBeNull();
+      },
+      15_000,
+    );
+  });
 
   it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
     // Mode=off should short-circuit before resolving any backend implementation.

@@ -1,5 +1,6 @@
 import type { SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 
 const SNAPSHOT_CACHE_LIMIT = 2_048;
 
@@ -87,6 +88,7 @@ function rememberSnapshotAlias(alias: string, canonical: string): void {
 }
 
 export function invalidateSessionSharingSnapshot(sessionKey?: string): void {
+  bumpGatewayAccessRevision();
   if (sessionKey) {
     // Mutation events carry the logical key without an agent id. These reverse indexes
     // preserve that cross-agent invalidation contract while keeping work proportional to
