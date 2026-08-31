@@ -224,6 +224,26 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
   });
 
+  it("dispatches the bookmark action as a core conversation-read action", async () => {
+    setReadPlugin();
+
+    const result = await dispatchTestChannelMessageAction({
+      channel: "discord",
+      action: "bookmark",
+      params: { channelId: "channel:current", op: "list" },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "discord:channel:current",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
   it("matches a sanitized channelId to a typed current-channel target", async () => {
     setReadPlugin();
 

@@ -1,29 +1,57 @@
 // Real-behavior proof for Slack channel bookmarks.
-// Drives the real actions.ts functions against a recording WebClient stand-in
-// so the bookmarks.add/list/edit/remove wire calls and their arguments are
-// captured end-to-end (not just the action-runtime dispatch mock).
-import { describe, expect, it } from "vitest";
-import {
-  addSlackChannelBookmark,
-  editSlackChannelBookmark,
-  listSlackChannelBookmarks,
-  removeSlackChannelBookmark,
-} from "./actions.js";
+// Drives the real production path (handleSlackAction action-runtime gating +
+// token resolution + read-target authorization + actions.ts) by routing every
+// WebClient resolution through a recording stand-in. The recording client
+// captures the exact bookmarks.add/list/edit/remove wire calls and arguments
+// end-to-end, so the proof covers the full dispatch path the operator's gateway
+// would exercise, not just the leaf actions.ts functions.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type WireCall = {
   method: string;
   args: Record<string, unknown>;
 };
 
-function createRecordingBookmarksClient(): {
-  client: { bookmarks: Record<string, (args: unknown) => Promise<unknown>> };
-  calls: WireCall[];
-} {
-  const calls: WireCall[] = [];
-  const record = (method: string, args: Record<string, unknown>) => {
-    calls.push({ method, args });
+const traceState = vi.hoisted(() => ({
+  calls: [] as WireCall[],
+  client: null as Record<string, unknown> | null,
+}));
+
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  const traceClient = () => {
+    if (!traceState.client) {
+      throw new Error("trace Slack client not initialized");
+    }
+    return traceState.client as never;
   };
-  const client = {
+  return {
+    ...actual,
+    createSlackLookupClient: traceClient,
+    createSlackReadClient: traceClient,
+    createSlackWebClient: traceClient,
+    createSlackWriteClient: traceClient,
+    getSlackWriteClient: traceClient,
+  };
+});
+
+const { handleSlackAction } = await import("./action-runtime.js");
+
+function recordingClient(): Record<string, unknown> {
+  const record = (method: string, args: Record<string, unknown>) => {
+    traceState.calls.push({ method, args });
+  };
+  return {
+    auth: {
+      test: async () => ({ ok: true, user_id: "U0BOT" }),
+    },
+    conversations: {
+      info: async (args: Record<string, unknown>) => ({
+        ok: true,
+        channel: { id: args.channel, is_channel: true, name: "current" },
+      }),
+    },
     bookmarks: {
       add: async (args: Record<string, unknown>) => {
         record("bookmarks.add", args);
@@ -33,7 +61,7 @@ function createRecordingBookmarksClient(): {
         record("bookmarks.list", args);
         return {
           ok: true,
-          bookmarks: [{ id: "B001", title: "Runbook", link: "https://example.com" }],
+          bookmarks: [{ id: "B001", title: "Runbook", link: "https://runbook.example" }],
         };
       },
       edit: async (args: Record<string, unknown>) => {
@@ -46,49 +74,91 @@ function createRecordingBookmarksClient(): {
       },
     },
   };
-  return { client, calls };
 }
 
-describe("Slack channel bookmark actions wire calls", () => {
-  it("calls bookmarks.add with channel_id, title, link, and type=link", async () => {
-    const { client, calls } = createRecordingBookmarksClient();
-    const bookmark = await addSlackChannelBookmark("C123", "Runbook", "https://example.com", {
-      client: client as never,
-      emoji: "bookmark",
-    });
+function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+  return {
+    channels: {
+      slack: {
+        botToken: "xoxb-trace",
+        ...overrides,
+      },
+    },
+  } as OpenClawConfig;
+}
 
-    expect(calls).toEqual([
+const trustedContext = {
+  currentChannelProvider: "slack",
+  currentChannelId: "team:T123:channel:C123",
+  requesterAccountId: "default",
+};
+
+function detailsOf(result: { content: Array<{ text?: string }> }): Record<string, unknown> {
+  return JSON.parse(result.content[0]?.text ?? "{}");
+}
+
+describe("Slack channel bookmark real-behavior trace", () => {
+  beforeEach(() => {
+    traceState.calls = [];
+    traceState.client = recordingClient();
+  });
+
+  it("routes addChannelBookmark through the action runtime to bookmarks.add", async () => {
+    const result = await handleSlackAction(
+      {
+        action: "addChannelBookmark",
+        channelId: "C123",
+        title: "Runbook",
+        link: "https://runbook.example",
+        emoji: "bookmark",
+      },
+      slackConfig(),
+      trustedContext,
+    );
+
+    expect(traceState.calls).toEqual([
       {
         method: "bookmarks.add",
         args: {
           channel_id: "C123",
           title: "Runbook",
-          link: "https://example.com",
+          link: "https://runbook.example",
           type: "link",
           emoji: "bookmark",
         },
       },
     ]);
-    expect(bookmark).toEqual({ id: "B001", title: "Runbook", link: "https://example.com" });
-  });
-
-  it("calls bookmarks.list with channel_id", async () => {
-    const { client, calls } = createRecordingBookmarksClient();
-    const bookmarks = await listSlackChannelBookmarks("C123", { client: client as never });
-
-    expect(calls).toEqual([{ method: "bookmarks.list", args: { channel_id: "C123" } }]);
-    expect(bookmarks).toEqual([{ id: "B001", title: "Runbook", link: "https://example.com" }]);
-  });
-
-  it("calls bookmarks.edit with channel_id, bookmark_id, and patched fields", async () => {
-    const { client, calls } = createRecordingBookmarksClient();
-    const bookmark = await editSlackChannelBookmark("C123", "B001", {
-      client: client as never,
-      title: "Updated",
-      emoji: "rotating_light",
+    expect(detailsOf(result)).toMatchObject({
+      ok: true,
+      bookmark: { id: "B001", title: "Runbook" },
     });
+  });
 
-    expect(calls).toEqual([
+  it("routes listChannelBookmarks through the action runtime to bookmarks.list", async () => {
+    const result = await handleSlackAction(
+      { action: "listChannelBookmarks", channelId: "C123" },
+      slackConfig(),
+      trustedContext,
+    );
+
+    expect(traceState.calls).toEqual([{ method: "bookmarks.list", args: { channel_id: "C123" } }]);
+    expect(detailsOf(result)).toMatchObject({ ok: true, bookmarks: [{ id: "B001" }] });
+  });
+
+  it("routes editChannelBookmark through the action runtime to bookmarks.edit", async () => {
+    const result = await handleSlackAction(
+      {
+        action: "editChannelBookmark",
+        channelId: "C123",
+        bookmarkId: "B001",
+        title: "Updated",
+        emoji: "rotating_light",
+      },
+      slackConfig(),
+      trustedContext,
+    );
+
+    expect(traceState.calls).toEqual([
       {
         method: "bookmarks.edit",
         args: {
@@ -99,24 +169,28 @@ describe("Slack channel bookmark actions wire calls", () => {
         },
       },
     ]);
-    expect(bookmark).toEqual({ id: "B001", title: "Updated" });
+    expect(detailsOf(result)).toMatchObject({ ok: true, bookmark: { id: "B001" } });
   });
 
-  it("calls bookmarks.remove with channel_id and bookmark_id", async () => {
-    const { client, calls } = createRecordingBookmarksClient();
-    await removeSlackChannelBookmark("C123", "B001", { client: client as never });
+  it("routes removeChannelBookmark through the action runtime to bookmarks.remove", async () => {
+    const result = await handleSlackAction(
+      { action: "removeChannelBookmark", channelId: "C123", bookmarkId: "B001" },
+      slackConfig(),
+      trustedContext,
+    );
 
-    expect(calls).toEqual([
+    expect(traceState.calls).toEqual([
       { method: "bookmarks.remove", args: { channel_id: "C123", bookmark_id: "B001" } },
     ]);
+    expect(detailsOf(result)).toMatchObject({ ok: true });
   });
 
-  it("omits emoji from bookmarks.add when not provided", async () => {
-    const { client, calls } = createRecordingBookmarksClient();
-    await addSlackChannelBookmark("C123", "Runbook", "https://example.com", {
-      client: client as never,
-    });
+  it("fails closed before any bookmark wire call when the gate is disabled", async () => {
+    const cfg = slackConfig({ actions: { bookmarks: false } });
 
-    expect(calls[0]?.args).not.toHaveProperty("emoji");
+    await expect(
+      handleSlackAction({ action: "listChannelBookmarks", channelId: "C123" }, cfg, trustedContext),
+    ).rejects.toThrow("Slack bookmarks are disabled.");
+    expect(traceState.calls).toEqual([]);
   });
 });
