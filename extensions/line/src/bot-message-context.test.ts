@@ -885,7 +885,12 @@ describe("buildLineMessageContext", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    text: string;
+    spans: [number, number][];
+    expected: string;
+    mention?: webhook.TextMessageContent["mention"];
+  }>([
     { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
     { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
     {
