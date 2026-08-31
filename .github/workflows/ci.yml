@@ -2231,13 +2231,19 @@ jobs:
   checks-ui:
     permissions:
       contents: read
-    name: checks-ui
+    name: ${{ needs.preflight.outputs.frozen_target == 'true' && 'checks-ui' || format('checks-ui ({0}/3)', matrix.shard) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
-    # Measured 177s body on hosted 4-core (run 31861511624); hybrid attempt 1
-    # rides the 8 vCPU class like the ui-e2e shards, retries stay hosted.
+    # Each Vitest row retains three root workers. Hybrid first attempts use
+    # the existing 8 vCPU class; retries and manual dispatch stay hosted.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        # Frozen checkouts retain their original unsharded test envelope.
+        shard: ${{ fromJSON(needs.preflight.outputs.frozen_target == 'true' && '[1]' || '[1,2,3]') }}
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -2278,13 +2284,14 @@ jobs:
           fi
 
       - name: Lint Control UI window.open usage
+        if: ${{ matrix.shard == 1 }}
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Test Control UI
         env:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"]'
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.frozen_target != 'true' && format(', "--shard={0}/3"', matrix.shard) || '') }}
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.

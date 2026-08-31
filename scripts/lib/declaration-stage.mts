@@ -58,7 +58,12 @@ export async function publishStagedDeclarations(
   staging: string,
   dist: string,
   required: string[],
-  cache?: { step: BuildCacheStep; state: BuildCacheState; params: BuildCacheParams },
+  cache?: {
+    step: BuildCacheStep;
+    state: BuildCacheState;
+    params: BuildCacheParams;
+    sealInputs?: () => { signature: string; inputs: string[] };
+  },
 ) {
   const reused = cache?.state.fresh === true;
   if (reused) {
@@ -125,6 +130,11 @@ export async function publishStagedDeclarations(
     [{ path: "plugin-sdk", extensions: [".d.ts", ".d.mts", ".d.cts"], recursive: false }],
     fs,
   ).map((file) => portableRelativePath(dist, file));
+  if (cache?.sealInputs && !reused) {
+    const { signature, inputs } = cache.sealInputs();
+    cache.state.signature = signature;
+    cache.state.consumedInputs = inputs;
+  }
   publishArtifactFiles(staging, dist, ordered, previous);
   if (cache && !reused) {
     // Seal only the validated private generation; live dist also contains declarations

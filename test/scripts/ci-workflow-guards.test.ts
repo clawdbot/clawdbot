@@ -29,6 +29,7 @@ import {
   shouldRunNativeI18n,
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
+import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -151,6 +152,8 @@ function evaluateWorkflowExpression(
         ? haystack.includes(needle)
         : String(haystack).includes(String(needle)),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    format: (value: string, ...args: unknown[]) =>
+      value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
     hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     github: {
@@ -8945,6 +8948,126 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
     expect(uiTest.run).not.toContain("--retry");
     expect(uiTest.run).toContain("pnpm --dir ui test");
+  });
+
+  it.each([
+    { label: "current", frozenTarget: false, compatibilityTarget: false, shards: [1, 2, 3] },
+    { label: "frozen current", frozenTarget: true, compatibilityTarget: false, shards: [1] },
+    { label: "frozen legacy", frozenTarget: true, compatibilityTarget: true, shards: [1] },
+  ])("executes the $label standalone UI envelope", async (scenario) => {
+    const workflow = readCiWorkflow();
+    const ui = workflow.jobs["checks-ui"];
+    const lint = ui.steps.find(
+      (step: WorkflowStep) => step.name === "Lint Control UI window.open usage",
+    );
+    const test = ui.steps.find((step: WorkflowStep) => step.name === "Test Control UI");
+    const context = {
+      eventName: scenario.frozenTarget ? "workflow_dispatch" : "pull_request",
+      frozenTarget: scenario.frozenTarget,
+      preflightOutputs: { compatibility_target: String(scenario.compatibilityTarget) },
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerBackend: "hybrid",
+    } as const;
+    // A workflow job without a matrix executes once.
+    const shards = ui.strategy
+      ? evaluateWorkflowExpression(ui.strategy.matrix.shard, context)
+      : [1];
+    expect(shards).toEqual(scenario.shards);
+    if (!scenario.frozenTarget) {
+      expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
+    }
+    expect(ui.needs).toEqual(["preflight"]);
+    expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
+    expect(ui.permissions).toEqual({ contents: "read" });
+    expect(ui["timeout-minutes"]).toBe(20);
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui");
+
+    const root = tempDirs.make("openclaw-ui-workflow-");
+    const bin = path.join(root, "bin");
+    const callsPath = path.join(root, "calls.txt");
+    const argsPath = path.join(root, "vitest-args.json");
+    mkdirSync(bin);
+    for (const command of ["node", "pnpm"]) {
+      writeExecutable(path.join(bin, command), [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `printf '%s\\n' '${command} '"$*" >> "$UI_COMMAND_CALLS"`,
+        ...(command === "node"
+          ? ['printf "%s\\n" "$OPENCLAW_NODE_TEST_VITEST_ARGS_JSON" > "$UI_VITEST_ARGS"']
+          : []),
+      ]);
+    }
+    for (const shard of scenario.shards) {
+      const rowContext = { ...context, matrix: { shard } };
+      const resolveValue = (value: unknown): string =>
+        typeof value === "string" && value.startsWith("${{")
+          ? String(evaluateWorkflowExpression(value, rowContext))
+          : String(value);
+      expect(resolveValue(ui.name)).toBe(
+        scenario.frozenTarget ? "checks-ui" : `checks-ui (${shard}/3)`,
+      );
+      expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
+        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+      );
+      const env = Object.fromEntries(
+        Object.entries({ ...ui.env, ...test.env }).map(([key, value]) => [
+          key,
+          resolveValue(value),
+        ]),
+      );
+      expect(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      const flags = [
+        "--maxWorkers",
+        "3",
+        "--reporter=verbose",
+        "--reporter=github-actions",
+        "--reporter=./scripts/lib/vitest-resource-reporter.mts",
+        ...(scenario.frozenTarget ? [] : [`--shard=${shard}/3`]),
+      ];
+      const steps = [
+        ...(!lint.if || evaluateWorkflowExpression(lint.if, rowContext) ? [lint] : []),
+        test,
+      ];
+      for (const step of steps) {
+        const result = runWorkflowShellScript(step.run, {
+          cwd: root,
+          env: {
+            ...process.env,
+            ...env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            UI_COMMAND_CALLS: callsPath,
+            UI_VITEST_ARGS: argsPath,
+          },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+      }
+      if (!scenario.compatibilityTarget) {
+        env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON = readFileSync(argsPath, "utf8");
+        expect(JSON.parse(env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON)).toEqual(flags);
+        const forwarded: string[][] = [];
+        expect(
+          await runShardPlans(resolveShardPlans(env), {
+            concurrency: Number(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY),
+            env,
+            scratchDir: root,
+            runChild: async (args, childEnv) => {
+              forwarded.push(args);
+              expect(childEnv.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
+              return 0;
+            },
+          }),
+        ).toBe(0);
+        expect(forwarded).toEqual([["ui/vitest.config.ts", "--", ...flags]]);
+      }
+    }
+    const calls = readFileSync(callsPath, "utf8").trim().split("\n");
+    expect(calls.filter((call) => call === "pnpm lint:ui:no-raw-window-open")).toHaveLength(1);
+    expect(calls.filter((call) => call !== "pnpm lint:ui:no-raw-window-open")).toEqual(
+      scenario.compatibilityTarget
+        ? ["pnpm --dir ui test --testTimeout=30000 --isolate"]
+        : scenario.shards.map(() => "node --import tsx scripts/ci-run-node-test-shard.mts"),
+    );
   });
 
   it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
