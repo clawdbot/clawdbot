@@ -212,8 +212,10 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-The review forks the foreground transcript in memory and appends one small user
-message. It uses a private detached session identity while preserving the
+The review creates a detached view of the foreground model context and appends
+one small user message. Storage-only native prompt payloads stay in the original
+transcript, whose stored bytes the review does not change. It uses a private
+detached session identity while preserving the
 foreground provider, model, auth profile, bootstrap context, skills prompt, tool
 schemas, and prompt-cache affinity. The provider can reuse the finished turn's
 cached request prefix without making the review part of the foreground session.

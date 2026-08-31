@@ -1,9 +1,19 @@
 /** Resolves the effective parent for a transcript message append inside the write transaction. */
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { sql } from "kysely";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptAppendParentId } from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-transcript-store.js";
+import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
+import {
+  isSessionTranscriptLeafControl,
+  parseSessionTranscriptTreeEntry,
+} from "./transcript-tree.js";
+import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
 
 export function resolveTranscriptMessageAppendParent<TMessage>(
   database: OpenClawAgentDatabase,
@@ -51,4 +61,75 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
     ancestorId = row.parent_id;
   }
   return options.parentId;
+}
+
+function readActiveTranscriptAppendParentId(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string | null {
+  const db = getSessionKysely(database.db);
+  const latest = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities as ti")
+      .innerJoin("transcript_events as te", (join) =>
+        join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
+      )
+      .select([
+        "ti.event_type",
+        /* kysely-allow-raw: append-parent resolution consumes navigation, never native replay bodies. */
+        projectTranscriptNavigationSql(sql<string>`te.event_json`).as("event_json"),
+      ])
+      .where("ti.session_id", "=", sessionId)
+      .orderBy("ti.seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return null;
+  }
+  const resolveFromNavigation = () =>
+    resolveVisibleTranscriptAppendParentId(
+      Array.from(
+        iterateSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            /* kysely-allow-raw: tolerant tree reconstruction retains only navigation fields. */
+            .select(projectTranscriptNavigationSql(sql<string>`event_json`).as("event_json"))
+            .where("session_id", "=", sessionId)
+            .orderBy("seq", "asc"),
+        ),
+        (row) => JSON.parse(row.event_json) as unknown,
+      ),
+    );
+  try {
+    const event = JSON.parse(latest.event_json) as unknown;
+    const treeEntry = parseSessionTranscriptTreeEntry(event);
+    if (!treeEntry) {
+      return resolveFromNavigation();
+    }
+    if (latest.event_type !== "leaf") {
+      return treeEntry.appendParentId;
+    }
+    const leafReferencesKnown =
+      treeEntry.leafId !== undefined &&
+      transcriptTreeReferenceExists(database, sessionId, treeEntry.leafId) &&
+      transcriptTreeReferenceExists(database, sessionId, treeEntry.appendParentId);
+    if (isSessionTranscriptLeafControl(event) && leafReferencesKnown) {
+      return treeEntry.appendParentId;
+    }
+  } catch {
+    // Fall through to the tolerant full-tree resolver.
+  }
+  return resolveFromNavigation();
+}
+
+function transcriptTreeReferenceExists(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  eventId: string | null,
+): boolean {
+  return (
+    eventId === null || readTranscriptIdentityByEventId(database, sessionId, eventId) !== undefined
+  );
 }
