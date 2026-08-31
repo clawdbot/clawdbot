@@ -12,6 +12,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
@@ -213,7 +214,53 @@ type ProviderErrorPayloadMetadata = {
   detail?: string;
   code?: string;
   type?: string;
+  retryAfterMs?: number;
 };
+
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
+
+function parseGoogleRetryDelayMs(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = GOOGLE_RETRY_DELAY_RE.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const seconds = Number(match[1]);
+  const fractionalMs = match[2] ? Math.ceil(Number(`0.${match[2]}`) * 1000) : 0;
+  const delayMs = seconds * 1000 + fractionalMs;
+  return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+}
+
+function extractGoogleRetryInfoDelayMs(payload: unknown): number | undefined {
+  const details = asOptionalRecord(asOptionalRecord(payload)?.error)?.details;
+  if (!Array.isArray(details)) {
+    return undefined;
+  }
+
+  let retryAfterMs: number | undefined;
+  for (const rawDetail of details) {
+    const detail = asOptionalRecord(rawDetail);
+    if (trimToUndefined(detail?.["@type"]) !== GOOGLE_RETRY_INFO_TYPE) {
+      continue;
+    }
+    const candidate = parseGoogleRetryDelayMs(detail?.retryDelay);
+    retryAfterMs =
+      candidate === undefined ? retryAfterMs : Math.max(retryAfterMs ?? candidate, candidate);
+  }
+  return retryAfterMs;
+}
+
+function extractRetryAfterHeaderMs(response: Response): number | undefined {
+  const seconds = parseRetryAfterHeaderSeconds(response.headers.get("Retry-After"));
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const delayMs = Math.ceil(seconds * 1000);
+  return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+}
 
 function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
   const root = asOptionalRecord(payload);
@@ -229,10 +276,12 @@ function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
     trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
   const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
   const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
+  const retryAfterMs = extractGoogleRetryInfoDelayMs(payload);
   return {
     ...(detail ? { detail: redactSensitiveText(detail) } : {}),
     ...(code ? { code } : {}),
     ...(type ? { type } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   };
 }
 
@@ -243,6 +292,7 @@ type ProviderHttpErrorInfo = {
   type?: string;
   body?: string;
   requestId?: string;
+  retryAfterMs?: number;
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
@@ -282,8 +332,12 @@ async function extractProviderErrorInfo(
       ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
+  const headerRetryAfterMs = extractRetryAfterHeaderMs(response);
   if (!rawBody) {
-    return requestId ? { requestId } : {};
+    return {
+      ...(requestId ? { requestId } : {}),
+      ...(headerRetryAfterMs !== undefined ? { retryAfterMs: headerRetryAfterMs } : {}),
+    };
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -294,10 +348,15 @@ async function extractProviderErrorInfo(
   const body = redactProviderErrorBody(safeBody);
   try {
     const metadata = extractProviderErrorPayloadMetadata(JSON.parse(safeBody));
+    const retryAfterMs =
+      metadata.retryAfterMs === undefined
+        ? headerRetryAfterMs
+        : Math.max(metadata.retryAfterMs, headerRetryAfterMs ?? metadata.retryAfterMs);
     return {
       ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
       ...(metadata.code ? { code: metadata.code } : {}),
       ...(metadata.type ? { type: metadata.type } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       body,
       ...(requestId ? { requestId } : {}),
     };
@@ -306,6 +365,7 @@ async function extractProviderErrorInfo(
       detail: body,
       body,
       ...(requestId ? { requestId } : {}),
+      ...(headerRetryAfterMs !== undefined ? { retryAfterMs: headerRetryAfterMs } : {}),
     };
   }
 }
@@ -327,6 +387,7 @@ export function extractProviderRequestId(response: Response): string | undefined
 export class ProviderHttpError extends Error {
   readonly status: number;
   readonly statusCode: number;
+  readonly retryAfterMs?: number;
   readonly code?: string;
   readonly errorCode?: string;
   readonly errorType?: string;
@@ -341,6 +402,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterMs?: number;
     },
   ) {
     super(message);
@@ -352,6 +414,7 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    this.retryAfterMs = params.retryAfterMs;
   }
 }
 
@@ -392,6 +455,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterMs: info.retryAfterMs,
     },
   );
 }

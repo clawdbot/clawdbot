@@ -48,8 +48,10 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
-const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
-  /(rate[_ ]limit|too many requests|\b(?:429|5\d\d)\b|resource has been exhausted|cloudflare|tokens per day)/i;
+const RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE =
+  /(rate[_ ]limit|too many requests|\b429\b|resource has been exhausted|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE = /\b5\d\d\b|cloudflare/i;
 
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
@@ -57,42 +59,110 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b)/i;
 
+const MEMORY_EMBEDDING_RETRY_POLICY = {
+  transient: { attempts: 3, baseDelayMs: 500, maxDelayMs: 8000 },
+  rateLimit: { attempts: 5, baseDelayMs: 5000, maxDelayMs: 60_000 },
+} as const;
+
 export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
-export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return (
-    RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
-    (!isSplittableMemoryEmbeddingBatchError(message) &&
-      RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message))
-  );
+type MemoryEmbeddingRetryClass = "permanent" | "rate-limit" | "transient";
+
+function readErrorField(error: unknown, field: string): unknown {
+  if (error === null || (typeof error !== "object" && typeof error !== "function")) {
+    return undefined;
+  }
+  try {
+    return Reflect.get(error, field);
+  } catch {
+    return undefined;
+  }
 }
 
-export function resolveMemoryEmbeddingRetryDelay(
-  delayMs: number,
-  randomValue: number,
-  maxDelayMs: number,
-): number {
-  return Math.min(maxDelayMs, Math.round(delayMs * (1 + randomValue * 0.2)));
+function readMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
+  const value = readErrorField(error, "retryAfterMs");
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function readMemoryEmbeddingStatus(error: unknown): number | undefined {
+  for (const field of ["status", "statusCode"]) {
+    const value = readErrorField(error, field);
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readMemoryEmbeddingErrorCode(error: unknown): string | undefined {
+  for (const field of ["errorCode", "code"]) {
+    const value = readErrorField(error, field);
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().toLowerCase();
+    }
+  }
+  return undefined;
+}
+
+function classifyMemoryEmbeddingRetryError(error: unknown): MemoryEmbeddingRetryClass {
+  const message = formatErrorMessage(error);
+  const retryAfterMs = readMemoryEmbeddingRetryAfterMs(error);
+  const status = readMemoryEmbeddingStatus(error);
+  if (readMemoryEmbeddingErrorCode(error) === "quota_exceeded" && retryAfterMs === undefined) {
+    return "permanent";
+  }
+  if (status === 429 || RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
+    return "rate-limit";
+  }
+  if (RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message)) {
+    return "transient";
+  }
+  if (isSplittableMemoryEmbeddingBatchError(message)) {
+    return "permanent";
+  }
+  return (status !== undefined && status >= 500 && status <= 599) ||
+    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message)
+    ? "transient"
+    : "permanent";
 }
 
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
-  isRetryable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  maxAttempts: number;
-  baseDelayMs: number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
+  const transient = MEMORY_EMBEDDING_RETRY_POLICY.transient;
+  const rateLimit = MEMORY_EMBEDDING_RETRY_POLICY.rateLimit;
   return await retryAsync(params.run, {
-    attempts: params.maxAttempts,
-    minDelayMs: params.baseDelayMs,
-    maxDelayMs: Number.MAX_SAFE_INTEGER,
+    attempts: rateLimit.attempts,
+    minDelayMs: transient.baseDelayMs,
+    maxDelayMs: rateLimit.maxDelayMs,
+    retryAfterMaxDelayMs: rateLimit.maxDelayMs,
+    jitter: 0.2,
     // Caller cancellation wins even when its timeout resembles a retryable
     // provider error; otherwise abandoned searches start another request.
-    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
+    shouldRetry: (err, attempt) => {
+      if (params.signal?.aborted) {
+        return false;
+      }
+      const retryClass = classifyMemoryEmbeddingRetryError(err);
+      if (retryClass === "permanent") {
+        return false;
+      }
+      return attempt < (retryClass === "rate-limit" ? rateLimit.attempts : transient.attempts);
+    },
+    delayMs: ({ attempt, err }) => {
+      const policy =
+        classifyMemoryEmbeddingRetryError(err) === "rate-limit" ? rateLimit : transient;
+      return Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1));
+    },
+    retryAfterMs: (err) =>
+      classifyMemoryEmbeddingRetryError(err) === "rate-limit"
+        ? readMemoryEmbeddingRetryAfterMs(err)
+        : undefined,
     sleep: params.waitForRetry,
   });
 }
@@ -100,20 +170,14 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
-  isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  maxAttempts: number;
-  baseDelayMs: number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   try {
     return await runMemoryEmbeddingRetryLoop({
       run: async () => await params.run(params.items),
-      isRetryable: params.isRetryable,
       waitForRetry: params.waitForRetry,
-      maxAttempts: params.maxAttempts,
-      baseDelayMs: params.baseDelayMs,
     });
   } catch (err) {
     const message = formatErrorMessage(err);

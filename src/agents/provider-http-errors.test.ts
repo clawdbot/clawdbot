@@ -304,6 +304,81 @@ describe("provider error utils", () => {
     expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
+  it.each([
+    ["delta seconds", "12", 12_000],
+    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
+    ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
+  ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
+    const now = Date.UTC(2026, 4, 1, 12, 0, 0);
+    // Shared-worker runs (--isolate=false): restore Date.now even on assertion failure.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const error = await createProviderHttpError(
+        new Response(null, { status: 429, headers: { "Retry-After": value } }),
+        "Provider API error",
+      );
+
+      expect(error).toMatchObject({ retryAfterMs: expected });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("uses the largest valid provider cooldown minimum", async () => {
+    const error = await createProviderHttpError(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            details: [
+              {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                retryDelay: "21.549315790s",
+              },
+            ],
+          },
+        }),
+        { status: 429, headers: { "Retry-After": "30" } },
+      ),
+      "Provider API error",
+    );
+
+    expect(error).toMatchObject({ retryAfterMs: 30_000 });
+  });
+
+  it.each([
+    ["negative header", { header: "-1" }],
+    ["unsafe header", { header: "9007199254741" }],
+    ["negative RetryInfo", { retryDelay: "-1s" }],
+    ["malformed RetryInfo", { retryDelay: "NaNs" }],
+    ["over-precise RetryInfo", { retryDelay: "1.0000000001s" }],
+    ["unsafe RetryInfo", { retryDelay: "9007199254741s" }],
+  ])("ignores $name cooldown hints", async (_name, value) => {
+    const body =
+      "retryDelay" in value
+        ? JSON.stringify({
+            error: {
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: value.retryDelay,
+                },
+              ],
+            },
+          })
+        : null;
+    const error = await createProviderHttpError(
+      new Response(body, {
+        status: 429,
+        headers: "header" in value ? { "Retry-After": value.header } : undefined,
+      }),
+      "Provider API error",
+    );
+
+    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
+  });
+
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
     const response = new Response(
       JSON.stringify({

@@ -342,6 +342,41 @@ describe("Gemini embedding provider", () => {
     );
   });
 
+  it("preserves structured Gemini cooldowns on failed embedding responses", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "1.500000001s",
+                },
+              ],
+            },
+          }),
+          { status: 429, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 1501,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects wrong single embedding vector shapes", async () => {
     installFetchMock(() => ({ embedding: { values: [1, "bad"] } }));
 

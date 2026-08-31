@@ -48,22 +48,28 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
 describe("memory embedding query retry cancellation", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("cancels provider backoff immediately without sending a second request", async () => {
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi
-      .fn<EmbeddingProvider["embed"]>()
-      .mockRejectedValue(new Error("TypeError: fetch failed"));
-    const manager = createEmbeddingQueryRetryHarness(embedQuery);
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(
+      Object.assign(new Error("gemini embeddings failed (429)"), {
+        status: 429,
+        retryAfterMs: 60_000,
+      }),
+    );
+    const manager = createEmbeddingQueryRetryHarness(embedQuery, 10_000);
 
     const pending = manager.embedQueryWithRetry("search terms", controller.signal);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(embedQuery).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(1);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
 
     controller.abort(abortReason);
 

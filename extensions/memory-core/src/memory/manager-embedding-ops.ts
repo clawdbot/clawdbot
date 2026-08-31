@@ -53,9 +53,7 @@ import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
-  isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingBatchError,
-  resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -80,9 +78,6 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
-const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -643,7 +638,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               }
               return result;
             },
-            isRetryable: isRetryableMemoryEmbeddingError,
             isSplittable: isSplittableMemoryEmbeddingBatchError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(
@@ -651,8 +645,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 structured ? "retrying structured batch" : "retrying",
               );
             },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
                 `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${splitAt} + ${itemCount - splitAt}`,
@@ -681,13 +673,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     action: string,
     signal?: AbortSignal,
   ): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
-    log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await sleepWithAbort(waitMs, signal);
+    log.warn(`memory embeddings retryable error; ${action} in ${delayMs}ms`);
+    await sleepWithAbort(delayMs, signal);
   }
 
   private resolveEmbeddingTimeout(
@@ -733,12 +720,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               });
             },
             signal,
-            isRetryable: isRetryableMemoryEmbeddingError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
             },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
           }),
       );
     } catch (err) {
