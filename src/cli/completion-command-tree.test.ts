@@ -24,18 +24,6 @@ describe("shell completion command tree", () => {
     expect(tree.root.valueOptions).toEqual(["-p", "--profile"]);
   });
 
-  it("omits hidden options from the suggested completions", () => {
-    const program = new Command()
-      .name("openclaw")
-      .option("-p, --profile <name>", "Profile")
-      .addOption(new Option("--internal-only").hideHelp());
-
-    const tree = collectShellCompletionCommandTree(program);
-
-    expect(tree.root.completions).toEqual(["-p", "--profile"]);
-    expect(tree.root.completions).not.toContain("--internal-only");
-  });
-
   it("expands aliases across every ancestor and inherits value-taking options", () => {
     const program = new Command().name("openclaw").option("-p, --profile <name>", "Profile");
     const cron = program.command("cron").alias("schedule").option("-z, --timezone <zone>");
@@ -126,6 +114,25 @@ describe("shell completion command tree", () => {
 
     expect(tree.root.valueChoices).toEqual([colorChoice]);
     expect(tree.descendants[0]?.valueChoices).toEqual([colorChoice]);
+  });
+
+  it("retains hidden value consumption and inherited-choice shadowing", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("-p, --profile <name>").choices(["parent"]));
+    program
+      .command("child")
+      .addOption(new Option("--profile <name>").choices(["child"]).hideHelp())
+      .option("--visible", "Visible option");
+
+    const context = collectShellCompletionCommandTree(program).descendants[0];
+
+    expect(context?.completions).toEqual(["--visible"]);
+    expect(context?.valueOptions).toEqual(["-p", "--profile"]);
+    expect(context?.valueChoices).toEqual([
+      { flags: ["-p"], choices: ["parent"], requiresValue: true },
+      { flags: ["--profile"], choices: ["child"], requiresValue: true },
+    ]);
   });
 
   it("keeps commandless roots valid for every shell", () => {

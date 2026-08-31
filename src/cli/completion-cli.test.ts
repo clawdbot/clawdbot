@@ -86,22 +86,6 @@ describe("completion-cli", () => {
     expect(script).not.toContain("John'\\''s");
   });
 
-  it.each(["bash", "zsh", "fish", "powershell"] as const)(
-    "omits hidden options from %s completions",
-    (shell) => {
-      const program = new Command()
-        .name("openclaw")
-        .option("--visible", "Advertised")
-        .addOption(new Option("--internal-only").hideHelp());
-
-      const script = getCompletionScript(shell, program);
-
-      // fish spells long flags as `-l visible`, so match the bare name.
-      expect(script).toContain("visible");
-      expect(script).not.toContain("internal-only");
-    },
-  );
-
   it("marks zsh option arguments and completes validated shell choices", () => {
     const script = getCompletionScript("zsh", createDocumentedCompletionProgram());
 
