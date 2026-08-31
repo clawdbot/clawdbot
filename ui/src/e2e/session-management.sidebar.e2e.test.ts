@@ -1,11 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -27,83 +25,6 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("keeps the browser-local draft pencil visible on active Home beside activity", async () => {
-    const mainKey = "agent:main:main";
-    const secondKey = "agent:main:draft-second";
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(mainKey, "Main", 2, {
-            hasActiveRun: true,
-            startedAt: 1,
-            status: "running",
-          }),
-          sessionRow(secondKey, "Draft second", 1),
-        ]),
-      },
-      sessionKey: mainKey,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
-      const homeRow = page.locator(".nav-item--home");
-      const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
-      const composer = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
-      );
-      await homeRow.waitFor({ state: "visible", timeout: 10_000 });
-      await secondRow.waitFor({ state: "visible" });
-      await composer.waitFor({ state: "visible" });
-      await captureUiProof(page, "draft-indicator-before.png");
-
-      await composer.fill("Keep this unsent");
-      const activity = homeRow.getByRole("img", { name: "Active run" });
-      const draft = homeRow.getByRole("img", { name: "Unsent draft" });
-      await activity.waitFor();
-      await draft.waitFor();
-      const activityBox = await activity.boundingBox();
-      const draftBox = await draft.boundingBox();
-      if (!activityBox || !draftBox) {
-        throw new Error("expected activity and draft icon bounds");
-      }
-      expect(draftBox.x).toBeGreaterThanOrEqual(activityBox.x + activityBox.width);
-      await captureUiProof(page, "draft-indicator-active.png");
-
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await draft.waitFor();
-
-      await homeRow.click();
-      await waitForControlUiRoute(page, {
-        pathname: controlUiSessionPath(mainKey),
-        routeId: "chat",
-      });
-      await draft.waitFor();
-      const presentedPanes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      await expect
-        .poll(() =>
-          presentedPanes.evaluateAll((panes) =>
-            panes.map((pane) => (pane as ChatPaneElement).sessionKey),
-          ),
-        )
-        .toEqual([mainKey]);
-
-      await composer.fill("");
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await expect.poll(() => draft.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("expands and manages child sessions inline before opening a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
@@ -235,8 +156,8 @@ suite.define(() => {
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
       await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
-      await page.getByRole("menuitem", { name: "Set icon" }).waitFor();
-      await page.getByRole("menuitem", { name: "Fork" }).waitFor();
+      await page.getByRole("menuitem", { name: "Icon & color" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);

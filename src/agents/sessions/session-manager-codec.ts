@@ -335,14 +335,13 @@ function isReadableMessage(value: unknown): boolean {
 
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   const message = isRecord(value) && value.type === "message" ? value.message : undefined;
-  const readableLegacyMessage =
-    isRecord(message) && message.role === "hookMessage"
-      ? isReadableContent(message.content)
-      : isReadableMessage(message);
   return (
     isRecord(value) &&
     isSessionEntryType(value.type) &&
-    (value.type !== "message" || readableLegacyMessage)
+    (value.type !== "message" ||
+      (isRecord(message) && message.role === "hookMessage"
+        ? isReadableContent(message.content)
+        : isReadableMessage(message)))
   );
 }
 
@@ -393,9 +392,10 @@ export function parseOpaqueLeafEntry(record: unknown):
 
 export function classifySessionFileEntry(rawEntry: FileEntry, sourceVersion: number) {
   const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
+  // Legacy rows can lack modern IDs; avoid constructing a discarded validation error for each one.
   const recognized =
-    isIndexedSessionEntry(entry) ||
-    (sourceVersion < CURRENT_SESSION_VERSION && isReadableLegacySessionEntry(entry));
+    (sourceVersion < CURRENT_SESSION_VERSION && isReadableLegacySessionEntry(entry)) ||
+    isIndexedSessionEntry(entry);
   return { entry, recognized };
 }
 

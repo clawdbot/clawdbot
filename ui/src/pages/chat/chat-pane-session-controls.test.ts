@@ -130,10 +130,10 @@ describe("chat pane composer controls", () => {
 
   it.each([
     [undefined, "Default"],
-    ["read-only", "Default (Read only)"],
+    ["read-only", "Default (Read Only)"],
     ["guarded", "Default (Guarded)"],
     ["workspace", "Default (Workspace)"],
-    ["full", "Default (Full access)"],
+    ["full", "Default (Full Access)"],
   ] as const)(
     "labels inherited permissions for %s without selecting a mode",
     (defaultMode, label) => {
@@ -238,7 +238,7 @@ describe("chat pane composer controls", () => {
     expect(defaultOption?.textContent).toContain("Default (Guarded)");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.textContent?.trim(),
-    ).toBe("Full access");
+    ).toBe("Full Access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();

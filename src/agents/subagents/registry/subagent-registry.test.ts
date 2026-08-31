@@ -63,6 +63,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -5759,6 +5760,10 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retains delete-mode successful completions through the delivery deadline", async () => {
+    const persist = (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) =>
+      saveSubagentRegistryChangesToSqlite(runs, runIds ?? [...runs.keys()]);
+    mocks.persistSubagentRunsToDisk.mockImplementation(persist);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(persist);
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({

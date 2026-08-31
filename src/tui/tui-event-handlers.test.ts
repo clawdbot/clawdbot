@@ -3313,23 +3313,32 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       {
         name: "prefers canonical persisted identity over a conflicting event envelope",
         initialSessionId: "session-1",
-        metadata: { id: "persisted-user", idempotencyKey: "persisted-run:user", seq: 7 },
+        metadata: {
+          id: "persisted-user",
+          idempotencyKey: "persisted-run:user",
+          runId: "execution-run",
+          seq: 7,
+        },
         envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
-        expected: { messageId: "persisted-user", runId: "persisted-run" },
+        expected: {
+          messageId: "persisted-user",
+          runId: "execution-run",
+          sendId: "persisted-run",
+        },
       },
       {
         name: "uses the envelope when canonical transcript identity is absent",
         initialSessionId: "session-1",
         metadata: undefined,
         envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
-        expected: { messageId: "envelope-user", runId: "envelope-run" },
+        expected: { messageId: "envelope-user", runId: "envelope-run", sendId: "envelope-run" },
       },
       {
         name: "binds the first session identity without dropping the live canonical prompt",
         initialSessionId: null,
         metadata: { id: "persisted-user", idempotencyKey: "persisted-run:user", seq: 7 },
         envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
-        expected: { messageId: "persisted-user", runId: "persisted-run" },
+        expected: { messageId: "persisted-user", runId: "persisted-run", sendId: "persisted-run" },
       },
     ])("$name", ({ initialSessionId, metadata, envelope, expected }) => {
       const { state, chatLog, handleSessionMessageEvent } = createHandlersHarness({
@@ -3348,7 +3357,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
       expect(chatLog.addLiveUser).toHaveBeenCalledExactlyOnceWith(
         "Canonical cross-client prompt.",
-        expected,
+        expect.objectContaining(expected),
       );
       expect(state.sessionProjection?.entries).toHaveLength(1);
       expect(state.sessionProjection?.entries[0]?.identity).toMatchObject({
@@ -3423,10 +3432,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
           },
         });
 
-        expect(chatLog.addLiveUser).toHaveBeenCalledWith("Sent from the other client.", {
-          messageId: "shared-session-user",
-          runId,
-        });
+        expect(chatLog.addLiveUser).toHaveBeenCalledWith(
+          "Sent from the other client.",
+          expect.objectContaining({ messageId: "shared-session-user", runId, sendId: runId }),
+        );
         expect(state.activeChatRunId).toBe(runId);
         expect(loadHistory).not.toHaveBeenCalled();
       },

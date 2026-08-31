@@ -934,6 +934,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     },
@@ -2429,7 +2430,7 @@ describe("scripts/test-projects changed-target routing", () => {
     {
       title: "keeps public plugin SDK changes focused by default",
       changedPath: "src/plugin-sdk/provider-entry.ts",
-      config: "test/vitest/vitest.unit-fast.config.ts",
+      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
       testPath: "src/plugin-sdk/provider-entry.test.ts",
     },
     {
@@ -2713,7 +2714,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.unit-fast.config.ts",
+        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
         watchMode: false,

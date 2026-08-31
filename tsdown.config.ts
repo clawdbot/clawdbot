@@ -629,6 +629,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
       "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
+    "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
     ...bundledHookEntries,
   };
 }

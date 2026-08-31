@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -29,7 +30,6 @@ import {
   patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
-  withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import {
   waitForSessionTranscriptIndexReconcile,
@@ -49,6 +49,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -268,22 +269,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await harness.close();
 });
-
-const sendReq = (
-  ws: { send: (payload: string) => void },
-  id: string,
-  method: string,
-  params: unknown,
-) => {
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method,
-      params,
-    }),
-  );
-};
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
@@ -4105,41 +4090,43 @@ describe("gateway server chat", () => {
   test.each([
     { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
-  ])("chat.send $caseName during SQLite admission", async ({ retryable, stopReason }) => {
+  ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
     const { storePath } = openDirectChatSession();
     const runId = `idem-restart-safe-abort-${stopReason}`;
-    const lockEntered = createDeferred();
-    const releaseLock = createDeferred();
-    let lockPromise: Promise<void> | undefined;
+    let stopListening: (() => void) | undefined;
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const scope = makeMainSessionScope(storePath);
-      lockPromise = withTranscriptWriteLock(scope, async () => {
-        lockEntered.resolve(undefined);
-        await releaseLock.promise;
-      });
-      await lockEntered.promise;
       const context = createDirectChatContext();
+      const abortCommittedTurn = vi.fn(() => {
+        const activeRun = expectDefined(
+          context.chatAbortControllers.get(runId),
+          "expected admitted chat run",
+        );
+        activeRun.abortStopReason = stopReason;
+        activeRun.controller.abort();
+      });
+      // The transcript notification follows the atomic user-turn and recovery-claim commit.
+      stopListening = onSessionTranscriptUpdate((update) => {
+        if (
+          update.target.sessionKey === scope.sessionKey &&
+          update.target.sessionId === scope.sessionId &&
+          isRecord(update.message) &&
+          update.message.role === "user" &&
+          update.message.idempotencyKey === `${runId}:user`
+        ) {
+          abortCommittedTurn();
+        }
+      });
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      const sendPromise = sendControlUiChat({
+      await sendControlUiChat({
         context,
         idempotencyKey: runId,
         message: "persist, then stop",
         respond: captureChatResult(responses),
       });
-      await waitForFast(
-        () => expect(context.chatAbortControllers.get(runId)).toBeDefined(),
-        FAST_WAIT_OPTS,
-      );
-      const activeRun = context.chatAbortControllers.get(runId);
-      if (!activeRun) {
-        throw new Error("expected admitted chat run");
-      }
-      activeRun.abortStopReason = stopReason;
-      activeRun.controller.abort();
-      releaseLock.resolve(undefined);
-      await Promise.all([sendPromise, lockPromise]);
-
+      stopListening();
+      expect(abortCommittedTurn).toHaveBeenCalledOnce();
       expect(responses).toEqual([
         {
           ok: true,
@@ -4245,8 +4232,7 @@ describe("gateway server chat", () => {
         }),
       ).toHaveLength(1);
     } finally {
-      releaseLock.resolve(undefined);
-      await lockPromise?.catch(() => undefined);
+      stopListening?.();
       resetDirectChatSession();
     }
   });
@@ -4677,11 +4663,10 @@ describe("gateway server chat", () => {
           scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
         },
       } as const;
-      context.getRuntimeConfig = vi
-        .fn()
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValue(changedRuntimeConfig);
+      context.getRuntimeConfig = () =>
+        loadSessionEntry(makeMainSessionScope(storePath))?.restartRecoveryDeliveryRunId === runId
+          ? changedRuntimeConfig
+          : initialRuntimeConfig;
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
 
       await sendControlUiChat({
@@ -8061,18 +8046,16 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
-      sendReq(
+      const sendRes = await rpcReq(
         ws,
-        "send-abort-1",
         "chat.send",
         makeChatSendParams({
           idempotencyKey: "idem-abort-1",
           timeoutMs: 30_000,
         }),
+        2_000,
       );
 
-      const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
       await waitForFast(() => {
         expect(spy.mock.calls.length).toBeGreaterThan(0);

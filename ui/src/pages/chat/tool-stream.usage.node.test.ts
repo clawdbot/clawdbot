@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { createHost } from "./tool-stream.test-helpers.ts";
-import { handleAgentEvent, resolveActiveRunOutputTokens } from "./tool-stream.ts";
+import { handleAgentEvent, resetToolStream } from "./tool-stream.ts";
 
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 
@@ -23,18 +23,52 @@ function agentEvent(
 }
 
 describe("app-tool-stream run usage", () => {
-  it("tracks monotonic output usage for a session-owned engine run", () => {
+  it("bounds retained usage while keeping the most recently updated run", () => {
+    const host = createHost();
+    for (let index = 0; index < 60; index++) {
+      handleAgentEvent(
+        host,
+        agentEvent(`run-${index}`, 1, "usage", { outputTokens: index }, "main"),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("still-active", index + 1, "usage", { outputTokens: index }, "main"),
+      );
+    }
+    expect(host.chatRunUsageById?.size).toBe(50);
+    expect(host.chatRunUsageById?.has("run-0")).toBe(false);
+    expect(host.chatRunUsageById?.get("still-active")?.outputTokens).toBe(59);
+  });
+
+  it("keeps the last usage through completion even without an intervening render", () => {
+    const host = createHost({ chatRunId: "client-run" });
+    handleAgentEvent(host, agentEvent("client-run", 1, "usage", { outputTokens: 695 }, "main"));
+    handleAgentEvent(host, agentEvent("client-run", 2, "lifecycle", { phase: "end" }, "main"));
+    expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(695);
+  });
+
+  it("accepts a newer corrected count but ignores older recovery usage", () => {
+    const host = createHost({ chatRunId: "client-run" });
+    handleAgentEvent(host, agentEvent("client-run", 8, "usage", { outputTokens: 120 }, "main"));
+    handleAgentEvent(host, agentEvent("client-run", 9, "usage", { outputTokens: 115 }, "main"));
+    resetToolStream(host);
+    handleAgentEvent(host, agentEvent("client-run", 7, "lifecycle", { phase: "start" }, "main"));
+    handleAgentEvent(host, agentEvent("client-run", 7, "usage", { outputTokens: 150 }, "main"));
+    expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(115);
+  });
+
+  it("tracks sequence-ordered output usage for a session-owned engine run", () => {
     const host = createHost({ chatRunId: "client-run" });
 
     handleAgentEvent(host, agentEvent("engine-run", 1, "usage", { outputTokens: 12 }, "main"));
     handleAgentEvent(host, agentEvent("engine-run", 2, "usage", { outputTokens: 8 }, "main"));
 
-    expect(host.chatRunUsageById?.get("engine-run")).toBe(12);
+    expect(host.chatRunUsageById?.get("engine-run")?.outputTokens).toBe(8);
 
     handleAgentEvent(host, agentEvent("engine-run", 3, "lifecycle", { phase: "start" }, "main"));
     handleAgentEvent(host, agentEvent("engine-run", 4, "usage", { outputTokens: 3 }, "main"));
 
-    expect(host.chatRunUsageById?.get("engine-run")).toBe(3);
+    expect(host.chatRunUsageById?.get("engine-run")?.outputTokens).toBe(3);
   });
 
   it("keeps session-scoped usage separate for concurrent active runs", () => {
@@ -44,8 +78,8 @@ describe("app-tool-stream run usage", () => {
     handleAgentEvent(host, agentEvent("run-b", 1, "usage", { outputTokens: 10 }, "main"));
 
     expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([
-      ["run-a", 100],
-      ["run-b", 10],
+      ["run-a", { outputTokens: 100, seq: 1 }],
+      ["run-b", { outputTokens: 10, seq: 1 }],
     ]);
   });
 
@@ -190,30 +224,8 @@ describe("app-tool-stream run usage", () => {
     handleAgentEvent(host, agentEvent("engine-run", 1, "usage", { outputTokens: 20 }));
     handleAgentEvent(host, agentEvent("client-run", 2, "usage", { outputTokens: 7 }));
 
-    expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([["client-run", 7]]);
-  });
-});
-
-describe("active run output usage selection", () => {
-  it("prefers local client-run usage and falls back to a server active run", () => {
-    const usageByRun = new Map([
-      ["client-run", 12],
-      ["engine-run", 30],
+    expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([
+      ["client-run", { outputTokens: 7, seq: 2 }],
     ]);
-
-    expect(
-      resolveActiveRunOutputTokens({
-        localRunId: "client-run",
-        activeRunIds: ["engine-run"],
-        usageByRun,
-      }),
-    ).toBe(12);
-    expect(
-      resolveActiveRunOutputTokens({
-        localRunId: "missing-client-run",
-        activeRunIds: ["missing-engine-run", "engine-run"],
-        usageByRun,
-      }),
-    ).toBe(30);
   });
 });

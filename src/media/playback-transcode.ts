@@ -64,6 +64,7 @@ const PLAYBACK_TRANSCODE_POLICY = {
       "audio/webm": "matroska,webm",
       "audio/x-aiff": "aiff",
       "audio/x-caf": "caf",
+      "audio/x-ms-asf": "asf",
       "audio/x-ms-wma": "asf",
     },
     target: { contentType: "audio/mp4", extension: ".m4a" },

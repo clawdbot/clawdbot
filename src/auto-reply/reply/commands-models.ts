@@ -35,7 +35,8 @@ import {
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
+import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
+import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -161,13 +162,32 @@ export async function buildPreparedModelsProviderData(
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<PreparedModelsProviderData> {
+  return buildPreparedDataForConfig(cfg, agentId, options).catch(async (error: unknown) => {
+    if (!(error instanceof PreparedModelCatalogConfigReplacedError)) {
+      throw error;
+    }
+    // Catalog, defaults, visibility, auth, aliases, and runtime choices share one config generation.
+    const { config } = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+      config: cfg,
+      readOnly: true,
+      agentId,
+      workspaceDir: options.workspaceDir,
+    });
+    return buildPreparedDataForConfig(config, agentId, options);
+  });
+}
+
+async function buildPreparedDataForConfig(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: { view?: "default" | "all"; workspaceDir?: string },
+): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
     ...runtimeNormalization,
   });
-  const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
@@ -181,11 +201,11 @@ export async function buildPreparedModelsProviderData(
     agentId,
     view: options.view ?? "default",
     loadCatalog: ({ readOnly }) =>
-      loadPreparedModelCatalogSnapshot({
+      preparedModelCatalog.loadPreparedModelCatalogSnapshot({
         config: cfg,
         readOnly,
         ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
-        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
+        ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       }),
   });
   const catalog = snapshot.entries;

@@ -603,6 +603,18 @@ export function expectBlockReplyCall(
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
 }
 
+/**
+ * Session-store paths reach production resolution, which derives a real agent
+ * SQLite file from the store's directory. A shared /tmp path would therefore
+ * open the machine-wide agent database and make unrelated suites depend on it.
+ */
+export function makeTestSessionStorePath(): string {
+  return path.join(
+    useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
+    "sessions.json",
+  );
+}
+
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;

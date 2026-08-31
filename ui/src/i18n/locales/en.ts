@@ -1212,10 +1212,20 @@ export const en: TranslationMap = {
     markRead: "Mark as read",
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
-    forkSession: "Fork",
+    forkSession: "Fork conversation",
     forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
-    copySessionId: "Copy session ID",
+    copySessionId: "Session ID",
+    copySessionLink: "Session link",
+    copyMarkdown: "Conversation as Markdown",
+    openNewTab: "New tab",
+    openNewWindow: "New window",
+    splitBelow: "Split below",
+    workspaceEditors: "Workspace · editor",
+    resetAppearance: "Reset to default",
+    copyTranscriptChanged: "Conversation changed while copying. Try again.",
+    openWindowBlocked: "Allow pop-ups for this site, then try again.",
+    splitUnavailable: "Open a conversation on a wide screen to use split view.",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: "Archive session",
@@ -1260,6 +1270,7 @@ export const en: TranslationMap = {
     groupByCategory: "Custom groups",
     groupByPerson: "Person",
     showSessionPreview: "Show message preview",
+    hideEmptyGroups: "Hide empty groups",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
@@ -1635,8 +1646,8 @@ export const en: TranslationMap = {
         description: "Gateway server settings (port, auth, binding)",
       },
       wizard: {
-        label: "Setup Wizard",
-        description: "Setup wizard state and history",
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
       },
       meta: {
         label: "Metadata",
@@ -1835,7 +1846,7 @@ export const en: TranslationMap = {
       mcp: "MCP",
       theme: "Theme",
       ui: "UI",
-      wizard: "Setup Wizard",
+      wizard: "Setup",
     },
     themes: {
       claw: {
@@ -2675,7 +2686,7 @@ export const en: TranslationMap = {
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
-    appearance: "Theme, UI, and setup wizard settings.",
+    appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
@@ -4073,7 +4084,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -5784,8 +5795,8 @@ export const en: TranslationMap = {
     },
     turnRecap: {
       doneIn: "Done in {duration}",
-      tokens: "{count} tokens",
-      tokensOne: "1 token",
+      tokens: "{count} output tokens",
+      tokensOne: "1 output token",
     },
     commands: {
       arguments: "Command arguments",
@@ -6051,7 +6062,7 @@ export const en: TranslationMap = {
       updateFailed: "Failed to update permissions: {error}",
       modes: {
         "read-only": {
-          label: "Read only",
+          label: "Read Only",
           description: "Read within the session root; writes and commands are blocked.",
         },
         guarded: {
@@ -6063,7 +6074,7 @@ export const en: TranslationMap = {
           description: "An AI reviewer checks requests beyond the session root.",
         },
         full: {
-          label: "Full access",
+          label: "Full Access",
           description: "No reviewer; files and commands are unrestricted.",
         },
       },

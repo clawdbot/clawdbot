@@ -42,6 +42,7 @@ import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
+  isSessionWorkAdmissionActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
@@ -1043,6 +1044,18 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
+  let releaseDrainProbe = () => {};
+  let deletionCleanup: Promise<unknown> | undefined;
+  let dispatchAdmissionsReleased: Promise<void> | undefined;
+  const scheduleTitle = await actualDashboardTitleScheduler();
+  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params) => {
+    // Capture chat custody before the independent title admission is created.
+    dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
+      scope: params.storePath,
+      identities: [params.sessionKey, params.admittedSessionId],
+    });
+    scheduleTitle(params);
+  });
   let finishDispatch: (() => void) | undefined;
   const dispatchFinished = new Promise<void>((resolve) => {
     finishDispatch = resolve;
@@ -1092,26 +1105,48 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     );
     await titleStarted;
     finishDispatch?.();
+    expect(dispatchAdmissionsReleased).toBeDefined();
+    await dispatchAdmissionsReleased;
+    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
 
+    const drainStarted = createDeferredCore();
+    const drainProbe = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        drainStarted.resolve();
+        releaseDrainProbe();
+      },
+    });
+    releaseDrainProbe = drainProbe.release;
     let deletionSettled = false;
     const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
       key: sessionKey,
     }).finally(() => {
       deletionSettled = true;
     });
-    await waitForFast(
-      () => expect(isSessionLifecycleMutationActive(storePath, [sessionKey])).toBe(true),
-      { timeout: 5_000 },
-    );
+    deletionCleanup = deletion.catch(() => {});
+    // Deletion drains title work outside its mutation lock; observe the drain owner itself.
+    await Promise.race([
+      drainStarted.promise,
+      deletion.then((result) => {
+        throw new Error(`Deletion returned before draining: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
     expect(deletionSettled).toBe(false);
 
     finishTitle?.();
     const deleted = await deletion;
     expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
+    releaseDrainProbe();
     finishDispatch?.();
     finishTitle?.();
+    await deletionCleanup;
     ws.close();
   }
 });

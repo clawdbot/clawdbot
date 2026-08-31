@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
 import {
@@ -190,33 +191,31 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     const { current } = updateCurrentConversationBindingRecord(
       conversationRef(normalizedConversationId),
       (existing) => {
-        const existingLocal = existing ? asAccountBindingRecord(existing) : undefined;
+        const previous =
+          existing?.targetSessionKey === normalizedTargetSessionKey &&
+          existing.targetKind === input.targetKind
+            ? existing
+            : undefined;
+        const existingLocal = previous ? asAccountBindingRecord(previous) : undefined;
         const record: AccountScopedConversationBindingRecord<TKind> = {
           accountId,
           conversationId: normalizedConversationId,
           targetKind: params.toStoredTargetKind(input.targetKind),
           targetSessionKey: normalizedTargetSessionKey,
           agentId:
-            (typeof input.metadata?.agentId === "string" && input.metadata.agentId.trim()
-              ? input.metadata.agentId.trim()
-              : existingLocal?.agentId) ??
+            normalizeOptionalString(input.metadata?.agentId) ??
+            existingLocal?.agentId ??
             resolveSessionAgentId({
               config: params.cfg,
               sessionKey: normalizedTargetSessionKey,
             }),
-          label:
-            typeof input.metadata?.label === "string" && input.metadata.label.trim()
-              ? input.metadata.label.trim()
-              : existingLocal?.label,
-          boundBy:
-            typeof input.metadata?.boundBy === "string" && input.metadata.boundBy.trim()
-              ? input.metadata.boundBy.trim()
-              : existingLocal?.boundBy,
+          label: normalizeOptionalString(input.metadata?.label) ?? existingLocal?.label,
+          boundBy: normalizeOptionalString(input.metadata?.boundBy) ?? existingLocal?.boundBy,
           boundAt: now,
           lastActivityAt: now,
         };
         return asSessionBindingRecord(record, {
-          ...existing?.metadata,
+          ...previous?.metadata,
           ...input.metadata,
         });
       },

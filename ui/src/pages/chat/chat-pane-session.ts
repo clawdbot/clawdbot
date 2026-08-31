@@ -7,6 +7,7 @@ import type { ControlUiSessionPullRequest } from "../../../../src/gateway/contro
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { t } from "../../i18n/index.ts";
+import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -31,7 +32,6 @@ import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
   catalogRawString,
-  nativeHistoryMessageIdentity,
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";

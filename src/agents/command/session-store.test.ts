@@ -1700,122 +1700,95 @@ describe("updateSessionStoreAfterAgentRun", () => {
     },
   );
 
-  it("keeps ordinary CLI context independent of historical compaction metadata", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-zero-compaction-with-usage";
-      const sessionId = "test-zero-compaction-with-usage-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 1_794_391,
-          totalTokensFresh: true,
-          inputTokens: 20,
-          outputTokens: 10_855,
-          cacheRead: 1_761_324,
-          cacheWrite: 33_047,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "claude-cli",
-        defaultModel: "claude-opus-4-7",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "claude-cli",
-              model: "claude-opus-4-7",
-              usage: {
-                input: 20,
-                output: 10_855,
-                cacheRead: 1_761_324,
-                cacheWrite: 33_047,
-              },
-              lastCallUsage: {
-                input: 20,
-                output: 10_855,
-                cacheRead: 1_761_324,
-                cacheWrite: 33_047,
-              },
-              compactionCount: 1,
-              compactionTokensAfter: 0,
-            },
+  it.each([
+    {
+      runtime: "CLI",
+      sessionKey: "agent:main:explicit:test-zero-compaction-with-usage",
+      sessionId: "test-zero-compaction-with-usage-session",
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      initial: {
+        totalTokens: 1_794_391,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+      usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      compactionTokensAfter: 0,
+      expected: {
+        totalTokens: 1_794_391,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+    },
+    {
+      runtime: "model",
+      sessionKey: "agent:main:explicit:test-positive-compaction-with-usage",
+      sessionId: "test-positive-compaction-with-usage-session",
+      provider: "openai",
+      model: "gpt-5.5",
+      initial: { totalTokens: 180_000 },
+      usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+      lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+      compactionTokensAfter: 80_000,
+      expected: {
+        totalTokens: 95_000,
+        inputTokens: 100_000,
+        outputTokens: 3_000,
+        cacheRead: 20_000,
+      },
+    },
+  ])(
+    "keeps ordinary $runtime context independent of historical compaction metadata",
+    async (testCase) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const { sessionKey, sessionId, provider, model } = testCase;
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: 1,
+            ...testCase.initial,
+            totalTokensFresh: true,
           },
-        } as EmbeddedAgentRunResult,
-      });
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(1_794_391);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.inputTokens).toBe(20);
-      expect(sessionStore[sessionKey]?.outputTokens).toBe(10_855);
-      expect(sessionStore[sessionKey]?.cacheRead).toBe(1_761_324);
-      expect(sessionStore[sessionKey]?.cacheWrite).toBe(33_047);
-    });
-  });
-
-  it("keeps ordinary model context independent of historical compaction metadata", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
-      const sessionId = "test-positive-compaction-with-usage-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
           sessionId,
-          updatedAt: 1,
-          totalTokens: 180_000,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "openai",
-              model: "gpt-5.5",
-              usage: {
-                input: 100_000,
-                output: 3_000,
-                cacheRead: 20_000,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: provider,
+          defaultModel: model,
+          result: {
+            meta: {
+              durationMs: 500,
+              agentMeta: {
+                sessionId,
+                provider,
+                model,
+                usage: testCase.usage,
+                lastCallUsage: testCase.lastCallUsage,
+                compactionCount: 1,
+                compactionTokensAfter: testCase.compactionTokensAfter,
               },
-              lastCallUsage: {
-                input: 91_000,
-                output: 1_000,
-                cacheRead: 4_000,
-              },
-              compactionCount: 1,
-              compactionTokensAfter: 80_000,
             },
-          },
-        } as EmbeddedAgentRunResult,
-      });
+          } as EmbeddedAgentRunResult,
+        });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(95_000);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
-      expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);
-      expect(sessionStore[sessionKey]?.cacheRead).toBe(20_000);
-    });
-  });
+        expect(sessionStore[sessionKey]).toMatchObject({
+          ...testCase.expected,
+          totalTokensFresh: true,
+        });
+      });
+    },
+  );
 
   it.each([0, 80_000, Number.POSITIVE_INFINITY])(
     "does not revive historical compaction snapshot %s without a private fact",

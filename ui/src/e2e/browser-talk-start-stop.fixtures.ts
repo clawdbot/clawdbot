@@ -14,6 +14,97 @@ export async function dispatchOpenAiTalkEvent(page: Page, event: unknown) {
   }, event);
 }
 
+export async function installOpenAiTalkFixture(page: Page) {
+  await page.addInitScript(() => {
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async (constraints: MediaStreamConstraints) => {
+        const stream = await getUserMedia(constraints);
+        (
+          window as Window & {
+            openclawVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawVideoTalkTracks = [
+          ...((window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
+            .openclawVideoTalkTracks ?? []),
+          ...stream.getTracks(),
+        ];
+        return stream;
+      },
+    });
+    class FakeDataChannel extends EventTarget {
+      readyState = "open";
+      sent: unknown[] = [];
+
+      send(payload: string) {
+        this.sent.push(JSON.parse(payload));
+      }
+
+      close() {
+        this.readyState = "closed";
+      }
+    }
+
+    class FakePeerConnection extends EventTarget {
+      connectionState = "new";
+      channel = new FakeDataChannel();
+      localDescription: RTCSessionDescriptionInit | null = null;
+      remoteDescription: RTCSessionDescriptionInit | null = null;
+
+      constructor() {
+        super();
+        (
+          window as Window & {
+            openclawVideoTalkE2e?: {
+              dataChannelCreated: boolean;
+              peer: FakePeerConnection;
+            };
+          }
+        ).openclawVideoTalkE2e = { dataChannelCreated: false, peer: this };
+      }
+
+      addTrack() {}
+
+      createDataChannel() {
+        const harness = (
+          window as Window & {
+            openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+          }
+        ).openclawVideoTalkE2e;
+        if (harness) {
+          harness.dataChannelCreated = true;
+        }
+        return this.channel;
+      }
+
+      async createOffer() {
+        return { type: "offer" as const, sdp: "offer-sdp" };
+      }
+
+      async setLocalDescription(description: RTCSessionDescriptionInit) {
+        this.localDescription = description;
+      }
+
+      async setRemoteDescription(description: RTCSessionDescriptionInit) {
+        this.remoteDescription = description;
+      }
+
+      close() {
+        this.connectionState = "closed";
+      }
+    }
+
+    Object.defineProperty(window, "RTCPeerConnection", {
+      configurable: true,
+      value: FakePeerConnection,
+    });
+  });
+  await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" });
+  });
+}
+
 export type WebRtcSdpE2eProof = {
   bodyCancelCount: number;
   bodyCancelResolvedCount: number;

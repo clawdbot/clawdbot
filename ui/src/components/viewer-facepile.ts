@@ -88,13 +88,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const viewers = projectPresenceViewers(
-      this.presencePayload,
-      this.selfUser,
-      this.selfInstanceId,
-      this.sessionKey,
-      this.excludeIdentities,
-    );
+    // Prepared faces must not evict the cached live projection used by sibling rows.
     const users = this.staticParticipants
       ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({
           identity,
@@ -103,7 +97,14 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers);
+      : (this.staticUsers ??
+        projectPresenceViewers(
+          this.presencePayload,
+          this.selfUser,
+          this.selfInstanceId,
+          this.sessionKey,
+          this.excludeIdentities,
+        ));
     if (users.length === 0) {
       return nothing;
     }

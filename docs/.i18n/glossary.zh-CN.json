@@ -1660,6 +1660,14 @@
     "target": "Gateway 配置参考"
   },
   {
+    "source": "v2026.8.1 (AKA OpenClaw 2.0)",
+    "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.1",
+    "target": "v2026.8.1"
+  },
+  {
     "source": "v2026.7.1",
     "target": "v2026.7.1"
   },

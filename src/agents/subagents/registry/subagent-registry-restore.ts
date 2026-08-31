@@ -290,7 +290,14 @@ export function createSubagentRegistryRestorer(config: {
             );
           },
         });
-        bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry);
+        bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
+          if (runs.get(entry.runId) === entry) {
+            emitSessionLifecycleEvent({
+              sessionKey: entry.childSessionKey,
+              reason: "run-capacity",
+            });
+          }
+        });
         continue;
       }
       // An aborted persisted session belongs to orphan recovery. Waiting on its

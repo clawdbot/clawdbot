@@ -181,9 +181,9 @@ export function createBootstrapDiagnostic() {
             observe(client, false, raw);
             callbacks.onMessage(raw);
           },
-          onClose: () => {
+          onClose: async () => {
             try {
-              callbacks.onClose();
+              await callbacks.onClose();
             } finally {
               append({ phase: "client.close", client, count: bridge.cdpClientCount });
             }

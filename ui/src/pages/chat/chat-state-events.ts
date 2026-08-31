@@ -5,6 +5,10 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
   readSessionChangedEvent,
@@ -22,11 +26,9 @@ import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts
 import { sleep } from "./chat-history-retry.ts";
 import {
   chatScopedEventSessionMatches,
-  isHiddenAssistantStreamText,
   loadChatBranches,
   loadChatHistory,
   retireChatBranchRequests,
-  shouldHideAssistantChatMessage,
 } from "./chat-history.ts";
 import {
   pullRequestLinksIn,

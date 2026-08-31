@@ -416,7 +416,11 @@ const sanity = (options: Omit<Parameters<typeof runCiGitStep>[0], "workflow">) =
 posixIt(
   "workflow sanity drains ordinary exact failure before branch fallback and config consumption",
   async () => {
-    const report = await sanity({ fetchResults: [23, 0], realClock: true });
+    const report = await sanity({
+      fetchResults: [23, 0],
+      realClock: true,
+      realDrain: false,
+    });
     expect(report.code, report.output).toBe(0);
     expect(report.readyAttempts).toEqual([1, 2]);
     expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
@@ -1040,6 +1044,7 @@ posixIt.each(["main-ancestor", "release-tag", "release-branch-head", "floating-m
     const publicationBase = releaseBranch ? release : "main";
     const report = await maturityRun({
       realClock: true,
+      realDrain: false,
       env: {
         ...maturityEnvironment,
         EXPECTED_SHA: floating ? "" : head,

@@ -184,9 +184,6 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
   </Card>
-  <Card title="ClawDock" href="/install/clawdock" icon="container">
-    Community Docker Compose setup and shell helpers.
-  </Card>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
   </Card>

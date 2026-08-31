@@ -38,6 +38,7 @@ import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
   prepareSessionPatchWorktreeTransition,
+  releaseSessionPatchArchive,
   type SessionPatchArchivePreparation,
   type SessionPatchArchiveTarget,
   validateSessionPatchArchiveProjection,
@@ -250,40 +251,47 @@ async function executeSessionPatchMutations(params: {
   };
 
   if (prepared.length > 0) {
+    const releaseArchiveDrains = async () =>
+      prepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
     try {
+      // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
+      await Promise.all(
+        prepared
+          .filter((target) => target.fullPatch.archived === true)
+          .map(async (target) => {
+            try {
+              const result = await prepareSessionPatchArchive({
+                cfg,
+                commitGuard: params.targets[target.index]!.commitGuard,
+                context: params.context,
+                loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
+                ...(pluginOwnerId ? { pluginOwnerId } : {}),
+                target,
+              });
+              if (result.ok) {
+                target.archivePreparation = result.value;
+              } else {
+                outcomes[target.index] = result;
+              }
+            } catch (error) {
+              outcomes[target.index] = {
+                ok: false,
+                error: unexpectedPatchError(target.key, error),
+              };
+            }
+          }),
+      );
       await runExclusiveSessionLifecycleMutation({
         targets: prepared.map((target) => ({
           scope: target.storePath,
           identities: target.lifecycleIdentities,
         })),
         prepare: async () => {
-          await Promise.all(
-            prepared
-              .filter((target) => target.fullPatch.archived === true)
-              .map(async (target) => {
-                try {
-                  const result = await prepareSessionPatchArchive({
-                    cfg,
-                    commitGuard: params.targets[target.index]!.commitGuard,
-                    context: params.context,
-                    loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
-                    ...(pluginOwnerId ? { pluginOwnerId } : {}),
-                    target,
-                  });
-                  if (result.ok) {
-                    target.archivePreparation = result.value;
-                  } else {
-                    outcomes[target.index] = result;
-                  }
-                } catch (error) {
-                  outcomes[target.index] = {
-                    ok: false,
-                    error: unexpectedPatchError(target.key, error),
-                  };
-                }
-              }),
-          );
+          for (const target of prepared) {
+            target.archivePreparation?.drain.handoffToMutation();
+          }
         },
+        finalize: releaseArchiveDrains,
         run: async () => {
           const groups = new Map<string, PreparedPatchTarget[]>();
           for (const target of prepared) {
@@ -540,15 +548,7 @@ async function executeSessionPatchMutations(params: {
         },
       });
     } finally {
-      for (const target of prepared) {
-        try {
-          target.archivePreparation?.drain.release();
-        } catch (error) {
-          sessionLog.warn(
-            `sessions.patch: archive drain release failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
-          );
-        }
-      }
+      await releaseArchiveDrains();
     }
   }
 

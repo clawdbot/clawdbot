@@ -85,6 +85,25 @@ update occurred. Existing synchronous and asynchronous callbacks that return `vo
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
 
+### Quiet progress presentation
+
+`createChannelProgressDraftCompositor({ presentation: "summary", ... })` keeps
+routine tool activity out of the visible draft while retaining authored status,
+reasoning, commentary, milestones, and actionable approval/failure lines. Pass
+`approvalId` on requested and resolved approval events so the compositor can
+clear the matching attention line. The default presentation remains unchanged.
+
+`createStatusReactionController({ presentation: "acknowledgement", ... })`
+keeps the initial reaction through work and success, skips inactivity warnings,
+and retains the existing error/cleanup lifecycle. The default `activity` policy
+continues to expose detailed lifecycle reactions.
+
+For edited or native progress, `createDraftStreamLoop` and finalizable draft
+controls accept `coalesceInFlight: true` to keep background updates arriving
+during a send in the next throttle window. Explicit `flush()` still bypasses
+the delay for attention and finalization. Cancel pending updates and await
+in-flight work before closing or rotating a stream.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
@@ -428,6 +447,11 @@ Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runt
 For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
 Omit scope only for intentional global cleanup or an existing legacy cross-channel
 operation. Scope does not change binding ids or require a new adapter method.
+
+Refreshing the same target session and target kind preserves omitted runtime
+metadata. Replacing either starts fresh target metadata, so a new session cannot
+inherit the previous plugin owner, agent, or label. Keep conversation transport
+details and explicit lifecycle settings separate from target metadata.
 
 ## Approvals and channel capabilities
 

@@ -56,7 +56,11 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
     const ctx: SubagentsCommandContext = {
       params,
       requesterKey,
-      runs: (await controlRuntimeLoader.load()).listControlledSubagentRuns(requesterKey),
+      runs: (await controlRuntimeLoader.load()).listControlledSubagentRuns(
+        requesterKey,
+        params.agentId,
+        params.cfg,
+      ),
       restTokens,
     };
 

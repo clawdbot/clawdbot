@@ -703,20 +703,58 @@ describe("runGatewayUpdate", () => {
     };
   }
 
-  it("skips git update when worktree is dirty", async () => {
-    await setupGitCheckout();
-    const beforeGitMutation = vi.fn<() => Promise<void>>();
-    const { runner, calls } = createRunner({
-      ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
-    });
+  it.each([
+    {
+      name: "dirty",
+      code: 0,
+      stdout: " M README.md",
+      stderr: "",
+      status: "skipped",
+      reason: "dirty",
+    },
+    {
+      name: "unreadable",
+      code: 128,
+      stdout: "",
+      stderr: "fatal: unable to read index",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+    {
+      name: "timed out",
+      code: null,
+      stdout: "",
+      stderr: "git status timed out",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+  ])(
+    "stops git update when the worktree is $name",
+    async ({ code, stdout, stderr, status, reason }) => {
+      await setupGitCheckout();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const { runner, calls } = createRunner({
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { code, stdout, stderr },
+      });
 
-    const result = await runWithRunner(runner, { beforeGitMutation });
+      const result = await runWithRunner(runner, { beforeGitMutation });
 
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("dirty");
-    expect(beforeGitMutation).not.toHaveBeenCalled();
-    expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
-  });
+      expect(result.status).toBe(status);
+      expect(result.reason).toBe(reason);
+      expect(result.steps).toMatchObject([
+        {
+          name: "clean check",
+          exitCode: code,
+          stdoutTail: stdout || null,
+          stderrTail: stderr || null,
+        },
+      ]);
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
+      expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
+    },
+  );
 
   it("uses the supplied update cwd when the process cwd disappeared", async () => {
     await setupGitCheckout();

@@ -251,6 +251,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const reply = await buildStatusReply({
       cfg: params.cfg,
+      agentId: params.agentId,
       command: params.command,
       sessionEntry: targetSessionEntry,
       sessionKey: params.sessionKey,

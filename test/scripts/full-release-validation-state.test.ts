@@ -2458,15 +2458,54 @@ console.log(JSON.stringify({
     expect(JSON.parse(readFileSync(validatorArgs, "utf8"))).toContain("--expected-selected-run-id");
   });
 
-  it("blocks Decision when canonical evidence manifest changes after planning", () => {
-    const root = mkdtempSync(join(tmpdir(), "frv-reuse-manifest-mismatch-"));
+  it.each([
+    { name: "unchanged evidence", waived: false, mutation: "none", blocker: "" },
+    { name: "owner-waived evidence", waived: true, mutation: "none", blocker: "" },
+    {
+      name: "changed source manifest",
+      waived: false,
+      mutation: "sha",
+      blocker: "provenance_mismatch",
+    },
+    {
+      name: "missing source waiver",
+      waived: true,
+      mutation: "waiver",
+      blocker: "reused_evidence_invalid",
+    },
+    {
+      name: "wrong source version",
+      waived: true,
+      mutation: "version",
+      blocker: "reused_evidence_invalid",
+    },
+  ])("revalidates $name at the Decision boundary", ({ waived, mutation, blocker }) => {
+    const root = tempDirs.make("frv-reuse-decision-");
     const output = join(root, "decision.json");
     const executionPlanPath = join(root, "plan.json");
     const gh = join(root, "gh");
     const validator = join(root, "validator.mjs");
+    const waiver = waived
+      ? { telegramWaiver: "2026.8.1-owner-approved", targetVersion: "2026.8.1" }
+      : {};
+    const sourceManifest = { ...evidenceManifest(), validationInputs: waiver };
+    const revalidatedManifest = structuredClone(sourceManifest);
+    if (mutation === "sha") {
+      revalidatedManifest.targetSha = "c".repeat(40);
+    } else if (mutation === "waiver") {
+      revalidatedManifest.validationInputs = {};
+    } else if (mutation === "version") {
+      revalidatedManifest.validationInputs.targetVersion = "2026.8.2";
+    }
     const sealedPlan = executionPlan(
-      { rerunGroup: "ci" },
       {
+        rerunGroup: "ci",
+        releaseProfile: "stable",
+        children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
+        ...waiver,
+      },
+      {
+        ...waiver,
         evidenceReuse: {
           changedPaths: [],
           evidenceSha: TARGET_SHA,
@@ -2475,7 +2514,7 @@ console.log(JSON.stringify({
           rootRunId: "99",
           runUrl: "https://example.invalid/runs/99",
           selectedRunId: "99",
-          sourceManifest: evidenceManifest(),
+          sourceManifest,
         },
       },
     );
@@ -2497,7 +2536,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       validator,
       `console.log(JSON.stringify({
   children: ${JSON.stringify(reusedEvidenceChildren())},
-  manifest: {runAttempt: 1, runId: "99", targetSha: "${"c".repeat(40)}"},
+  manifest: ${JSON.stringify(revalidatedManifest)},
   releaseProfile: "stable",
   rerunGroup: "ci"
 }));\n`,
@@ -2522,13 +2561,15 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       },
       timeout: 10_000,
     });
-    expect(result.status, result.stderr).toBe(1);
-    expect(JSON.parse(readFileSync(output, "utf8")).blockers).toContainEqual(
-      expect.objectContaining({
-        kind: "provenance_mismatch",
-        message: "revalidated evidence source manifest differs from the immutable plan",
-      }),
-    );
+    expect(result.status, result.stderr).not.toBe(2);
+    const decision = JSON.parse(readFileSync(output, "utf8"));
+    expect(result.status, JSON.stringify(decision.blockers)).toBe(blocker ? 1 : 0);
+    expect(decision.state).toBe(blocker ? "blocked_complete" : "passed");
+    if (blocker) {
+      expect(decision.blockers).toContainEqual(expect.objectContaining({ kind: blocker }));
+    } else {
+      expect(decision.blockers).toEqual([]);
+    }
   });
 
   it("validates a generated manifest against its immutable execution plan", () => {

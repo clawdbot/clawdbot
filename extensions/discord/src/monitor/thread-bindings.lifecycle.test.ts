@@ -1254,66 +1254,69 @@ describe("thread binding lifecycle", () => {
     expect(hoisted.restPost).not.toHaveBeenCalled();
   });
 
-  it("preserves direct-binding metadata when rebinding the same conversation", async () => {
-    createTestThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      createTestThreadBindingManager({
         accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        agentId: "codex",
+        persist: false,
+        enableSweeper: false,
+        idleTimeoutMs: 24 * 60 * 60 * 1000,
+        maxAgeMs: 0,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "owner-plugin",
+          pluginRoot: "/plugins/owner-plugin",
+          agentId: "previous-agent",
+          boundBy: "system",
+        },
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: replace ? "agent:main:acp:replacement" : "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          label: "updated",
+        },
+      });
+
+      const resolved = requireRecord(
+        getSessionBindingService().resolveByConversation({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        }),
+        "resolved binding",
+      );
+      expectFields(requireRecord(resolved.metadata, "resolved metadata"), "resolved metadata", {
+        pluginBindingOwner: replace ? undefined : "plugin",
+        pluginId: replace ? undefined : "owner-plugin",
+        pluginRoot: replace ? undefined : "/plugins/owner-plugin",
+        agentId: replace ? "main" : "previous-agent",
         boundBy: "system",
-      },
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        label: "codex-dm",
-      },
-    });
-
-    const resolved = requireRecord(
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      }),
-      "resolved binding",
-    );
-    expectFields(requireRecord(resolved.metadata, "resolved metadata"), "resolved metadata", {
-      pluginBindingOwner: "plugin",
-      pluginId: "openclaw-codex-app-server",
-      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      agentId: "codex",
-      boundBy: "system",
-      label: "codex-dm",
-    });
-    expect(hoisted.restGet).not.toHaveBeenCalled();
-    expect(hoisted.restPost).not.toHaveBeenCalled();
-  });
+        label: "updated",
+      });
+      expect(hoisted.restGet).not.toHaveBeenCalled();
+      expect(hoisted.restPost).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps overlapping thread ids isolated per account", async () => {
     const a = createTestThreadBindingManager({

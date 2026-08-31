@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/install/clawdock",
+      "destination": "/install/docker#clawdock-migration"
+    },
+    {
       "source": "/concepts/message-lifecycle-refactor",
       "destination": "/plugins/sdk-channel-outbound"
     },
@@ -1156,7 +1160,6 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -2080,6 +2083,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]

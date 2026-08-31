@@ -323,12 +323,10 @@ export function readChatThreadMessageIdentity(message: unknown) {
   return readSessionMessageIdentity(message, { messageId: surfaceId });
 }
 
-/** Every projection of one composer submit (pending queue row, locally
- * materialized turn, authoritative history) shares this identity so the
- * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-export function userTurnSendIdentity(message: unknown): string | null {
+/** Causal boundaries follow execution ownership, which can differ from the submit key. */
+export function userTurnRunId(message: unknown): string | null {
   const identity = readChatThreadMessageIdentity(message);
-  return identity?.role === "user" && identity.runId ? `send:${identity.runId}` : null;
+  return identity?.role === "user" ? identity.runId : null;
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
@@ -342,11 +340,10 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
-  const sendIdentity = userTurnSendIdentity(message);
-  if (sendIdentity) {
-    return sendIdentity;
-  }
   const identity = readChatThreadMessageIdentity(message);
+  if (identity?.sendId) {
+    return `send:${identity.sendId}`;
+  }
   if (identity?.isImported) {
     if (identity.externalSource) {
       return `import:${identity.externalSource}`;
@@ -411,9 +408,12 @@ export function hasRenderableNormalizedMessage(
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
-  const media = role === "user" && readTranscriptMediaEntries(message).length;
   return Boolean(
-    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    (role === "user" && readTranscriptMediaEntries(message).length),
   );
 }
 

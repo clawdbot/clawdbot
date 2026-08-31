@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
@@ -31,11 +35,14 @@ async function renderTelegramStatus(params: {
   cfg: StatusTextParams["cfg"];
   sessionEntry: NonNullable<StatusTextParams["sessionEntry"]>;
   statusAccountId?: string;
+  sessionKey?: string;
+  agentId?: string;
 }): Promise<string> {
   return await buildStatusText({
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
-    sessionKey: "agent:main:main",
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     statusChannel: "telegram",
     ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
     provider: "openai",
@@ -119,6 +126,50 @@ describe("buildStatusText channel features", () => {
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
   });
+});
+
+describe("buildStatusText global subagent scope", () => {
+  beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
+  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
+  it.each(["research", "ops"])(
+    "shows the selected global agent's children when the default is %s",
+    async (defaultAgentId) => {
+      for (const agentId of ["research", "ops"]) {
+        addSubagentRunForTests({
+          runId: `status-global-${agentId}`,
+          childSessionKey: `agent:${agentId}:subagent:status-worker`,
+          controllerSessionKey: "global",
+          requesterSessionKey: "global",
+          requesterAgentId: agentId,
+          requesterDisplayKey: "global",
+          task: `${agentId} status worker`,
+          cleanup: "keep",
+          createdAt: Date.now() - 1_000,
+          startedAt: Date.now() - 1_000,
+        });
+      }
+
+      const text = await renderTelegramStatus({
+        cfg: {
+          agents: {
+            entries: {
+              research: { default: defaultAgentId === "research" },
+              ops: { default: defaultAgentId === "ops" },
+            },
+          },
+          session: { scope: "global" },
+        },
+        sessionEntry: { sessionId: "global-status", updatedAt: 0 },
+        sessionKey: "global",
+        agentId: "research",
+      });
+
+      expect(text).toContain("🤖 Subagents: 1 active");
+      expect(text).toContain("research status worker");
+      expect(text).not.toContain("ops status worker");
+    },
+  );
 });
 
 describe("Codex usage after runtime fallback", () => {
