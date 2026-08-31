@@ -14,9 +14,6 @@ const daemonInstallModuleLoader = createLazyImportLoader(
 const daemonLifecycleModuleLoader = createLazyImportLoader(
   () => import("../cli/daemon-cli/lifecycle.js"),
 );
-const databaseCompatibilityModuleLoader = createLazyImportLoader(
-  () => import("../state/openclaw-state-db-readonly.js"),
-);
 
 /** Result returned after checking, optionally installing, and optionally starting the gateway. */
 type GatewayReadinessResult =
@@ -58,8 +55,7 @@ async function defaultGatherStatus(params: {
 }): Promise<DaemonStatus> {
   const { gatherDaemonStatus } = await daemonStatusModuleLoader.load();
   return gatherDaemonStatus({
-    rpc: {},
-    configuredProbeUrl: params.probeUrl,
+    rpc: params.probeUrl ? { url: params.probeUrl } : {},
     probe: true,
     requireRpc: params.requireRpc,
     deep: false,
@@ -125,6 +121,10 @@ function gatewayLooksStopped(status: DaemonStatus): boolean {
   }
   const error = status.rpc?.error ?? "";
   return /\bECONNREFUSED\b|couldn't connect|connection refused/i.test(error);
+}
+
+function gatewayServiceIsInstalled(status: DaemonStatus): boolean {
+  return Boolean(status.service.command || status.service.loadState.status === "loaded");
 }
 
 function nativeServiceTargetsGateway(status: DaemonStatus): boolean {
@@ -224,46 +224,21 @@ export async function ensureGatewayReadyForOperation(
 
   const reason = readinessFailureReason(initialStatus);
   const nativeServiceCanRecover = nativeServiceTargetsGateway(initialStatus);
-  if (
-    nativeServiceCanRecover &&
-    (initialStatus.service.loadState.status === "unknown" ||
-      initialStatus.service.definitionError ||
-      initialStatus.service.runtime?.inspectionFailure)
-  ) {
-    const inspectionReason = "Could not check the background Gateway service.";
-    options.runtime.log(inspectionReason);
-    options.runtime.log("Run `openclaw gateway status --deep` for the inspection failure.");
-    return { ready: false, status: initialStatus, reason: inspectionReason, recoverable: false };
-  }
   if (!gatewayLooksStopped(initialStatus) || !nativeServiceCanRecover) {
     printGatewayNotReadyHints(options.runtime, reason, nativeServiceCanRecover);
     return { ready: false, status: initialStatus, reason, recoverable: false };
   }
 
-  const shouldInstall = !initialStatus.service.installed;
+  const serviceInstalled = gatewayServiceIsInstalled(initialStatus);
+  const shouldInstall = !serviceInstalled;
   if (shouldInstall && options.allowInstall === false) {
     printGatewayNotReadyHints(options.runtime, reason);
     return { ready: false, status: initialStatus, reason, recoverable: false };
   }
 
-  // Reachable and externally managed Gateways return above: only local recovery
-  // may open this install's state, before offering any service mutation.
-  const { assertOpenClawStateDatabaseCompatible } = await databaseCompatibilityModuleLoader.load();
-  try {
-    await assertOpenClawStateDatabaseCompatible();
-  } catch (error) {
-    const compatibilityReason = error instanceof Error ? error.message : String(error);
-    options.runtime.error(compatibilityReason);
-    return { ready: false, status: initialStatus, reason: compatibilityReason, recoverable: false };
-  }
-
-  if (shouldInstall) {
-    options.runtime.log(`OpenClaw needs a running Gateway to ${options.operation}.`);
-    options.runtime.log("No background Gateway service was found for this profile.");
-  }
   const prompt = shouldInstall
-    ? `Install and start the background Gateway service to ${options.operation}?`
-    : `The background Gateway service is installed but stopped. Start it to ${options.operation}?`;
+    ? `No background Gateway service was detected for this profile. Install and start one to ${options.operation}?`
+    : `The background Gateway service is not running. Start it to ${options.operation}?`;
   const approved = await confirmRecovery({
     message: prompt,
     yes: options.yes,

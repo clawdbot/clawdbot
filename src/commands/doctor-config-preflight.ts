@@ -21,7 +21,6 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { assertOpenClawStateDatabaseCompatible } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
@@ -121,16 +120,9 @@ export async function runDoctorConfigPreflight(
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
-  if (
-    stateMigrationsRequested ||
-    options.migrateLegacyConfig !== false ||
-    options.repairPrefixedConfig === true
-  ) {
-    await assertOpenClawStateDatabaseCompatible();
-  }
   if (gatewayStartupCheckpointRequired) {
-    // State write admission below already quarantines orphaned SQLite sidecars,
-    // so the live-owner refusal must precede every mutation-capable step.
+    // First preflight operation: state write admission below already quarantines orphaned
+    // SQLite sidecars, so the live-owner refusal must precede every mutation-capable step.
     await refuseStartupMigrationsForLiveGatewayOwner(process.env);
   }
   if (stateMigrationsRequested) {

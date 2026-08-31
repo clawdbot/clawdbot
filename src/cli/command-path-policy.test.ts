@@ -125,12 +125,7 @@ describe("command-path-policy", () => {
     }
   });
 
-  it("keeps dashboard and gateway control RPCs on core-only config validation", () => {
-    expectResolvedPolicy(["dashboard"], {
-      configGuard: "validate",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
+  it("keeps gateway control RPCs on core-only config validation", () => {
     for (const subcommand of ["call", "restart", "suspend", "resume"]) {
       expectResolvedPolicy(["gateway", subcommand], {
         configGuard: "validate",

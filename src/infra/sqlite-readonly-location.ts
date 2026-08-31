@@ -40,7 +40,6 @@ type SourceSidecars = {
 };
 
 type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
-type SqliteReadOnlyStrategy = "backup" | "copy";
 
 type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
@@ -472,14 +471,11 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
- * The copy strategy preserves source bytes, including the WAL index, while
- * allocating its private staging directory asynchronously.
  * The InProcess exports are child-only: POSIX close() can release every lock
  * the calling process holds on the same source inode.
  */
 export async function prepareSqliteReadOnlyLocationInProcess(
   pathname: string,
-  strategy: SqliteReadOnlyStrategy = "backup",
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const canonicalPath = fs.realpathSync.native(pathname);
   let lastChange: Error | undefined;
@@ -494,12 +490,19 @@ export async function prepareSqliteReadOnlyLocationInProcess(
       lastChange = error;
       continue;
     }
+    if (journalMode === "empty") {
+      try {
+        return await createStableReadOnlyCopy(canonicalPath, journalMode);
+      } catch (error) {
+        if (!(error instanceof SqliteSourceChangedError)) {
+          throw error;
+        }
+        lastChange = error;
+        continue;
+      }
+    }
     const sidecars = readSourceSidecars(canonicalPath);
-    const useOnlineBackup =
-      strategy === "backup" &&
-      journalMode !== "empty" &&
-      (journalMode !== "wal" || (sidecars.wal && sidecars.shm));
-    if (useOnlineBackup) {
+    if (journalMode !== "wal" || (sidecars.wal && sidecars.shm)) {
       try {
         return await createOnlineReadOnlyBackup(canonicalPath);
       } catch (error) {
@@ -538,12 +541,7 @@ export async function prepareSqliteReadOnlyLocationInProcess(
       }
     }
     try {
-      if (journalMode === "unknown") {
-        throw new SqliteSourceChangedError(
-          `SQLite journal mode is unavailable while copying: ${canonicalPath}`,
-        );
-      }
-      return await createStableReadOnlyCopy(canonicalPath, journalMode);
+      return await createStableReadOnlyCopy(canonicalPath, "wal");
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;
@@ -664,7 +662,6 @@ function adoptSqliteReadOnlyWorkerResult(params: {
 
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
-  strategy: SqliteReadOnlyStrategy = "backup",
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const workerUrl = resolveSqliteReadOnlyWorkerUrl();
   return await new Promise((resolve, reject) => {
@@ -673,7 +670,7 @@ export async function prepareSqliteReadOnlyLocation(
       [
         ...resolveRuntimeWorkerArgv(workerUrl),
         SQLITE_READONLY_CHILD_ARG,
-        strategy === "copy" ? "async-copy" : "async",
+        "async",
         path.resolve(pathname),
       ],
       { encoding: "utf8" },

@@ -4,7 +4,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "../infra/sqlite-readonly-location.js";
@@ -52,29 +51,6 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
       userVersion,
       OPENCLAW_STATE_SCHEMA_VERSION,
     );
-  }
-}
-
-/** Refuse newer state before setup or service recovery can mutate its files. */
-export async function assertOpenClawStateDatabaseCompatible(
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<void> {
-  const pathname = existingPathOrUndefined(resolveReadOnlyPath(options));
-  if (pathname === undefined) {
-    return;
-  }
-  const prepared = await prepareSqliteReadOnlyLocation(pathname, "copy");
-  try {
-    // Admission checks the committed version only. Doctor still owns repair of
-    // quarantined state; opening the runtime store here would prevent that repair.
-    const database = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-    try {
-      assertSupportedSchemaVersion(database, pathname);
-    } finally {
-      database.close();
-    }
-  } finally {
-    prepared.cleanup();
   }
 }
 

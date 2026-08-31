@@ -273,7 +273,6 @@ export function resolveManagedGatewayServiceProcessEnv(
 
 export type GatewayServiceState = {
   installed: boolean;
-  definitionError?: string;
   loadState: GatewayServiceLoadState;
   running: boolean;
   env: GatewayServiceEnv;

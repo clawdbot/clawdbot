@@ -427,11 +427,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
-  {
-    commandPath: ["dashboard"],
-    // Opening a running Gateway is a client operation; local recovery owns state admission.
-    policy: { configGuard: "validate", networkProxy: "bypass" },
-  },
+  { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
   {
     commandPath: ["devices"],

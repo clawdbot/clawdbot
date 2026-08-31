@@ -491,7 +491,6 @@ describe("gatherDaemonStatus", () => {
     const status = {
       service: {
         label: "Scheduled Task",
-        installed: true,
         loaded: true,
         loadState: { status: "loaded" as const },
         loadedText: "registered",
@@ -774,27 +773,6 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.targetRole).toBe("diagnostic-only");
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { configuredProbeUrl: "ws://127.0.0.1:19001", targetRole: "target" },
-    { configuredProbeUrl: "ws://127.0.0.1:19002", targetRole: "diagnostic-only" },
-    { configuredProbeUrl: "wss://remote.example:19001", targetRole: "diagnostic-only" },
-  ] as const)(
-    "binds configured target $configuredProbeUrl to $targetRole",
-    async ({ configuredProbeUrl, targetRole }) => {
-      await withStatusConfig(
-        '{"gateway":{"bind":"loopback"}}',
-        async () => {
-          const status = await gatherStatus({ configuredProbeUrl });
-          expect(status.service.targetRole).toBe(targetRole);
-          expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-            expect.objectContaining({ url: configuredProbeUrl }),
-          );
-        },
-        true,
-      );
-    },
-  );
 
   it("keeps the standalone gateway default when no native service target exists", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);

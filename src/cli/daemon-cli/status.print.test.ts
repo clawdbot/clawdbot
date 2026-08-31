@@ -10,10 +10,7 @@ import type { DaemonStatus } from "./status.gather.js";
 import { printDaemonStatus as printDaemonStatusRuntime } from "./status.print.js";
 
 type TestDaemonStatus = Omit<DaemonStatus, "service"> & {
-  service: Omit<DaemonStatus["service"], "loaded" | "installed"> & {
-    loaded?: boolean | null;
-    installed?: boolean;
-  };
+  service: Omit<DaemonStatus["service"], "loaded"> & { loaded?: boolean | null };
 };
 
 function printDaemonStatus(
@@ -29,11 +26,7 @@ function printDaemonStatus(
   printDaemonStatusRuntime(
     {
       ...status,
-      service: {
-        ...status.service,
-        loaded,
-        installed: status.service.installed ?? Boolean(loaded || status.service.command),
-      },
+      service: { ...status.service, loaded },
     },
     options,
   );
@@ -444,26 +437,6 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Windows firewall: Windows Firewall may ignore");
     expectMockLineContains(runtime.error, "GPO-store only");
-  });
-
-  it("reports a failed service-definition inspection even when load state is known", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          installed: false,
-          loadState: { status: "not-loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          definitionError: "permission denied reading the service definition",
-        },
-        extraServices: [],
-      },
-      { json: false, deep: true },
-    );
-
-    expectMockLineContains(runtime.error, "Service inspection failed: permission denied");
-    expectMockLineContains(runtime.error, "gateway status --deep");
   });
 
   it("uses service command env for WSL systemd unavailable hints", () => {

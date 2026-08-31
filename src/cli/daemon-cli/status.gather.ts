@@ -124,7 +124,6 @@ type ResolvedGatewayStatus = {
   cliPort: number;
   probeUrl: string;
   probeUrlOverride: string | null;
-  nativeProbeUrl: string;
 };
 
 type CliStatusSummary = {
@@ -275,8 +274,6 @@ export type DaemonStatus = {
   logFile?: string;
   service: {
     label: string;
-    installed: boolean;
-    definitionError?: string;
     loaded: boolean | null;
     loadState: GatewayServiceLoadState;
     loadedText: string;
@@ -440,8 +437,7 @@ async function resolveGatewayStatusSummary(params: {
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
   const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
   const scheme = tlsEnabled ? "wss" : "ws";
-  const nativeProbeUrl = `${scheme}://${probeHost}:${daemonPort}`;
-  const probeUrl = probeUrlOverride ?? nativeProbeUrl;
+  const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   const diagnosticProbeUrl = projectGatewayUrlForDiagnostics(probeUrl);
   const controlUiLinks =
     params.daemonCfg.gateway?.controlUi?.enabled === false
@@ -478,7 +474,6 @@ async function resolveGatewayStatusSummary(params: {
     cliPort: resolveGatewayPort(params.cliCfg, process.env),
     probeUrl,
     probeUrlOverride,
-    nativeProbeUrl,
   };
 }
 
@@ -582,8 +577,6 @@ export async function gatherDaemonStatus(
     requireRpc?: boolean;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
-    /** Dashboard target resolved from config; explicit CLI URLs remain diagnostic-only. */
-    configuredProbeUrl?: string;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const localPortOverride = resolveGatewayLocalPortOverride(opts.rpc);
@@ -622,23 +615,18 @@ export async function gatherDaemonStatus(
     daemonConfigSummary,
     configMismatch,
   } = await loadDaemonConfigContext(targetServiceCommand?.environment, { deep: opts.deep });
-  const { gateway, daemonPort, cliPort, probeUrl, probeUrlOverride, nativeProbeUrl } =
+  const { gateway, daemonPort, cliPort, probeUrl, probeUrlOverride } =
     await resolveGatewayStatusSummary({
       cliCfg,
       daemonCfg,
       mergedDaemonEnv,
       commandProgramArguments: targetServiceCommand?.programArguments,
-      rpcUrlOverride: opts.rpc.url ?? opts.configuredProbeUrl,
+      rpcUrlOverride: opts.rpc.url,
       localPortOverride,
     });
   const probeMode =
     localPortOverride === undefined && daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-  // Only the configured endpoint matching the selected service may recover it.
-  // An explicit --url or a different install/port never acquires that authority.
-  const serviceTargetsProbe =
-    useNativeServiceTargetContext &&
-    (!probeUrlOverride ||
-      (!opts.rpc.url && opts.configuredProbeUrl === nativeProbeUrl && !configMismatch));
+  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
   const shouldInspectLocalGateway = probeMode === "local" && !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
@@ -811,8 +799,6 @@ export async function gatherDaemonStatus(
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
-      installed: serviceState.installed,
-      ...(serviceState.definitionError ? { definitionError: serviceState.definitionError } : {}),
       loaded: loadState.status === "unknown" ? null : loaded,
       loadState,
       loadedText: service.loadedText,

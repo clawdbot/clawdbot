@@ -71,8 +71,6 @@ describe("createNewerSqliteSchemaVersionError", () => {
     expect(error.message).toContain("this build supports 11");
     expect(error.message).toContain(describeRunningOpenClawBuild());
     expect(error.message).toContain("supports schema 12 or newer");
-    expect(error.message).toMatch(/^This OpenClaw build cannot open your existing data\./);
-    expect(error.message).toContain("separate profile or OPENCLAW_STATE_DIR");
   });
 
   it("does not assert a downgrade the operator never performed", () => {
