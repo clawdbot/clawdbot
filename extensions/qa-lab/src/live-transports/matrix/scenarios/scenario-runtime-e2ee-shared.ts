@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
-import type { Result } from "@openclaw/normalization-core/result";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -355,22 +354,21 @@ export async function withMatrixQaE2eeDriverAndObserver<T>(
 ) {
   const driver = await createMatrixQaE2eeDriverClient(context, scenarioId);
   let observer: MatrixQaE2eeScenarioClient | undefined;
-  let outcome: Result<T, unknown>;
-  try {
-    observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
-    outcome = { ok: true, value: await run({ driver, observer }) };
-  } catch (error) {
-    outcome = { ok: false, error };
-  }
+  const [outcome] = await Promise.allSettled([
+    (async () => {
+      observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
+      return await run({ driver, observer });
+    })(),
+  ]);
   // Join every acquired client before the next scenario can reuse its device and crypto state.
   const cleanup = await Promise.allSettled(
     [driver, observer].map(async (client) => client?.stop()),
   );
-  const failures: unknown[] = outcome.ok ? [] : [outcome.error];
+  const failures: unknown[] = outcome.status === "fulfilled" ? [] : [outcome.reason];
   failures.push(
     ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
   );
-  if (outcome.ok && failures.length === 0) {
+  if (outcome.status === "fulfilled" && failures.length === 0) {
     return outcome.value;
   }
   throw failures.length === 1

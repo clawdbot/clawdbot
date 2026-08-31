@@ -394,7 +394,9 @@ describe("qa suite runtime flow", () => {
       vi.useFakeTimers();
       try {
         const prepareFlow = vi.fn(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, preparationMs));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, preparationMs);
+          });
         });
         const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
         const scenario = makeQaSuiteTestScenario("negative-observation", { config: {} });
@@ -414,7 +416,9 @@ describe("qa suite runtime flow", () => {
             {
               name: "Observe the complete no-reply window",
               run: async () => {
-                await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, 8_000);
+                });
                 observed();
               },
             },

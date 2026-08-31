@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -94,7 +95,7 @@ describe("Matrix E2EE scenario client ownership", () => {
       const scenarioFailure = new Error("verification failed");
       const driverFailure = new Error("driver shutdown failed");
       const observerFailure = new Error("observer shutdown failed");
-      const delayedStop = Promise.withResolvers<void>();
+      const delayedStop = createDeferred<void>();
       const stops = {
         driver: vi.fn(async () => {
           if (firstFailure !== "driver") {
@@ -117,7 +118,9 @@ describe("Matrix E2EE scenario client ownership", () => {
         throw scenarioFailure;
       }).then(settled, settled);
       try {
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(stops.driver).toHaveBeenCalledTimes(1);
         expect(stops.observer).toHaveBeenCalledTimes(1);
         expect(settled).not.toHaveBeenCalled();
@@ -135,8 +138,10 @@ describe("Matrix E2EE scenario client ownership", () => {
   );
 
   it("returns the scenario result after stopping both clients", async () => {
-    const driver = client(vi.fn(async () => {}));
-    const observer = client(vi.fn(async () => {}));
+    const stopDriver = vi.fn(async () => {});
+    const stopObserver = vi.fn(async () => {});
+    const driver = client(stopDriver);
+    const observer = client(stopObserver);
     vi.mocked(createMatrixQaE2eeScenarioClient)
       .mockResolvedValueOnce(driver)
       .mockResolvedValueOnce(observer);
@@ -145,14 +150,16 @@ describe("Matrix E2EE scenario client ownership", () => {
 
     await expect(withMatrixQaE2eeDriverAndObserver(context, scenarioId, run)).resolves.toBe(result);
     expect(run).toHaveBeenCalledExactlyOnceWith({ driver, observer });
-    expect(driver.stop).toHaveBeenCalledTimes(1);
-    expect(observer.stop).toHaveBeenCalledTimes(1);
+    expect(stopDriver).toHaveBeenCalledTimes(1);
+    expect(stopObserver).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a cleanup-only rejection after joining the other client", async () => {
-    const delayedStop = Promise.withResolvers<void>();
-    const driver = client(vi.fn().mockRejectedValue(undefined));
-    const observer = client(vi.fn(() => delayedStop.promise));
+    const delayedStop = createDeferred<void>();
+    const stopDriver = vi.fn().mockRejectedValue(undefined);
+    const stopObserver = vi.fn(() => delayedStop.promise);
+    const driver = client(stopDriver);
+    const observer = client(stopObserver);
     vi.mocked(createMatrixQaE2eeScenarioClient)
       .mockResolvedValueOnce(driver)
       .mockResolvedValueOnce(observer);
@@ -162,9 +169,11 @@ describe("Matrix E2EE scenario client ownership", () => {
       verified: true,
     })).then(resolved, rejected);
     try {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(driver.stop).toHaveBeenCalledTimes(1);
-      expect(observer.stop).toHaveBeenCalledTimes(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopDriver).toHaveBeenCalledTimes(1);
+      expect(stopObserver).toHaveBeenCalledTimes(1);
       expect(resolved).not.toHaveBeenCalled();
       expect(rejected).not.toHaveBeenCalled();
     } finally {
