@@ -60,17 +60,6 @@ import {
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
 
-function registerManager(manager: ThreadBindingManager) {
-  MANAGERS_BY_ACCOUNT_ID.set(manager.accountId, manager);
-}
-
-function unregisterManager(accountId: string, manager: ThreadBindingManager) {
-  const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
-  if (existing === manager) {
-    MANAGERS_BY_ACCOUNT_ID.delete(accountId);
-  }
-}
-
 function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
   const accountId = normalizeAccountId(accountIdRaw);
   return {
@@ -125,6 +114,8 @@ export function createThreadBindingManager(params: {
   );
   const resolveCurrentCfg = () => getRuntimeConfigSnapshot() ?? params.cfg;
   const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
+  const getCurrentBinding = (threadId: string) =>
+    MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager ? manager.getByThreadId(threadId) : undefined;
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const runSweepOnce = async () => {
@@ -137,7 +128,7 @@ export function createThreadBindingManager(params: {
       // Re-read live state after any awaited work from earlier iterations.
       // This avoids unbinding based on stale snapshot data when activity touches
       // happen while the sweeper loop is in-flight.
-      const binding = manager.getByThreadId(snapshotBinding.threadId);
+      const binding = getCurrentBinding(snapshotBinding.threadId);
       if (!binding) {
         continue;
       }
@@ -198,6 +189,10 @@ export function createThreadBindingManager(params: {
       }
       try {
         const channel = await getChannel(rest, binding.threadId);
+        // A completed probe only owns the manager and binding that started it.
+        if (getCurrentBinding(binding.threadId) !== binding) {
+          continue;
+        }
         if (!channel || typeof channel !== "object") {
           logVerbose(
             `discord thread binding sweep probe returned invalid payload for ${binding.threadId}`,
@@ -212,6 +207,9 @@ export function createThreadBindingManager(params: {
           });
         }
       } catch (err) {
+        if (getCurrentBinding(binding.threadId) !== binding) {
+          continue;
+        }
         if (isDiscordThreadGoneError(err)) {
           logVerbose(
             `discord thread binding sweep removing stale binding ${binding.threadId}: ${summarizeDiscordError(err)}`,
@@ -493,13 +491,15 @@ export function createThreadBindingManager(params: {
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      unregisterManager(accountId, manager);
+      if (MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager) {
+        MANAGERS_BY_ACCOUNT_ID.delete(accountId);
+        forgetThreadBindingToken(accountId);
+      }
       unregisterSessionBindingAdapter({
         channel: "discord",
         accountId,
         adapter: sessionBindingAdapter,
       });
-      forgetThreadBindingToken(accountId);
     },
   };
 
@@ -524,7 +524,7 @@ export function createThreadBindingManager(params: {
 
   registerSessionBindingAdapter(sessionBindingAdapter);
 
-  registerManager(manager);
+  MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
 }
 
