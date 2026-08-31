@@ -507,17 +507,24 @@ describe("createGatewayRuntimeState", () => {
   });
 
   it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
+    // Degraded tailscale (issue #133827): generic Serve/Funnel failures keep loopback alive.
     const routeFailure = new Error("route claim failed");
+    const warn = vi.fn();
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       port: 18789,
       tailscaleMode: "serve",
+      log: { info: () => {}, warn },
       prepareManagedTailscaleIngress: async () => {
         throw routeFailure;
       },
     });
 
-    await expect(runtimeState.startListening()).rejects.toBe(routeFailure);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+    await expect(runtimeState.startListening()).resolves.toBeUndefined();
+    expect(runtimeState.getTailscaleIngressEndpoint()).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("continuing with loopback gateway only"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exposure unavailable"));
     expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
       expect.objectContaining({
         bindHost: "127.0.0.1",
@@ -525,7 +532,10 @@ describe("createGatewayRuntimeState", () => {
         serviceName: "Tailscale gateway ingress",
       }),
     );
-    expect(runtimeState.httpBindHosts).toEqual([]);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+    );
+    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
   });
 
   it("does not publish managed ingress when Tailscale mode is off", async () => {
