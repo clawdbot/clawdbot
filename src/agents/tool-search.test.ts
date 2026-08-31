@@ -197,14 +197,12 @@ describe("Tool Search", () => {
     { limit: 0, valid: false },
     { limit: -1, valid: false },
   ])("validates schema limit $limit", ({ limit, valid }) => {
-    const input = limit === undefined ? { query: "test" } : { query: "test", limit };
+    const item = limit === undefined ? { query: "test" } : { query: "test", limit };
+    const input = { queries: [item] };
     expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
   });
 
-  it("accepts bounded structured batch queries in the tool schema", () => {
-    expect(JSON.stringify(limitSearchTool.parameters)).toContain(
-      "serialized query strings may use at most 512 UTF-8 bytes in total",
-    );
+  it("advertises one closed batch-capable request shape", () => {
     expect(
       Value.Check(limitSearchTool.parameters, {
         queries: [
@@ -213,10 +211,28 @@ describe("Tool Search", () => {
         ],
       }),
     ).toBe(true);
+    expect(limitSearchTool.parameters).toMatchObject({
+      additionalProperties: false,
+      required: ["queries"],
+      properties: { queries: expect.any(Object) },
+    });
+    expect(Value.Check(limitSearchTool.parameters, {})).toBe(false);
+    expect(Value.Check(limitSearchTool.parameters, { query: "calendar" })).toBe(false);
+    expect(
+      Value.Check(limitSearchTool.parameters, {
+        query: "calendar",
+        queries: [{ query: "Slack" }],
+      }),
+    ).toBe(false);
     expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
     expect(
       Value.Check(limitSearchTool.parameters, {
         queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(limitSearchTool.parameters, {
+        queries: [{ query: "calendar", legacy: true }],
       }),
     ).toBe(false);
   });
@@ -258,7 +274,6 @@ describe("Tool Search", () => {
   });
 
   it.each(["", "  "])("preserves scalar empty-query compatibility for %j", async (query) => {
-    expect(Value.Check(limitSearchTool.parameters, { query })).toBe(true);
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
       catalogRef,
@@ -299,17 +314,10 @@ describe("Tool Search", () => {
     ).rejects.toThrow(
       "resolve to 56 results, but may request at most 50 in total. An omitted limit counts as 8; set smaller per-query limits and retry",
     );
-    expect(JSON.stringify(searchTool.parameters)).toContain(
-      "Their effective limits may total at most 50; an omitted item limit counts as 8",
-    );
-    expect(JSON.stringify(searchTool.parameters)).toContain(
-      "Maximum results for this query. Defaults to 8 when omitted.",
-    );
   });
 
   it("preserves scalar query length compatibility while bounding batch query echo", async () => {
     const longScalarQuery = "q".repeat(4097);
-    expect(Value.Check(limitSearchTool.parameters, { query: longScalarQuery })).toBe(true);
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
       catalogRef,
@@ -334,9 +342,8 @@ describe("Tool Search", () => {
     ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
   });
 
-  it("uses the schema's grapheme length semantics at runtime", async () => {
+  it("preserves legacy scalar grapheme length semantics at runtime", async () => {
     const query = "😀".repeat(3_000);
-    expect(Value.Check(limitSearchTool.parameters, { query })).toBe(true);
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
       catalogRef,
