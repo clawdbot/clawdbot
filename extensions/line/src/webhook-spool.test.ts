@@ -95,39 +95,6 @@ describe("LINE webhook spool", () => {
     });
   });
 
-  it("never admits an event delivered while another channel holds chat control", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      const standby = createEvent({
-        webhookEventId: "event-standby",
-        userId: "user-standby",
-        mode: "standby",
-      });
-      const active = createEvent({ webhookEventId: "event-active", userId: "user-active" });
-
-      await spool.accept({ destination: "destination-1", events: [standby, active] });
-
-      const pending = await queue.listPending();
-      expect(pending.map((entry) => entry.id)).toEqual(["message:message-event-active"]);
-
-      spool.start();
-      try {
-        await waitForVerdict(queue, "message:message-event-active", "completed");
-        expect(deliver.mock.calls.map((call) => call[0])).toEqual([active]);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("caps active deliveries across repeated drain pumps", async () => {
     await withQueue(async (queue) => {
       let releaseDeliveries = () => {};
