@@ -97,15 +97,14 @@ function literalPatternPrefix(pattern: string, routedToGlob: boolean): string {
 }
 
 // Walk root for the fs.glob-absent fallback: the literal directory prefix before
-// the first glob-magic character, so the local scan starts where fs.glob would
-// root its walk instead of always re-reading from the workspace root.
+// the first glob-magic segment, so the local scan starts where fs.glob would root
+// its walk instead of always re-reading from the workspace root. Delegates to the
+// shared literal-prefix grammar with routedToGlob=true — the fallback matcher
+// unconditionally treats `[ab]` as a character class, and only glob-routed
+// patterns ever reach this walk, so the root must stop before a bracket segment
+// exactly as the security pre-gate does (`packages/[ab]/*` roots at `packages`).
 function resolveFallbackWalkRoot(normalizedPattern: string): string {
-  const globIndex = normalizedPattern.search(/[?*{}]/u);
-  if (globIndex === -1) {
-    return normalizedPattern;
-  }
-  const slashIndex = normalizedPattern.lastIndexOf("/", globIndex);
-  return slashIndex === -1 ? "." : normalizedPattern.slice(0, slashIndex) || ".";
+  return literalPatternPrefix(normalizedPattern, true);
 }
 
 // Whether a brace-free pattern segment is a wildcard the fallback matcher treats

@@ -1063,6 +1063,163 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
       });
     },
   );
+
+  it("resolves a mixed bracket-class + wildcard pattern via the fallback (fs.glob parity)", async () => {
+    // The fallback walk root must use the matcher's grammar: `[ab]` is a character
+    // CLASS here (the pattern also carries `*`, so it routes to fs.glob where the
+    // class is honored). fs.glob loads both packages; the fallback must load the
+    // same set. Pre-fix the walk root scan missed `[`/`]`, so it rooted the walk at
+    // the non-existent literal dir `packages/[ab]` and silently loaded nothing.
+    const workspaceDir = await createWorkspaceDir("bracket-star");
+    await fs.mkdir(path.join(workspaceDir, "packages", "a", "x"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "packages", "b", "y"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "packages", "a", "x", "AGENTS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "packages", "b", "y", "AGENTS.md"), "b", "utf-8");
+
+    const pattern = "packages/[ab]/*/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["packages/a/x/AGENTS.md", "packages/b/y/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
+
+  it("resolves a root-level bracket-class pattern via the fallback (fs.glob parity)", async () => {
+    // Character class in the FIRST segment: the literal prefix is the workspace
+    // root, exactly where fs.glob roots the walk. Pre-fix the scan skipped the
+    // bracket and rooted at the non-existent literal dir `[ab]`, dropping both.
+    const workspaceDir = await createWorkspaceDir("bracket-root");
+    await fs.mkdir(path.join(workspaceDir, "a", "x"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "b", "y"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "a", "x", "AGENTS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "b", "y", "AGENTS.md"), "b", "utf-8");
+
+    const pattern = "[ab]/*/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["a/x/AGENTS.md", "b/y/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
+
+  it("resolves a bracket-class + globstar pattern via the fallback (fs.glob parity)", async () => {
+    // Bracket class combined with `**`: the walk still roots at the literal prefix
+    // before the class segment (`packages`), and the globstar spans depth. Pre-fix
+    // the root was the non-existent literal `packages/[ab]`, dropping everything.
+    const workspaceDir = await createWorkspaceDir("bracket-globstar");
+    await fs.mkdir(path.join(workspaceDir, "packages", "a", "deep"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "packages", "b"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "packages", "a", "deep", "AGENTS.md"),
+      "ad",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "packages", "b", "AGENTS.md"), "b", "utf-8");
+
+    const pattern = "packages/[ab]/**/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["packages/a/deep/AGENTS.md", "packages/b/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
+
+  it("loads bracket-class fallback files through the loader with no diagnostics", async () => {
+    // Loader boundary for the bracket-class case. The pattern carries `*`, so the
+    // loader routes it to the glob resolver; with fs.glob absent the fallback must
+    // still load both bracketed packages and surface no diagnostic. Pre-fix the
+    // fallback dropped everything, leaving the files unloaded.
+    const workspaceDir = await createWorkspaceDir("bracket-loader");
+    await fs.mkdir(path.join(workspaceDir, "packages", "a", "x"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "packages", "b", "y"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "packages", "a", "x", "AGENTS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "packages", "b", "y", "AGENTS.md"), "b", "utf-8");
+
+    await withoutFsGlob(async () => {
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "packages/[ab]/*/AGENTS.md",
+      ]);
+      const contents = files.map((file) => file.content).toSorted();
+      expect(contents).toStrictEqual(["a", "b"]);
+      expect(diagnostics).toStrictEqual([]);
+    });
+  });
+
+  it("keeps a brace-across-slash pattern unchanged (regression pin)", async () => {
+    // Regression pin for the delegation fix: a brace alternative that spans a slash
+    // (`{a/b,c}`) collapses its literal prefix to the workspace root under both the
+    // old scan and the matcher grammar, so its match set must not change. This case
+    // passes before and after the fix — it guards against a per-segment rewrite that
+    // would split the brace on `/` and regress it.
+    const workspaceDir = await createWorkspaceDir("brace-slash");
+    await fs.mkdir(path.join(workspaceDir, "a", "b"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "c"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "a", "b", "AGENTS.md"), "ab", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "c", "AGENTS.md"), "c", "utf-8");
+
+    const pattern = "{a/b,c}/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["a/b/AGENTS.md", "c/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
+
+  it("treats an escaped bracket as a literal directory name (fs.glob parity)", async () => {
+    // Escaped-bracket probe: `[[]ab]` is a class matching a single `[` followed by
+    // the literal `ab]`, so the pattern targets a directory LITERALLY named `[ab]`.
+    // The fallback must root before that magic segment and match the literal dir,
+    // exactly as fs.glob does. Pre-fix the walk root was the non-existent literal
+    // `packages/[[]ab]`, so nothing loaded.
+    const workspaceDir = await createWorkspaceDir("escaped-bracket");
+    await fs.mkdir(path.join(workspaceDir, "packages", "[ab]", "x"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "packages", "[ab]", "x", "AGENTS.md"),
+      "lit",
+      "utf-8",
+    );
+
+    const pattern = "packages/[[]ab]/*/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["packages/[ab]/x/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
+
+  it("selects a valid walk root when the buggy prefix names a file (fs.glob parity)", async () => {
+    // Literal-prefix-is-a-file probe. `pkg[ab]/*/AGENTS.md` has `pkg[ab]` as a
+    // single character-class segment matching `pkga`/`pkgb`, so the matcher grammar
+    // roots the walk at the workspace root. A real FILE literally named `pkg[ab]`
+    // sits in the tree: the pre-fix scan (blind to `[`/`]`) rooted the walk at that
+    // file's path, so readdir failed and nothing loaded. The fix roots at the
+    // workspace root and matches both real package dirs, exactly as fs.glob does.
+    const workspaceDir = await createWorkspaceDir("file-prefix");
+    await fs.writeFile(path.join(workspaceDir, "pkg[ab]"), "decoy", "utf-8");
+    await fs.mkdir(path.join(workspaceDir, "pkga", "x"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "pkgb", "y"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkga", "x", "AGENTS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "pkgb", "y", "AGENTS.md"), "b", "utf-8");
+
+    const pattern = "pkg[ab]/*/AGENTS.md";
+    const oracle = await nodeGlobRelative(workspaceDir, pattern);
+    expect(oracle).toStrictEqual(["pkga/x/AGENTS.md", "pkgb/y/AGENTS.md"]);
+
+    await withoutFsGlob(async () => {
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+      expect(matches).toStrictEqual(oracle);
+    });
+  });
 });
 
 describe("toPortableMatchPath", () => {
