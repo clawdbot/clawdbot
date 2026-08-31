@@ -107,21 +107,26 @@ prompt size), use `/context list` or `/context detail`. See
 In chat:
 
 - `/status` -> emoji-rich status card with the session model, context usage,
-  last response input/output tokens, and estimated cost when local pricing is
-  configured for the active model.
+  last response input/output tokens, and cost from recorded billing or local
+  pricing for the active model.
 - `/usage off|tokens|full` -> appends a per-response usage footer to every
   reply. Persists per session (stored as `responseUsage`).
   - `/usage reset` (aliases: `inherit`, `clear`, `default`) clears the
     session override so it re-inherits the configured default.
   - `/usage tokens` shows turn token/cache details.
-  - `/usage full` shows compact model/context/cost details; estimated cost
-    appears only when OpenClaw has usage metadata and local pricing for the
-    active model. Custom `messages.usageTemplate` layouts can include
-    token/cache fields.
+  - `/usage full` shows compact model/context/cost details. Cost comes from a
+    recorded amount or usage metadata with local pricing for the active model.
+    Custom `messages.usageTemplate` layouts can include token/cache fields.
 - `/usage cost` -> local cost summary from OpenClaw session logs.
 
 Other surfaces:
 
+- **Control UI:** the working indicator and completed-run recap show cumulative
+  **output tokens** for that run, including its model calls across tool use and
+  retries. Counts update when the runtime reports completed-response usage, not
+  on every streamed text fragment. Reloading an active run restores its latest
+  count. This counter excludes input tokens and is separate from the composer
+  context-window meter and persisted billing summaries.
 - **TUI/Web TUI:** `/status` and `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
@@ -154,8 +159,8 @@ OpenClaw falls back to matching OAuth/API-key credentials from auth
 profiles, env, or config.
 
 Assistant transcript entries persist the same normalized usage shape,
-including `usage.cost` when the active model has pricing configured and the
-provider returns usage metadata. This gives `/usage cost` and
+including `usage.cost` when the runtime calculates an estimate or the provider
+reports a billed amount. This gives `/usage cost` and
 transcript-backed session status a stable source even after the live
 runtime state is gone.
 
@@ -175,18 +180,42 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, `/usage full` omits cost; use
-`/usage tokens` or a custom `messages.usageTemplate` when you need
+`cacheWrite`. If both pricing and a recorded amount are missing, `/usage full`
+omits cost; use `/usage tokens` or a custom `messages.usageTemplate` when you need
 token/cache details in every reply. Cost display is not limited to API-key
 auth: non-API-key providers such as `aws-sdk` can show estimated cost when
 their configured model entry includes local pricing and the provider
 returns usage metadata.
 
-Pricing updates ship in the hosted model catalog alongside model metadata.
-OpenClaw does not fetch OpenRouter or LiteLLM directly. Set
-`models.catalogRefresh.enabled: false` to disable hosted catalog traffic on
-offline or restricted networks; bundled pricing and explicit
-`models.providers.*.models[].cost` entries still drive local cost estimates.
+When a model publishes `tieredPricing`, each request selects one tier using its
+total prompt input: uncached input plus cache reads and cache writes. Output
+tokens do not select the tier. The selected rates apply to every token bucket
+in that request, rather than only to tokens above a threshold. Ranges are
+half-open `[start, end)`; an open-ended final range uses `[start]`.
+
+Turn totals sum costs calculated for each model request, retaining tier and
+model boundaries across tool loops and retries. If an older or external runtime
+provides only aggregate tokens, flat-rate estimates remain available. A tiered
+aggregate without complete per-request costs omits the cost instead of treating
+the summed tokens as one large request. Provider-billed totals, including zero,
+take precedence over catalog estimates and remain visible even when token counts
+are unavailable. Unknown token counts are not inferred from a billed amount.
+
+Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
+Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
+Omitted flat-rate fields can still inherit catalog defaults. An explicit
+`tieredPricing` schedule takes precedence over the catalog schedule.
+
+Pricing updates ship in the hosted model catalog alongside model metadata. Its
+publisher reads public pricing sources, including OpenCode's official catalog
+and Venice's public model API when the provider declares the native source.
+Base rates and context tiers come from the same source; usage rendering makes no
+network requests. Hosted updates activate after
+the next Gateway restart. Set `models.catalogRefresh.enabled: false` to disable
+hosted catalog traffic on offline or restricted networks; bundled pricing still
+works. Agent-local `models.json` prices take precedence over explicit
+`models.providers.*.models[].cost` entries, and both override catalog estimates,
+including explicit flat and zero rates.
 
 ## Cache TTL and pruning impact
 

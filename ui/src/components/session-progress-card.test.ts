@@ -265,6 +265,44 @@ describe("renderSessionProgressCard", () => {
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
   });
 
+  it("collapses active composer progress when requested and preserves manual expansion", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        progressCard,
+        "composer",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+      ),
+      container,
+    );
+
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(false);
+    card!.open = true;
+
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, revision: progressCard.revision + 1 },
+        "composer",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+      ),
+      container,
+    );
+    expect(card?.open).toBe(true);
+  });
+
   it("keeps the collapsed counter in the summary action column", () => {
     const container = document.createElement("div");
     render(renderSessionProgressCard(progressCard, "composer"), container);

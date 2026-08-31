@@ -5,6 +5,7 @@ import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
   type NodeWorkerConnectionFailureMessage,
 } from "./node-supervisor-protocol.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 import { runWorkerCommand, type WorkerCommandLifetime } from "./worker-command.runtime.js";
 
 const WORKER_START_MESSAGE_TYPE = "openclaw-worker-start-v1";
@@ -14,7 +15,7 @@ function isWorkerStartMessage(value: unknown): boolean {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
+    hasExactOwnKeys(value, ["type"]) &&
     (value as { type?: unknown }).type === WORKER_START_MESSAGE_TYPE
   );
 }
@@ -114,6 +115,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
 export async function runWorkerProcess(
   options: {
     internalWorkerIpc?: boolean;
+    managed?: boolean;
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
@@ -123,6 +125,7 @@ export async function runWorkerProcess(
   await runWorkerCommand({
     input: process.stdin,
     output: process.stdout,
+    ...(options.managed ? { managed: true } : {}),
     ...(options.internalWorkerIpc ? { lifetime: createWorkerIpcLifetime() } : {}),
     ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
   });

@@ -97,6 +97,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 
 ## Gateway auth for node host
 
@@ -149,11 +151,24 @@ Options:
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
+- `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--force`: Reinstall/overwrite if already installed
+
+Set `OPENCLAW_WRAPPER` to an executable wrapper file to use it instead of the
+selected runtime and CLI entrypoint. The wrapper receives `node run` and the
+connection arguments; it must launch OpenClaw and forward those arguments.
+
+If installation reports a runtime probe failure, check the executable and
+working directory named in the error. For example, when switching users with
+`runuser`, first change to a directory that the target user can read. A failed
+probe does not mean that the installed Node version is unsupported; upgrade
+advice is reserved for missing or unsupported runtimes.
 
 > **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
 > install. Without lingering, `systemd --user` tears down the node service when

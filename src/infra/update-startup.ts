@@ -27,6 +27,7 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import {
@@ -553,16 +554,6 @@ export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartu
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
 
-function gitCommitsMatch(left: string, right: string): boolean {
-  const normalizedLeft = left.trim().toLowerCase();
-  const normalizedRight = right.trim().toLowerCase();
-  return (
-    normalizedLeft.length >= 7 &&
-    normalizedRight.length >= 7 &&
-    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
-  );
-}
-
 function resolveGitInstalledAtMs(
   git: NonNullable<UpdateCheckResult["git"]>,
   installReceipt: VerifiedGitUpdateReceipt | null,
@@ -572,7 +563,7 @@ function resolveGitInstalledAtMs(
     root !== null &&
     updateInstallRootsMatch(root, installReceipt.root) &&
     git.sha &&
-    gitCommitsMatch(installReceipt.sha, git.sha)
+    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
     ? installReceipt.installedAtMs
     : undefined;
 }

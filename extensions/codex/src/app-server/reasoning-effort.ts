@@ -9,21 +9,12 @@ const CODEX_REASONING_EFFORTS = [
   "max",
   "ultra",
 ] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+type CodexEnabledReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export type CodexReasoningEffort = CodexEnabledReasoningEffort | "none";
 
 const LEGACY_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const LEGACY_PRO_MODEL_ID_RE = /^gpt-5\.[45]-pro$/u;
 const MODERN_GPT_5_MODEL_ID_RE = /^gpt-5\.(?:[3-9]|[1-9]\d)(?:$|-)/u;
-
-function normalizeCodexReasoningEfforts(
-  efforts: readonly string[] | null | undefined,
-): CodexReasoningEffort[] {
-  if (!efforts) {
-    return [];
-  }
-  const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
-  return CODEX_REASONING_EFFORTS.filter((effort) => supported.has(effort));
-}
 
 /** Read reasoning metadata after the Codex app-server route has been selected. */
 export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | undefined {
@@ -38,10 +29,13 @@ export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | 
 }
 
 function resolveSupportedReasoningEffort(params: {
-  requested: CodexReasoningEffort;
+  requested: CodexEnabledReasoningEffort;
   supportedReasoningEfforts: readonly string[];
-}): CodexReasoningEffort | undefined {
-  const supported = normalizeCodexReasoningEfforts(params.supportedReasoningEfforts);
+}): CodexEnabledReasoningEffort | undefined {
+  const declared = new Set(
+    params.supportedReasoningEfforts.map((effort) => effort.trim().toLowerCase()),
+  );
+  const supported = CODEX_REASONING_EFFORTS.filter((effort) => declared.has(effort));
   if (supported.includes(params.requested)) {
     return params.requested;
   }
@@ -62,7 +56,10 @@ export function resolveCodexAppServerReasoningEffort(params: {
   modelId: string;
   supportedReasoningEfforts?: readonly string[];
 }): CodexReasoningEffort | null {
-  if (params.thinkLevel === "off" || params.thinkLevel === "adaptive") {
+  if (params.thinkLevel === "off") {
+    return params.supportedReasoningEfforts?.includes("none") ? "none" : null;
+  }
+  if (params.thinkLevel === "adaptive") {
     return null;
   }
   if (params.supportedReasoningEfforts) {

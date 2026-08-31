@@ -6,7 +6,6 @@ import {
   canRunBufferBackedVideoToVideoLiveLane,
   parseVideoProviderFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
@@ -87,13 +86,6 @@ describe("video-generation live-test helpers", () => {
         hasLiveKeys: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("   ")).toBe("none");
-    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
-    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {

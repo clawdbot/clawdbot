@@ -9,15 +9,11 @@ const mocks = vi.hoisted(() => ({
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   resolveBundledProviderPolicySurface: vi.fn(() => null),
-  shouldSuppressBuiltInModelCore: vi.fn(() => {
-    throw new Error("runtime model suppression should be skipped");
-  }),
-  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
+  shouldSuppressBuiltInModelCore: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelCore: mocks.shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
@@ -146,7 +142,6 @@ describe("appendPreparedModelCatalogRows", () => {
       context: createRowContext({
         authIndex: { evaluateModelAuth },
         filter: { provider: "openai" },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -190,7 +185,6 @@ describe("appendPreparedModelCatalogRows", () => {
       context: createRowContext({
         authIndex: { evaluateModelAuth },
         filter: { provider: "nvidia" },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -226,7 +220,6 @@ describe("appendPreparedModelCatalogRows", () => {
       context: createRowContext({
         authIndex: { evaluateModelAuth: () => authEvaluation(true) },
         filter: { provider: "ollama", local: true },
-        skipRuntimeModelSuppression: true,
       }),
     };
 
@@ -269,7 +262,6 @@ describe("appendPreparedModelCatalogRows", () => {
           evaluateModelAuth: () => authEvaluation(true),
         },
         filter: { provider: "anthropic" },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -312,7 +304,6 @@ describe("appendDiscoveredRows", () => {
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -366,7 +357,6 @@ describe("appendDiscoveredRows", () => {
         },
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -406,7 +396,6 @@ describe("appendDiscoveredRows", () => {
         },
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -461,7 +450,6 @@ describe("appendConfiguredRows", () => {
         availableKeys: new Set(["openai/gpt-5.5"]),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -497,7 +485,6 @@ describe("appendConfiguredRows", () => {
       catalogSnapshot: { entries: [catalogEntry], routeVariants: [catalogEntry] },
       context: createRowContext({
         authIndex: { evaluateModelAuth },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -514,8 +501,8 @@ describe("appendConfiguredRows", () => {
 });
 
 describe("prepared provider catalog projection", () => {
-  it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
-    mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
+  it("omits manifest-suppressed catalog rows", async () => {
+    mocks.shouldSuppressBuiltInModelCore.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
 
     await appendCommittedProviderCatalogRows({
@@ -542,12 +529,10 @@ describe("prepared provider catalog projection", () => {
           evaluateModelAuth: () => authEvaluation(false),
         },
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
-    expect(mocks.shouldSuppressBuiltInModelCore).not.toHaveBeenCalled();
-    expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
+    expect(mocks.shouldSuppressBuiltInModelCore).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",
       baseUrl: "https://api.openai.com/v1",
@@ -602,7 +587,6 @@ describe("prepared provider catalog projection", () => {
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -647,7 +631,6 @@ describe("prepared provider catalog projection", () => {
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -679,7 +662,6 @@ describe("prepared provider catalog projection", () => {
         discoveredKeys: new Set(["anthropic/claude-sonnet-4-6"]),
         availableKeys: new Set(),
         filter: { provider: "anthropic", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -709,7 +691,6 @@ describe("prepared provider catalog projection", () => {
           evaluateModelAuth: () => authEvaluation(undefined),
         },
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -751,7 +732,6 @@ describe("appendConfiguredProviderRows", () => {
         },
         authIndex,
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -796,7 +776,6 @@ describe("appendConfiguredProviderRows", () => {
         },
         authIndex,
         filter: { provider: "anthropic", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -842,7 +821,6 @@ describe("appendConfiguredProviderRows", () => {
         availableKeys: new Set(["openai/gpt-5.6"]),
         discoveredKeys: new Set(["openai/gpt-5.6"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -895,7 +873,6 @@ describe("appendConfiguredProviderRows", () => {
           evaluateModelAuth,
         },
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -965,7 +942,6 @@ describe("appendAuthenticatedCatalogRows", () => {
           }),
         },
         filter: { provider: "local-openai", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 
@@ -1010,7 +986,6 @@ describe("appendAuthenticatedCatalogRows", () => {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),
         },
         filter: { provider: "remote-provider", local: false },
-        skipRuntimeModelSuppression: true,
       }),
     });
 

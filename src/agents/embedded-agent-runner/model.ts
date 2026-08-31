@@ -14,12 +14,7 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import {
-  AuthStorage as AgentAuthStorageClass,
-  ModelRegistry as AgentModelRegistryClass,
-  type AuthStorage,
-  type ModelRegistry,
-} from "../sessions/index.js";
+import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
@@ -74,15 +69,8 @@ export function createEmptyAgentDiscoveryStores(): {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
-  const authStorage =
-    typeof AgentAuthStorageClass.inMemory === "function"
-      ? AgentAuthStorageClass.inMemory({})
-      : AgentAuthStorageClass.create();
-  const modelRegistry =
-    typeof AgentModelRegistryClass.inMemory === "function"
-      ? AgentModelRegistryClass.inMemory(authStorage)
-      : AgentModelRegistryClass.create(authStorage);
-  return { authStorage, modelRegistry };
+  const authStorage = AuthStorage.inMemory({});
+  return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
 }
 
 function resolvePreparedAgentSnapshot(
@@ -163,18 +151,17 @@ export async function resolveModelAsync(
     const workspaceDir =
       options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
     const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
-    const preparedStores =
-      !options?.authStorage || !options?.modelRegistry
-        ? preparedModelRuntime?.createStores()
-        : undefined;
-    const fallbackStores =
-      emptyDiscoveryStores ?? preparedStores ?? createEmptyAgentDiscoveryStores();
-    const authStorage = options?.authStorage ?? fallbackStores.authStorage;
-    const modelRegistry =
-      options?.modelRegistry ??
-      (options?.authStorage
-        ? fallbackStores.modelRegistry.fork(authStorage)
-        : fallbackStores.modelRegistry);
+    let { authStorage, modelRegistry } = options ?? {};
+    if (!authStorage || !modelRegistry) {
+      const stores =
+        emptyDiscoveryStores ??
+        preparedModelRuntime?.createStores() ??
+        createEmptyAgentDiscoveryStores();
+      authStorage ??= stores.authStorage;
+      modelRegistry ??= options?.authStorage
+        ? stores.modelRegistry.fork(authStorage)
+        : stores.modelRegistry;
+    }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
     let staticCatalogModel: StaticCatalogFallbackModel | undefined;

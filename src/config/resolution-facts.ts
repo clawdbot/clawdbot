@@ -86,6 +86,40 @@ export function copyConfigResolutionFactsExcept(
   setConfigResolutionFacts(target, remaining);
 }
 
+type SerializedConfigResolutionFacts = Readonly<{
+  unresolvedPaths: readonly string[];
+  authoredSecretRefs: readonly (readonly [string, SecretRef])[];
+}> | null;
+
+/** Captures loader provenance as deterministic data for a prepared worker generation. */
+export function serializeConfigResolutionFacts(target: unknown): SerializedConfigResolutionFacts {
+  const facts = getConfigResolutionFacts(target);
+  return facts === null
+    ? null
+    : {
+        unresolvedPaths: [...facts].toSorted(),
+        authoredSecretRefs: [...(authoredSecretRefsByFacts.get(facts) ?? [])].toSorted(
+          ([left], [right]) => left.localeCompare(right),
+        ),
+      };
+}
+
+/** Restores known-empty facts too: absence would reparse decoded literals as references. */
+export function restoreConfigResolutionFacts(
+  target: unknown,
+  data: SerializedConfigResolutionFacts,
+): void {
+  if (data === null) {
+    setConfigResolutionFacts(target, null);
+    return;
+  }
+  const facts = new Set(data.unresolvedPaths);
+  if (data.authoredSecretRefs.length > 0) {
+    authoredSecretRefsByFacts.set(facts, new Map(data.authoredSecretRefs));
+  }
+  setConfigResolutionFacts(target, facts);
+}
+
 export function hasUnresolvedConfigPath(target: unknown, path: string): boolean {
   return getConfigResolutionFacts(target)?.has(path) === true;
 }

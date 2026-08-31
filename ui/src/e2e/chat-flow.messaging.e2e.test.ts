@@ -1,10 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProofEnabled,
-  channelStopProofDir,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -72,7 +70,7 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe("agent:main:main");
       expect(params.message).toBe(prompt);
       expect(params.deliver).toBe(false);
 
@@ -121,12 +119,12 @@ suite.define(() => {
         session: {
           activeRunIds: [runId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       await expect.poll(() => userRow.count()).toBe(1);
@@ -182,12 +180,12 @@ suite.define(() => {
         session: {
           activeRunIds: [],
           hasActiveRun: false,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "done",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       await page.locator(".agent-chat__composer-combobox textarea").fill(currentPrompt);
@@ -211,12 +209,12 @@ suite.define(() => {
         session: {
           activeRunIds: [currentRunId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await gateway.emitGatewayEvent("chat", {
         deltaText: currentPartial,
@@ -227,7 +225,7 @@ suite.define(() => {
         },
         runId: currentRunId,
         seq: 1,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await gateway.emitGatewayEvent("session.message", {
@@ -244,12 +242,12 @@ suite.define(() => {
         session: {
           activeRunIds: [currentRunId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
@@ -304,12 +302,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
       };
 
@@ -336,7 +334,7 @@ suite.define(() => {
       await gateway.setHistoryMessages(persistedMessages);
       await gateway.resolveDeferred("chat.history", {
         messages: [],
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         thinkingLevel: null,
       });
       await expectDistinctPeerBubbles();
@@ -392,7 +390,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -409,12 +407,12 @@ suite.define(() => {
           session: {
             activeRunIds: [runId],
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "running",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         };
         await gateway.emitGatewayEvent("session.message", sharedUserEvent);
 
@@ -523,7 +521,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor({
@@ -545,12 +543,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
 
         await expect
@@ -575,7 +573,7 @@ suite.define(() => {
           .toBe(true);
         await gateway.resolveDeferred("chat.history", {
           messages: includesPrompt ? [userMessage, assistantMessage] : [assistantMessage],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
         await expect
@@ -630,7 +628,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -645,7 +643,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
@@ -685,7 +683,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
@@ -709,12 +707,12 @@ suite.define(() => {
         session: {
           activeRunIds: [],
           hasActiveRun: false,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "done",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).length)
@@ -806,7 +804,7 @@ suite.define(() => {
           ]),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, channelSessionKey));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
@@ -872,7 +870,7 @@ suite.define(() => {
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
       expect(await composer.inputValue()).toBe("");
       if (captureUiProofEnabled) {
-        await mkdir(channelStopProofDir, { recursive: true });
+        const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
         await page.screenshot({
           path: path.join(channelStopProofDir, "stopped.png"),
           fullPage: true,
@@ -933,7 +931,7 @@ suite.define(() => {
 
   it("sends /steer for the selected session without resolving a run or leaf", async () => {
     await withChatPage(async (page) => {
-      const sessionKey = "main";
+      const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, {
         historyMessages: [
           {
@@ -992,7 +990,11 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params).toMatchObject({ sessionKey: "main", message: prompt, deliver: false });
+      expect(params).toMatchObject({
+        sessionKey: "agent:main:main",
+        message: prompt,
+        deliver: false,
+      });
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await gateway.emitChatFinal({

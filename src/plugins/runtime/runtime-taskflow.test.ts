@@ -4,6 +4,7 @@ import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-auth
 import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { createTaskFlowForTask, getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById } from "../../tasks/task-registry.js";
+import { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 import {
   installRuntimeTaskDeliveryMock,
   resetRuntimeTaskTestState,
@@ -21,7 +22,7 @@ function requireCreatedFlow<T>(flow: T | null): T {
 }
 
 afterEach(() => {
-  resetRuntimeTaskTestState({ persist: false });
+  resetRuntimeTaskTestState();
 });
 
 describe("runtime TaskFlow", () => {
@@ -267,5 +268,13 @@ describe("runtime TaskFlow", () => {
     });
     expect(getTaskFlowById(managed.flowId)?.endedAt).toBeUndefined();
     expect(getTaskFlowById(mirrored.flowId)?.revision).toBe(0);
+  });
+
+  // Declared last on purpose: it observes what the earlier tests' afterEach
+  // resets left behind. A reset that keeps durable rows lets
+  // ensureTaskRegistryReady() restore them here, and every later test file in
+  // this isolate:false worker then inherits phantom active restart blockers.
+  it("leaves no restorable task restart blockers for later test files", () => {
+    expect(getInspectableActiveTaskRestartBlockers()).toStrictEqual([]);
   });
 });

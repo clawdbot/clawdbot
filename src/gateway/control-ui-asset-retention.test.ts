@@ -1,188 +1,245 @@
-import { createHash } from "node:crypto";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  CONTROL_UI_ASSET_MANIFEST_FILENAME,
-  CONTROL_UI_ASSET_MANIFEST_VERSION,
-  hashControlUiAssetManifestEntries,
-  type ControlUiAssetManifestEntry,
-} from "./control-ui-asset-manifest.js";
+import { CONTROL_UI_ASSET_MANIFEST_FILENAME } from "./control-ui-asset-manifest.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
-
-function createControlUiAssetManifest(entries: ControlUiAssetManifestEntry[]) {
-  const assets = entries.toSorted((left, right) => left.path.localeCompare(right.path));
-  return {
-    version: CONTROL_UI_ASSET_MANIFEST_VERSION,
-    generation: hashControlUiAssetManifestEntries(assets),
-    assets,
-  };
-}
-
-async function writeBuild(root: string, label: string, corrupt = false): Promise<string> {
-  const assetPath = `assets/panel-${label}.js`;
-  const contents = Buffer.from(`export const panel = ${JSON.stringify(label)};\n`);
-  await fs.mkdir(path.join(root, "assets"), { recursive: true });
-  await fs.writeFile(path.join(root, assetPath), contents);
-  const manifest = createControlUiAssetManifest([
-    {
-      path: assetPath,
-      sha256: corrupt ? "0".repeat(64) : createHash("sha256").update(contents).digest("hex"),
-      size: contents.byteLength,
-    },
-  ]);
-  await fs.writeFile(
-    path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME),
-    `${JSON.stringify(manifest)}\n`,
-  );
-  return assetPath;
-}
+import {
+  createRetentionManifest,
+  withRetentionFixture,
+  writeRetentionBuild,
+} from "./control-ui-asset-retention.test-support.js";
 
 describe("Control UI asset retention", () => {
-  it("keeps the current and two prior verified generations", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-retention-"));
-    const stateDir = path.join(fixture, "state");
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const builds: Array<{ assetPath: string; root: string }> = [];
-        for (const label of ["a", "b", "c", "d"]) {
-          const root = path.join(fixture, `build-${label}`);
-          const assetPath = await writeBuild(root, label);
-          const retention = createControlUiAssetRetention(root);
-          await retention.prepare();
-          builds.push({ assetPath, root });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 5);
-          });
-        }
-
-        const current = createControlUiAssetRetention(builds[3]!.root);
-        await current.prepare();
-        expect(current.resolveAsset(builds[0]!.assetPath)).toBeNull();
-        for (const build of builds.slice(1)) {
-          const retained = current.resolveAsset(build.assetPath);
-          expect(retained).not.toBeNull();
-          expect(await fs.readFile(retained!.filePath, "utf8")).toContain(
-            path.basename(build.root).slice(-1),
-          );
-        }
-      });
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true });
-    }
-  });
-
-  it("defers cached-generation verification until preparation", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-deferred-"));
-    const stateDir = path.join(fixture, "state");
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const firstRoot = path.join(fixture, "build-a");
-        const firstAsset = await writeBuild(firstRoot, "a");
-        await createControlUiAssetRetention(firstRoot).prepare();
-
-        const secondRoot = path.join(fixture, "build-b");
-        await writeBuild(secondRoot, "b");
-        const retention = createControlUiAssetRetention(secondRoot);
-
-        expect(retention.resolveAsset(firstAsset)).toBeNull();
-        await retention.prepare();
-        expect(retention.resolveAsset(firstAsset)).not.toBeNull();
-      });
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true });
-    }
-  });
-
-  it("stops before copying when its lifecycle is cancelled", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-cancelled-"));
+  it("verifies each retained asset once per preparation", async () => {
+    const fixture = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-retention-io-")),
+    );
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture, "state") }, async () => {
-        const root = path.join(fixture, "build");
-        await writeBuild(root, "cancelled");
-        const controller = new AbortController();
-        controller.abort();
-
-        await expect(
-          createControlUiAssetRetention(root).prepare({ signal: controller.signal }),
-        ).rejects.toMatchObject({ name: "AbortError" });
+        const retainedPaths = new Set<string>();
+        let expectedBytes = 0;
+        let root = "";
+        for (const label of ["a", "b", "c"]) {
+          root = path.join(fixture, label);
+          const { assetPath: asset } = await writeRetentionBuild(root, label);
+          const owner = createControlUiAssetRetention(root);
+          await owner.prepare();
+          const retained = owner.resolveAsset(asset)!;
+          retainedPaths.add(retained.filePath);
+          expectedBytes += (await fs.stat(retained.filePath)).size;
+        }
+        const counts = { lstats: 0, reads: 0, readBytes: 0, hashes: 0, hashBytes: 0 };
+        const buffers = new WeakSet<object>();
+        const readFile = fs.readFile;
+        const lstat = fs.lstat;
+        const hash = crypto.createHash;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (typeof args[0] === "string" && retainedPaths.has(args[0])) {
+            counts.lstats++;
+          }
+          return lstat(...args);
+        });
+        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          const result = await readFile(...args);
+          if (
+            typeof args[0] === "string" &&
+            retainedPaths.has(args[0]) &&
+            Buffer.isBuffer(result)
+          ) {
+            counts.reads++;
+            counts.readBytes += result.byteLength;
+            buffers.add(result);
+          }
+          return result;
+        });
+        vi.spyOn(crypto, "createHash").mockImplementation((...args) => {
+          const instance = hash(...args);
+          const update = instance.update.bind(instance);
+          instance.update = (data, ...rest) => {
+            if (typeof data === "object" && buffers.has(data)) {
+              counts.hashes++;
+              counts.hashBytes += data.byteLength;
+            }
+            return update(data, ...rest);
+          };
+          return instance;
+        });
+        syncBuiltinESMExports();
+        const owner = createControlUiAssetRetention(root);
+        try {
+          await owner.prepare();
+        } finally {
+          vi.restoreAllMocks();
+          syncBuiltinESMExports();
+        }
+        expect(counts).toEqual({
+          lstats: 3,
+          reads: 3,
+          readBytes: expectedBytes,
+          hashes: 3,
+          hashBytes: expectedBytes,
+        });
+        for (const retained of retainedPaths) {
+          expect(owner.resolveAsset(`assets/${path.basename(retained)}`)?.filePath).toBe(retained);
+        }
       });
     } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
       await fs.rm(fixture, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the current and two prior generations with deterministic mtime ties", async () => {
+    await withRetentionFixture(async ({ seed, cache }) => {
+      const builds = [await seed("a"), await seed("b"), await seed("c"), await seed("d")] as const;
+      const [current, ...previous] = builds;
+      const future = new Date("2099-01-01T00:00:00Z");
+      for (const build of previous) {
+        await fs.utimes(build.target, future, future);
+      }
+      const expected = previous
+        .toSorted((a, b) => a.manifest.generation.localeCompare(b.manifest.generation))
+        .slice(0, 2);
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+      expect((await fs.readdir(cache)).toSorted()).toEqual(
+        [current, ...expected].map((b) => b.manifest.generation).toSorted(),
+      );
+      for (const build of builds) {
+        const kept = build === current || expected.includes(build);
+        expect(owner.resolveAsset(build.assetPath) !== null).toBe(kept);
+      }
+    });
+  });
+
+  it("enforces the exact aggregate 96 MiB edge and gives current bytes priority", async () => {
+    await withRetentionFixture(async ({ seed, cache }) => {
+      const older = await seed("a", { size: 48 * 1024 * 1024 });
+      const current = await seed("b", { size: 48 * 1024 * 1024 });
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+      expect(owner.resolveAsset(older.assetPath)).not.toBeNull();
+      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await fs.readdir(cache)).toHaveLength(2);
+      const tiny = await seed("c", { size: 1 });
+      const next = createControlUiAssetRetention(tiny.root);
+      await next.prepare();
+      expect(next.resolveAsset(older.assetPath)).toBeNull();
+      expect(next.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(next.resolveAsset(tiny.assetPath)).not.toBeNull();
+      expect(await fs.readdir(cache)).toHaveLength(2);
+    });
+  });
+
+  it("projects survivors by mtime even when selection prioritizes the current generation", async () => {
+    await withRetentionFixture(async ({ seed }) => {
+      const previous = await seed("previous", { assetPath: "assets/shared.js" });
+      const current = await seed("current", { assetPath: "assets/shared.js" });
+      const future = new Date("2099-01-01T00:00:00Z");
+      await fs.utimes(previous.target, future, future);
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+      expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(
+        path.join(previous.target, previous.assetPath),
+      );
+    });
+  });
+
+  it("publishes through a symlinked state-directory ancestor using the canonical retained root", async () => {
+    await withRetentionFixture(async ({ root, cache }) => {
+      const alias = path.join(root, "alias");
+      await fs.symlink(root, alias, "dir");
+      const build = await writeRetentionBuild(path.join(root, "build"), "current");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(alias, "state") }, async () => {
+        const owner = createControlUiAssetRetention(build.root);
+        await owner.prepare();
+        expect(owner.resolveAsset(build.assetPath)?.rootRealPath).toBe(
+          path.join(cache, build.manifest.generation),
+        );
+      });
+    });
+  });
+
+  it("defers verification, exposes verified fallback during copy failure, and retries rejected preparation", async () => {
+    await withRetentionFixture(async ({ root, seed, cache }) => {
+      const old = await seed("old");
+      const current = await writeRetentionBuild(path.join(root, "current"), "current", {
+        corrupt: true,
+      });
+      const owner = createControlUiAssetRetention(current.root);
+      expect(owner.resolveAsset(old.assetPath)).toBeNull();
+      const open = fs.open;
+      const observed = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        expect(owner.resolveAsset(old.assetPath)?.filePath).toBe(
+          path.join(old.target, old.assetPath),
+        );
+        return open(...args);
+      });
+      const preparing = owner.prepare();
+      expect(owner.prepare()).toBe(preparing);
+      await expect(preparing).rejects.toThrow("changed while being retained");
+      expect(observed).toHaveBeenCalled();
+      expect(owner.resolveAsset(old.assetPath)).not.toBeNull();
+      expect(await fs.readdir(cache)).toEqual([old.manifest.generation]);
+      await writeRetentionBuild(current.root, "current");
+      await owner.prepare();
+      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+    });
   });
 
   it("skips generations larger than the hard cache budget before reading assets", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-oversized-"));
-    const stateDir = path.join(fixture, "state");
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const root = path.join(fixture, "build");
-        await fs.mkdir(root, { recursive: true });
-        const manifest = createControlUiAssetManifest(
-          ["a", "b"].map((label) => ({
-            path: `assets/${label}.js`,
-            sha256: "0".repeat(64),
-            size: 50 * 1024 * 1024,
-          })),
-        );
-        await fs.writeFile(
-          path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME),
-          `${JSON.stringify(manifest)}\n`,
-        );
-
-        const retention = createControlUiAssetRetention(root);
-        await retention.prepare();
-
-        expect(retention.resolveAsset("assets/a.js")).toBeNull();
-        expect(await fs.readdir(path.join(stateDir, "cache", "control-ui-assets"))).toEqual([]);
-      });
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true });
-    }
+    await withRetentionFixture(async ({ root, cache }) => {
+      const manifest = createRetentionManifest(
+        ["a", "b"].map((label) => ({
+          path: `assets/${label}.js`,
+          sha256: "0".repeat(64),
+          size: 50 * 1024 * 1024,
+        })),
+      );
+      await fs.writeFile(
+        path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+        JSON.stringify(manifest),
+      );
+      const owner = createControlUiAssetRetention(root);
+      await owner.prepare();
+      expect(owner.resolveAsset("assets/a.js")).toBeNull();
+      expect(await fs.readdir(cache)).toEqual([]);
+    });
   });
 
-  it("refuses to publish bytes that do not match the build manifest", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-corrupt-"));
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture, "state") }, async () => {
-        const root = path.join(fixture, "build");
-        await writeBuild(root, "corrupt", true);
-
-        await expect(createControlUiAssetRetention(root).prepare()).rejects.toThrow(
-          "changed while being retained",
-        );
-      });
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true });
-    }
-  });
-
-  it("does not serve cached bytes changed after publication", async () => {
-    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-control-ui-tampered-"));
-    const stateDir = path.join(fixture, "state");
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const originalRoot = path.join(fixture, "build-original");
-        const assetPath = await writeBuild(originalRoot, "original");
-        const originalRetention = createControlUiAssetRetention(originalRoot);
-        await originalRetention.prepare();
-        const retained = originalRetention.resolveAsset(assetPath);
-        expect(retained).not.toBeNull();
-
-        const original = await fs.readFile(retained!.filePath);
-        await fs.writeFile(retained!.filePath, Buffer.alloc(original.byteLength, 0x78));
-
-        const currentRoot = path.join(fixture, "build-current");
-        await writeBuild(currentRoot, "current");
-        const currentRetention = createControlUiAssetRetention(currentRoot);
-        await currentRetention.prepare();
-        expect(currentRetention.resolveAsset(assetPath)).toBeNull();
-      });
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true });
-    }
+  it("prunes only generations and stale staging directories", async () => {
+    await withRetentionFixture(async ({ seed, cache, root }) => {
+      const current = await seed("current");
+      const names = [".staging-1-aaaa", ".staging-2-bbbb", "unrelated", "e".repeat(64)] as const;
+      for (const name of names) {
+        await fs.mkdir(path.join(cache, name));
+      }
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      await fs.utimes(
+        path.join(cache, names[0]),
+        new Date(now - 3_600_000),
+        new Date(now - 3_600_000),
+      );
+      await fs.utimes(
+        path.join(cache, names[1]),
+        new Date(now - 3_599_000),
+        new Date(now - 3_599_000),
+      );
+      await fs.writeFile(path.join(root, "sentinel"), "outside");
+      await fs.symlink(root, path.join(cache, "f".repeat(64)), "dir");
+      await createControlUiAssetRetention(current.root).prepare();
+      expect((await fs.readdir(cache)).toSorted()).toEqual(
+        [current.manifest.generation, names[1], names[2], "f".repeat(64)].toSorted((left, right) =>
+          left.localeCompare(right),
+        ),
+      );
+      expect(await fs.readFile(path.join(root, "sentinel"), "utf8")).toBe("outside");
+    });
   });
 });

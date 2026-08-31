@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 
 type CodeModeBridgeMethod =
@@ -72,11 +73,11 @@ export type CodeModeSettlementMode =
 
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
-export type CodeModeWorkerThreadResult =
+type CodeModeWorkerOutcome<Output, Value> =
   | {
       status: "completed";
-      value: unknown;
-      output: unknown[];
+      value: Value;
+      output: Output;
     }
   | {
       status: "waiting";
@@ -84,7 +85,7 @@ export type CodeModeWorkerThreadResult =
       pendingRequests: PendingBridgeRequest[];
       canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
-      output: unknown[];
+      output: Output;
     }
   | {
       status: "failed";
@@ -97,5 +98,11 @@ export type CodeModeWorkerThreadResult =
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
-      output: unknown[];
+      output: Output;
     };
+
+export type CodeModeVmResult = CodeModeWorkerOutcome<unknown[], unknown>;
+export type CodeModeWorkerThreadResult = CodeModeWorkerOutcome<
+  CodeModeOutputSource,
+  CodeModeJsonSource
+>;

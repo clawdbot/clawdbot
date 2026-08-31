@@ -206,6 +206,32 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    A custom interactive auth method that mints a static token or API key can
+    request protected persistence on its returned profile:
+
+    ```typescript
+    return {
+      profiles: [
+        {
+          profileId: "acme-ai:device",
+          credential: { type: "token", provider: "acme-ai", token },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "ACME_AI_TOKEN",
+          },
+        },
+      ],
+    };
+    ```
+
+    OpenClaw keeps the inline value only while staged validation runs. At the
+    final persistence boundary it writes the value to the protected local store
+    and saves a `tokenRef` or `keyRef` in the auth profile. `namePrefix` must be
+    an uppercase environment-style name. OpenClaw adds a stable suffix derived
+    from the provider and final profile id so multiple profiles remain separate.
+    Use this only for provider-minted static credentials, not rotating OAuth
+    credentials or values already supplied as SecretRefs.
+
     ### Live model discovery
 
     If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -368,6 +394,31 @@ catalog, API-key auth, and dynamic model resolution.
     and pass a provider-specific `readRows` / `readModelId` only when the
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
+
+    For a separate authoritative metadata feed, the same
+    `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
+    each entry pairs a runtime model with its lifecycle status.
+    `projectUpstreamProviderCatalogSnapshot` rebuilds that snapshot from a
+    trusted seed and accepted upstream rows, dropping withdrawn upstream-only
+    models. `projectProviderCatalogSnapshotRows` intersects advertised IDs with
+    active snapshot entries, deduplicating in endpoint order;
+    `listProviderCatalogSnapshotEntries` projects the same lifecycle facts for
+    catalog consumers. Keep seed lifecycle policy and model-specific decoration
+    in the owning plugin. Derive static fallback eligibility after refreshing
+    metadata so the first failed or fully filtered discovery uses current status.
+    Public metadata never establishes account entitlement or expands the
+    credential scope of discovery.
+
+    The same subpath exposes `normalizeOpenRouterModelPricing(pricing)` for
+    native OpenRouter pricing objects. It converts per-token rates and static
+    prompt-length overrides into a complete per-million cost schedule, without
+    network access or prices from another source. Overrides apply strictly above
+    `min_prompt_tokens`, counting uncached input, cache reads, and cache writes.
+    Matching entries apply in source order: later entries win per price key,
+    including at equal thresholds; omitted keys inherit the native base or an
+    earlier matching entry. Cache rates absent from the base default to zero.
+    Invalid effective token rates return `undefined`. Entries with time-based or
+    unknown conditions are skipped; other known charge dimensions are ignored.
 
     When `ctx.providerIds` is present, it contains the normalized provider
     identities selected for that catalog owner. Return `null` before resolving
@@ -726,6 +777,7 @@ catalog, API-key auth, and dynamic model resolution.
 
       Runtime fallback notes:
 
+      - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
       - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
@@ -787,9 +839,21 @@ catalog, API-key auth, and dynamic model resolution.
 
         Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
         plugins share capped error-body reads, JSON error parsing, and
-        request-id suffixes.
+        request-id suffixes. Pass `{ requestHeaders: headers }` as its third
+        argument when requests carry credentials: this redacts reflected header
+        values before error details and metadata are retained. Pass the same
+        option to `readProviderJsonResponse(...)` to omit unsafe parser excerpts.
+        For provider-specific failure payloads, use
+        `redactProviderResponseErrorText(text, headers)` or the bounded
+        `readProviderResponseErrorText(response, limitBytes, headers)` helper
+        from the same SDK entrypoint.
       </Tab>
       <Tab title="Realtime transcription">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeTranscriptionProviders(cfg, providerIds)`. This discovers
+        providers named in plugin-local config without broadening the active
+        registry or bypassing plugin enablement and allow/deny policy.
+
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` - the shared
         helper handles proxy capture, reconnect backoff, close flushing, ready
         handshakes, audio queueing, and close-event diagnostics. Your plugin
@@ -838,6 +902,14 @@ catalog, API-key auth, and dynamic model resolution.
         compatible transcription APIs.
       </Tab>
       <Tab title="Realtime voice">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
+        ordinary catalog discovery; per-call candidates do not change that catalog.
+        Automatic realtime voice and Voice Call transcription selection uses declared alias config as
+        defaults, with earlier aliases preferred and canonical values taking precedence.
+        An explicitly selected alias still overrides canonical config without inheriting
+        settings from other aliases.
+
         ```typescript
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",
@@ -1106,6 +1178,21 @@ catalog, API-key auth, and dynamic model resolution.
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
         required.
+
+        Search providers using `openclaw/plugin-sdk/provider-web-search` should
+        resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and
+        pass that value to both `readCachedSearchPayload(cacheKey, ttlMs)` and
+        `writeCachedSearchPayload(cacheKey, payload, ttlMs)`. A zero TTL bypasses
+        reads and writes; a positive TTL bounds entry age without extending its
+        original expiry. Reads return a payload marked `cached: true`, or
+        `undefined` on a miss. The reader's `ttlMs` argument is optional:
+        existing one-argument calls continue to use the stored expiry alone.
+
+        Both tool definitions accept `execute(args, context?)`, where the optional
+        context carries `signal?: AbortSignal`. Forward that signal to network
+        requests and check cancellation after asynchronous work. Existing
+        one-argument implementations remain valid; OpenClaw rejects late fetch
+        results after cancellation before publishing them to its fetch cache.
       </Tab>
     </Tabs>
 

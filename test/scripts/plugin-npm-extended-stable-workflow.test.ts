@@ -165,13 +165,13 @@ describe("plugin npm extended-stable workflow", () => {
       workflow().jobs?.preview_plugins_npm,
       "Validate ref is on a trusted publish branch",
     );
-    expect(trusted.run).toContain("extended-stable/${release_year}.${release_month}.33");
-    expect(trusted.run).toContain("exact 40-character source SHA");
     expect(trusted.run).toContain(
-      '[[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]]',
+      'extended_branch = f"extended-stable/{version.group(1)}.{version.group(2)}.33"',
     );
+    expect(trusted.run).toContain("exact 40-character source SHA");
+    expect(trusted.run).toContain('os.environ["WORKFLOW_REF"] == f"refs/heads/{extended_branch}"');
     expect(trusted.run).toContain(
-      '[[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]',
+      'exact_ref_match(\n        "HEAD",\n        f"refs/remotes/origin/{extended_branch}"',
     );
   });
 
@@ -179,7 +179,8 @@ describe("plugin npm extended-stable workflow", () => {
     const preview = workflow().jobs?.preview_plugins_npm;
     const previewSteps = preview?.steps ?? [];
     const trusted = step(preview, "Validate ref is on a trusted publish branch");
-    expect(previewSteps.slice(0, 6).map((candidate) => candidate.name)).toEqual([
+    expect(previewSteps.slice(0, 7).map((candidate) => candidate.name)).toEqual([
+      "Prepare Git owner",
       "Checkout",
       "Checkout trusted preflight tooling",
       "Resolve checked-out ref",
@@ -188,7 +189,7 @@ describe("plugin npm extended-stable workflow", () => {
       "Setup Node environment",
     ]);
     const trustedIndex = previewSteps.indexOf(trusted);
-    expect(trustedIndex).toBe(4);
+    expect(trustedIndex).toBe(5);
     for (const candidate of previewSteps.slice(0, trustedIndex)) {
       expect(candidate.uses?.startsWith("./"), candidate.name).not.toBe(true);
       expect(candidate.run ?? "", candidate.name).not.toMatch(/\b(?:bun|npm|pnpm)\b/u);
@@ -220,12 +221,12 @@ describe("plugin npm extended-stable workflow", () => {
       WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(trusted.run).toContain(
-      '[[ "${TRUSTED_PUBLISHER_PREFLIGHT}" == "true" && "${PREFLIGHT_ONLY}" != "true" ]]',
+      'if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:',
     );
     expect(trusted.run).toContain("trusted_publisher_preflight requires preflight_only=true");
-    expect(trusted.run).toContain('[[ ! "${SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]');
+    expect(trusted.run).toContain('re.fullmatch(r"[0-9a-fA-F]{40}", source_ref)');
     expect(trusted.run).toContain(
-      '[[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]',
+      'exact_ref_match(\n        "HEAD",\n        f"{source_ref}^{{commit}}"',
     );
     expect(trusted.run).toContain(
       "Plugin npm preflight must not include a release publish parent run tuple.",
@@ -233,9 +234,7 @@ describe("plugin npm extended-stable workflow", () => {
     const preflightBranchRejection = trusted.run?.indexOf(
       "Plugin npm preflight target must be reachable from main or release/*.",
     );
-    const tideclawBranch = trusted.run?.indexOf(
-      'if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/',
-    );
+    const tideclawBranch = trusted.run?.indexOf('r"refs/heads/tideclaw/alpha/');
     expect(preflightBranchRejection).toBeGreaterThan(-1);
     expect(tideclawBranch).toBeGreaterThan(preflightBranchRejection ?? Number.MAX_SAFE_INTEGER);
   });
@@ -308,8 +307,14 @@ describe("plugin npm extended-stable workflow", () => {
     expect(download.with?.name).toBe(
       "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
     );
+    const sourceRead = step(verify, "Read exact npm preflight source package");
+    expect(sourceRead.run).toContain("f\"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json\"");
+    expect(sourceRead.run).toContain("timeout=120");
+    expect(sourceRead.run).toContain('errors="surrogateescape"');
     const readback = step(verify, "Validate npm preflight artifact readback");
-    expect(readback.run).toContain('git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json"');
+    expect(readback.run).not.toMatch(/(?:^|\s)git (?:fetch|show)\b/mu);
+    expect(readback.run).toContain("unique_by(.id)");
+    expect(readback.run).not.toContain("unique_by(.name)");
     expect(readback.run).toContain("Expected exactly one live package artifact named");
     expect(readback.run).toContain('crypto.createHash("sha256")');
     expect(readback.run).toContain('crypto.createHash("sha512")');
@@ -445,17 +450,16 @@ describe("plugin npm extended-stable workflow", () => {
     expect(pluginManifest.id).toBe("meta");
   });
 
-  it("bounds external git fetch and npm publish operations", () => {
+  it("owns external Git while retaining the npm publish deadline", () => {
     const source = readFileSync(workflowPath, "utf8");
-    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
     const npmPublishLines = source
       .split("\n")
       .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
 
-    expect(gitFetchLines).toHaveLength(5);
-    expect(
-      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
-    ).toBe(true);
+    expect(source).not.toMatch(
+      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
+    );
+    expect(source.match(/timeout=120/gu)).toHaveLength(5);
     expect(npmPublishLines).toEqual([
       '            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \\',
     ]);
@@ -491,6 +495,26 @@ describe("plugin npm extended-stable workflow", () => {
     expect(bootstrap.run).toContain("--ignore-scripts");
     expect(bootstrap.run).not.toContain("bash scripts/plugin-npm-publish.sh");
 
+    const resolveEvidence = step(
+      parsed.jobs?.publish_plugins_npm,
+      "Resolve immutable npm publication artifact",
+    );
+    expect(resolveEvidence.run).toContain("producer_attempt");
+    expect(resolveEvidence.run).toContain("last.producer_attempt");
+    expect(resolveEvidence.run).toContain("--connect-timeout 10");
+    expect(resolveEvidence.run).toContain("--max-time 120");
+    expect(resolveEvidence.run).toContain("actions/artifacts/${artifact_id}/zip");
+    expect(resolveEvidence.run).toContain("node scripts/release-tooling-identity.mjs verify");
+    expect(resolveEvidence.run).toContain('--workflow-ref "$WORKFLOW_HEAD_BRANCH"');
+    expect(resolveEvidence.run).toContain('--workflow-full-ref "$WORKFLOW_REF"');
+    expect(resolveEvidence.run).toContain('--workflow-sha "$WORKFLOW_SHA"');
+    expect(resolveEvidence.run).toContain('--release-publish-run-id "$RELEASE_PUBLISH_RUN_ID"');
+    const sourceRead = step(
+      parsed.jobs?.publish_plugins_npm,
+      "Read exact npm publication source package",
+    );
+    expect(sourceRead.run).toContain("timeout=120");
+    expect(sourceRead.run).toContain('errors="surrogateescape"');
     const consume = step(
       parsed.jobs?.publish_plugins_npm,
       "Consume immutable npm publication evidence",
@@ -498,20 +522,11 @@ describe("plugin npm extended-stable workflow", () => {
     expect(consume.run).toContain("node scripts/plugin-publication-artifact.mjs verify");
     expect(consume.run).toContain("--run-state-policy same-run-producer-success");
     expect(consume.run).toContain("producer_attempt");
-    expect(consume.run).toContain("last.producer_attempt");
     expect(consume.run).toContain(
       '--producer-job-name "Preflight plugin npm package (${PACKAGE_NAME})"',
     );
     expect(consume.run).toContain("--workflow-jobs-metadata");
     expect(consume.run).toContain("--source-package-json-sha256");
-    expect(consume.run).toContain("--connect-timeout 10");
-    expect(consume.run).toContain("--max-time 120");
-    expect(consume.run).toContain("actions/artifacts/${artifact_id}/zip");
-    expect(consume.run).toContain("node scripts/release-tooling-identity.mjs verify");
-    expect(consume.run).toContain('--workflow-ref "$WORKFLOW_HEAD_BRANCH"');
-    expect(consume.run).toContain('--workflow-full-ref "$WORKFLOW_REF"');
-    expect(consume.run).toContain('--workflow-sha "$WORKFLOW_SHA"');
-    expect(consume.run).toContain('--release-publish-run-id "$RELEASE_PUBLISH_RUN_ID"');
     expect(
       step(parsed.jobs?.publish_plugins_npm, "Checkout trusted publication tooling").with?.ref,
     ).toBe("${{ github.workflow_sha }}");

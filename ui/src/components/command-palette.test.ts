@@ -134,15 +134,26 @@ function findPaletteOption(palette: CommandPalette, label: string, exact = false
 
 describe("CommandPalette lifecycle", () => {
   let restoreDialogPolyfill: () => void;
+  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
     vi.useFakeTimers();
     restoreDialogPolyfill = installDialogPolyfill();
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
   });
 
   afterEach(() => {
     document.body.replaceChildren();
     restoreDialogPolyfill();
+    if (scrollIntoViewDescriptor) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+    } else {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -521,6 +532,147 @@ describe("CommandPalette lifecycle", () => {
       await palette.updateComplete;
       expect(palette.querySelector('[aria-selected="true"]')).toBe(items[expectedIndex]);
     }
+  });
+
+  it.each(["retain", "navigate"])(
+    "keeps selection actionable when a chosen session disappears and returns (%s)",
+    async (interaction) => {
+      const { gateway, setConnected } = createGateway(true);
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => ({
+            ...createSessionResult("agent:main:qa-0", "Agent QA 0"),
+            count: 10,
+            sessions: Array.from(
+              { length: 10 },
+              (_, index) =>
+                createSessionResult(`agent:main:qa-${index}`, `Agent QA ${index}`).sessions[0]!,
+            ),
+          })),
+        ),
+      );
+      await enterQuery(palette, "agent");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      const session = findPaletteOption(palette, "Agent QA 9")!;
+      const sessionText = session.textContent;
+      session.dispatchEvent(new MouseEvent("mouseenter"));
+      await palette.updateComplete;
+
+      setConnected(false);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Agent QA 9")).toBeUndefined();
+      const first = palette.querySelector('[role="option"]');
+      expect(palette.querySelector('[aria-selected="true"]')).toBe(first);
+      const input = palette.querySelector("input")!;
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(first);
+      if (interaction === "navigate") {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        await palette.updateComplete;
+      }
+      const offlineSelection = palette.querySelector('[aria-selected="true"]')?.textContent;
+
+      setConnected(true);
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      const active = palette.querySelector('[aria-selected="true"]');
+      expect(active?.textContent).toEqual(
+        interaction === "retain" ? sessionText : offlineSelection,
+      );
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(palette.isOpen).toBe(false);
+      if (interaction === "retain") {
+        expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:qa-9");
+      } else {
+        expect(palette.onSelectSession).not.toHaveBeenCalled();
+        expect(palette.onNavigate).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["removed", "retained"])(
+    "resolves the selected catalog item after a shrinking refresh (%s)",
+    async (selection) => {
+      const { gateway } = createGateway(true);
+      const context = createContext(
+        gateway,
+        vi.fn(async () => null),
+      );
+      const roster = {
+        defaultId: "a",
+        mainKey: "main",
+        scope: "per-sender" as const,
+        agents: [
+          { id: "a", name: "Review Alpha" },
+          { id: "b", name: "Review Bravo" },
+          { id: "c", name: "Review Charlie" },
+        ],
+      };
+      const refresh = createDeferred<typeof roster>();
+      const ensureList = vi.fn().mockResolvedValueOnce(roster).mockReturnValueOnce(refresh.promise);
+      const { palette } = await mountPalette({
+        ...context,
+        agents: { ...context.agents, ensureList },
+      });
+      await enterQuery(palette, "review");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      vi.setSystemTime(Date.now() + 30_001);
+      const input = palette.querySelector("input")!;
+      input.value = "review ";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      for (let i = 0; i < 2; i++) {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        await palette.updateComplete;
+      }
+      expect(palette.querySelector('[aria-selected="true"]')?.textContent).toContain(
+        "Review Charlie",
+      );
+      refresh.resolve({
+        ...roster,
+        agents: selection === "removed" ? roster.agents.slice(0, 1) : roster.agents.slice(2),
+      });
+      await vi.waitFor(() => expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1));
+      await palette.updateComplete;
+      const remaining = palette.querySelector('[role="option"]');
+      expect(palette.querySelector('[aria-selected="true"]')).toBe(remaining);
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(remaining);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(palette.onNavigate).toHaveBeenCalledWith("agents", {
+        pathname: `/settings/agents/${selection === "removed" ? "a" : "c"}`,
+      });
+      expect(palette.isOpen).toBe(false);
+    },
+  );
+
+  it("distinguishes model choices with hyphenated provider and model IDs", async () => {
+    const { gateway } = createGateway(true, {
+      methods: ["models.list"],
+      request: vi.fn(async () => ({
+        models: [
+          { provider: "qa", id: "custom-model", name: "Needle Alpha" },
+          { provider: "qa-custom", id: "model", name: "Needle Bravo" },
+        ],
+      })) as GatewayBrowserClient["request"],
+    });
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => null),
+      ),
+    );
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    palette
+      .querySelector("input")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await palette.updateComplete;
+    expect(palette.querySelector('[aria-selected="true"]')?.textContent).toContain("Needle Bravo");
   });
 
   it.each(["agent:main:topic:thread", "agent:main:topic:\ud800"])(

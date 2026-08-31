@@ -7,7 +7,7 @@ import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpe
 import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
-import { createQuickReplyItems, pushMessagesLine } from "./send.js";
+import { pushMessagesLine } from "./send.js";
 
 type WireMessage = { type: string; text?: string; altText?: string };
 
@@ -365,6 +365,38 @@ describe("Row-overflow table delivery through production outbound adapter over l
     expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
   });
 
+  it("delivers every line of an oversized code block through the production outbound adapter", async () => {
+    const code = Array.from(
+      { length: 120 },
+      (_, i) => `const line${i} = ${i}; // padding pad`,
+    ).join("\n");
+    const markdown = `Header\n\n\`\`\`ts\n${code}\n\`\`\`\n\nFooter`;
+    expect(code.length).toBeGreaterThan(2000);
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:UtestCodeOverflow",
+      text: markdown,
+      payload: { text: markdown },
+      cfg: LINE_TEST_CFG,
+    });
+
+    const allMessages = collectAllWireMessages(requests);
+    const allText = allMessages
+      .filter((message) => message.type === "text" && message.text)
+      .map((message) => message.text!)
+      .join(" ");
+
+    for (const line of [0, 60, 119]) {
+      expect(allText).toContain(`const line${line} = ${line};`);
+    }
+    expect(allText).not.toContain("\n...");
+    expect(allText).toContain("Header");
+    expect(allText).toContain("Footer");
+    expect(allText.indexOf("Header")).toBeLessThan(allText.indexOf("const line0"));
+    expect(allText.indexOf("const line119")).toBeLessThan(allText.indexOf("Footer"));
+    expect(allMessages.some((message) => message.altText === "Code")).toBe(false);
+  });
+
   it("keeps rendered-code quick replies on final media on the actual LINE HTTP wire", async () => {
     const markdown = "```js\nfirst()\n```";
 
@@ -395,7 +427,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
       processLineMessage,
       chunkMarkdownText,
       pushMessagesLine,
-      createQuickReplyItems,
     });
 
     const result = await deliverLineAutoReply({

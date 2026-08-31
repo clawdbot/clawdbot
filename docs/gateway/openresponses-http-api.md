@@ -10,7 +10,9 @@ The Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
 
-Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/embeddings`, and `POST /v1/chat/completions`.
+Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, and `POST /v1/embeddings`.
+
+`POST /v1/chat/completions` is enabled separately with `gateway.http.endpoints.chatCompletions.enabled`. See [OpenAI Chat Completions](/gateway/openai-http-api).
 
 ## Authentication, security, and routing
 
@@ -84,6 +86,8 @@ Accepted for schema compatibility but ignored when building the prompt.
 Provide tools with `tools: [{ type: "function", name, description?, parameters? }]`.
 
 If the agent calls a tool, the response returns a `function_call` output item. Send a follow-up request with `function_call_output` to continue the turn.
+
+Clients that manage their own history can append `response.output` to `input`, then append new user messages or `function_call_output` items. Keep returned assistant metadata and function-call IDs, names, and arguments unchanged. Alternatively, supply `previous_response_id` and only the new input items.
 
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.
 
@@ -220,6 +224,8 @@ Set `stream: true` to receive Server-Sent Events:
 - Stream ends with `data: [DONE]`
 
 Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
+
+Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
 ## Usage
 

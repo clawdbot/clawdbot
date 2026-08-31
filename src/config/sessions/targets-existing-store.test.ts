@@ -8,7 +8,43 @@ import type { OpenClawConfig } from "../config.js";
 import { resolveExistingAgentSessionStoreTargetsSync } from "./targets.js";
 import { countMatching, createAgentSessionStores } from "./targets.test-support.js";
 
-describe("resolveExistingAgentSessionStoreTargetsSync retired store", () => {
+describe("resolveExistingAgentSessionStoreTargetsSync", () => {
+  it("validates a configured canonical SQLite target once", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const storePaths = await createAgentSessionStores(stateDir, ["main"]);
+      const agentsRoot = path.join(stateDir, "agents");
+      const sqlitePath = path.join(agentsRoot, "main", "agent", "openclaw-agent.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      const lstat = vi.spyOn(nodeFs, "lstatSync");
+      const realpath = vi.spyOn(nodeFs.realpathSync, "native");
+      syncBuiltinESMExports();
+      try {
+        expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "main")).toEqual([
+          { agentId: "main", storePath: storePaths.main },
+        ]);
+
+        expect({
+          sqliteLstat: countMatching(lstat.mock.calls, ([candidate]) => candidate === sqlitePath),
+          sqliteRealpath: countMatching(
+            realpath.mock.calls,
+            ([candidate]) => candidate === sqlitePath,
+          ),
+          rootRealpath: countMatching(
+            realpath.mock.calls,
+            ([candidate]) => candidate === agentsRoot,
+          ),
+        }).toEqual({ sqliteLstat: 1, sqliteRealpath: 1, rootRealpath: 1 });
+      } finally {
+        lstat.mockRestore();
+        realpath.mockRestore();
+        syncBuiltinESMExports();
+      }
+    });
+  });
+
   it("does not resolve unrelated registered store identities", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");

@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./desktop-panel.ts";
 
 type DesktopPanelElement = HTMLElement & {
   available: boolean;
+  documentMode: boolean;
   client: GatewayBrowserClient | null;
   desktopClientFactory: () => {
     connect(options: { onConnect: () => void }): Promise<{ disconnect(): void }>;
@@ -15,6 +17,8 @@ type DesktopPanelElement = HTMLElement & {
   embedded: boolean;
   handleToggleRequest(event: Event): void;
   presented: boolean;
+  requestedSource: string | null;
+  sessionKey: string | null;
   renderRoot: DocumentFragment;
   updateComplete: Promise<unknown>;
 };
@@ -61,6 +65,161 @@ describe("embedded desktop panel presentation", () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
+  });
+
+  it("follows the session desktop and retires its connection before resolving a new placement", async () => {
+    const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
+    let refresh: Promise<void> | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        await refresh;
+        return { environments: [desktopEnvironment, replacement] };
+      }
+      return {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=session",
+        expiresAtMs: 60_000,
+        control: false,
+      };
+    });
+    const disconnect = vi.fn();
+    const connect = vi.fn(async (options: { onConnect: () => void }) => {
+      options.onConnect();
+      return { disconnect };
+    });
+    const panel = createPanel();
+    panel.client = { gatewayUrl: "ws://gateway.test", request } as unknown as GatewayBrowserClient;
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.sessionKey = "agent:main:cloud";
+    panel.requestedSource = desktopEnvironment.id;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+
+    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("desktop.observe", {
+      source: { kind: "environment", environmentId: desktopEnvironment.id },
+      control: false,
+    });
+
+    const nextInventory = createDeferred();
+    refresh = nextInventory.promise;
+    panel.requestedSource = replacement.id;
+    await panel.updateComplete;
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    nextInventory.resolve();
+    refresh = undefined;
+    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenLastCalledWith("desktop.observe", {
+      source: { kind: "environment", environmentId: replacement.id },
+      control: false,
+    });
+
+    panel.requestedSource = null;
+    await panel.updateComplete;
+    await settleTasks();
+    expect(disconnect).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
+  });
+
+  it("keeps focused session updates current across control changes and overlapping lookups", async () => {
+    const sessionKey = "agent:main:focused";
+    const active = {
+      key: sessionKey,
+      kind: "direct",
+      placement: { state: "active", environmentId: desktopEnvironment.id },
+    };
+    const reclaimed = { ...active, placement: { state: "reclaimed" } };
+    let sessionRead: Promise<unknown> | undefined;
+    let listener: GatewayEventListener = () => {
+      throw new Error("expected a focused session listener");
+    };
+    const unsubscribe = vi.fn();
+    const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      if (method === "sessions.describe") {
+        return sessionRead ?? { session: active };
+      }
+      return {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=focused",
+        expiresAtMs: 60_000,
+        control: params?.control ?? false,
+      };
+    });
+    const disconnect = vi.fn();
+    const connect = vi.fn(async (options: { onConnect: () => void }) => {
+      options.onConnect();
+      return { disconnect };
+    });
+    const panel = createPanel();
+    panel.client = {
+      gatewayUrl: "ws://gateway.test",
+      request,
+      addEventListener: (next: GatewayEventListener) => {
+        listener = next;
+        return unsubscribe;
+      },
+    } as unknown as GatewayBrowserClient;
+    panel.available = true;
+    panel.documentMode = true;
+    panel.sessionKey = sessionKey;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    const descriptions = () =>
+      request.mock.calls.filter(([method]) => method === "sessions.describe");
+    const changed = (key = sessionKey) =>
+      listener({ type: "event", event: "sessions.changed", payload: { sessionKey: key } });
+
+    changed("agent:main:unrelated");
+    await settleTasks();
+    expect(descriptions()).toHaveLength(1);
+    changed();
+    await waitForFast(() => expect(descriptions()).toHaveLength(2));
+    await settleTasks();
+    expect(disconnect).not.toHaveBeenCalled();
+
+    const pending = createDeferred<unknown>();
+    sessionRead = pending.promise;
+    changed();
+    await waitForFast(() => expect(descriptions()).toHaveLength(3));
+    const control = panel.renderRoot.querySelector<HTMLButtonElement>(
+      'button[aria-label="Take control"]',
+    );
+    if (!control) {
+      throw new Error("expected focused Desktop control button");
+    }
+    control.click();
+    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    pending.resolve({ session: reclaimed });
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
+    );
+    expect(disconnect).toHaveBeenCalledTimes(2);
+
+    sessionRead = undefined;
+    changed();
+    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
+    const stale = createDeferred<unknown>();
+    sessionRead = stale.promise;
+    changed();
+    await waitForFast(() => expect(descriptions()).toHaveLength(5));
+    sessionRead = Promise.resolve({ session: reclaimed });
+    changed();
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
+    );
+    stale.resolve({ session: active });
+    await settleTasks();
+    expect(connect).toHaveBeenCalledTimes(3);
+    panel.remove();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it("keeps a hidden embedded mount dormant even when the standalone dock was open", async () => {

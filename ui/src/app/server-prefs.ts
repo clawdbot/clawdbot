@@ -495,6 +495,23 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
     if (!pendingPrefs) {
       return;
     }
+    const localOnlyKeys = SYNCED_PREF_KEYS.filter(
+      (key) =>
+        pendingPrefs?.[key] !== undefined &&
+        SYNCED_PREFS[key].configSync === false &&
+        !(pushProfileId && pushCanWrite),
+    );
+    if (localOnlyKeys.length) {
+      if (!writer.state.connected) {
+        return;
+      }
+      // Profile-only preferences must never fall through to config.patch,
+      // including intent queued before this connection's identity was known.
+      cancelPendingKeys(pendingScope, localOnlyKeys);
+      updateRetainedLocalKeys(pendingScope, localOnlyKeys, true);
+      pushAfterCommit?.({ needsRefresh: false, retainedLocal: true });
+      continue;
+    }
     if (pushProfileId && pendingPrefs.theme === "custom") {
       // Offline-queued custom theme reaching a profile connection: browser-local
       // by contract, so retain it here instead of syncing it to the profile.
@@ -666,6 +683,9 @@ export function pushServerUiPrefs(
   const keys = SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(prefs, key));
   const blockedKeys = writer.state.connected
     ? keys.filter((key) => {
+        if (SYNCED_PREFS[key].configSync === false && !pushProfileId) {
+          return true;
+        }
         if (pushProfileId && isAppearancePref(key)) {
           // Imported custom palettes are browser-local by contract; a profile
           // must never carry a theme another browser cannot render.

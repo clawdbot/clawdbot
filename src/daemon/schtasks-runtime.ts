@@ -31,7 +31,10 @@ import {
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
+import {
+  createServiceRuntimeInspectionFailure,
+  type GatewayServiceRuntime,
+} from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -151,7 +154,7 @@ function createStartupEntryRemovalError(error: unknown): Error {
   );
 }
 
-export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
+async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
   const runtime = await readScheduledTaskRuntime(env).catch(() => null);
   if (runtime?.status !== "running") {
     return false;
@@ -538,7 +541,7 @@ export async function readScheduledTaskRuntime(
     if (await isStartupEntryInstalled(env)) {
       return resolveFallbackRuntime(env);
     }
-    return { status: "unknown", detail: String(err) };
+    return createServiceRuntimeInspectionFailure(err);
   }
   const taskName = resolveTaskName(env);
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
@@ -548,11 +551,9 @@ export async function readScheduledTaskRuntime(
     }
     const detail = (res.stderr || res.stdout).trim();
     const missing = probeScheduledTaskExists(taskName) === false;
-    return {
-      status: missing ? "stopped" : "unknown",
-      ...(!missing && detail ? { detail } : {}),
-      missingUnit: missing,
-    };
+    return missing
+      ? { status: "stopped", missingUnit: true }
+      : { ...createServiceRuntimeInspectionFailure(detail), missingUnit: false };
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);

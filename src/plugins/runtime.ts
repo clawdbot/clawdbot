@@ -126,14 +126,19 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
-  if (!state.activeRegistry) {
+  const registry = asPluginRegistry(state.activeRegistry);
+  if (!registry) {
     return;
   }
+  const version = state.activeVersion;
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    const registry = asPluginRegistry(state.activeRegistry);
-    if (registry) {
-      dispatchPluginAgentEventSubscriptions({ registry, event });
-    }
+    dispatchPluginAgentEventSubscriptions({
+      registry,
+      event,
+      // The registry object can become active again after rollback. Its version
+      // keeps already-dispatched callback authority bound to this exact cutover.
+      isLive: () => state.activeRegistry === registry && state.activeVersion === version,
+    });
   });
 }
 
@@ -259,22 +264,26 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }
 
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  return (
+    state.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    getActivePluginRegistry()
+  );
+}
+
 export function requireActivePluginRegistry(): PluginRegistry {
-  if (state.registrationContext) {
-    return state.registrationContext.registry;
+  const registry = getPluginRegistryForContext();
+  if (registry) {
+    return registry;
   }
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  if (scopedRegistry) {
-    return scopedRegistry;
-  }
-  if (!state.activeRegistry) {
-    state.activeRegistry = createEmptyPluginRegistry();
-    markPluginRegistryActive(state.activeRegistry);
-    state.activeVersion += 1;
-    settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
-    syncPluginAgentEventBridge();
-  }
-  return asPluginRegistry(state.activeRegistry)!;
+  state.activeRegistry = createEmptyPluginRegistry();
+  markPluginRegistryActive(state.activeRegistry);
+  state.activeVersion += 1;
+  settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
+  syncPluginAgentEventBridge();
+  return state.activeRegistry;
 }
 
 /** Binds unchanged direct SDK facades to the registry currently running synchronous register(). */

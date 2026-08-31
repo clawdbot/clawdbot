@@ -15,8 +15,13 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   createModelGenerationFixture,
@@ -2521,6 +2526,43 @@ describe("image tool implicit imageModel config", () => {
       expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
     });
   });
+
+  it("resolves a producer-staged bare upload handle", async () => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
+      await fs.mkdir(path.dirname(path.join(sandboxRoot, stagedPath)), { recursive: true });
+      await fs.writeFile(
+        path.join(sandboxRoot, stagedPath),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      const fetch = stubMinimaxOkFetch();
+      const sandbox = {
+        root: sandboxRoot,
+        bridge: createHostSandboxFsBridge(sandboxRoot),
+        stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+      };
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+        sandbox,
+      });
+
+      const res = await tool.execute("t1", { path: "file_upload" });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(res.details).toMatchObject({ rewrittenFrom: "file_upload" });
+
+      await fs.writeFile(
+        path.join(sandboxRoot, "file_upload"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+      const direct = await tool.execute("t2", { path: "file_upload" });
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(direct.details).not.toHaveProperty("rewrittenFrom");
+    });
+  });
 });
 
 describe("image tool data URL support", () => {
@@ -2700,25 +2742,28 @@ describe("image tool data URL support", () => {
 
 describe("image tool MiniMax VLM routing", () => {
   const priorFetch = global.fetch;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "minimax-vlm", applyEnv: false });
     installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     global.fetch = priorFetch;
     imageProviderHarness.reset();
     testing.setProviderDepsForTest();
+    await state.cleanup();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
+    const agentDir = state.agentDir();
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
-    return { fetch: fetchMock, tool };
+    return { fetch: fetchMock, tool, cfg, agentDir };
   }
 
   it("accepts path for single-image requests and calls minimaxUnderstandImage", async () => {
@@ -2843,14 +2888,39 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
-    const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
+    const { tool, cfg, agentDir } = await createMinimaxVlmFixture({
+      status_code: 1004,
+      status_msg: "bad key",
+    });
+    const generation = createModelGenerationFixture({
+      agentDir,
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      label: "minimax-vlm",
+      provider: "minimax",
+      requestProvider: "minimax",
+    });
+    const classifyFailoverReason = vi.fn(() => undefined);
+    expectDefined(
+      generation.pluginRegistry.providers[0],
+      "MiniMax provider registration",
+    ).provider.classifyFailoverReason = classifyFailoverReason;
 
+    // Embedded tools inherit this registry scope before provider error classification.
     await expect(
-      tool.execute("t1", {
-        prompt: "Describe the image.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      }),
+      withPluginRuntimeGenerationScope(generation.preparedModelRuntime, () =>
+        tool.execute("t1", {
+          prompt: "Describe the image.",
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ),
     ).rejects.toThrow(/MiniMax VLM API error/i);
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+        errorMessage: "MiniMax VLM API error (1004): bad key.",
+      }),
+    );
   });
 });
 
@@ -3188,43 +3258,50 @@ describe("image compression policy", () => {
   });
 
   it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
-    const provider = "prepared-image-provider";
-    const model = "prepared-image-model";
-    const cfg = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      config: cfg,
-      label: "image-a",
-      provider,
-      requestProvider: provider,
-      modelId: model,
-      runtimeAugment: true,
-      staticImagePolicy: {
-        maxBytes: 1_000_000,
-        preferredSidePx: 1_280,
-        tokenMode: "detail",
-      },
-      runtimeImagePolicy: { maxSidePx: 1_440 },
-    });
-    const generationB = createModelGenerationFixture({
-      config: cfg,
-      label: "image-b",
-      provider,
-      requestProvider: provider,
-      modelId: model,
-      runtimeAugment: true,
-      staticImagePolicy: {
-        maxBytes: 2_000_000,
-        preferredSidePx: 2_560,
-        tokenMode: "provider",
-      },
-      runtimeImagePolicy: { maxSidePx: 2_880 },
-    });
-    installImageUnderstandingProviderDeps([], {
-      useDefaultResolveModelAsync: true,
-    });
-    publishCurrentModelGeneration(generationB);
-
+    const state = await createOpenClawTestState({ label: "image-model-generation" });
     try {
+      const provider = "prepared-image-provider";
+      const model = "prepared-image-model";
+      const cfg = {} satisfies OpenClawConfig;
+      const generationA = createModelGenerationFixture({
+        agentDir: state.agentDir("prepared"),
+        workspaceDir: state.workspaceDir,
+        config: cfg,
+        label: "image-a",
+        provider,
+        requestProvider: provider,
+        modelId: model,
+        runtimeAugment: true,
+        staticImagePolicy: {
+          maxBytes: 1_000_000,
+          preferredSidePx: 1_280,
+          tokenMode: "detail",
+        },
+        runtimeImagePolicy: { maxSidePx: 1_440 },
+      });
+      const generationB = createModelGenerationFixture({
+        agentDir: state.agentDir("prepared"),
+        workspaceDir: state.workspaceDir,
+        config: cfg,
+        label: "image-b",
+        provider,
+        requestProvider: provider,
+        modelId: model,
+        runtimeAugment: true,
+        staticImagePolicy: {
+          maxBytes: 2_000_000,
+          preferredSidePx: 2_560,
+          tokenMode: "provider",
+        },
+        runtimeImagePolicy: { maxSidePx: 2_880 },
+      });
+      installImageUnderstandingProviderDeps([], {
+        useDefaultResolveModelAsync: true,
+      });
+      publishCurrentModelGeneration(generationB);
+
+      // Compression deliberately omits agentDir: real resolution uses the default
+      // agent, not the distinct "prepared" agent stored in the snapshot.
       await expect(
         testing.resolveImageCompressionPolicy({
           cfg,
@@ -3248,6 +3325,7 @@ describe("image compression policy", () => {
       expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
     } finally {
       resetModelGenerationFixtureState();
+      await state.cleanup();
     }
   });
 

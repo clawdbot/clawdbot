@@ -110,7 +110,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
   const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
-    provider: input.providerOwner?.id,
+    providerOwner: input.providerOwner,
   });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||
@@ -289,6 +289,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     lastAssistant: input.attemptAssistant,
     config: input.runParams.config,
     sessionKey: input.runParams.sessionKey ?? input.runParams.sessionId,
+    agentId: input.runParams.agentId,
     authFailure,
     rateLimitFailure,
     billingFailure,

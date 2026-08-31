@@ -15,7 +15,6 @@ import {
   isSecretRefObject,
   jsonValue,
   renderFieldRow,
-  renderRestoreDefaultButton,
   renderSchemaDefaultDescription,
   renderSensitiveToggleButton,
   wrapSensitiveControl,
@@ -485,14 +484,6 @@ export function renderTextInput(
         </span>
       `
     : wrappedInput;
-  const control = html`
-    ${presentedInput}
-    ${renderRestoreDefaultButton({
-      ...params,
-      disabled: disabled || effectiveRedacted,
-    })}
-  `;
-
   return renderFieldRow({
     label,
     help,
@@ -500,7 +491,7 @@ export function renderTextInput(
     defaultDescription: effectiveRedacted ? nothing : renderSchemaDefaultDescription(schema, value),
     tags,
     showLabel,
-    control,
+    control: presentedInput,
   });
 }
 
@@ -623,7 +614,6 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     >
       +
     </button>
-    ${renderRestoreDefaultButton(params)}
   `;
 
   return renderFieldRow({
@@ -699,7 +689,7 @@ export function renderSelect(
       >
         ${schema.default !== undefined
           ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : t("configForm.select")}
+          : (hintForPath(path, hints)?.placeholder ?? t("configForm.select"))}
       </option>
       ${canSelectNull
         ? html`

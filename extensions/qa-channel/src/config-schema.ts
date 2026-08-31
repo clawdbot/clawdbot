@@ -27,6 +27,7 @@ const QaChannelAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     responsePrefix: z.string().optional(),
     baseUrl: z.string().url().optional(),
     botUserId: z.string().optional(),

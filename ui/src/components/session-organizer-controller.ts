@@ -23,6 +23,7 @@ import {
   storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
+  storeSidebarSessionsHideEmptyGroups,
   storeSidebarSessionsShowCron,
   storeSidebarSessionsShowPreview,
   storeSidebarSessionsShowSystem,
@@ -766,12 +767,21 @@ export class SessionOrganizerController {
     }
     this.host.sessionsStatusFilter = statusFilter;
     this.host.clearSessionSelection();
-    this.host.sessionData.resetForStatusFilter(statusFilter);
+    this.host.sessionData.resetSessionList();
     try {
       storeSidebarSessionStatusFilter(statusFilter);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }
     void this.host.sessionData.refreshSidebarSessions();
+  }
+
+  setSessionsHideEmptyGroups(hide: boolean) {
+    this.host.sessionsHideEmptyGroups = hide;
+    try {
+      storeSidebarSessionsHideEmptyGroups(hide);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
   }
 }

@@ -64,6 +64,8 @@ profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
 
 In `--json` mode, invalid `--port`, `--limit`, `--interval`, or `--max-bytes` values and conflicting `--url`/`--port` options produce the standard CLI failure envelope on stdout: `{"ok":false,"error":{"type":"cli_error","message":"..."}}`. Terminal log-fetch failures instead emit `{"type":"error",...}` on stderr. Both exit with status `1`.
 
+In text mode, terminal log-fetch failures print the redacted error reason, selected Gateway connection details, and a doctor hint on stderr. A received RPC rejection is shown as the error, rather than reported as a Gateway reachability failure.
+
 ## Related
 
 - [Logging overview](/logging)

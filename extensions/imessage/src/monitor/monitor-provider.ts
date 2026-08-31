@@ -795,16 +795,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
 
     if (decision.kind === "drop") {
-      // Record echo/reflection drops so the rate limiter can detect sustained loops.
-      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate. "from me" is excluded: every own-send
-      // (agent replies, multi-chunk sends, operator phone traffic) produces a
-      // from-me row, so counting it lets a normal outbound burst trip the limiter
-      // and silently suppress the next legitimate inbound message.
+      // Count reflected agent content, not ordinary own-send or self-chat dedupe
+      // rows: counting those benign drops mutes legitimate conversation bursts.
       const isLoopDrop =
-        decision.reason === "echo" ||
-        decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content";
+        decision.reason === "echo" || decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }

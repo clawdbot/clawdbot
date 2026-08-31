@@ -11,6 +11,36 @@ afterEach(() => {
 });
 
 describe("session workspace path actions", () => {
+  it("renders file-shaped placeholders while the initial workspace list loads", async () => {
+    const workspace = {
+      collapsed: false,
+      sessionKey: "agent:main:workspace",
+      list: null,
+      loading: true,
+      error: null,
+      activeId: null,
+      dock: "right" as const,
+      narrowLayout: false,
+      onToggleCollapsed: vi.fn(),
+      onSetDock: vi.fn(),
+      onRefresh: vi.fn(),
+      onBrowsePath: vi.fn(),
+      onOpenFile: vi.fn(),
+      onSearch: vi.fn(),
+      onOpenArtifact: vi.fn(),
+    } satisfies SessionWorkspaceProps;
+    const mount = document.body.appendChild(document.createElement("div"));
+
+    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+
+    const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
+    expect(skeleton).toBeInstanceOf(HTMLElement);
+    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
+    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+    expect(mount.textContent).not.toContain("Loading session workspace");
+  });
+
   it.each(
     [
       {
@@ -82,7 +112,9 @@ describe("session workspace path actions", () => {
     await vi.waitFor(() => expect(copy!.getAttribute("aria-label")).toBe(testCase.feedback));
 
     expect(writeText).toHaveBeenCalledWith(testCase.path);
-    expect(copy!.dataset[testCase.failed ? "error" : "copied"]).toBe("1");
+    const feedback = copy!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+    expect(feedback?.textContent).toBe(testCase.feedback);
+    expect(feedback?.hidden).toBe(false);
     expect(rowClick).not.toHaveBeenCalled();
     expect(onOpenFile).not.toHaveBeenCalled();
 

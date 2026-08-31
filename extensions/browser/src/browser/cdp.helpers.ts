@@ -5,7 +5,7 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { createHash } from "node:crypto";
-import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -35,7 +35,7 @@ export { isLoopbackHost };
 export { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 export { openCdpWebSocket, withCdpSocket } from "./cdp-websocket.js";
 export type { CdpSendFn } from "./cdp-websocket.js";
-export { parseBrowserHttpUrl, redactCdpUrl };
+export { redactCdpUrl };
 
 /**
  * Returns true when the URL uses a WebSocket protocol (ws: or wss:).

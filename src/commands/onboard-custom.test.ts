@@ -1,7 +1,13 @@
 // Onboard custom tests cover custom provider prompts and API-key credential handling.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
+
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot,
+}));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -95,6 +101,11 @@ function expectOpenAiCompatResult(params: {
 }
 
 describe("promptCustomApiConfig", () => {
+  beforeEach(() => {
+    loadManifestMetadataSnapshot.mockReset();
+    loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -140,6 +151,54 @@ describe("promptCustomApiConfig", () => {
     expect(aliasPrompt?.[0].validate("Operations")).toBe(
       "Alias Operations already points to openai/ops.",
     );
+  });
+
+  it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
+    const preparedPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              aliases: {
+                latest: "modern-model",
+              },
+            },
+          },
+        },
+      },
+    ];
+    loadManifestMetadataSnapshot.mockReturnValueOnce({ plugins: preparedPlugins } as never);
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "modern-model", "custom", "Legacy"],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/latest": { alias: "Legacy" },
+          },
+        },
+      },
+    };
+    const target = {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    };
+
+    const result = await runPromptCustomApi(prompter, config, target);
+
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
+      config,
+      workspaceDir: target.workspaceDir,
+      env: process.env,
+    });
+    expect(loadManifestMetadataSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      prompter.text.mock.invocationCallOrder[0]!,
+    );
+    expect(result.config.agents?.defaults?.models?.["custom/modern-model"]?.alias).toBe("Legacy");
   });
 
   it("cancels custom provider verification response bodies", async () => {

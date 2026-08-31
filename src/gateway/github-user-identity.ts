@@ -15,6 +15,7 @@ import {
   GITHUB_REQUEST_TIMEOUT_MS,
   readBoundedResponse,
   readGitHubJsonResponse,
+  readOptionalGitHubString,
 } from "./control-ui-github-api.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
@@ -25,7 +26,7 @@ const ACCESS_ASSERTION_MAX_BYTES = 16 * 1024;
 const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
-type ResolvedGitHubUserIdentity = { accountId: number; login: string };
+type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
@@ -135,20 +136,13 @@ async function resolveGitHubUserIdentityByLogin(
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
   const accountId = payload.id;
-  const login = typeof payload.login === "string" ? normalizeGitHubLogin(payload.login) : undefined;
   if (!Number.isSafeInteger(accountId) || typeof accountId !== "number" || accountId <= 0) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid account id");
   }
-  if (!login) {
-    throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
-  }
-  return { accountId, login };
+  return parseGitHubUserIdentity(accountId, payload);
 }
 
-function resolveGitHubUserIdentityById(
-  accountId: number,
-  payload: unknown,
-): ResolvedGitHubUserIdentity {
+function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedGitHubUserIdentity {
   if (!isRecord(payload) || payload.id !== accountId) {
     throw new ControlUiGitHubError(502, "GitHub account id did not match");
   }
@@ -156,7 +150,7 @@ function resolveGitHubUserIdentityById(
   if (!login) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
   }
-  return { accountId, login };
+  return { accountId, login, name: readOptionalGitHubString(payload, "name") };
 }
 
 function retryableConnectionSync(
@@ -216,6 +210,8 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
+  /** Reuse an exact verified Access account/email binding before refreshing GitHub metadata. */
+  preferCachedIdentity?: boolean;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -241,6 +237,15 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
+    if (params.preferCachedIdentity) {
+      const cached = resolveCachedGitHubIdentity({
+        accountId: accessIdentity.accountId,
+        email: access.principal,
+      });
+      if (cached) {
+        return cached;
+      }
+    }
     let response: Response | undefined;
     let payload: unknown;
     try {
@@ -269,7 +274,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         ? error
         : new ControlUiGitHubError(502, "GitHub request failed");
     }
-    const identity = resolveGitHubUserIdentityById(accessIdentity.accountId, payload);
+    const identity = parseGitHubUserIdentity(accessIdentity.accountId, payload);
     const profile = syncGitHubIdentity({
       identity,
       authenticationAlias: { kind: "email", email: access.principal },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -107,6 +107,14 @@ describe("device worker provider", () => {
     });
     expect(repeated.leaseId).toBe(first.leaseId);
     expect(next.leaseId).not.toBe(first.leaseId);
+    const getPairedDevice = vi.fn(async () => null);
+    const listCurrentNodes = vi.fn(async () => []);
+    const disconnected = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+    const allocation = await disconnected.resolveAllocation({ device: DEVICE_ID }, "operation-1");
+    expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
+    await disconnected.destroy({ leaseId: allocation.leaseId, profile: { device: DEVICE_ID } });
+    expect(getPairedDevice).not.toHaveBeenCalled();
+    expect(listCurrentNodes).not.toHaveBeenCalled();
   });
 
   it("keeps a connected paired host available when all worker slots are occupied", async () => {

@@ -211,7 +211,11 @@ async function runEmbeddedAgentInternal(
       // Subscription-scoped claude-cli auth executes via the CLI backend;
       // resolved post-admission so dispatched runs obey the same lifecycle,
       // placement, and concurrency gates as native embedded runs.
-      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible({
+        ...params,
+        // Preserve the admitted writer claim alongside the already resolved storage identity.
+        sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+      });
       if (cliDispatched) {
         return cliDispatched;
       }
@@ -299,17 +303,19 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress,
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
-            ? acquireReadOnlyPreparedModelRuntime(preparedInput)
+            ? acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal)
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains
                 // available through the snapshot's lazy control-plane loader.
                 catalogMode: "static",
                 ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+                abortSignal: params.abortSignal,
               }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+      let preparedLeaseActive = true;
       try {
         if (
           params.pluginGeneration &&
@@ -470,11 +476,13 @@ async function runEmbeddedAgentInternal(
           withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
         return params.pluginGeneration
           ? await withPreparedModelRuntimePluginGenerationScope(
-              params.pluginGeneration,
+              preparedModelRuntimeLease.pluginGeneration,
               runWithPreparedRuntime,
+              () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
             )
           : await runWithPreparedRuntime();
       } finally {
+        preparedLeaseActive = false;
         preparedModelRuntimeLease.release();
       }
     });

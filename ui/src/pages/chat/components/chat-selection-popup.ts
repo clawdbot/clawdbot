@@ -9,8 +9,7 @@ type ChatSelectionPopupActions = {
   onAskSideChat: (selection: string) => void;
 };
 
-let activeSelectionPopup: HTMLDivElement | null = null;
-let removeDismissListeners: (() => void) | null = null;
+let activeSelectionPopup: { element: HTMLDivElement; listeners: AbortController } | null = null;
 let selectionPopupTimer: number | null = null;
 
 export function removeChatSelectionPopup() {
@@ -20,10 +19,9 @@ export function removeChatSelectionPopup() {
     window.clearTimeout(selectionPopupTimer);
     selectionPopupTimer = null;
   }
-  activeSelectionPopup?.remove();
+  activeSelectionPopup?.element.remove();
+  activeSelectionPopup?.listeners.abort();
   activeSelectionPopup = null;
-  removeDismissListeners?.();
-  removeDismissListeners = null;
 }
 
 function selectionTextWithinChatBubble(
@@ -110,7 +108,8 @@ function showChatSelectionPopup(
     ),
   );
   document.body.appendChild(popup);
-  activeSelectionPopup = popup;
+  const listeners = new AbortController();
+  activeSelectionPopup = { element: popup, listeners };
 
   const popupRect = popup.getBoundingClientRect();
   let left = selectionRect.left + selectionRect.width / 2 - popupRect.width / 2;
@@ -141,16 +140,11 @@ function showChatSelectionPopup(
   // The popup is position:fixed against a since-scrolled selection rect;
   // dismiss instead of chasing the text.
   const handleScroll = () => removeChatSelectionPopup();
-  document.addEventListener("pointerdown", handlePointerDown, true);
-  document.addEventListener("selectionchange", handleSelectionChange);
-  document.addEventListener("keydown", handleKeydown);
-  document.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-  removeDismissListeners = () => {
-    document.removeEventListener("pointerdown", handlePointerDown, true);
-    document.removeEventListener("selectionchange", handleSelectionChange);
-    document.removeEventListener("keydown", handleKeydown);
-    document.removeEventListener("scroll", handleScroll, { capture: true });
-  };
+  const { signal } = listeners;
+  document.addEventListener("pointerdown", handlePointerDown, { capture: true, signal });
+  document.addEventListener("selectionchange", handleSelectionChange, { signal });
+  document.addEventListener("keydown", handleKeydown, { signal });
+  document.addEventListener("scroll", handleScroll, { capture: true, passive: true, signal });
 }
 
 export function handleChatSelectionPointerUp(
