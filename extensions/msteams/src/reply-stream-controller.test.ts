@@ -476,6 +476,33 @@ describe("createTeamsReplyStreamController", () => {
     ).toEqual({ text: undefined, presentation: { blocks: [buttons] } });
   });
 
+  it("drops a streamed reply's select, which Teams renders as the prose it just sent", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "Which region?\n\nOptions\n- EU\n- US" });
+
+    // Teams declares selects: false, so a select degrades to a text list - and in fallback
+    // mode that list is part of the prose the stream already delivered.
+    expect(
+      ctrl.preparePayload({
+        text: "Which region?\n\nOptions\n- EU\n- US",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              placeholder: "Options",
+              options: [
+                { label: "EU", value: "eu" },
+                { label: "US", value: "us" },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("allows fallback delivery for second text segment after tool calls", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });

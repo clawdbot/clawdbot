@@ -70,6 +70,30 @@ describe("msteams reply presentation", () => {
     ]);
   });
 
+  it("still builds the card when a data-only presentation also offers controls", () => {
+    const prepared = prepareMSTeamsReplyPayload({
+      text: "Runs by region:\n- EU: 12",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Runs by region",
+            headers: ["Region", "Runs"],
+            rows: [["EU", "12"]],
+          },
+          { type: "buttons", buttons: [{ label: "Open run", value: "open" }] },
+        ],
+      },
+    });
+
+    // The authored fallback only wins when nothing interactive is left. Keeping the prose
+    // here would drop the button - the loss this whole change exists to stop.
+    expect(cardOf(prepared)?.actions).toEqual([
+      { type: "Action.Submit", title: "Open run", data: { value: "open", label: "Open run" } },
+    ]);
+  });
+
   it("keeps the producer's authored fallback for a presentation Teams cannot render", () => {
     const authored = "Runs by region:\n- EU: 12\n- US: 9";
     const prepared = prepareMSTeamsReplyPayload({
@@ -182,6 +206,7 @@ describe("msteams reply presentation", () => {
             buttons: [
               { label: "Open docs", url: "https://example.com/docs" },
               { label: "Retry", action: { type: "command", command: "/retry" } },
+              { label: "Open app", action: { type: "web-app", url: "https://example.com/app" } },
               { label: "Approve", value: "approve" },
             ],
           },
@@ -192,6 +217,7 @@ describe("msteams reply presentation", () => {
     expect(message?.card?.actions).toEqual([
       { type: "Action.OpenUrl", title: "Open docs", url: "https://example.com/docs" },
       { type: "Action.Submit", title: "Retry", data: "/retry" },
+      { type: "Action.OpenUrl", title: "Open app", url: "https://example.com/app" },
       { type: "Action.Submit", title: "Approve", data: { value: "approve", label: "Approve" } },
     ]);
   });

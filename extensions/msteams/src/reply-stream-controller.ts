@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  adaptMessagePresentationForChannel,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -21,6 +22,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { extractMessageId } from "./media-helpers.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type Maybe<T> = T | undefined;
@@ -219,7 +221,12 @@ export function createTeamsReplyStreamController(params: {
       const remainder = { ...payload, text: undefined };
       return hasOutboundReplyContent(remainder) ? remainder : undefined;
     }
-    const controls = presentation.blocks.filter(isMessagePresentationInteractiveBlock);
+    // What survives adaptation as interactive is what Teams renders natively; a select
+    // degrades to a text list here, and that list was in the prose the stream delivered.
+    const controls = adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+    }).blocks.filter(isMessagePresentationInteractiveBlock);
     const {
       presentation: _presentation,
       presentationTextMode: _presentationTextMode,
