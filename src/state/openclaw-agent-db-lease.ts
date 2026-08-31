@@ -28,6 +28,13 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
   key: "global",
 } as const;
 
+export class OpenClawAgentDatabaseLeaseActiveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenClawAgentDatabaseLeaseActiveError";
+  }
+}
+
 const maintenanceAuthority = new AsyncLocalStorage<OpenClawStateLeaseContext>();
 
 export function runWithAgentDatabaseMaintenanceAuthority<T>(
@@ -204,7 +211,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
     }, options);
     if (leaseStillExists && (!agentId || row.agent_id === agentId)) {
       const remediation = agentId ? "." : "; stop that process and rerun openclaw doctor --fix.";
-      throw new Error(
+      throw new OpenClawAgentDatabaseLeaseActiveError(
         `Agent ${row.agent_id} database is still open in another process${remediation}`,
       );
     }

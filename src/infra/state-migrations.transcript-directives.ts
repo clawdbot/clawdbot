@@ -4,6 +4,7 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
+  OpenClawAgentDatabaseLeaseActiveError,
   assertAgentDatabaseMaintenanceAuthority,
   assertNoOpenClawAgentDatabaseLeases,
 } from "../state/openclaw-agent-db-lease.js";
@@ -248,8 +249,11 @@ function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): b
   try {
     assertNoOpenClawAgentDatabaseLeases(agentId, { env });
     return false;
-  } catch {
-    return true;
+  } catch (error) {
+    if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
+      return true;
+    }
+    throw error;
   }
 }
 

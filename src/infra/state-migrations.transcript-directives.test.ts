@@ -624,6 +624,37 @@ describe("historical transcript directive migration", () => {
     expect(opened.db.isOpen).toBe(true);
   });
 
+  it("surfaces lease inspection failures from preflight", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-lease-inspection-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeases").mockImplementation(() => {
+      throw new Error("shared-state lease inspection failed");
+    });
+
+    const result = await migrateHistoricalTranscriptDirectives({ env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        `Skipped historical transcript directive migration preflight for ${databasePath}: Error: shared-state lease inspection failed`,
+      ),
+    ]);
+    const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    try {
+      expect(
+        database
+          .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
+          .get("historical-transcript-directives-v1"),
+      ).toBeUndefined();
+    } finally {
+      database.close();
+    }
+  });
+
   it("leaves canonical archives and their active writer untouched", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-current-archive-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
