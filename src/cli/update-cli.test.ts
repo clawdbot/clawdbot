@@ -4987,9 +4987,9 @@ describe("update-cli", () => {
     const tempDir = tempDirs.make("openclaw-update-staged-fail-");
     const prefix = path.join(tempDir, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
-    const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.4.20");
-    readPackageVersion.mockResolvedValue("2026.4.20");
-    primeNpmChannelTag("latest", "2026.4.25");
+    const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.7.1");
+    readPackageVersion.mockResolvedValue("2026.7.1");
+    primeNpmChannelTag("latest", "2026.8.1");
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
         const stagePrefix = argv[argv.indexOf("--prefix") + 1];
@@ -4997,15 +4997,17 @@ describe("update-cli", () => {
           throw new Error("missing stage prefix");
         }
         const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-        await writeOpenClawPackageFixture(stageRoot, "2026.4.25", {
+        await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
           entrySource: "export {};\n",
           inventory: true,
         });
-        await fs.writeFile(
-          path.join(stageRoot, "dist", "stale-runtime.js"),
-          "export {};\n",
-          "utf-8",
-        );
+        await Promise.all([
+          fs.writeFile(
+            path.join(stageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+            "pending\n",
+          ),
+          fs.writeFile(path.join(stageRoot, "dist", "stale-runtime.js"), "export {};\n", "utf-8"),
+        ]);
       }
     });
 
@@ -5014,8 +5016,13 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(doctorCommandCall()).toBeUndefined();
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(
+      commandCalls().some(
+        ([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"),
+      ),
+    ).toBe(false);
     await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-      '"version":"2026.4.20"',
+      '"version":"2026.7.1"',
     );
     const logs = getLogOutput();
     expect(logs).toContain("global install verify");
