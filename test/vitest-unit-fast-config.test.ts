@@ -91,6 +91,7 @@ describe("unit-fast vitest lane", () => {
         "src/agents/agent-tools.deferred-followup-guidance.test.ts",
         "src/test-utils/openclaw-test-state.test.ts",
         "src/utils.test.ts",
+        "src/media-generation/runtime-shared.test.ts",
       ];
       let gitLsFilesCalls = 0;
       const originalSpawnSync = childProcess.spawnSync;
@@ -101,6 +102,7 @@ describe("unit-fast vitest lane", () => {
           const stdout = [
             "src/agents/agent-tools.deferred-followup-guidance.test.ts",
             "src/hooks/frontmatter.test.ts",
+            "src/media-generation/runtime-shared.test.ts",
           ].join("\\0") + "\\0";
           return {
             pid: 0,
@@ -151,17 +153,27 @@ describe("unit-fast vitest lane", () => {
           selections.push(config.test.include);
         }
         console.log("UNIT_FAST_SELECTION_PROBE", JSON.stringify(selections));
+        const { default: unitConfig, createUnitVitestConfigWithOptions } = await import("./test/vitest/vitest.unit.config.ts?io-probe=" + Date.now());
+        const cliUnitConfig = createUnitVitestConfigWithOptions({}, {
+          argv: ["node", "vitest", "run", ...selectedTests],
+        });
+        console.log("UNIT_SELECTION_PROBE", JSON.stringify([unitConfig, cliUnitConfig].map(({ test }) => ({
+          include: test.include,
+          excluded: test.exclude.filter((file) => selectedTests.includes(file)),
+        }))));
+        console.log(
+          "UNIT_FAST_IO_PROBE",
+          gitLsFilesCalls,
+          readdirSyncCalls,
+          scopedHookFileReads,
+          scopedOutsideFileReads,
+          unselectedFileReads,
+        );
+        const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
+        console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
       } finally {
         fs.rmSync(directory, { recursive: true, force: true });
       }
-      console.log(
-        "UNIT_FAST_IO_PROBE",
-        gitLsFilesCalls,
-        readdirSyncCalls,
-        scopedHookFileReads,
-        scopedOutsideFileReads,
-        unselectedFileReads,
-      );
     `;
     configProbeResult = spawnNodeEvalSync(script, {
       env: {
@@ -183,7 +195,7 @@ describe("unit-fast vitest lane", () => {
     broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
   });
 
-  it("classifies only selected fast-config sources while preserving lane ownership", () => {
+  it("classifies only selected config sources without truncating later full ownership", () => {
     expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
     const probeMatch = configProbeResult.stdout.match(
       /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+) (\d+)/u,
@@ -201,6 +213,19 @@ describe("unit-fast vitest lane", () => {
       ["src/test-utils/openclaw-test-state.test.ts"],
       ["src/utils.test.ts"],
     ]);
+    const unitSelection = configProbeResult.stdout.match(/UNIT_SELECTION_PROBE (.+)/u);
+    expect(unitSelection, configProbeResult.stdout).not.toBeNull();
+    const excluded = [
+      "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+      "src/test-utils/openclaw-test-state.test.ts",
+      "src/utils.test.ts",
+    ];
+    const include = [...excluded, "src/media-generation/runtime-shared.test.ts"];
+    expect(JSON.parse(unitSelection?.[1] ?? "null")).toEqual([
+      { include, excluded },
+      { include, excluded },
+    ]);
+    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true");
   });
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
