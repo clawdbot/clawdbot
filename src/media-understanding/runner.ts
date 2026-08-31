@@ -48,10 +48,12 @@ import {
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import {
-  buildMediaUnderstandingRegistry,
-  getMediaUnderstandingProvider,
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
+} from "./provider-registry-metadata.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
 } from "./provider-registry.js";
 import {
   resolveModelEntries,

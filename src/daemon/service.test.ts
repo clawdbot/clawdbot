@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -14,11 +14,10 @@ import {
   resolveGatewayService,
   startGatewayService,
 } from "./service.js";
-import { createMockGatewayService } from "./service.test-helpers.js";
+import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
 
-vi.mock("../config/paths.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
-  return { ...actual, isDefaultInstallIdentity: () => true };
+beforeEach(() => {
+  mockSystemAccountHome();
 });
 
 function setPlatform(value: NodeJS.Platform) {
@@ -145,7 +144,7 @@ describe("readGatewayServiceState", () => {
     { updateInstallKind: "package" as const, shouldRestart: false },
     { updateInstallKind: "package" as const, shouldRestart: true },
   ])(
-    "allows managerless Linux preflight for $updateInstallKind restart=$shouldRestart",
+    "handles managerless Linux preflight for $updateInstallKind restart=$shouldRestart",
     async ({ updateInstallKind, shouldRestart }) => {
       const { maybeStopManagedServiceBeforeMutableUpdate } =
         await import("../cli/update-cli/update-command-service.js");
@@ -182,10 +181,16 @@ describe("readGatewayServiceState", () => {
           phase: "inspect",
           timeoutMs: 2_000,
         });
-        expect(result.blockMessage).toBeUndefined();
+        if (shouldRestart) {
+          expect(result.blockMessage).toContain("Refusing to mutate code");
+          expect(result.blockMessage).toContain("stop the Gateway manually before the update");
+          expect(result.serviceMutationSkipMessage).toBeUndefined();
+        } else {
+          expect(result.blockMessage).toBeUndefined();
+          expect(result.serviceMutationSkipMessage).toContain("inspection is unavailable");
+          expect(result.serviceMutationSkipMessage).toContain("gateway status --deep");
+        }
         expect(result.serviceMutationAllowed).toBe(false);
-        expect(result.serviceMutationSkipMessage).toContain("inspection is unavailable");
-        expect(result.serviceMutationSkipMessage).toContain("gateway status --deep");
         expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
         expect(result.stopped).toBe(false);
       } finally {
@@ -209,7 +214,7 @@ describe("readGatewayServiceState", () => {
         if (capabilityFails) {
           throw new Error("capability unavailable");
         }
-        return { kind: "sealed", detail: "deployment owned" };
+        return { kind: "sealed", reason: "foreign-owner" };
       });
       const service = createService({
         hasInstalledDefinition,
@@ -241,8 +246,8 @@ describe("readGatewayServiceState", () => {
         });
         expect(state.definitionMutationCapability).toEqual(
           capabilityFails
-            ? { kind: "unknown", detail: "Cannot inspect service definition." }
-            : { kind: "sealed", detail: "deployment owned" },
+            ? { kind: "unknown", reason: "inspection-failed" }
+            : { kind: "sealed", reason: "foreign-owner" },
         );
       } else {
         expect(readDefinitionMutationCapability).not.toHaveBeenCalled();
@@ -315,13 +320,13 @@ describe("readGatewayServiceState", () => {
     });
   });
 
-  it("preserves runtime probe failures as an explicit unknown state", async () => {
+  it("normalizes localized runtime probe failures at the service boundary", async () => {
     const readCommand = vi.fn(async () => null);
     const service = createService({
       isLoaded: vi.fn(async () => true),
       readCommand,
       readRuntime: vi.fn(async () => {
-        throw new Error("systemctl show timed out");
+        throw new Error("錯誤: 系統找不到指定的檔案。");
       }),
     });
 
@@ -331,8 +336,27 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",
-      detail: "Error: systemctl show timed out",
+      detail: "service runtime inspection failed",
+      inspectionFailure: {
+        code: "service-runtime-inspection-failed",
+        detail: "錯誤: 系統找不到指定的檔案。",
+      },
     });
+  });
+
+  it("bounds structured runtime inspection diagnostics", async () => {
+    const service = createService({
+      readRuntime: vi.fn(async () => {
+        throw new Error("錯".repeat(600));
+      }),
+    });
+
+    const state = await readGatewayServiceState(service);
+
+    expect(state.runtime?.inspectionFailure).toMatchObject({
+      code: "service-runtime-inspection-failed",
+    });
+    expect(state.runtime?.inspectionFailure?.detail).toHaveLength(500);
   });
 
   it("preserves loaded-state probe failures as an explicit unknown state", async () => {

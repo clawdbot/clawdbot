@@ -214,8 +214,7 @@ export function createExecTool(
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
-      const deferredResolveExecEnvState =
-        requestPreparation.getDeferredResolveExecEnvPreparedState(params);
+      const hookContext = requestPreparation.getExecHookContext(params);
       const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -350,7 +349,7 @@ export function createExecTool(
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
       let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
-        defaults?.bypassHostApprovalFloors === true ||
+        (defaults?.bypassHostApprovalFloors === true && modePolicy.ask === "off") ||
         (elevatedRequested &&
           elevatedMode === "full" &&
           modePolicyAllowsFullBypass &&
@@ -425,7 +424,7 @@ export function createExecTool(
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
-            hookContext: deferredResolveExecEnvState?.hookContext,
+            hookContext,
           });
         }
 
@@ -517,6 +516,7 @@ export function createExecTool(
             defaultTimeoutSec,
             security,
             ask,
+            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
             autoReview,
             autoReviewer,
             signal,

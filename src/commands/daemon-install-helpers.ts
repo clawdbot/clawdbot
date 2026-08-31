@@ -416,6 +416,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         );
         continue;
       }
+      const value = Object.hasOwn(params.env, key) ? params.env[key]?.trim() : undefined;
+      if (!value) {
+        continue;
+      }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
@@ -424,10 +428,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       if (Object.hasOwn(params.durableEnvironment, key)) {
-        continue;
-      }
-      const value = params.env[key]?.trim();
-      if (!value) {
         continue;
       }
       entries[key] = value;
@@ -822,12 +822,6 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
-    runtime: params.runtime,
-    devMode: params.devMode,
-    runtimePath: params.runtimePath,
-  });
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const wrapperPointsAtWindowsTaskScript =
     Boolean(wrapperInput?.trim()) &&
@@ -841,6 +835,13 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtWindowsTaskScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    runtimePath: params.runtimePath,
+    wrapperPath,
+  });
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
     : wrapperPointsAtWindowsTaskScript

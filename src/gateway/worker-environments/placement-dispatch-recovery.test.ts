@@ -236,7 +236,7 @@ describe("worker placement restart recovery", () => {
           : REQUEST;
 
       await expect(harness.service.dispatch(request)).rejects.toThrow(
-        "current execution-context contract",
+        "current worker launch contract",
       );
 
       expect(harness.placements.current()).toMatchObject({
@@ -714,6 +714,7 @@ describe("worker placement restart recovery", () => {
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
+        runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim("/gateway/workspace", begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),

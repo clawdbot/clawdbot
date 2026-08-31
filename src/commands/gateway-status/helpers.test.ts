@@ -237,6 +237,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -262,6 +263,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "permission denied",
       missingScopeErrorDetails: {
         code: "MISSING_SCOPE" as const,
@@ -288,6 +290,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
+      gatewayReached: true as const,
       error: "unknown method: status",
       close: null,
       auth: {

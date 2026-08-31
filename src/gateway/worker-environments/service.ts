@@ -67,13 +67,20 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 
 type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
+  prepareComputer?: (
+    claim: import("./placement-store.js").WorkerSessionTurnClaim,
+  ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
+  executeComputer?: import("./worker-turn-computer-rpc.js").WorkerComputerExecutor;
+  closeComputers?: () => Promise<void>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   nodePortalCarrier?: WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   stopNodeEnrollmentWaits?: () => void;
+  closeNodeBootstrapArtifacts?: () => Promise<void>;
   stopNodeWorkerBundleTransfers?: () => void;
+  maintainProviders?: (signal: AbortSignal) => Promise<void>;
   reconcileIntervalMs?: number;
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
@@ -177,6 +184,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
+  const maintenanceAbort = new AbortController();
+  let maintenanceInFlight: Promise<void> | undefined;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
     states.includes(record.state);
@@ -296,8 +305,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+    prepareNodeBootstrap: options.prepareNodeBootstrap,
+    projectNamespace: options.projectNamespace,
+    prepareNodeRuntime: options.prepareNodeRuntime,
+    closeNodeRuntime: options.closeNodeRuntime,
     prepareNodeEnrollment: options.prepareNodeEnrollment,
+    closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
+    placementStore: options.placementStore,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
@@ -336,6 +351,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     liveEvents: options.liveEvents,
     placementStore: options.placementStore,
     executeSessionTool: options.executeSessionTool,
+    executeComputer: options.executeComputer,
     inference,
     isStopping: () => stopping,
     now,
@@ -409,18 +425,23 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return async () => await closeReconcileEnvironmentGuard(guard);
   };
 
-  const reconcilePass = async () => {
-    const tasks = store
-      .listForReconcile()
-      .map(
-        (candidate) => () =>
-          reconcileEnvironment(candidate.environmentId).catch(() =>
-            warn(
-              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
-            ),
+  const reconcilePass = async (environmentId?: string) => {
+    const candidates =
+      environmentId === undefined
+        ? store.listForReconcile()
+        : [store.get(environmentId)].filter((candidate) => candidate !== undefined);
+    const tasks = candidates.map(
+      (candidate) => () =>
+        reconcileEnvironment(candidate.environmentId).catch(() =>
+          warn(
+            `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
           ),
-      );
+        ),
+    );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    if (environmentId !== undefined) {
+      return;
+    }
     try {
       store.pruneTerminalEnvironments();
     } catch (error) {
@@ -432,9 +453,33 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
-  const reconcileOnce = () => {
+  const reconcileOnce = (environmentId?: string) => {
     if (stopping) {
       return Promise.resolve();
+    }
+    if (environmentId !== undefined) {
+      // Preserve per-environment failure reporting without joining unrelated sweep work.
+      // Shutdown still owns this pass; the installed guard coalesces its exact environment.
+      return trackOperation(reconcilePass(environmentId));
+    }
+    if (options.maintainProviders && !maintenanceInFlight) {
+      // Keep cleanup off the placement/reconcile wait path, but retain the actual promise
+      // until shutdown has aborted and drained every provider-owned command.
+      maintenanceInFlight = trackOperation(
+        Promise.resolve()
+          .then(() => {
+            maintenanceAbort.signal.throwIfAborted();
+            return options.maintainProviders!(maintenanceAbort.signal);
+          })
+          .catch(() => {
+            if (!stopping) {
+              warn("Worker provider maintenance sweep failed; cleanup will retry");
+            }
+          })
+          .finally(() => {
+            maintenanceInFlight = undefined;
+          }),
+      );
     }
     return (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;
@@ -462,6 +507,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    maintenanceAbort.abort();
     options.stopNodeEnrollmentWaits?.();
     clearInterval(interval);
     interval = undefined;
@@ -472,6 +518,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
     await closeReconcileEnvironmentGuard();
+    await options
+      .closeComputers?.()
+      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
@@ -490,6 +539,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       credentialBroker.clear();
       turnRpc.clear();
       options.liveEvents?.clear();
+      await options.closeNodeBootstrapArtifacts?.();
     }
   };
 
@@ -530,6 +580,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    inventoryVersion: store.inventoryVersion,
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
@@ -541,6 +592,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -549,6 +601,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },
@@ -557,6 +610,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       idempotencyKey: string,
       machineClass?: string,
       executionMode?: WorkerExecutionMode,
+      projectPath?: string,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -567,6 +621,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           },
           machineClass,
           executionMode,
+          projectPath,
         }),
       );
     },
@@ -583,6 +638,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
     executeSessionTool: turnRpc.executeSessionTool,
+    executeComputer: turnRpc.executeComputer,
+    prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,

@@ -1,19 +1,21 @@
 // Real-browser proof of frozen goal timing on the chat composer.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI goal elapsed time" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/goal-elapsed");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    artifactDir = createControlUiE2eArtifactDir("goal-elapsed");
+  }
+});
 
 suite.define(() => {
   it("shows a paused goal's frozen duration before and after opening details and reloading", async () => {
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         colorScheme: "light",

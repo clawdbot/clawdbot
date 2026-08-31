@@ -211,6 +211,11 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/** True when root-owned paths would be paired with the sudo caller's user manager. */
+export function hasSudoToRootSystemdUserManagerMismatch(env: GatewayServiceEnv): boolean {
+  return resolveSystemctlUserScope(env).preferMachineScope;
+}
+
 /**
  * Resolves the account whose user manager owns the service operation.
  * Keep linger diagnostics on this identity so sudo never checks root while

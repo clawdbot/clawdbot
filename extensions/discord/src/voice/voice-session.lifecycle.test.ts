@@ -26,6 +26,7 @@ defineDiscordVoiceTests(
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
+    beginSpeakerTurn,
     getVoiceReceive,
     getLastAudioPlayer,
     expectOffEventWithFunction,
@@ -214,6 +215,7 @@ defineDiscordVoiceTests(
       });
 
       const entry = getSessionEntry(manager);
+      expect(entry.realtimeLifecycle.status).toBe("inactive");
       let resolveRealtimeReady!: () => void;
       const realtimeReady = new Promise<undefined>((resolve) => {
         resolveRealtimeReady = () => resolve(undefined);
@@ -223,7 +225,7 @@ defineDiscordVoiceTests(
       const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
 
       await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
-      expect(entry.realtime).toBeUndefined();
+      expect(entry.realtimeLifecycle.status).toBe("starting");
 
       resolveRealtimeReady();
       const result = await upgrade;
@@ -237,7 +239,7 @@ defineDiscordVoiceTests(
         onStop,
         onUtterance,
       });
-      expect(entry.realtime).toBeTruthy();
+      expect(entry.realtimeLifecycle.status).toBe("active");
       const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
       attempts.set("g1", Date.now());
 
@@ -249,7 +251,7 @@ defineDiscordVoiceTests(
       expect(stopNotesResult.ok).toBe(true);
       expect(entry.transcripts).toBeUndefined();
       expect(onStop).toHaveBeenCalledOnce();
-      expect(entry.realtime).toBeTruthy();
+      expect(entry.realtimeLifecycle.status).toBe("active");
       expect(realtimeSessionMock.close).not.toHaveBeenCalled();
       expect(attempts.has("g1")).toBe(true);
       expectConnectedStatus(manager, "1001");
@@ -278,20 +280,18 @@ defineDiscordVoiceTests(
       const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
 
       await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
-      expect(entry.pendingRealtime).toBeTruthy();
-      expect(entry.realtime).toBeUndefined();
+      expect(entry.realtimeLifecycle.status).toBe("starting");
 
       entry.stop();
       expect(realtimeSessionMock.close).toHaveBeenCalled();
-      expect(entry.pendingRealtime).toBeUndefined();
-      expect(entry.realtime).toBeUndefined();
+      expect(entry.realtimeLifecycle.status).toBe("stopped");
 
       resolveRealtimeReady();
       const result = await upgrade;
 
       expect(result.ok).toBe(false);
       expect(result.message).toContain("stopped before startup completed");
-      expect(entry.realtime).toBeUndefined();
+      expect(entry.realtimeLifecycle.status).toBe("stopped");
     });
 
     it("detaches transcripts without leaving voice during pending realtime upgrade", async () => {
@@ -327,15 +327,13 @@ defineDiscordVoiceTests(
       expect(stopNotesResult.ok).toBe(true);
       expect(entry.transcripts).toBeUndefined();
       expect(onStop).toHaveBeenCalledOnce();
-      expect(entry.pendingRealtime).toBeTruthy();
-      expect(entry.realtime).toBeUndefined();
+      expect(entry.realtimeLifecycle.status).toBe("starting");
 
       resolveRealtimeReady();
       const result = await upgrade;
 
       expect(result.ok).toBe(true);
-      expect(entry.pendingRealtime).toBeUndefined();
-      expect(entry.realtime).toBeTruthy();
+      expect(entry.realtimeLifecycle.status).toBe("active");
       expectConnectedStatus(manager, "1001");
     });
 
@@ -397,11 +395,7 @@ defineDiscordVoiceTests(
       expect(realtimeSessionMock.close).not.toHaveBeenCalled();
       expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeTranscripts);
 
-      const turn = entry.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u-owner",
-      );
-      turn?.sendInputAudio(Buffer.alloc(3840));
+      const turn = beginSpeakerTurn(entry, { initialAudio: Buffer.alloc(3840) });
       bridgeParams?.onTranscript?.("user", "meeting note transcript", true);
 
       await vi.waitFor(() =>
@@ -420,7 +414,7 @@ defineDiscordVoiceTests(
           }),
         ),
       );
-      turn?.close();
+      turn.close();
     });
 
     it("destroys stale tracked voice connections before joining", async () => {
@@ -651,13 +645,10 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const turn = entry.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u1",
-      );
+      const turn = beginSpeakerTurn(entry, { userId: "u1", initialAudio: null });
 
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-      turn?.sendInputAudio(Buffer.alloc(3840));
+      turn.sendInputAudio(Buffer.alloc(3840));
 
       expect(realtimeSessionMock.setMediaTimestamp).toHaveBeenCalledWith(0);
       expect(realtimeSessionMock.setMediaTimestamp).toHaveBeenCalledWith(10);
@@ -687,12 +678,7 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const turn = entry.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u1",
-      );
-
-      turn?.sendInputAudio(Buffer.alloc(3840));
+      beginSpeakerTurn(entry, { userId: "u1", initialAudio: Buffer.alloc(3840) });
 
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
       expect(player.stop).not.toHaveBeenCalled();
@@ -712,13 +698,8 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const turn = entry.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u1",
-      );
-
-      turn?.sendInputAudio(Buffer.alloc(3840));
-      turn?.close();
+      const turn = beginSpeakerTurn(entry, { userId: "u1", initialAudio: Buffer.alloc(3840) });
+      turn.close();
 
       expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(2);
       const trailingSilence = realtimeSessionMock.sendAudio.mock.calls.at(-1)?.[0] as
@@ -742,13 +723,8 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const turn = entry.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u1",
-      );
-
-      turn?.sendInputAudio(Buffer.alloc(3840));
-      turn?.close();
+      const turn = beginSpeakerTurn(entry, { userId: "u1", initialAudio: Buffer.alloc(3840) });
+      turn.close();
 
       const trailingSilence = realtimeSessionMock.sendAudio.mock.calls.at(-1)?.[0] as
         | Buffer

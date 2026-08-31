@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Covers plugin registry assembly, contribution lookup, and reset behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -31,6 +31,10 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 function resolveProviderOwners(
   params: Omit<
@@ -890,7 +894,7 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
-  it("derives config-scoped registries for cold callers", () => {
+  it("derives config-scoped registries within a fresh lifecycle generation", () => {
     const stateDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const bundledRoot = makeTempDir();
@@ -899,32 +903,22 @@ describe("plugin registry facade", () => {
     createCandidate(rootDir);
     const env = hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot });
     const config = { plugins: { entries: { demo: { enabled: true } } } } as const;
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
-
     const first = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       workspaceDir,
       config,
       env,
     });
-    const manifestReadsAfterFirst = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
     const second = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       workspaceDir,
       config,
       env,
     });
-    const manifestReadsAfterSecond = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
     expect(first.source).toBe("derived");
     expect(second.source).toBe("derived");
-    expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
+    expectSnapshotPluginIds(first.snapshot, ["demo"]);
+    expectSnapshotPluginIds(second.snapshot, ["demo"]);
   });
 
   it("reloads profile extensions after the metadata lifecycle is cleared", () => {

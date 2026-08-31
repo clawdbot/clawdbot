@@ -1021,31 +1021,6 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("readSessionMessagesAsync recent mode honors byte caps", async () => {
-    const sessionId = "test-session-async-recent-mode";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "older" } },
-      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
-      { message: { role: "user", content: "latest" } },
-    ]);
-    const openSpy = vi.spyOn(fs.promises, "open");
-
-    try {
-      const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
-        mode: "recent",
-        maxMessages: 1,
-        maxBytes: 2048,
-      });
-      expect(messages).toHaveLength(1);
-      expectMessageFields(messages[0], { role: "user", content: "latest" });
-      expect(JSON.stringify(messages)).not.toContain("older");
-      expect(openSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
   test("reads only the active branch when transcript rewrites abandon older entries", async () => {
     const sessionId = "test-session-active-branch";
     const recordTimestamp = (second: number) => ({

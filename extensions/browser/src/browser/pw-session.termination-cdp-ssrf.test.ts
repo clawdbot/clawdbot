@@ -49,6 +49,11 @@ vi.mock("ws", () => {
   return { default: MockWebSocket };
 });
 
+vi.mock(
+  "./pw-session-cdp-transport.js",
+  () => import("./pw-session-cdp-transport.test-support.js"),
+);
+
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 

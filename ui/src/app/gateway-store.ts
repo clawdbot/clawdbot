@@ -1,4 +1,5 @@
 import {
+  gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
   resolveSafeTimeoutDelayMs,
@@ -31,7 +32,13 @@ import type {
   ApplicationGatewaySnapshot,
 } from "./context.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
-import { loadSettings, patchSettings, persistSessionToken } from "./settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  patchSettings,
+  persistSessionToken,
+  resolveGatewayCredentialsForUrlEdit,
+} from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
@@ -68,6 +75,7 @@ function sameSelfUser(
 ): boolean {
   return (
     left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
     left?.avatarUrl === right?.avatarUrl
@@ -319,9 +327,26 @@ export function createApplicationGateway(
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
+    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
+    const logicalGatewayChanged =
+      gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
+    const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
+      connection.gatewayUrl,
+      nextGatewayUrl,
+      connection,
+    );
     const nextConnection = {
       ...connection,
       ...connectionOverrides,
+      ...(logicalGatewayChanged && connectionOverrides.token === undefined
+        ? { token: scopedCredentials.token }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.password === undefined
+        ? { password: scopedCredentials.password }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.bootstrapToken === undefined
+        ? { bootstrapToken: "", bootstrapProfile: undefined }
+        : {}),
       ...(connectionOverrides.bootstrapToken !== undefined &&
       connectionOverrides.bootstrapProfile === undefined
         ? { bootstrapProfile: undefined }
@@ -337,10 +362,6 @@ export function createApplicationGateway(
       connectionRevision += 1;
       void clearStoredChatSnapshots();
     }
-    const hasRequestedSessionKey = requestedSessionKey !== undefined;
-    const nextSessionKey = hasRequestedSessionKey
-      ? requestedSessionKey.trim()
-      : snapshot.sessionKey;
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so
     // treating any override as a selection would let an ephemeral approval
@@ -348,6 +369,13 @@ export function createApplicationGateway(
     const gatewayUrlChanged =
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
+    const targetSelection = gatewayUrlChanged
+      ? loadGatewaySessionSelection(nextConnection.gatewayUrl)
+      : null;
+    const hasRequestedSessionKey = requestedSessionKey !== undefined;
+    const nextSessionKey = hasRequestedSessionKey
+      ? requestedSessionKey.trim()
+      : (targetSelection?.sessionKey ?? snapshot.sessionKey);
     // A different Gateway has no established session to keep mounted on failure.
     // Accepted tradeoff: a restart pill armed for the previous gateway may
     // linger across a mid-restart gateway switch until the next hello or the
@@ -375,7 +403,8 @@ export function createApplicationGateway(
               sessionKey: nextSessionKey,
               lastActiveSessionKey: nextSessionKey,
             }
-          : {}),
+          : (targetSelection ?? {})),
+        ...(targetSelection ? { selectedAgentId: targetSelection.selectedAgentId } : {}),
       },
       persistConnectionSettings || gatewayUrlChanged,
     );

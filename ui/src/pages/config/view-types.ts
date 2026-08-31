@@ -1,6 +1,10 @@
 import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type {
   NativeNotificationsPermission,
@@ -11,11 +15,11 @@ import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../.
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
-import type { WebPushUiState } from "./notifications-section.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
 
 type SettingsMediaDeviceState = {
@@ -121,7 +125,6 @@ export type ConfigProps = {
   localeProvenance: ServerUiPrefProvenance;
   localeResetValue?: Locale;
   onLocaleChange: (locale: Locale | undefined) => void;
-  resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setAccent: (accent: string | undefined) => void;
@@ -147,6 +150,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  chatCollapseTaskProgress: boolean;
+  setChatCollapseTaskProgress: (enabled: boolean) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
   forceShowAdvanced?: boolean;
@@ -172,7 +177,6 @@ export type ConfigProps = {
   chatSendShortcutProvenance: ServerUiPrefProvenance;
   chatSendShortcutResetValue: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  resetChatSendShortcut: () => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
   chatFollowUpModeOverridden: boolean;
   chatFollowUpModeProvenance: ServerUiPrefProvenance;
@@ -205,8 +209,10 @@ export type ConfigProps = {
   };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushUiState;
+  webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
+  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
+  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
 };

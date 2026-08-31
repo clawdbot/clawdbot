@@ -29,13 +29,13 @@ describe("initial user message handoff", () => {
 
     prepareInitialUserMessageHandoff(handoff, sessionKey, item, client, {
       runId: "initial-image-run",
-      messageSeq: 1,
     });
 
     expect(handoff.read("main", client)).toEqual({
       sessionKey,
       owner: client,
       pendingRunId: "initial-image-run",
+      pending: true,
       message: {
         role: "user",
         content: [
@@ -51,7 +51,6 @@ describe("initial user message handoff", () => {
           idempotencyKey: "initial-image-run:user",
           senderId: "profile-1",
           senderName: "Alice Example",
-          seq: 1,
         },
       },
     });

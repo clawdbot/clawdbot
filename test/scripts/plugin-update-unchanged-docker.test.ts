@@ -306,20 +306,25 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
-    expect(script.match(/assert-disabled-policy-preserved/g)).toHaveLength(2);
+    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(2);
   });
 
-  it("requires corrupt update failures to preserve the explicit allow policy", () => {
+  it.each([
+    ["explicit disable", { enabled: false }],
+    ["typed quarantine", { enabled: true }],
+  ])("preserves the explicit allow policy after %s recovery", (_recovery, entry) => {
     expect(() =>
-      runProbe("assert-disabled-policy-preserved", {
+      runProbe("assert-corrupt-policy-preserved", {
         plugins: {
           allow: [CORRUPT_PLUGIN_ID],
-          entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+          entries: { [CORRUPT_PLUGIN_ID]: entry },
         },
       }),
     ).not.toThrow();
+  });
 
-    const revokedPolicy = runProbeStatus("assert-disabled-policy-preserved", {
+  it("rejects corrupt update recovery that revokes the explicit allow policy", () => {
+    const revokedPolicy = runProbeStatus("assert-corrupt-policy-preserved", {
       plugins: {
         entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
       },
@@ -328,7 +333,7 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(revokedPolicy.stderr).toContain("expected plugins.allow to preserve");
   });
 
-  it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {
+  it("accepts disabled or quarantined corrupt plugin warnings and rejects neither", () => {
     const disabledAfterFailure = {
       status: "ok",
       npm: {
@@ -365,5 +370,38 @@ describe("plugin update unchanged Docker E2E", () => {
         ],
       }),
     ).not.toThrow();
+
+    const quarantinedAfterFailure = {
+      status: "warning",
+      npm: {
+        outcomes: [
+          {
+            pluginId: CORRUPT_PLUGIN_ID,
+            status: "error",
+            message: `Plugin "${CORRUPT_PLUGIN_ID}" failed post-core payload smoke check: package.json is missing`,
+          },
+        ],
+      },
+      warnings: [
+        {
+          pluginId: CORRUPT_PLUGIN_ID,
+          reason: "package.json is missing",
+          guidance: [
+            "Run openclaw update repair to retry post-update plugin repair.",
+            `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
+          ],
+        },
+      ],
+    };
+    expect(() => runProbe("assert-corrupt-plugin-result", quarantinedAfterFailure)).not.toThrow();
+
+    const neitherRecovery = runProbeStatus("assert-corrupt-plugin-result", {
+      ...quarantinedAfterFailure,
+      npm: { outcomes: [] },
+    });
+    expect(neitherRecovery.status).not.toBe(0);
+    expect(neitherRecovery.stderr).toContain(
+      "expected quarantined or disabled-after-failure outcome",
+    );
   });
 });

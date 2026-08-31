@@ -91,6 +91,7 @@ export type NewSessionComposerOptions = {
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
+  onBackgroundSubmit?: () => void;
 };
 
 function submitNewSession(options: NewSessionComposerOptions) {
@@ -409,10 +410,23 @@ function handleComposerKeydown(
   ) {
     return;
   }
-  if (event.key !== "Enter" || event.shiftKey) {
+  if (event.key !== "Enter") {
     return;
   }
-  if (options.requiresModifier && !event.metaKey && !event.ctrlKey) {
+  const hasSubmitModifier = event.metaKey || event.ctrlKey;
+  const isBackgroundShortcut = options.requiresModifier
+    ? hasSubmitModifier && event.shiftKey
+    : hasSubmitModifier && !event.shiftKey;
+  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
+    if (options.canSubmit || options.submitDisabledReason !== undefined) {
+      event.preventDefault();
+      resetSkillMenuState(options.textareaController.skillMenuState);
+      resetSlashMenuState(options.textareaController.slashMenuState);
+      options.onBackgroundSubmit();
+    }
+    return;
+  }
+  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
     return;
   }
   // A reasoned gate still consumes the press: the submission flow records the
@@ -512,6 +526,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     ? getActiveSkillMenuOptionLabel(skillMenuState)
     : getActiveSlashMenuOptionLabel(slashMenuState);
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
+  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
+  const backgroundShortcut = options.requiresModifier
+    ? "Control+Shift+Enter Meta+Shift+Enter"
+    : "Control+Enter Meta+Enter";
+  const keyShortcuts = options.onBackgroundSubmit
+    ? `${ordinaryShortcut} ${backgroundShortcut}`
+    : ordinaryShortcut;
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -549,6 +570,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ?readonly=${options.dictationActive}
               placeholder=${animatedPlaceholder}
               aria-label=${messagePlaceholder}
+              aria-keyshortcuts=${keyShortcuts}
               .value=${visibleMessage}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}

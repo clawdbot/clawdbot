@@ -180,6 +180,39 @@ function mockExdevRename(filePath: string) {
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
+  it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "legacy-gateway-exec",
+        name: "Legacy gateway shell",
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        payload: {
+          kind: "agentTurn",
+          message: "run",
+          toolsAllow: ["gateway_exec"],
+        },
+      }),
+    ]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requirement: "legacy-gateway-exec-recreation",
+          message: expect.stringContaining("retired `gateway_exec` alias"),
+          fixHint: expect.stringContaining("fresh authenticated creator turn"),
+        }),
+      ]),
+    );
+    expect((await readPersistedJobs(storePath))[0]?.payload).toMatchObject({
+      toolsAllow: ["gateway_exec"],
+    });
+  });
+
   it("reports legacy cron store, run-log, and payload findings without mutating files", async () => {
     const storePath = await makeTempStorePath();
     await writeLegacyCronArrayStore(storePath, [
@@ -660,6 +693,50 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoteContaining("Quarantined cron job rows found", "Cron");
     expectNoteContaining("1 row was removed from the active cron store", "Cron");
+  });
+
+  it("recovers a valid quarantined schedule only after Doctor confirmation", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, []);
+    saveCronQuarantinedJobs({
+      storePath,
+      nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
+      entries: [
+        {
+          sourceIndex: 0,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "variant-cron",
+            schedule: { kind: " CRON ", expr: "0 9 * * *", tz: "UTC" },
+          }),
+          state: { nextRunAtMs: 123 },
+          updatedAtMs: 456,
+        },
+      ],
+    });
+    const cfg = createCronConfig(storePath);
+    const decline = makePrompter(false);
+
+    await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: decline });
+
+    expect((await loadCronStore(storePath)).jobs).toEqual([]);
+    expect(loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+    expect(decline.confirm).toHaveBeenCalledOnce();
+
+    const confirm = makePrompter(true);
+    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter: confirm });
+
+    const persisted = (await loadCronStore(storePath)).jobs;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      id: "variant-cron",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+      state: { nextRunAtMs: 123 },
+    });
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");
   });
 
   it("imports and archives standalone legacy quarantine files without losing recovery fields", async () => {
@@ -2255,6 +2332,51 @@ describe("maybeRepairLegacyCronStore", () => {
     const delivery = requireRecord(persisted[0]?.delivery, "cron delivery");
     expect(delivery.mode).toBe("announce");
     expect(delivery.to).toBe("telegram:123");
+  });
+
+  it("keeps valid schedule enum variants active after SQLite migration", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "legacy-cron-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: " CRON ", cron: "0 7 * * *", tz: "UTC" },
+      }),
+      createLegacyCronJob({
+        id: "legacy-every-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: "Every", everyMs: 60_000 },
+      }),
+      createLegacyCronJob({
+        id: "legacy-stream-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: " Stream ", command: ["node", "events.mjs"], mode: " LINE " },
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: { repair: true },
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    expect(
+      jobs.map((job) => ({
+        id: job.id,
+        enabled: job.enabled,
+        kind: requireRecord(job.schedule, "cron schedule").kind,
+        mode: requireRecord(job.schedule, "cron schedule").mode,
+      })),
+    ).toEqual([
+      { id: "legacy-cron-kind", enabled: true, kind: "cron", mode: undefined },
+      { id: "legacy-every-kind", enabled: true, kind: "every", mode: undefined },
+      { id: "legacy-stream-kind", enabled: true, kind: "stream", mode: "line" },
+    ]);
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
   });
 
   it("quarantines invalid legacy rows before saving the repaired store", async () => {

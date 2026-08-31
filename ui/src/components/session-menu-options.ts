@@ -1,5 +1,9 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import {
+  SESSION_COLOR_IDS,
+  normalizeSessionColorValue,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { icons } from "./icons.ts";
@@ -77,4 +81,38 @@ export function renderSessionGroupOptions(params: {
       : nothing}
     ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
   `;
+}
+
+export function renderSessionColorOptions(params: {
+  color: string | null;
+  disabled: boolean;
+  disabledReason?: string;
+  onSelect: (event: MouseEvent, color: string | null) => void;
+}) {
+  const current = normalizeSessionColorValue(params.color ?? "");
+  return html`<div
+    class="session-menu__colors"
+    role="group"
+    aria-label=${t("sessionsView.setColorMenu")}
+  >
+    ${[null, ...SESSION_COLOR_IDS].map((color) => {
+      const label = color ? t(`sessionsView.colors.${color}`) : t("common.default");
+      return html`<button
+        type="button"
+        class="session-menu__color-choice"
+        aria-label=${label}
+        aria-pressed=${String(current === color)}
+        ?disabled=${params.disabled}
+        title=${params.disabledReason ?? label}
+        @click=${(event: MouseEvent) => params.onSelect(event, color)}
+      >
+        <span
+          class="session-menu__color-swatch"
+          style=${color ? `background: var(--session-color-${color})` : nothing}
+          aria-hidden="true"
+          >${current === color ? icons.check : nothing}</span
+        >
+      </button>`;
+    })}
+  </div>`;
 }

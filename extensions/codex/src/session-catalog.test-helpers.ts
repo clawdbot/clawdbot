@@ -11,11 +11,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   validateJsonSchemaValue,
@@ -45,7 +42,6 @@ import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -102,7 +98,7 @@ export function createCodexSessionCatalogControl(
 ): CodexSessionCatalogControl {
   const config = params.getRuntimeConfig() ?? {};
   return createCodexSessionCatalogControlFactory(params).forRequest(
-    resolveSessionAgentIds({ config }).sessionAgentId,
+    resolveSessionAgentIdsStrict({ config }).sessionAgentId,
   );
 }
 
@@ -143,7 +139,8 @@ export function continueLocalCodexSession(
 ) {
   return continueLocalCodexSessionRuntime({
     ...params,
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: params.config }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: params.config }).sessionAgentId,
   });
 }
 
@@ -320,6 +317,7 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
   const control = {
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
+    requireEligibleThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
     listTurnPage: vi.fn(async () => ({ data: [] })),
@@ -548,7 +546,8 @@ export function archiveTestSession(params: {
 }) {
   const archiveConfig = params.config ?? config;
   return archiveLocalCodexSession({
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: archiveConfig }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: archiveConfig }).sessionAgentId,
     bindingStore: params.bindingStore ?? createCodexTestBindingStore(),
     config: archiveConfig,
     control: params.control,
@@ -580,7 +579,7 @@ export {
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveCodexAppServerUserHomeDir,
@@ -595,7 +594,6 @@ export {
   catalogError,
   parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogControlFactory,
   createCodexSessionCatalogNodeInvokePolicies,

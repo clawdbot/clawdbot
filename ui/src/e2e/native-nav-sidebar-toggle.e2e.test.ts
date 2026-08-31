@@ -1,10 +1,10 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -18,14 +18,24 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
-const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let TOAST_PROOF_DIR: string;
+beforeEach(() => {
+  TOAST_PROOF_DIR = createControlUiE2eArtifactDir("toast-layering");
+});
+const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let railProofDir: string | undefined;
+beforeEach(() => {
+  railProofDir = railProofDirParent
+    ? createControlUiE2eArtifactDir("native-nav-sidebar-toggle", railProofDirParent)
+    : undefined;
+});
 const limitedScopes = ["operator.read", "operator.write"];
 const UPDATE_AVAILABLE = {
   channel: "stable",
@@ -129,29 +139,7 @@ suite.define(() => {
       });
     }
     if (options.webChrome) {
-      await page.addInitScript(() => {
-        const nativeWindow = window as Window & {
-          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
-        };
-        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
-          canGoBack: false,
-          canGoForward: false,
-        };
-        const stamp = () => {
-          document.documentElement.classList.add(
-            "openclaw-native-macos",
-            "openclaw-native-web-chrome",
-          );
-          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
-        };
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
+      await installNativeWebChrome(page);
     }
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -174,6 +162,14 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
+    expect(
+      await page.evaluate(() => ({
+        titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
+        titlebarRequested: performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("macos-titlebar-controls")),
+      })),
+    ).toEqual({ titlebarRegistered: false, titlebarRequested: false });
     expect(
       await page.evaluate(() =>
         performance
@@ -484,7 +480,6 @@ suite.define(() => {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         path: path.join(railProofDir, "native-web-top-left-controls.png"),
@@ -590,7 +585,6 @@ suite.define(() => {
       await panelControls.nth(index).click({ trial: true });
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         fullPage: true,
         path: path.join(
@@ -717,7 +711,7 @@ suite.define(() => {
     await page.keyboard.press("Meta+K");
     const palette = page.locator(".cmd-palette");
     const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await palette.waitFor({ state: "visible" });
+    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );
@@ -911,9 +905,20 @@ suite.define(() => {
     await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
-  it.each(["dark", "light"] as const)(
-    "keeps the toast above the mobile drawer in %s mode",
-    async (colorScheme) => {
+  it.each([
+    {
+      colorScheme: "dark",
+      finalLayout: "compact",
+      finalViewport: { height: 844, width: 390 },
+    },
+    {
+      colorScheme: "light",
+      finalLayout: "desktop",
+      finalViewport: { height: 900, width: 1280 },
+    },
+  ] as const)(
+    "keeps drawer toast actionable and handed-off toast clear of chat chrome in $finalLayout $colorScheme mode",
+    async ({ colorScheme, finalLayout, finalViewport }) => {
       const page = await openPage({
         colorScheme,
         height: 844,
@@ -937,6 +942,17 @@ suite.define(() => {
       const toast = host.locator(".app-toast");
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
+      const drawerToastGeometry = await host.evaluate((node) => {
+        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        return {
+          computedTop: toastElement
+            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
+            : null,
+          placement: node.dataset.toastPlacement,
+        };
+      });
+      expect(drawerToastGeometry.placement).toBe("overlay");
+      expect(drawerToastGeometry.computedTop).toBe(20);
       const dismiss = toast.getByRole("button", { name: "Dismiss" });
       await dismiss.click({ trial: true });
 
@@ -944,24 +960,50 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
       });
-      if (colorScheme === "dark") {
+      if (finalLayout === "compact") {
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.isVisible()).toBe(false);
       } else {
-        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.setViewportSize(finalViewport);
         await expect.poll(() => drawer.count()).toBe(0);
       }
-      const retainedToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      expect(page.viewportSize()).toEqual(finalViewport);
+      const retainedHost = page.locator(".shell > openclaw-toast-host");
+      await expect.poll(() => retainedHost.getAttribute("data-toast-placement")).toBe("shell");
+      const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      const [toastBounds, composerBounds] = await Promise.all([
-        retainedToast.boundingBox(),
-        page.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
-      if (!toastBounds || !composerBounds) {
-        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      if (finalLayout === "compact") {
+        await expect
+          .poll(async () => {
+            const [toastBounds, headerBounds] = await Promise.all([
+              retainedToast.boundingBox(),
+              page.locator(".chat-pane__header:visible").first().boundingBox(),
+            ]);
+            return Boolean(
+              toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
+            );
+          })
+          .toBe(true);
+      } else {
+        await expect
+          .poll(async () => Math.round((await retainedToast.boundingBox())?.y ?? -1))
+          .toBe(20);
       }
-      expect(Math.round(toastBounds.y)).toBe(20);
-      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
+      await expect
+        .poll(async () => {
+          const [toastBounds, composerBounds] = await Promise.all([
+            retainedToast.boundingBox(),
+            page.locator(".agent-chat__composer-shell").boundingBox(),
+          ]);
+          return Boolean(
+            toastBounds && composerBounds && toastBounds.y + toastBounds.height < composerBounds.y,
+          );
+        })
+        .toBe(true);
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`),
+      });
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => retainedToast.isVisible()).toBe(false);
     },

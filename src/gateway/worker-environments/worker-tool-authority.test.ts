@@ -52,6 +52,57 @@ afterEach(() => {
 
 describe("resolveWorkerToolAuthority", () => {
   it.each([
+    { modelHasVision: true, allowed: true },
+    { modelHasVision: false, allowed: false },
+    { modelHasVision: undefined, allowed: true },
+  ])(
+    "applies prepared model vision capability ($modelHasVision)",
+    ({ modelHasVision, allowed }) => {
+      const tools = resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-test" },
+        turn: turn({ modelHasVision, toolsAllow: ["computer", "browser"] }),
+        availableOptionalToolNames: ["computer", "browser"],
+      }).allowedToolNames;
+      expect(tools.includes("computer")).toBe(allowed);
+      expect(tools).toContain("browser");
+    },
+  );
+
+  it.each([
+    { name: "default", tools: {}, allowed: true },
+    {
+      name: "additive sandbox tools",
+      tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
+      allowed: true,
+    },
+    {
+      name: "explicit sandbox allow",
+      tools: { sandbox: { tools: { allow: ["read"] } } },
+      allowed: false,
+    },
+    {
+      name: "explicit sandbox deny",
+      tools: { sandbox: { tools: { deny: ["computer"] } } },
+      allowed: false,
+    },
+    { name: "global deny", tools: { deny: ["computer"] }, allowed: false },
+    { name: "coding profile", tools: { profile: "coding" as const }, allowed: false },
+  ])("respects $name policy for a prepared sandbox-contained desktop", ({ tools, allowed }) => {
+    const turnParams = turn({
+      sessionKey: "agent:main:worker-sandboxed",
+      config: { agents: { defaults: { sandbox: { mode: "all" } } }, tools },
+    });
+    const params = { modelRef: { provider: "openai", model: "gpt-test" }, turn: turnParams };
+    expect(resolveWorkerToolAuthority(params).allowedToolNames).not.toContain("computer");
+    expect(
+      resolveWorkerToolAuthority({
+        ...params,
+        availableOptionalToolNames: ["computer"],
+      }).allowedToolNames.includes("computer"),
+    ).toBe(allowed);
+  });
+
+  it.each([
     {
       name: "explicit deny",
       exec: { security: "deny" as const, ask: "off" as const },
@@ -93,13 +144,13 @@ describe("resolveWorkerToolAuthority", () => {
   it.each([
     {
       name: "deny",
-      execSession: { execSecurity: "deny" as const },
+      execSession: { permissionMode: "read-only" as const },
       expected: { host: "gateway", security: "deny", ask: "off" },
     },
     {
       name: "approval",
-      execSession: { execAsk: "always" as const },
-      expected: { host: "gateway", security: "full", ask: "always" },
+      execSession: { permissionMode: "guarded" as const },
+      expected: { host: "gateway", security: "allowlist", ask: "on-miss" },
     },
     {
       name: "node binding",

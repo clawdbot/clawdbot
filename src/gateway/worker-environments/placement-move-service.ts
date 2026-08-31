@@ -8,6 +8,7 @@ import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import { isCurrentPlacementTurnClaim, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
@@ -20,7 +21,6 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
-type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 type WorkerPlacementMoveSourceDisposition = "reconcile" | "abandon";
 const RESTART_AUTHORITY_EXPIRED =
   "Cloud worker move request authority expired after Gateway restart; retry move";
@@ -319,10 +319,20 @@ export function createWorkerPlacementMoveService(options: {
     }
   };
 
-  const recoverAll = async (): Promise<Set<string>> => {
+  const recoverAll = async (environmentId?: string): Promise<Set<string>> => {
     const protectedSessions = new Set<string>();
     for (const intent of options.placements.listPlacementMoves()) {
-      const state = options.placements.get(intent.sessionId)?.state;
+      const placement = options.placements.get(intent.sessionId);
+      // Source cleanup can leave a local placement; destination activation keeps the
+      // move intent until completion. Either owner must be able to finish that move.
+      if (
+        environmentId !== undefined &&
+        intent.source.environmentId !== environmentId &&
+        placement?.environmentId !== environmentId
+      ) {
+        continue;
+      }
+      const state = placement?.state;
       if (
         (intent.abandonSource && state !== "local") ||
         state === "draining" ||

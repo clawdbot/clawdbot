@@ -64,6 +64,16 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
     },
     sessions: { state: { result: null }, createResult: vi.fn() },
+    placementStartup: {
+      get: vi.fn(() => undefined),
+      hasPendingTurn: vi.fn(() => false),
+    },
+    initialUserMessage: {
+      prepare: vi.fn(),
+      read: vi.fn(() => null),
+      retire: vi.fn(),
+      clear: vi.fn(),
+    },
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
     navigateAndWait: vi.fn(async () => undefined),

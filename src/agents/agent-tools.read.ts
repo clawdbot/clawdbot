@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
-import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
@@ -54,12 +53,20 @@ import {
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
 import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
-import { createBoundedReadTextPage, formatReadContinuationNotice } from "./sessions/tools/read.js";
+import {
+  createBoundedReadTextPage,
+  formatReadContinuationNotice,
+} from "./sessions/tools/read-page.js";
 import {
   ReadToolContinuationSchema,
   type ReadToolContinuation,
 } from "./sessions/tools/tool-contracts.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+import {
+  resolveToolResultBudget,
+  toolResultFitsBudget,
+  type ToolResultBudget,
+} from "./tool-result-limits.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -141,15 +148,6 @@ export function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): 
 
 function malformedXmlArgValuePathError(key: string): Error {
   return new Error(`Malformed path parameter: ${key}. Supply correct parameters before retrying.`);
-}
-
-function formatBytes(bytes: number): string {
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "mega",
-    separator: "",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 0 : 1),
-  });
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
@@ -310,6 +308,7 @@ async function executeReadWithAdaptivePaging(params: {
   args: Record<string, unknown>;
   signal?: AbortSignal;
   maxBytes: number;
+  modelBudget?: ToolResultBudget;
 }): Promise<AgentToolResult<unknown>> {
   const userLimit = params.args.limit;
   const hasExplicitLimit =
@@ -360,7 +359,13 @@ async function executeReadWithAdaptivePaging(params: {
       ? formatReadContinuationNotice(pageContinuation, params.maxBytes)
       : "";
 
-    if (candidateBytes + Buffer.byteLength(continuationNotice, "utf8") > params.maxBytes) {
+    if (
+      candidateBytes + Buffer.byteLength(continuationNotice, "utf8") > params.maxBytes ||
+      !toolResultFitsBudget(
+        `${aggregatedText}${delimiter}${pageText}${continuationNotice}`,
+        params.modelBudget,
+      )
+    ) {
       if (aggregatedText) {
         return withReadContinuation(
           firstResult,
@@ -379,6 +384,7 @@ async function executeReadWithAdaptivePaging(params: {
         ...(next.kind === "cursor" ? { cursor: next.cursor } : {}),
         limit: next.limit,
         maxBytes: params.maxBytes,
+        modelBudget: params.modelBudget,
         adaptive: true,
       });
       if (bounded.kind === "text") {
@@ -953,6 +959,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 }
 
 type SandboxToolParams = {
+  abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -962,13 +969,12 @@ type SandboxToolParams = {
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
-export function createSandboxedReadTool(
-  params: SandboxToolParams & { createTool?: typeof createReadTool },
-) {
+export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createReadTool)(params.root, {
+    createReadTool(params.root, {
       operations: createSandboxReadOperations(params),
       maxBytes: resolveAdaptiveReadMaxBytes(params),
+      modelBudget: resolveToolResultBudget(params.modelContextWindowTokens),
       modelHasVision: params.modelHasVision,
     }),
   );
@@ -981,11 +987,9 @@ export function createSandboxedReadTool(
 }
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
-export function createSandboxedWriteTool(
-  params: SandboxToolParams & { createTool?: typeof createWriteTool },
-) {
+export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createWriteTool)(params.root, {
+    createWriteTool(params.root, {
       operations: createSandboxWriteOperations(params),
     }),
   );
@@ -993,11 +997,9 @@ export function createSandboxedWriteTool(
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
-export function createSandboxedEditTool(
-  params: SandboxToolParams & { createTool?: typeof createEditTool },
-) {
+export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createEditTool)(params.root, {
+    createEditTool(params.root, {
       operations: createSandboxEditOperations(params),
     }),
   );
@@ -1010,12 +1012,12 @@ export function createHostWorkspaceWriteTool(
   options?: {
     containmentRoot?: string;
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-    createTool?: typeof createWriteTool;
   },
 ) {
   const base = eraseSessionFileTool(
-    (options?.createTool ?? createWriteTool)(root, {
+    createWriteTool(root, {
       operations: createHostWriteOperations(options?.containmentRoot ?? root, options),
     }),
   );
@@ -1028,12 +1030,12 @@ export function createHostWorkspaceEditTool(
   options?: {
     containmentRoot?: string;
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-    createTool?: typeof createEditTool;
   },
 ) {
   const base = eraseSessionFileTool(
-    (options?.createTool ?? createEditTool)(root, {
+    createEditTool(root, {
       operations: createHostEditOperations(options?.containmentRoot ?? root, options),
     }),
   );
@@ -1045,6 +1047,7 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  const modelBudget = resolveToolResultBudget(options?.modelContextWindowTokens);
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
@@ -1069,6 +1072,7 @@ export function createOpenClawReadTool(
           : (normalizedRecord ?? {}),
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
+        modelBudget,
       });
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
@@ -1189,6 +1193,7 @@ export function wrapReadToolWithSkillContent(
               eraseSessionFileTool(
                 createReadTool("/", {
                   maxBytes: resolveAdaptiveReadMaxBytes(options),
+                  modelBudget: resolveToolResultBudget(options?.modelContextWindowTokens),
                   operations: {
                     resolvePath: (filePath) => filePath,
                     access: async (filePath) => void readContent(filePath),
@@ -1217,7 +1222,8 @@ export function wrapReadToolWithSkillContent(
             : undefined;
         if (detailsKind === "truncated") {
           resetDelivery();
-          const text = `Skill instructions cannot be partially served: the whole document exceeds the ${formatBytes(resolveAdaptiveReadMaxBytes(options))} read budget. Ask the operator to reduce the document or increase the model context.`;
+          const text =
+            "Skill instructions cannot be partially served: the whole document exceeds this call's read or model-context budget. Ask the operator to reduce the document or increase the model context.";
           return {
             content: [{ type: "text", text }],
             details: { kind: "text", content: text },
@@ -1268,10 +1274,15 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+        await params.bridge.writeFile({
+          filePath: absolutePath,
+          cwd: params.root,
+          data: content,
+          signal: params.abortSignal,
+        });
       },
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
@@ -1290,7 +1301,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
-        params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+        params.bridge.writeFile({
+          filePath: absolutePath,
+          cwd: params.root,
+          data: content,
+          signal: params.abortSignal,
+        }),
       statFile: (absolutePath: string) =>
         params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
@@ -1353,6 +1369,7 @@ async function writeWorkspaceFile(
   getRoot: () => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
+  abortSignal?: AbortSignal,
 ) {
   // Validate the path before starting the fs-safe root: call getRoot() (which opens the
   // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
@@ -1366,13 +1383,16 @@ async function writeWorkspaceFile(
   if (targetStat?.isSymbolicLink()) {
     throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
   }
-  await (await getRoot()).write(relative, content, { mkdir: true });
+  const rootHandle = await getRoot();
+  abortSignal?.throwIfAborted();
+  await rootHandle.write(relative, content, { mkdir: true });
 }
 
 function createHostWriteOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1384,9 +1404,11 @@ function createHostWriteOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
+          options?.abortSignal?.throwIfAborted();
           await fs.mkdir(resolved, { recursive: true });
         },
-        writeFile: writeHostFile,
+        writeFile: (filePath: string, content: string) =>
+          writeHostFile(filePath, content, options?.abortSignal),
         readFile: async (absolutePath: string) =>
           fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
         statFile: (absolutePath: string) =>
@@ -1408,10 +1430,11 @@ function createHostWriteOperations(
         const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
         const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
         await assertSandboxPath({ filePath: resolved, cwd: root, root });
+        options?.abortSignal?.throwIfAborted();
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
+        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Canonicalize symlink parents like the write path: fs-safe 0.5.2
         // rejects intermediate symlinks by default, but in-workspace symlink
@@ -1432,6 +1455,7 @@ function createHostEditOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1444,7 +1468,8 @@ function createHostEditOperations(
         readFile: async (absolutePath: string) => {
           return await fs.readFile(resolveHostPath(absolutePath));
         },
-        writeFile: writeHostFile,
+        writeFile: (filePath: string, content: string) =>
+          writeHostFile(filePath, content, options?.abortSignal),
         statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
           await fs.access(resolveHostPath(absolutePath));
@@ -1471,7 +1496,7 @@ function createHostEditOperations(
         return safeRead.buffer;
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
+        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       statFile: async (absolutePath: string) => {
         const relative = toRelativeWorkspacePath(root, absolutePath);
         return statHostFile(path.resolve(root, relative));

@@ -1,5 +1,4 @@
-import { DEV_BRANCH } from "./update-channels.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -38,71 +37,62 @@ export function resolveBuildEnv(
   };
 }
 
-export function resolveInstallEnv(
+export function gitCleanCheckArgs(gitRoot: string): string[] {
+  return ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"];
+}
+
+async function hasExplicitPnpmPreferOfflineConfig(params: {
+  runCommand: CommandRunner;
+  cwd: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  try {
+    const result = await params.runCommand(["pnpm", "config", "get", "prefer-offline"], {
+      cwd: params.cwd,
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+    });
+    if (result.code !== 0) {
+      return true;
+    }
+    // pnpm reports only explicitly configured typed values; these sentinels mean absent.
+    const value = result.stdout.trim();
+    return value !== "" && value !== "undefined" && value !== "null";
+  } catch {
+    // A failed provenance check must not override an operator's possible explicit policy.
+    return true;
+  }
+}
+
+export async function resolveInstallEnv(
   manager: "pnpm" | "bun" | "npm",
-  env?: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv | undefined {
+  env: NodeJS.ProcessEnv | undefined,
+  cwd: string,
+  runCommand: CommandRunner,
+  timeoutMs: number,
+): Promise<NodeJS.ProcessEnv | undefined> {
   if (manager !== "pnpm") {
     return env;
   }
-  return {
+  const effectiveEnv = env ?? process.env;
+  const hasExplicitPreferOffline =
+    effectiveEnv.pnpm_config_prefer_offline !== undefined ||
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
+  const hasConfigPreferOffline = hasExplicitPreferOffline
+    ? false
+    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+  const installEnv: NodeJS.ProcessEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
-}
-
-function isSupersededInstallFailure(
-  step: UpdateStepResult,
-  steps: readonly UpdateStepResult[],
-): boolean {
-  return (
-    step.name === "deps install" &&
-    steps.some(
-      (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
-    )
-  );
-}
-
-function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
-    step.name,
-  );
-}
-
-function isSupersededTargetRefFailure(
-  step: UpdateStepResult,
-  followingSteps: readonly UpdateStepResult[],
-): boolean {
-  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
-  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
-  const isUpstreamProbe = step.name === "upstream check";
-  const isLocalDevBranchProbe = step.name === `git show-ref ${DEV_BRANCH}`;
-  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe && !isLocalDevBranchProbe) {
-    return false;
+  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+    installEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
+    installEnv.pnpm_config_prefer_offline = "true";
   }
-  if (isLocalDevBranchProbe) {
-    return followingSteps.some(
-      (candidate) =>
-        candidate.name.startsWith(`git checkout -B ${DEV_BRANCH} `) && candidate.exitCode === 0,
-    );
-  }
-  return followingSteps.some(
-    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
-  );
-}
-
-export function findBlockingGitFailure(
-  steps: readonly UpdateStepResult[],
-): UpdateStepResult | undefined {
-  return steps.find(
-    (step, index) =>
-      step.exitCode !== 0 &&
-      !isPreflightCandidateFailure(step) &&
-      !isSupersededInstallFailure(step, steps) &&
-      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
-  );
+  return installEnv;
 }
 
 export function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {

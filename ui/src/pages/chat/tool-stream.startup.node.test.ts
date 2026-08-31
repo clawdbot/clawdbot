@@ -25,10 +25,22 @@ function toolStart(runId: string, toolCallId: string): AgentEvent {
 }
 
 describe("app-tool-stream startup status", () => {
-  it("clears the active run status on the first matching tool start", () => {
+  it.each(["tool", "preamble"])("clears the active run status on matching %s activity", (kind) => {
     const host = createStartupHost();
 
-    handleAgentEvent(host, toolStart("run-1", "tool-1"));
+    handleAgentEvent(
+      host,
+      kind === "tool"
+        ? toolStart("run-1", "tool-1")
+        : {
+            runId: "run-1",
+            seq: 1,
+            stream: "item",
+            ts: 1,
+            sessionKey: "main",
+            data: { kind: "preamble", itemId: "opening", progressText: "Checking the workspace" },
+          },
+    );
 
     expect(host.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
   });

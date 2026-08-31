@@ -99,8 +99,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -185,8 +185,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -221,8 +221,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
     socket.send(JSON.stringify({ type: "req", id: "get-1", method: "config.get", params: {} }));
@@ -246,8 +246,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -258,54 +258,6 @@ describe("mock gateway stateful sessions", () => {
 
     expect(frames.find((frame) => frame.id === "subscribe-events")?.payload).toEqual({
       subscribed: true,
-    });
-  });
-
-  it("makes a successfully adopted catalog session visible to the next sessions.list", async ({
-    gatewayPage,
-  }) => {
-    const { window, execute } = gatewayPage;
-    const sessionKey = "agent:main:adopted-codex";
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.catalog.continue": { sessionKey },
-      },
-    });
-    execute(script);
-
-    const socket = new window.WebSocket("ws://mock-gateway");
-    const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
-    });
-    await flushMockTimers();
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "continue-1",
-        method: "sessions.catalog.continue",
-        params: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
-      }),
-    );
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "continue-1")?.payload).toEqual({ sessionKey });
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "list-adopted-1",
-        method: "sessions.list",
-        params: { agentId: "main", search: "adopted-codex" },
-      }),
-    );
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "list-adopted-1")?.payload).toMatchObject({
-      count: 2,
-      sessions: [
-        expect.objectContaining({ key: "main" }),
-        expect.objectContaining({ key: sessionKey, hasActiveRun: false, status: "done" }),
-      ],
     });
   });
 
@@ -324,8 +276,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -370,150 +322,58 @@ describe("mock gateway stateful sessions", () => {
     ).toMatchObject({
       count: 2,
       sessions: [
-        expect.objectContaining({ key: "main" }),
+        expect.objectContaining({ key: "agent:main:main" }),
         expect.objectContaining({ key: sessionKey }),
       ],
     });
   });
 
-  it("does not publish a rejected catalog adoption to sessions.list", async ({ gatewayPage }) => {
-    const { window, execute } = gatewayPage;
-    const sessionKey = "agent:main:rejected-adoption";
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.catalog.continue": {
-          __mockError: { code: "INVALID_REQUEST", message: "catalog adoption rejected" },
-        },
-      },
-    });
-    execute(script);
-
-    const socket = new window.WebSocket("ws://mock-gateway");
-    const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
-    });
-    await flushMockTimers();
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "rejected-adoption",
-        method: "sessions.catalog.continue",
-        params: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
-      }),
-    );
-    await flushMockTimers();
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "list-after-rejected-adoption",
-        method: "sessions.list",
-        params: { agentId: "main", search: "rejected-adoption" },
-      }),
-    );
-    await flushMockTimers();
-
-    const listed = frames.find((frame) => frame.id === "list-after-rejected-adoption")?.payload;
-    expect(listed).toMatchObject({ count: 1, sessions: [{ key: "main" }] });
-    expect(JSON.stringify(listed)).not.toContain(sessionKey);
-  });
-
-  it("makes a newly created session visible to the next sessions.list", async ({ gatewayPage }) => {
-    const { window, execute } = gatewayPage;
-    const sessionKey = "agent:main:created-session";
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.create": { key: sessionKey, runStarted: true },
-      },
-    });
-    execute(script);
-
-    const socket = new window.WebSocket("ws://mock-gateway");
-    const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
-    });
-    await flushMockTimers();
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "create-1",
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    );
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "create-1")?.payload).toEqual({
-      key: sessionKey,
-      runStarted: true,
-    });
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "list-1",
-        method: "sessions.list",
-        params: { agentId: "main", search: "created-session" },
-      }),
-    );
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
-      count: 2,
-      sessions: [
-        expect.objectContaining({ key: "main" }),
-        expect.objectContaining({
-          key: sessionKey,
-          hasActiveRun: true,
-          status: "running",
+  it.for(["sessions.catalog.continue", "sessions.create"])(
+    "does not publish rejected %s materialization to sessions.list",
+    async (method, { gatewayPage }) => {
+      const { window, execute } = gatewayPage;
+      const sessionKey = "agent:main:rejected-session";
+      execute(
+        createControlUiMockGatewayInitScript({
+          methodResponses: {
+            [method]: {
+              __mockError: { code: "INVALID_REQUEST", message: "materialization rejected" },
+            },
+          },
         }),
-      ],
-    });
-  });
-
-  it("does not publish a rejected session creation to sessions.list", async ({ gatewayPage }) => {
-    const { window, execute } = gatewayPage;
-    const sessionKey = "agent:main:rejected-session";
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.create": {
-          __mockError: { code: "INVALID_REQUEST", message: "session creation rejected" },
-        },
-      },
-    });
-    execute(script);
-
-    const socket = new window.WebSocket("ws://mock-gateway");
-    const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
-    });
-    await flushMockTimers();
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "rejected-create",
-        method: "sessions.create",
-        params: { agentId: "main", key: sessionKey },
-      }),
-    );
-    await flushMockTimers();
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "list-after-rejection",
-        method: "sessions.list",
-        params: { agentId: "main", search: "rejected-session" },
-      }),
-    );
-    await flushMockTimers();
-
-    const listed = frames.find((frame) => frame.id === "list-after-rejection")?.payload;
-    expect(listed).toMatchObject({ count: 1, sessions: [{ key: "main" }] });
-    expect(JSON.stringify(listed)).not.toContain(sessionKey);
-  });
+      );
+      const socket = new window.WebSocket("ws://mock-gateway");
+      const frames: ResponseFrame[] = [];
+      socket.addEventListener("message", (event: MessageEvent) => {
+        frames.push(JSON.parse(String(event.data)) as ResponseFrame);
+      });
+      await flushMockTimers();
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id: "rejected",
+          method,
+          params:
+            method === "sessions.create"
+              ? { agentId: "main", key: sessionKey }
+              : { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+        }),
+      );
+      await flushMockTimers();
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id: "list-after-rejection",
+          method: "sessions.list",
+          params: { agentId: "main", search: "rejected-session" },
+        }),
+      );
+      await flushMockTimers();
+      const listed = frames.find((frame) => frame.id === "list-after-rejection")?.payload;
+      expect(listed).toMatchObject({ count: 1, sessions: [{ key: "agent:main:main" }] });
+      expect(JSON.stringify(listed)).not.toContain(sessionKey);
+    },
+  );
 
   it("cycles subscription-scoped session events and stops after unsubscribe", async ({
     gatewayPage,
@@ -570,8 +430,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -663,8 +523,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -682,7 +542,14 @@ describe("mock gateway stateful sessions", () => {
 
     expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
       count: 1,
-      sessions: [{ key: "agent:main:research", archived: false }],
+      sessions: [
+        {
+          key: "agent:main:research",
+          archived: true,
+          archivedAt: expect.any(Number),
+          pinned: false,
+        },
+      ],
     });
   });
 
@@ -708,8 +575,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 

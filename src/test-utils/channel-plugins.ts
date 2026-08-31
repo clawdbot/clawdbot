@@ -1,4 +1,5 @@
 // Constructs channel plugin registries and plugin fixtures for tests.
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ChannelCapabilities,
   ChannelId,
@@ -28,6 +29,21 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
     enabled: true,
   })),
 });
+
+/** Publish fixture channels after startup settles, before creating any fixture turns or handles. */
+export async function activateTestChannelRegistry(
+  fixture: Pick<PluginRegistry, "channels" | "channelSetups">,
+): Promise<void> {
+  const { captureActivePluginRegistrySnapshot, restoreActivePluginRegistrySnapshot } =
+    await import("../plugins/runtime.js");
+  const snapshot = captureActivePluginRegistrySnapshot();
+  const registry = expectDefined(snapshot.activeRegistry, "expected gateway root plugin registry");
+  registry.channels.push(...fixture.channels);
+  registry.channelSetups.push(...fixture.channelSetups);
+  // Reactivation creates a fresh lifecycle epoch. Keep the Gateway's registry object
+  // and host settings, but publish before any fixture turn or retained handle exists.
+  restoreActivePluginRegistrySnapshot(snapshot);
+}
 
 export const createChannelTestPluginBase = (params: {
   id: ChannelId;

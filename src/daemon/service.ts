@@ -31,7 +31,10 @@ import {
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
+import {
+  createServiceRuntimeInspectionFailure,
+  type GatewayServiceRuntime,
+} from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
@@ -110,7 +113,6 @@ type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
 );
-
 function pathIsSameOrChild(candidate: string, parent: string): boolean {
   return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
 }
@@ -213,15 +215,14 @@ export async function readGatewayServiceState(
       ? true
       : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
-    service.readRuntime(env, { timeoutMs }).catch((error: unknown) => ({
-      status: "unknown" as const,
-      detail: String(error),
-    })),
+    service
+      .readRuntime(env, { timeoutMs })
+      .catch((error: unknown) => createServiceRuntimeInspectionFailure(error)),
     // Update policy needs definition authority; ordinary status/start reads do not.
     args.requireEffective
       ? service
           .readDefinitionMutationCapability?.({ env: baseEnv, environment: env, timeoutMs })
-          .catch(() => ({ kind: "unknown" as const, detail: "Cannot inspect service definition." }))
+          .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const)
       : undefined,
   ]);
   return {

@@ -372,6 +372,9 @@ public enum ChatSessionSidebarModel {
         if let lastReadAt = change.lastReadAt {
             session.lastReadAt = lastReadAt
         }
+        if change.colorPresent {
+            session.color = change.color
+        }
         if change.agentStatusPresent {
             session.agentStatus = change.agentStatus
         }

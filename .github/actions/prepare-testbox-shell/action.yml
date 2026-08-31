@@ -3,7 +3,7 @@ description: Pin the checked-out base ref and expose the setup-node toolchain to
 
 inputs:
   base-ref:
-    description: Commit or ref that Testbox should treat as origin/main; defaults to HEAD.
+    description: Event base for pull requests, or ref to treat as origin/main for manual runs; defaults to HEAD.
     required: false
 
 runs:
@@ -17,6 +17,14 @@ runs:
         set -euo pipefail
 
         base_ref="${TESTBOX_BASE_REF:-HEAD}"
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          # The checked-out merge can have a newer base than the event payload.
+          base_ref="$(node scripts/lib/merge-head-diff-base.mjs \
+            --base "$base_ref" --head HEAD --prefer-first-parent)"
+          BASE_SHA="$base_ref" FETCH_REF="$GITHUB_BASE_REF" \
+            python3 -I -S "$GITHUB_ACTION_PATH/../git-owner/owner.py" \
+              --policy "$GITHUB_ACTION_PATH/../ensure-base-commit/policy.py"
+        fi
         if ! base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"; then
           echo "Testbox base commit is missing from the maintained checkout: $base_ref" >&2
           exit 1

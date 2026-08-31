@@ -350,8 +350,7 @@ final class OnboardingAISetupModel {
                     }
                     finishConnected(
                         kind: "existing-model",
-                        activationOwner: self.pendingActivationOwner,
-                        requireExistingReceipt: true)
+                        activationOwner: receiptOwner)
                     if self.connected {
                         return .connected
                     }
@@ -494,14 +493,14 @@ final class OnboardingAISetupModel {
         }
     }
 
-    /// Complete a receipt-backed restored handoff after route-bound live inference.
+    /// Live verification without an activation owner reopens pre-existing inference.
     func acceptVerifiedPendingInference(modelRef: String) {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.pendingActivationVerification, !model.isEmpty else { return }
         guard self.pendingActivationOwner == nil else { return }
         finishConnected(
             kind: "existing-model",
-            activationOwner: self.pendingActivationOwner)
+            handoff: .dashboard)
     }
 
     /// Clear only the completed receipt created by this setup attempt.
@@ -754,20 +753,6 @@ extension OnboardingAISetupModel {
             "No Gateway is selected. Select a Gateway, then try again.")
     }
 
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    private func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
-    }
-
     func userSelect(kind: String) {
         guard self.canSelectCandidate(kind: kind) else { return }
         var supersededKind: String?
@@ -1007,7 +992,7 @@ extension OnboardingAISetupModel {
             } catch {
                 guard let supersededAttemptDeadline = context.supersededAttemptDeadline,
                       Date() < supersededAttemptDeadline,
-                      Self.activationAdmissionIsBusy(error)
+                      Self.setupAdmissionIsBusy(error)
                 else { throw error }
                 try await Task.sleep(nanoseconds: retryDelayMs * 1_000_000)
                 retryDelayMs = min(retryDelayMs * 2, 5000)
@@ -1208,6 +1193,17 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
+                if Self.setupAdmissionIsBusy(error) {
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    // No session was admitted; cancelling or reconciling could adopt another operation.
+                    self.applyAuthWizardResult(
+                        done: true,
+                        step: nil,
+                        status: "error",
+                        error: error.localizedDescription,
+                        preparedModelRef: nil)
+                    return
+                }
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
                 let cancellation = await self.gateway.cancelWizardSession(
@@ -1231,17 +1227,6 @@ extension OnboardingAISetupModel {
         }
     }
 
-    func continueProviderAuth() {
-        guard let step = authStep else { return }
-        let value: AnyCodable? = switch wizardStepType(step) {
-        case "text": AnyCodable(self.authText)
-        case "select": self.selectedAuthWizardOption?.value
-        case "confirm": AnyCodable(self.authConfirmation)
-        default: nil
-        }
-        self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
     func cancelProviderAuth() {
         let sessionID = self.authSessionID
         let authServerLease = self.serverLease
@@ -1259,7 +1244,8 @@ extension OnboardingAISetupModel {
             let cancellation = await self.gateway.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
-            guard authAttemptID == self.authAttemptID else { return }
+            // The wizard may finish while cancellation is in flight; keep its terminal outcome.
+            guard authAttemptID == self.authAttemptID, self.authSessionID == sessionID else { return }
             if cancellation == .absent,
                await self.reconcileProviderAuthAfterUnknownOutcome(
                    token: token,
@@ -1268,7 +1254,11 @@ extension OnboardingAISetupModel {
             {
                 return
             }
-            if cancellation != .unresolved {
+            if cancellation == .unresolved {
+                self.authError = Failure(
+                    summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
+                    detail: nil)
+            } else {
                 self.authAttemptID = UUID()
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
@@ -1276,7 +1266,7 @@ extension OnboardingAISetupModel {
         }
     }
 
-    private func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
+    func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
         guard let sessionID = authSessionID, let serverLease else { return }
         self.authBusy = true
         self.authError = nil
@@ -1291,12 +1281,31 @@ extension OnboardingAISetupModel {
         let token = self.attemptToken
         let authAttemptID = self.authAttemptID
         Task {
+            var requestLease = serverLease
             do {
-                let data = try await self.gateway.request(
-                    method: "wizard.next",
-                    params: params,
-                    timeoutMs: Self.providerAuthRequestTimeoutMs,
-                    ifCurrentServerLease: serverLease)
+                let data: Data
+                do {
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                } catch OpenClawChatTransportSendError.notDispatched {
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    // Only this error proves the callback never reached the Gateway.
+                    // Keep the wizard identity and retry once on the same route.
+                    let replacementLease = try await self.gateway.acquireServerLease(
+                        ifSameRouteAs: requestLease,
+                        timeoutMs: 5000)
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    requestLease = replacementLease
+                    self.serverLease = requestLease
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                }
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
                 self.applyAuthWizardResult(
@@ -1306,13 +1315,13 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
-                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: serverLease)
+                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: requestLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 if cancellation != .cancelled,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
-                       originalServerLease: serverLease)
+                       originalServerLease: requestLease)
                 {
                     return
                 }
@@ -1614,14 +1623,14 @@ extension OnboardingAISetupModel {
     private func finishConnected(
         kind: String,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
-        requireExistingReceipt: Bool = false)
+        handoff: OnboardingDashboardHandoff = .custodianOnboarding)
     {
         let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
         let completedReceipt = OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: self.defaults)
-        if activationOwner != nil || requireExistingReceipt {
+        if activationOwner != nil {
             guard completedReceipt else {
                 self.pendingActivationVerification = false
                 self.statuses[kind] = .failed(Self.transportFailure(
@@ -1633,7 +1642,9 @@ extension OnboardingAISetupModel {
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
         self.selectedKind = kind
-        self.phase = .connected
+        // Verification labels and completion receipts do not encode setup intent.
+        // Keep the destination in the completion itself, including after receipt cleanup.
+        self.phase = .connected(handoff)
         self.pendingActivationOwner = activationOwner
         self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
             routeIdentity.isEmpty ? nil : CompletedHandoff(

@@ -22,7 +22,7 @@ This maps to how executive assistants work: their own credentials, mail sent "on
 
 ## Why delegates
 
-OpenClaw's default mode is a **personal assistant** - one human, one agent. Delegates extend this to organizations:
+OpenClaw's simplest mode is **one human, one agent**. Delegates extend this to organizations:
 
 | Personal mode               | Delegate mode                                  |
 | --------------------------- | ---------------------------------------------- |

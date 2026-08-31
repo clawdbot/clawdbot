@@ -514,28 +514,25 @@ export function renderUsage(props: UsageProps) {
                         );
                         break;
                       case "json":
-                        downloadTextFile(
-                          `openclaw-usage-${exportStamp}.json`,
-                          JSON.stringify(
-                            {
-                              totals: displayTotals,
-                              sessions: filteredSessions,
-                              daily: filteredDaily,
-                              aggregates: activeAggregates,
-                            },
-                            null,
-                            2,
-                          ),
-                          "application/json",
-                        );
+                        displayActions.onExportJson({
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        });
                         break;
                       case undefined:
                         break;
                     }
                   }}
                 >
-                  <button slot="trigger" type="button" class="btn btn--sm">
-                    ${t("usage.export.label")} ▾
+                  <button
+                    slot="trigger"
+                    type="button"
+                    class="btn btn--sm"
+                    aria-busy=${data.exporting}
+                  >
+                    ${data.exporting ? t("common.loading") : t("usage.export.label")} ▾
                   </button>
                   <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
@@ -545,7 +542,9 @@ export function renderUsage(props: UsageProps) {
                   </wa-dropdown-item>
                   <wa-dropdown-item
                     value="json"
-                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                    ?disabled=${data.exporting ||
+                    data.loading ||
+                    (filteredSessions.length === 0 && filteredDaily.length === 0)}
                   >
                     ${t("usage.export.json")}
                   </wa-dropdown-item>
@@ -873,6 +872,8 @@ export function renderUsage(props: UsageProps) {
                         detailActions.onLogFilterHasToolsChange,
                         detailActions.onLogFilterQueryChange,
                         detailActions.onLogFilterClear,
+                        detail.context,
+                        detailActions.onRetryContextWeight,
                         display.contextExpanded,
                         detailActions.onToggleContextExpanded,
                         filterActions.onClearSessions,

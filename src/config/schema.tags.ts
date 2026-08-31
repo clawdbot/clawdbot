@@ -119,27 +119,21 @@ function normalizeTag(tag: string): ConfigTag | null {
   return CONFIG_TAGS.includes(normalized) ? normalized : null;
 }
 
-function normalizeTags(tags: ReadonlyArray<string>): ConfigTag[] {
+function normalizeTags(tags: ReadonlyArray<string>): string[] {
   const out = new Set<ConfigTag>();
+  const custom = new Set<string>();
   for (const tag of tags) {
-    const normalized = normalizeTag(tag);
-    if (normalized) {
-      out.add(normalized);
+    const known = normalizeTag(tag);
+    if (known) {
+      out.add(known);
+    } else {
+      const normalized = normalizeLowercaseStringOrEmpty(tag);
+      if (normalized) {
+        custom.add(normalized);
+      }
     }
   }
-  return [...out].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]);
-}
-
-function collectUnknownTags(tags: ReadonlyArray<string>): string[] {
-  const out = new Set<string>();
-  for (const tag of tags) {
-    const normalized = normalizeLowercaseStringOrEmpty(tag);
-    if (!normalized || normalizeTag(normalized)) {
-      continue;
-    }
-    out.add(normalized);
-  }
-  return [...out];
+  return [...[...out].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]), ...custom];
 }
 
 function patternToRegExp(pattern: string): RegExp {
@@ -147,21 +141,9 @@ function patternToRegExp(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`, "i");
 }
 
-function resolveOverride(path: string): ConfigTag[] | undefined {
-  const direct = TAG_OVERRIDES[path];
-  if (direct) {
-    return direct;
-  }
-  for (const [pattern, tags] of Object.entries(TAG_OVERRIDES)) {
-    if (!pattern.includes("*")) {
-      continue;
-    }
-    if (patternToRegExp(pattern).test(path)) {
-      return tags;
-    }
-  }
-  return undefined;
-}
+const WILDCARD_TAG_OVERRIDES = Object.entries(TAG_OVERRIDES)
+  .filter(([pattern]) => pattern.includes("*"))
+  .map(([pattern, tags]) => ({ pattern: patternToRegExp(pattern), tags }));
 
 function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   for (const tag of tags) {
@@ -172,9 +154,10 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 /** Derive known config UI tags from a schema path and optional hint metadata. */
 function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  const override = resolveOverride(path);
+  const override =
+    TAG_OVERRIDES[path] ?? WILDCARD_TAG_OVERRIDES.find(({ pattern }) => pattern.test(path))?.tags;
   if (override) {
-    return normalizeTags(override);
+    return override;
   }
 
   const tags = new Set<ConfigTag>();
@@ -210,7 +193,7 @@ function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
     tags.add("advanced");
   }
 
-  return normalizeTags([...tags]);
+  return [...tags];
 }
 
 /** Return hints with derived known tags merged ahead of any existing custom tags. */
@@ -220,10 +203,7 @@ export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
     // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
-    const tags = [
-      ...normalizeTags([...derivedTags, ...existingTags]),
-      ...collectUnknownTags(existingTags),
-    ];
+    const tags = normalizeTags([...derivedTags, ...existingTags]);
     next[path] = { ...hint, tags };
   }
   return next;

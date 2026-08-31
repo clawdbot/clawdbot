@@ -120,19 +120,11 @@ defineDiscordVoiceTests(
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
         config: { voice: { realtime: { debounceMs: 1 } } },
       });
-      const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
-        "u-guest",
-      );
-      nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
+      beginSpeakerTurn(entry, { senderIsOwner: false });
 
       await flushRealtimeForcedConsultTimers(() => {
         bridgeParams?.onTranscript?.("user", "non-owner question", true);
-        const ownerTurn = entry?.realtime?.beginSpeakerTurn(
-          { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-          "u-owner",
-        );
-        ownerTurn?.sendInputAudio(Buffer.alloc(8));
+        beginSpeakerTurn(entry);
       });
 
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();

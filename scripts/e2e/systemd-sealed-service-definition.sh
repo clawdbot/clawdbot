@@ -32,67 +32,8 @@ install -d -o appuser -g appuser -m 0700 "$state_dir"
 install -d -o root -g root -m 0555 "$unit_dir"
 install -d -o root -g root -m 0755 "$shim_dir"
 install -o root -g root -m 0755 scripts/e2e/lib/doctor-install-switch/shims/systemctl "$shim_dir/systemctl"
-install -o root -g root -m 0755 /dev/stdin "$shim_dir/busctl" <<'BUSCTL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-manager=org.freedesktop.systemd1
-object_path=/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice
-actual=("$@")
-expected=(--user --json=short)
-
-reject_invocation() {
-  printf '%s\n' 'Unsupported sealed systemd busctl invocation.' >&2
-  exit 1
-}
-
-case "${actual[2]:-}" in
-  call)
-    expected+=(call "$manager" /org/freedesktop/systemd1 "$manager.Manager" LoadUnit s openclaw-gateway.service)
-    response=manager
-    ;;
-  get-property)
-    case "${actual[5]:-}" in
-      "$manager.Service")
-        expected+=(get-property "$manager" "$object_path" "$manager.Service" ExecStart WorkingDirectory Environment EnvironmentFiles UnsetEnvironment)
-        response=service
-        ;;
-      "$manager.Unit")
-        expected+=(get-property "$manager" "$object_path" "$manager.Unit" FragmentPath DropInPaths NeedDaemonReload LoadState)
-        response=unit
-        ;;
-      *) reject_invocation ;;
-    esac
-    ;;
-  *) reject_invocation ;;
-esac
-
-[[ "${#actual[@]}" -eq "${#expected[@]}" ]] || reject_invocation
-for index in "${!expected[@]}"; do
-  [[ "${actual[$index]}" == "${expected[$index]}" ]] || reject_invocation
-done
-
-case "$response" in
-  manager)
-    printf '%s\n' '{"type":"o","data":["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"]}'
-    ;;
-  service)
-    printf '%s\n' \
-      '{"type":"a(sasbttttuii)","data":[["/usr/local/bin/node",["/usr/local/bin/node","/app/openclaw.mjs","gateway","--port","18789"],false,0,0,0,0,0,0,0]]}' \
-      '{"type":"s","data":"/app"}' \
-      '{"type":"as","data":["OPENCLAW_GATEWAY_PORT=18789"]}' \
-      '{"type":"a(sb)","data":[["/home/appuser/.openclaw/gateway.systemd.env",false]]}' \
-      '{"type":"as","data":[]}'
-    ;;
-  unit)
-    printf '%s\n' \
-      '{"type":"s","data":"/home/appuser/.config/systemd/user/openclaw-gateway.service"}' \
-      '{"type":"as","data":[]}' \
-      '{"type":"b","data":false}' \
-      '{"type":"s","data":"loaded"}'
-    ;;
-esac
-BUSCTL
+install -o root -g root -m 0755 scripts/e2e/lib/doctor-install-switch/shims/busctl "$shim_dir/busctl"
+install -o root -g root -m 0644 scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs "$shim_dir/systemd-exec-start.mjs"
 
 install_sealed_unit() {
   install -o root -g "$1" -m "$2" /dev/stdin "$unit_path" <<'UNIT'

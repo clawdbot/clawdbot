@@ -12,6 +12,7 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
+import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
 type AgentApprovalEventPhase = "requested" | "resolved";
@@ -376,6 +377,26 @@ export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "
   }
   notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
   return true;
+}
+
+/** Adds one completed model call, returning its accepted run total for local callbacks. */
+export function emitAgentRunOutputTokens(params: {
+  runId: string;
+  lifecycleGeneration: string;
+  outputTokens: number;
+  sessionKey?: string;
+}): { outputTokens: number } | undefined {
+  return recordAgentRunOutputTokens({
+    ...params,
+    emit: (data) =>
+      emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        sessionKey: params.sessionKey,
+        stream: "usage",
+        data,
+      }),
+  });
 }
 
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */

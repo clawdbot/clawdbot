@@ -57,12 +57,6 @@ jobs:
           install-trufflehog: "true"
           # Testbox hydration uses the ordinary pnpm store cache. Canonical CI
           # owns the exact dependency archive and never delegates here.
-      - name: Ensure Testbox base commit
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:

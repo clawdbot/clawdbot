@@ -45,7 +45,7 @@ it("retires queued Gateway work and listeners when its page closes", async ({ ga
   });
   expect(socket.readyState).toBe(window.WebSocket.OPEN);
   const responses: string[] = [];
-  socket.addEventListener("message", (event) => responses.push(String(event.data)));
+  socket.addEventListener("message", (event: MessageEvent) => responses.push(String(event.data)));
   socket.send(
     JSON.stringify({
       type: "req",

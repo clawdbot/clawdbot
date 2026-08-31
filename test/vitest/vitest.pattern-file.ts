@@ -134,20 +134,19 @@ function narrowIncludePatterns(
     return null;
   }
 
-  // Narrowing must intersect the CLI selection with the lane's own scope. When the lane is
-  // rooted deeper than the CLI selection, keep the lane: returning the caller's broader
-  // directory pattern re-admits files the lane never owns — `unit-fast` picks up the stateful
-  // files it excludes, and `contracts-*` picks up every sibling test outside `contracts/`.
-  // Both run `isolate: false`, so those extra files share a worker and pollute unrelated ones.
+  // Vitest applies CLI filters after discovery. Prefix overlap cannot prove glob
+  // containment, so retain the owner's patterns unless selecting an owned literal file.
   const narrowed = new Set<string>();
   for (const candidate of candidatePatterns) {
-    const candidatePrefix = literalPrefixForGlobPattern(candidate);
+    const isLiteral = !/[?*[\]{}]/u.test(candidate);
     for (const laneScope of includePatterns) {
-      if (!patternsCouldOverlap(candidate, laneScope)) {
-        continue;
+      if (isLiteral) {
+        if (path.matchesGlob(candidate, laneScope)) {
+          narrowed.add(candidate);
+        }
+      } else if (patternsCouldOverlap(candidate, laneScope)) {
+        narrowed.add(laneScope);
       }
-      const laneScopePrefix = literalPrefixForGlobPattern(laneScope);
-      narrowed.add(laneScopePrefix.length > candidatePrefix.length ? laneScope : candidate);
     }
   }
   return [...narrowed];

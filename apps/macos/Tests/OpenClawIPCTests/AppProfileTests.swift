@@ -23,12 +23,16 @@ struct AppProfileTests {
                 "/Users/test/.openclaw")
             #expect(profile.cliRootArguments.isEmpty)
         }
+    }
+
+    @Test func `current profile scopes credential service identities`() {
+        let suffix = AppProfile.current.name.map { ".profile.\($0)" } ?? ""
         #if DEBUG
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug\(suffix)")
         #else
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding\(suffix)")
         #endif
     }
 

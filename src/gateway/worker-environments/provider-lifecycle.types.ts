@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type {
   WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -10,6 +11,7 @@ import type {
 } from "../../plugins/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -39,8 +41,20 @@ export type WorkerProviderLifecycleInputOptions = {
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
+  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord) => Promise<void>;
+  prepareNodeRuntime?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeRuntimePreparation>;
+  closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
+  prepareNodeEnrollment?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeEnrollment>;
+  closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
+  projectNamespace?: string;
+  placementStore?: WorkerSessionPlacementGate;
   providerCallTimeoutMs?: number;
 };
 

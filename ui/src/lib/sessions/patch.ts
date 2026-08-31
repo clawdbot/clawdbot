@@ -11,6 +11,7 @@ export type SessionToolOverrides = {
 export type SessionPatch = {
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;

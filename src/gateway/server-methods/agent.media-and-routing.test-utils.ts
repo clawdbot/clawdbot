@@ -1164,6 +1164,10 @@ describe("gateway agent handler", () => {
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      key: childSessionKey,
+      kind: "direct",
+      updatedAt,
+      sessionId: "sess-followup",
       status: "running",
       startedAt: 123,
       endedAt: undefined,
@@ -1208,7 +1212,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
-      status: "queued",
+      status: "running",
       task: "follow-up",
     });
   });
@@ -1241,6 +1245,10 @@ describe("gateway agent handler", () => {
       return await updater(store);
     });
     mocks.loadGatewaySessionRow.mockReturnValue({
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt,
+      sessionId: "sess-main",
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/tmp/subagent",
       forkedFromParent: true,
@@ -1298,12 +1306,13 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "queued",
+      status: "running",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
       agentId: "main",
       dropIfSlow: true,
+      sessionKeys: ["agent:main:main"],
     });
   });
 
@@ -1440,6 +1449,13 @@ describe("gateway agent handler", () => {
         basePersisted: true,
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+        toolsAllowExecTargetRequirement: {
+          version: 1,
+          target: { version: 1, host: "gateway", ask: "always" },
+          grantIndex: 1,
+        },
         cliSessionBindingFacts: {
           sourceReplyDeliveryMode: "automatic" as const,
           requireExplicitMessageTarget: true,
@@ -1484,6 +1500,11 @@ describe("gateway agent handler", () => {
       sessionId?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      scheduledToolPolicy?: {
+        version: 1;
+        mode: "trusted";
+        execTarget?: { host: "gateway"; ask?: "always" };
+      };
       requireExplicitMessageTarget?: boolean;
       sourceReplyDeliveryMode?: string;
       cliSessionBindingFacts?: {
@@ -1498,8 +1519,13 @@ describe("gateway agent handler", () => {
     expect(callArgs.model).toBe("claude-opus-4-8");
     expect(callArgs.thinking).toBe("high");
     expect(callArgs.bootstrapContextRunKind).toBe("cron");
-    expect(callArgs.toolsAllow).toEqual(["image_generate", "write"]);
+    expect(callArgs.toolsAllow).toEqual(["image_generate", "exec", "write"]);
     expect(callArgs.toolsAllowIsDefault).toBe(true);
+    expect(callArgs.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "trusted",
+      execTarget: { host: "gateway", ask: "always" },
+    });
     expect(callArgs.requireExplicitMessageTarget).toBe(true);
     expect(callArgs.sourceReplyDeliveryMode).toBe("automatic");
     expect(callArgs.cliSessionBindingFacts).toEqual({
@@ -1555,6 +1581,15 @@ describe("gateway agent handler", () => {
       basePersisted: false,
       code: ErrorCodes.INVALID_REQUEST,
     },
+    {
+      name: "when its required exec pin is missing",
+      client: "continuation" as const,
+      phase: "ready" as const,
+      freshRevision: "revision-1",
+      basePersisted: true,
+      damagedExecPin: true,
+      code: ErrorCodes.UNAVAILABLE,
+    },
   ])("rejects a cron media continuation $name", async (testCase) => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
@@ -1570,6 +1605,16 @@ describe("gateway agent handler", () => {
           "basePersisted" in testCase ? testCase.basePersisted : testCase.phase === "ready",
         ...("ownerLifecycleGeneration" in testCase
           ? { ownerLifecycleGeneration: testCase.ownerLifecycleGeneration }
+          : {}),
+        ...("damagedExecPin" in testCase
+          ? {
+              toolsAllow: ["image_generate", "write"],
+              toolsAllowExecTargetRequirement: {
+                version: 1,
+                target: { version: 1, host: "gateway", ask: "always" },
+                grantIndex: 1,
+              },
+            }
           : {}),
       },
     };

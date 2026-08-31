@@ -28,6 +28,44 @@ function expectRelayUrlValidity(relayUrl: string, valid: boolean) {
 }
 
 describe("BuzzConfigSchema", () => {
+  it.each([
+    ["ada", true],
+    ["default", true],
+    ["bot-2", true],
+    ["Ada", false],
+    ["", false],
+    ["constructor", false],
+    ["prototype", false],
+  ])("validates account key %j in runtime and generated schemas", (accountId, valid) => {
+    const config = {
+      groupPolicy: "allowlist",
+      accounts: { [accountId]: { relayUrl: "wss://buzz.example.com" } },
+    };
+    expect(parseBuzzConfig(config).success).toBe(valid);
+    expectJsonSchemaValidity(`buzz.account.${accountId}`, config, valid);
+    expect(parseBuzzConfig({ defaultAccount: accountId }).success).toBe(valid);
+    expectJsonSchemaValidity(
+      `buzz.default-account.${accountId}`,
+      { groupPolicy: "allowlist", defaultAccount: accountId },
+      valid,
+    );
+  });
+
+  it("keeps nested policy optional and validates nested channel fields", () => {
+    const parsed = parseBuzzConfig({ accounts: { ada: { replyToMode: "off", historyLimit: 2 } } });
+    expect(parsed).toMatchObject({
+      success: true,
+      data: { accounts: { ada: { replyToMode: "off", historyLimit: 2 } } },
+    });
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty("accounts.ada.groupPolicy");
+    }
+    const invalid = {
+      accounts: { ada: { relayUrl: "https://invalid.example.com", historyLimit: 21 } },
+    };
+    expect(parseBuzzConfig(invalid).success).toBe(false);
+    expectJsonSchemaValidity("buzz.invalid-nested-account", invalid, false);
+  });
   it.each(["[bot]", "auto", "", "[{model}]"])(
     "accepts responsePrefix %j in runtime and JSON schemas",
     (responsePrefix) => {
@@ -48,6 +86,18 @@ describe("BuzzConfigSchema", () => {
     expect(parseBuzzConfig(config).success).toBe(valid);
     expectJsonSchemaValidity(`buzz.history.${historyLimit}`, config, valid);
   });
+  it.each([
+    ["off", true],
+    ["all", true],
+    ["first", false],
+    ["batched", false],
+    [false, false],
+  ])("validates replyToMode %s in runtime and JSON schemas", (replyToMode, valid) => {
+    const config = { replyToMode, groupPolicy: "allowlist" };
+    expect(parseBuzzConfig(config).success).toBe(valid);
+    expectJsonSchemaValidity(`buzz.reply-mode.${replyToMode}`, config, valid);
+  });
+
   it.each([
     "ws://localhost:3000",
     "wss://buzz.example.com/relay",

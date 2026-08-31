@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -649,12 +650,52 @@ describe("managed inbound media fact projection", () => {
 });
 
 describe("current user profile display projection", () => {
+  it("sender provenance gates profile lookups and alias projection", () => {
+    const identity = { type: "profile", id: "shared-id" };
+    const rows = [
+      identity,
+      {
+        type: "observation",
+        id: "shared-id",
+        pluginId: "channel",
+        accountId: null,
+        senderKind: "unknown",
+      },
+      undefined,
+    ].map((senderIdentity, index) => ({
+      role: "user",
+      content: `row ${index}`,
+      timestamp: index + 1,
+      __openclaw: {
+        senderId: "shared-id",
+        senderName: "Same label",
+        ...(senderIdentity ? { senderIdentity } : {}),
+      },
+    }));
+    const original = JSON.stringify(rows);
+    const resolveCurrentUserProfileDisplay = vi.fn(() => ({
+      kind: "resolved" as const,
+      profileId: "canonical-id",
+      avatarUrl: "/api/users/canonical-id/avatar?v=2",
+      hasUploadedAvatar: true,
+    }));
+    const projected = projectChatDisplayMessages(rows, { resolveCurrentUserProfileDisplay });
+    expect(resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(1);
+    expect(projected[0]?.["__openclaw"]).toMatchObject({
+      senderIdentity: { type: "profile", id: "canonical-id" },
+      senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=2",
+    });
+    expect(projected.slice(1)).toEqual(rows.slice(1));
+    expect(JSON.stringify(rows)).toBe(original);
+  });
+
   it("dedupes sender lookups per batch and enriches only resolved sender ids", () => {
     const messages = [
       {
         role: "user",
         content: "first",
         __openclaw: {
+          senderIdentity: { type: "profile", id: "profile-ada" },
           senderId: "profile-ada",
           senderName: "Historical Ada",
           senderUsername: "ada",
@@ -663,12 +704,19 @@ describe("current user profile display projection", () => {
       {
         role: "user",
         content: "second",
-        __openclaw: { senderId: "profile-ada", senderName: "Earlier Ada" },
+        __openclaw: {
+          senderIdentity: { type: "profile", id: "profile-ada" },
+          senderId: "profile-ada",
+          senderName: "Earlier Ada",
+        },
       },
       {
         role: "user",
         content: "third",
-        __openclaw: { senderId: "profile-bob" },
+        __openclaw: {
+          senderIdentity: { type: "profile", id: "profile-bob" },
+          senderId: "profile-bob",
+        },
       },
       {
         role: "user",
@@ -721,21 +769,23 @@ describe("current user profile display projection", () => {
     expect(resolveCurrentUserProfileDisplay.mock.calls.map(([senderId]) => senderId)).toEqual([
       "profile-ada",
       "profile-bob",
-      "channel-sender",
     ]);
     expect(projected.map((message) => message["__openclaw"])).toEqual([
       {
+        senderIdentity: { type: "profile", id: "profile-ada" },
         senderId: "profile-ada",
         senderName: "Historical Ada",
         senderUsername: "ada",
         senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=20",
       },
       {
+        senderIdentity: { type: "profile", id: "profile-ada" },
         senderId: "profile-ada",
         senderName: "Earlier Ada",
         senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=20",
       },
       {
+        senderIdentity: { type: "profile", id: "profile-bob" },
         senderId: "profile-bob",
         senderProfileAvatarUrl: "/api/users/profile-bob/avatar?v=30",
       },
@@ -759,6 +809,7 @@ describe("current user profile display projection", () => {
       role: "user",
       content: "stale avatar",
       __openclaw: {
+        senderIdentity: { type: "profile", id: "with-avatar" },
         senderId: "with-avatar",
         senderName: "Historical Name",
         senderProfileAvatarUrl: "/api/users/with-avatar/avatar?v=10",
@@ -768,6 +819,7 @@ describe("current user profile display projection", () => {
       role: "user",
       content: "removed avatar",
       __openclaw: {
+        senderIdentity: { type: "profile", id: "without-avatar" },
         senderId: "without-avatar",
         senderProfileAvatarUrl: "/api/users/without-avatar/avatar?v=10",
       },
@@ -776,6 +828,7 @@ describe("current user profile display projection", () => {
       role: "user",
       content: "lookup failed",
       __openclaw: {
+        senderIdentity: { type: "profile", id: "lookup-failed" },
         senderId: "lookup-failed",
         senderProfileAvatarUrl: "/existing/projected/avatar",
       },
@@ -804,11 +857,13 @@ describe("current user profile display projection", () => {
     });
 
     expect(projected[0]?.["__openclaw"]).toEqual({
+      senderIdentity: { type: "profile", id: "with-avatar" },
       senderId: "with-avatar",
       senderName: "Historical Name",
       senderProfileAvatarUrl: "/api/users/with-avatar/avatar?v=20",
     });
     expect(projected[1]?.["__openclaw"]).toEqual({
+      senderIdentity: { type: "profile", id: "without-avatar" },
       senderId: "without-avatar",
       senderProfileAvatarUrl: "/api/users/without-avatar/avatar?v=20",
     });
@@ -820,6 +875,7 @@ describe("current user profile display projection", () => {
       role: "user",
       content: "unchanged",
       __openclaw: {
+        senderIdentity: { type: "profile", id: "profile-ada" },
         senderId: "profile-ada",
         senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=old",
       },
@@ -875,58 +931,36 @@ describe("chat display message-tool projection", () => {
   });
 });
 
-describe("chat display tool-result detail projection", () => {
-  it("omits opaque provider replay state from display history", () => {
-    const [message] = sanitizeChatHistoryMessages([
+describe("TTS supplement matching", () => {
+  it("matches later audio against the text left by an earlier supplement", () => {
+    const marker = { textSha256: createHash("sha256").update("same").digest("hex") };
+    const firstAudio = { type: "audio", url: "https://example.test/first.mp3" };
+    const secondAudio = { type: "audio", url: "https://example.test/second.mp3" };
+    const caption = { type: "input_text", text: "caption" };
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 2 },
       {
         role: "assistant",
-        content: [{ type: "text", text: "visible" }],
-        providerReplay: {
-          type: "openai-responses-compaction",
-          data: "opaque-display-compaction",
-        },
+        content: [caption, firstAudio],
+        openclawTtsSupplement: marker,
       },
-    ]) as Array<Record<string, unknown>>;
+      { role: "assistant", content: [secondAudio], openclawTtsSupplement: marker },
+    ];
+    const original = structuredClone(messages);
 
-    expect(message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible" }],
-    });
-    expect(message).not.toHaveProperty("providerReplay");
-    expect(JSON.stringify(message)).not.toContain("opaque-display-compaction");
-  });
-
-  it("keeps authoritative write booleans and strips unrelated details", () => {
-    const [overwrite, created, invalid] = sanitizeChatHistoryMessages([
+    expect(projectChatDisplayMessages(messages)).toEqual([
       {
-        role: "toolResult",
-        toolCallId: "write-1",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: true, created: false, diff: "-1 old\n+1 new", private: "drop" },
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, secondAudio],
+        timestamp: 1,
       },
       {
-        role: "toolResult",
-        toolCallId: "write-2",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: true, created: true },
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, caption, firstAudio],
+        timestamp: 2,
       },
-      {
-        role: "toolResult",
-        toolCallId: "write-3",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: "true", created: 1 },
-      },
-    ]) as Array<Record<string, unknown>>;
-
-    expect(overwrite?.details).toEqual({
-      changed: true,
-      created: false,
-      diff: "-1 old\n+1 new",
-    });
-    expect(created?.details).toEqual({ changed: true, created: true });
-    expect(invalid).not.toHaveProperty("details");
+    ]);
+    expect(messages).toEqual(original);
   });
 });

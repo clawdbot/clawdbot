@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  appendReplyMediaFailureWarning,
+  getReplyPayloadMetadata,
   readPairingQrReplyChannelData,
+  stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -11,6 +12,7 @@ import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
+  buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
@@ -137,6 +139,14 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   ).length;
   const plan = createOutboundPayloadPlan(params.payloads);
   if (plan.length === 0) {
+    const failureBlocks = params.payloads.flatMap((payload) =>
+      (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+        buildManagedMediaFailureBlock,
+      ),
+    );
+    if (failureBlocks.length > 0) {
+      return failureBlocks;
+    }
     return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
   }
 
@@ -147,10 +157,14 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
-    let managedMediaPrepareFailed = false;
-    const text = sanitizeAssistantDisplayText(payload.text, {
-      preserveBoundaries: preserveTextBoundaries,
-    });
+    const metadataSource = params.payloads[entry.sourceIndex] ?? payload;
+    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const text = sanitizeAssistantDisplayText(
+      stripReplyMediaFailureFallback(payload.text, mediaFailures),
+      {
+        preserveBoundaries: preserveTextBoundaries,
+      },
+    );
     if (text) {
       const previousBlock = content.at(-1);
       if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
@@ -177,14 +191,10 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      items: prepareOutgoingMediaFromReplyPayload(
-        payload,
-        params.payloads[entry.sourceIndex] ?? payload,
-      ),
+      items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
       localRoots: params.managedMediaLocalRoots,
       continueOnPrepareError: true,
       onPrepareError: (error) => {
-        managedMediaPrepareFailed = true;
         params.onManagedMediaPrepareError?.(error.message);
       },
     });
@@ -196,9 +206,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       }
     }
     content.push(...mediaBlocks);
-    if (managedMediaPrepareFailed) {
-      content.push({ type: "text", text: appendReplyMediaFailureWarning(undefined) });
-    }
+    content.push(...mediaFailures.map(buildManagedMediaFailureBlock));
   }
 
   if (content.length > 0) {
@@ -226,25 +234,17 @@ export function replaceAssistantContentTextBlocks(
   }
   const merged: AssistantDisplayContentBlock[] = [];
   let transcriptTextIndex = 0;
-  const mediaFailureWarning = appendReplyMediaFailureWarning(undefined);
   for (const block of content) {
     if (
       block?.type === "text" &&
       typeof block.text === "string" &&
-      block.text !== mediaFailureWarning &&
       transcriptTextIndex < transcriptTextBlocks.length
     ) {
       const replacement = expectDefined(
         transcriptTextBlocks[transcriptTextIndex++],
         "transcript text blocks entry at transcript text index++",
       );
-      merged.push(
-        block.text.includes(mediaFailureWarning) &&
-          typeof replacement.text === "string" &&
-          !replacement.text.includes(mediaFailureWarning)
-          ? { ...replacement, text: appendReplyMediaFailureWarning(replacement.text) }
-          : replacement,
-      );
+      merged.push(replacement);
       continue;
     }
     merged.push(block);

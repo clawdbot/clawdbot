@@ -26,7 +26,6 @@ type GatewayChatUserTurnController = {
   persistBestEffort: () => Promise<void>;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
-  setAcceptedSessionId: (sessionId: string) => void;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
@@ -35,6 +34,7 @@ export function createGatewayChatUserTurnController(params: {
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
+  display?: false;
   startedAt: number;
   warn: (message: string) => void;
   assertGoalCurrent?: () => void;
@@ -45,7 +45,9 @@ export function createGatewayChatUserTurnController(params: {
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
-    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+    ...(params.display === false || request.goalOperation?.action === "resume"
+      ? { display: false }
+      : {}),
     text: request.rawMessage,
     timestamp: session.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
@@ -81,7 +83,6 @@ export function createGatewayChatUserTurnController(params: {
         }),
       )
     : Promise.resolve(baseInput);
-  let acceptedSessionId = admission.admittedSessionId;
   const recorder = createUserTurnTranscriptRecorder({
     ...(request.goalOperation
       ? {
@@ -101,7 +102,7 @@ export function createGatewayChatUserTurnController(params: {
         session.sessionLoadOptions,
       );
       const targetEntry = entry ?? admission.initialSessionEntry;
-      if (!targetEntry?.sessionId || targetEntry.sessionId !== acceptedSessionId) {
+      if (!targetEntry?.sessionId || targetEntry.sessionId !== admission.sessionBinding.sessionId) {
         return undefined;
       }
       return {
@@ -146,9 +147,6 @@ export function createGatewayChatUserTurnController(params: {
     },
     recorder,
     replyContextFieldsPromise,
-    setAcceptedSessionId: (sessionId) => {
-      acceptedSessionId = sessionId;
-    },
     setInputPromise: (input) => {
       const previousInputPromise = inputPromise;
       inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({

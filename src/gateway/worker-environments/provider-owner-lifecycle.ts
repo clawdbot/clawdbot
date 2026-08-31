@@ -1,10 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
+import type { WorkerProvider } from "../../plugins/types.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import { requireProviderOperationTimeoutMs } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export function createWorkerProviderOwnerLifecycle(
-  options: Pick<WorkerProviderLifecycleOptions, "store" | "tunnelManager" | "serviceError">,
+  options: Pick<
+    WorkerProviderLifecycleOptions,
+    | "store"
+    | "tunnelManager"
+    | "serviceError"
+    | "callProvider"
+    | "providerCallTimeoutMs"
+    | "placementStore"
+  >,
 ) {
   const { store, serviceError } = options;
   const tunnels = options.tunnelManager;
@@ -30,6 +40,15 @@ export function createWorkerProviderOwnerLifecycle(
     reason?: WorkerTunnelStopReason,
   ): Promise<WorkerEnvironmentRecord> => {
     requireCurrentOwner(record);
+    const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
+    if (sessionId) {
+      // Transfer an exact pending-result owner before credential revocation makes its
+      // same-lifecycle worker permanently unreachable to recovery.
+      options.placementStore?.prepareWorkspaceResultOwnerRevocation(
+        { sessionId, environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
+        new Error(record.lastError ?? "Cloud worker owner revoked before workspace recovery"),
+      );
+    }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
     store.revokeEnvironmentCredential(record.environmentId);
@@ -43,5 +62,29 @@ export function createWorkerProviderOwnerLifecycle(
     return requireCurrentOwner(record);
   };
 
-  return { requireCurrentOwner, stopOwner };
+  const destroyLease = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    lease: Parameters<WorkerProvider["destroy"]>[0],
+  ) => {
+    requireCurrentOwner(record);
+    const timeoutMs =
+      options.providerCallTimeoutMs === undefined
+        ? requireProviderOperationTimeoutMs(
+            "destroy",
+            provider.resolveDestroyTimeoutMs?.(lease.profile),
+          )
+        : undefined;
+    await options.callProvider(
+      record.environmentId,
+      () => {
+        // An earlier timed-out operation can keep this call queued across owner changes.
+        requireCurrentOwner(record);
+        return provider.destroy(lease);
+      },
+      timeoutMs,
+    );
+  };
+
+  return { requireCurrentOwner, stopOwner, destroyLease };
 }

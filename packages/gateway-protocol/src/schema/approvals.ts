@@ -221,6 +221,8 @@ const ApprovalResolutionFields = {
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
   status: Type.Literal("pending"),
+  /** Canonical raising session when projected into a session-scoped reviewer surface. */
+  sourceSessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Approval whose first recorded reviewer decision allows the operation. */

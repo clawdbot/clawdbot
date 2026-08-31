@@ -16,7 +16,7 @@ import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
-  findCallMatchesInStore,
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -260,15 +260,11 @@ describe("voice-call call record store", () => {
       );
     }
     expect(await getCallHistoryFromStore(storePath, 100)).toHaveLength(100);
-    const internalMatches = await findCallMatchesInStore(storePath, "call-target");
-    expect(internalMatches.byCallId).toMatchObject({
+    expect(findCallInStore(storePath, "call-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });
-    expect(internalMatches.byProviderCallId).toMatchObject({ callId: "noise-100" });
-
-    const providerMatches = await findCallMatchesInStore(storePath, "provider-target");
-    expect(providerMatches.byProviderCallId).toMatchObject({
+    expect(findCallInStore(storePath, "provider-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });

@@ -55,7 +55,13 @@ describe("channel migration artifact consent", () => {
     }
     writeArtifact(installedDir, "1.0.0", ["existing-provider"]);
     writeArtifact(stagedDir, "2.0.0", ["existing-provider", "new-provider"]);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state"), HOME: root };
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      HOME: root,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+    };
     const previousSurface = resolvePluginArtifactDeclaredSurface(installedDir, env);
     const config: OpenClawConfig = {
       plugins: {

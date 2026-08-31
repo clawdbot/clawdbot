@@ -2,7 +2,7 @@ import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-r
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { ACTIVITY_PERSON_PARAM } from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
-import { projectPresencePayload, type PresenceViewer } from "../../lib/presence-users.ts";
+import type { PresenceViewer } from "../../lib/presence-users.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -136,26 +136,6 @@ export function projectSessionActivity(
     sessions: visible,
     timeCount: result?.peopleSessionCount ?? visible.length,
   };
-}
-
-export function resolveActivityIdentity(
-  userId: string,
-  presencePayload: unknown,
-  people: SessionsListResult["people"],
-): PresenceViewer | null {
-  const online = projectPresencePayload(presencePayload).users.find((user) => user.id === userId);
-  if (online) {
-    return online;
-  }
-  const person = people?.find((candidate) => candidate.identity.id === userId);
-  return person
-    ? {
-        id: person.identity.id,
-        name: person.label,
-        avatarUrl: person.avatarUrl,
-        watchedSessions: [],
-      }
-    : null;
 }
 
 export function resolveViewingNow(

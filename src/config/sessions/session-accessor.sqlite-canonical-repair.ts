@@ -85,7 +85,6 @@ export function readExactSessionEntryRowForCanonicalRepair(
     entry:
       parsedEntry ??
       ({ sessionId: row.current_session_id, updatedAt: row.updated_at } satisfies SessionEntry),
-    legacyKeys: [],
     row,
   };
 }

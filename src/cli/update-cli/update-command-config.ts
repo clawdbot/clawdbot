@@ -16,9 +16,12 @@ import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
 import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
+import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -235,6 +238,22 @@ function resolveRestoredAuthoredChannels(params: {
     return restoredModelOverrides.channels;
   }
   return changed ? restoredChannels : undefined;
+}
+
+export async function persistValidatedDowngradeConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): Promise<void> {
+  if (
+    snapshot.valid &&
+    shouldWarnOnTouchedVersion(VERSION, snapshot.sourceConfig.meta?.lastTouchedVersion)
+  ) {
+    // Strict target validation permits this write even when Doctor execution failed.
+    // Committing unchanged config through its normal writer stamps the target version,
+    // so same-channel downgrades retain ordinary restart eligibility.
+    await withPluginLifecycleLease({}, async () => {
+      await mutateConfigFileWithRetry({ mutate: () => undefined });
+    });
+  }
 }
 
 export async function persistRequestedUpdateChannel(params: {

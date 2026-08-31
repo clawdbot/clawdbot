@@ -153,12 +153,9 @@ export async function repairLoadedGatewayServiceForStart(
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
     .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
-    .catch(() => ({ kind: "unknown" as const, detail: "" }));
-  if (capability && capability.kind !== "writable") {
-    assertServiceDefinitionWritable({
-      kind: capability.kind,
-      detail: "Service definition cannot be safely modified.",
-    });
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
   }
   if (
     hasGatewayServiceLauncherOverride(params.state.command) ||
@@ -190,10 +187,13 @@ export async function repairLoadedGatewayServiceForStart(
   const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
   const installedRuntimePath =
     installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
-  const runtime =
-    installedRuntimePath && (await resolveBunRuntimeInfo(installedRuntimePath)).supported
-      ? "bun"
-      : "node";
+  const runtimeInfo = installedRuntimePath
+    ? await resolveBunRuntimeInfo(installedRuntimePath)
+    : undefined;
+  if (runtimeInfo?.status === "probe-failed") {
+    throw runtimeInfo.error;
+  }
+  const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,

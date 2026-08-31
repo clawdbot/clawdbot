@@ -59,6 +59,7 @@ function emptyOwnerMaps(): PluginMetadataSnapshot["owners"] {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   };
 }
 
@@ -66,19 +67,21 @@ function createManifestBackedProviderSnapshot(
   plugin: PluginManifestRecord,
 ): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],

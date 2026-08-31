@@ -5,7 +5,7 @@ import {
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -196,7 +196,7 @@ async function resolveConversationAppServerRuntime(params: {
     source?.agentId ??
     params.agentId ??
     (params.config
-      ? resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+      ? resolveSessionAgentIdsStrict({ sessionKey: params.sessionKey, config: params.config })
           .sessionAgentId
       : undefined);
   const storePath =

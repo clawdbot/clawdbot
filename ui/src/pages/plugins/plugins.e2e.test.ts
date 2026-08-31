@@ -31,6 +31,7 @@ const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
 const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
+const restartWarningPattern = /restarts the Gateway immediately[\s\S]*interrupts active sessions/u;
 const pluginMethods = [
   "plugins.list",
   "plugins.inspect",
@@ -372,6 +373,12 @@ async function clickRowAction(page: Page, rowSelector: string, buttonName: strin
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
+async function confirmPluginLifecycle(page: Page, action: "Install" | "Remove"): Promise<void> {
+  const dialog = page.locator("openclaw-modal-dialog");
+  await dialog.waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: action, exact: true }).click();
+}
+
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -592,7 +599,22 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await captureScreenshot(page, "04-search-desktop.png");
 
       await gateway.deferNext("plugins.install");
+      const installCountBeforeConfirmation = (await gateway.getRequests("plugins.install")).length;
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
+      const installRestartConfirm = page.locator("openclaw-modal-dialog");
+      await installRestartConfirm.waitFor({ state: "visible" });
+      expect(await installRestartConfirm.textContent()).toMatch(restartWarningPattern);
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(
+        installCountBeforeConfirmation,
+      );
+      await installRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await installRestartConfirm.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(
+        installCountBeforeConfirmation,
+      );
+      await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
+      await installRestartConfirm.waitFor({ state: "visible" });
+      await installRestartConfirm.getByRole("button", { name: "Install", exact: true }).click();
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       expect(requestParams(firstInstallRequest)).toEqual({
@@ -698,16 +720,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await calendarRow.waitFor({ state: "visible" });
       await captureScreenshot(page, "05-enabled-installed-desktop.png");
 
-      // Removable installs expose a confirm-guarded uninstall behind the trash button.
-      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      // Removable installs disclose the restart before the uninstall request.
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
+      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      const uninstallRestartConfirm = page.locator("openclaw-modal-dialog");
+      await uninstallRestartConfirm.waitFor({ state: "visible" });
+      expect(await uninstallRestartConfirm.textContent()).toMatch(restartWarningPattern);
+      expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(uninstallCountBefore);
+      await uninstallRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await uninstallRestartConfirm.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(uninstallCountBefore);
+      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      await uninstallRestartConfirm.waitFor({ state: "visible" });
       const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("plugins.list");
       // Keep the authoritative config refresh on the workboard-enabled snapshot
       // so the conditional sidebar route assertion below stays meaningful.
       await gateway.deferNext("config.get");
-      await calendarRow.getByRole("button", { name: "Remove", exact: true }).click();
+      await uninstallRestartConfirm.getByRole("button", { name: "Remove", exact: true }).click();
       const uninstallRequest = await waitForNextRequest(
         gateway,
         "plugins.uninstall",
@@ -748,6 +779,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await reinstallRow
         .getByRole("button", { name: "Install Calendar Plus", exact: true })
         .click();
+      await confirmPluginLifecycle(page, "Install");
       const reinstallRequest = await waitForNextRequest(
         gateway,
         "plugins.install",
@@ -831,6 +863,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginLifecycle(page, "Install");
       expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
@@ -888,6 +921,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginLifecycle(page, "Install");
       await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",

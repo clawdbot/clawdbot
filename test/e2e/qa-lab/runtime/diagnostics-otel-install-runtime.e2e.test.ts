@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,8 +7,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/api.js";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -215,7 +219,7 @@ async function startRegistry(repoRoot: string, scratch: string, tarball: string,
   }
 }
 
-async function runTurn(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>, marker: string) {
+async function runTurn(gateway: QaGatewayChild, marker: string) {
   const started = (await gateway.call("chat.send", {
     sessionKey: `agent:qa:${marker.toLowerCase()}`,
     message: `Reply exactly: ${marker}`,
@@ -232,7 +236,7 @@ async function runTurn(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
 }
 
 async function restartWithOtelConfig(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   sampleRate: number;
   traceEndpoint: string;
 }) {
@@ -256,15 +260,16 @@ async function restartWithOtelConfig(params: {
   });
 }
 
-// Return the handle before installation so the caller's finally owns every later failure.
+// The caller retains the owner before startup and every later installation step.
 async function startInstallGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   envTraceEndpoint: string;
   mockBaseUrl: string;
   nodeOptions?: string;
   registryBaseUrl: string;
   repoRoot: string;
 }) {
-  return await startQaGatewayChild({
+  return await params.owner.start({
     repoRoot: params.repoRoot,
     providerBaseUrl: `${params.mockBaseUrl}/v1`,
     providerMode: "mock-openai",
@@ -293,7 +298,7 @@ async function startInstallGateway(params: {
 }
 
 async function installAndConfigure(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   configTraceEndpoint: string;
   packageVersion: string;
   sampleRate?: number;
@@ -349,12 +354,14 @@ describe("managed diagnostics-otel install runtime", () => {
     const envOnly = await startReceiver();
     let registry: Awaited<ReturnType<typeof startRegistry>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
-    try {
+    const gatewayOwner = createQaGatewayChild();
+    let gateway: QaGatewayChild | undefined;
+    const runProof = async () => {
       const packed = await packPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
       gateway = await startInstallGateway({
+        owner: gatewayOwner,
         envTraceEndpoint: envOnly.baseUrl,
         mockBaseUrl: mock.baseUrl,
         registryBaseUrl: registry.baseUrl,
@@ -407,16 +414,17 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
       expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.capturedRequests).toHaveLength(0);
-    } finally {
+    };
+    await runQaGatewayFixture(runProof, async () => {
       await settleCleanup(
-        ["gateway", async () => await gateway?.stop()],
+        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
         ["mock provider", async () => await mock?.stop()],
         ["fixture registry", async () => await stopChild(registry?.child)],
         ["configured receiver", async () => await configured.close()],
         ["environment receiver", async () => await envOnly.close()],
         ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
       );
-    }
+    });
   }, 180_000);
 
   test("keeps installed diagnostic listeners active with a preloaded SDK", async () => {
@@ -438,8 +446,9 @@ describe("managed diagnostics-otel install runtime", () => {
     const ignoredConfig = await startReceiver();
     let registry: Awaited<ReturnType<typeof startRegistry>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
-    try {
+    const gatewayOwner = createQaGatewayChild();
+    let gateway: QaGatewayChild | undefined;
+    const runProof = async () => {
       const packed = await packPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
@@ -467,6 +476,7 @@ describe("managed diagnostics-otel install runtime", () => {
         ].join("\n"),
       );
       gateway = await startInstallGateway({
+        owner: gatewayOwner,
         envTraceEndpoint: receiver.baseUrl,
         mockBaseUrl: mock.baseUrl,
         nodeOptions: `--import=${pathToFileURL(preloadPath).href}`,
@@ -506,15 +516,16 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(runSpan.traceId).toBeTruthy();
       expect(runSpan.spanId).toBeTruthy();
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
-    } finally {
+    };
+    await runQaGatewayFixture(runProof, async () => {
       await settleCleanup(
-        ["gateway", async () => await gateway?.stop()],
+        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
         ["mock provider", async () => await mock?.stop()],
         ["fixture registry", async () => await stopChild(registry?.child)],
         ["preloaded receiver", async () => await receiver.close()],
         ["ignored config receiver", async () => await ignoredConfig.close()],
         ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
       );
-    }
+    });
   }, 180_000);
 });
