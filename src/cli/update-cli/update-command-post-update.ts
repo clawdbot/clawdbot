@@ -121,10 +121,7 @@ export async function finishUpdate(params: {
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
     printFinalResult(recoverService ? completedResult(result) : finalResult);
   };
-  const restoreWindowsAutoStart = async (
-    result: UpdateRunResult,
-    failureExitCode = resolveManagedServiceUpdateFailureExitCode(result),
-  ) => {
+  const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop);
       return true;
@@ -137,7 +134,7 @@ export async function finishUpdate(params: {
         status: "error",
         reason: "windows-task-autostart-restore-failed",
       });
-      defaultRuntime.exit(failureExitCode);
+      defaultRuntime.exit(1);
       return false;
     }
   };
@@ -146,7 +143,7 @@ export async function finishUpdate(params: {
     if (!(await restoreWindowsAutoStart(params.result))) {
       return;
     }
-    await reportResult(params.result, params.result.recovery?.serviceRestartSafe !== false);
+    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
     if (params.result.recovery?.serviceRestartSafe === false) {
       if (!params.opts.json) {
         const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
@@ -165,7 +162,13 @@ export async function finishUpdate(params: {
         }
       }
     }
-    defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(params.result));
+    // The helper only recovers a service it parked that this CLI could not own
+    // (for example, an unloaded LaunchAgent). Never retry a handled restart.
+    defaultRuntime.exit(
+      params.preManagedServiceStop?.stopped
+        ? 1
+        : resolveManagedServiceUpdateFailureExitCode(params.result),
+    );
     return;
   }
 
@@ -173,7 +176,7 @@ export async function finishUpdate(params: {
     if (!(await restoreWindowsAutoStart(params.result))) {
       return;
     }
-    await reportResult(params.result, true);
+    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
     if (params.result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -197,7 +200,14 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    defaultRuntime.exit(params.result.reason === "dirty" ? 1 : 0);
+    defaultRuntime.exit(
+      !params.preManagedServiceStop?.stopped &&
+        resolveManagedServiceUpdateFailureExitCode(params.result) !== 1
+        ? resolveManagedServiceUpdateFailureExitCode(params.result)
+        : params.result.reason === "dirty"
+          ? 1
+          : 0,
+    );
     return;
   }
 
@@ -254,11 +264,12 @@ export async function finishUpdate(params: {
         }),
     );
     if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsAutoStart(params.result, freshProcessResult.exitCode))) {
+      if (!(await restoreWindowsAutoStart(params.result))) {
         return;
       }
       await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
-      defaultRuntime.exit(freshProcessResult.exitCode);
+      // A nested process exit is not this updater's verified recovery verdict.
+      defaultRuntime.exit(1);
       return;
     }
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;

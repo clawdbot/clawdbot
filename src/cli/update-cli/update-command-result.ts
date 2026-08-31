@@ -4,6 +4,7 @@ import type { EXTENDED_STABLE_TAG_UNSUPPORTED_REASON } from "../../infra/update-
 import type { ExtendedStableFailureReason } from "../../infra/update-check.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
+  resolveManagedServiceUpdateFailureExitCode,
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
@@ -29,6 +30,7 @@ export async function reportPreMutationUpdateFailure(params: {
     mode: params.installKind === "git" ? "git" : "unknown",
     root: params.root,
     reason: params.reason,
+    recovery: { serviceRestartSafe: true },
     steps: [],
     durationMs: 0,
   };
@@ -43,7 +45,7 @@ export async function reportPreMutationUpdateFailure(params: {
     defaultRuntime.error(params.message);
   }
   printResult(result, params.opts);
-  defaultRuntime.exit(1);
+  defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(result));
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

@@ -3198,30 +3198,33 @@ describe("update-cli", () => {
     expect(runExec).not.toHaveBeenCalled();
   });
 
-  it.each([2, 79])("preserves the fresh process failure exit %s", async (exitCode) => {
-    setupUpdatedRootRefresh();
-    spawn.mockImplementationOnce(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        once: EventEmitter["once"];
-      };
-      queueMicrotask(() => {
-        child.emit("exit", exitCode, null);
+  it.each([2, 78, 79, 80])(
+    "does not forward nested failure exit %s as recovery authority",
+    async (exitCode) => {
+      setupUpdatedRootRefresh();
+      spawn.mockImplementationOnce(() => {
+        const child = new EventEmitter() as EventEmitter & {
+          once: EventEmitter["once"];
+        };
+        queueMicrotask(() => {
+          child.emit("exit", exitCode, null);
+        });
+        return child;
       });
-      return child;
-    });
 
-    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
-      await updateCommand({ yes: true, json: true });
-    });
+      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
+        await updateCommand({ yes: true, json: true });
+      });
 
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
-    expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      reason: "post-core-update-failed",
-    });
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-  });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "post-core-update-failed",
+      });
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    },
+  );
 
   it("post-core resume mode skips the core update and only runs post-update tasks", async () => {
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
@@ -5648,9 +5651,7 @@ describe("update-cli", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
-        await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toThrow(
-          "package replacement failed",
-        );
+        await updateCommand({ yes: true, timeout: "17" });
       });
     } finally {
       platformSpy.mockRestore();
@@ -5703,7 +5704,7 @@ describe("update-cli", () => {
     mockPackageReplacementFailure("package replacement failed");
 
     try {
-      await expect(updateCommand({ yes: true })).rejects.toThrow("package replacement failed");
+      await updateCommand({ yes: true });
     } finally {
       platformSpy.mockRestore();
     }
@@ -5712,6 +5713,21 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(freshRestartCalls()).toHaveLength(0);
+  });
+
+  it("leaves the stopped Gateway down when Git mutation throws without a recovery verdict", async () => {
+    mockRunningManagedGateway();
+    const failure = new Error("updater interrupted after mutation");
+    vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
+      await opts?.beforeGitMutation?.({});
+      throw failure;
+    });
+
+    await expect(updateCommand({ yes: true, json: true })).rejects.toBe(failure);
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(freshRestartCalls()).toHaveLength(0);
+    expectNoSideEffects(serviceStart, serviceRestart);
+    expect(getErrorOutput()).toContain("Update recovery is unverified");
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {

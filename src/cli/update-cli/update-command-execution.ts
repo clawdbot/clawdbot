@@ -200,6 +200,7 @@ export async function executeMutableUpdate(params: {
             mode: params.packageInstallTarget?.manager ?? "unknown",
             root: params.root,
             reason: "database-schema-preflight",
+            recovery: { serviceRestartSafe: true },
             steps: [],
             durationMs: Date.now() - params.startedAt,
           }
@@ -276,7 +277,11 @@ export async function executeMutableUpdate(params: {
         err,
       );
     }
-    await recoverStoppedService();
+    // Only the mutation owner can prove rollback. Unexpected exceptions cannot
+    // authorize restarting a partially replaced installation.
+    defaultRuntime.error(
+      "Update recovery is unverified. Inspect `openclaw gateway status --deep` and repair the installation before restarting.",
+    );
     throw err;
   }
 

@@ -1,3 +1,6 @@
+import path from "node:path";
+import type { Readable } from "node:stream";
+
 type ManagedSystemdPostExitState = {
   activeState: string;
   generation?: "cleared" | "parked" | "replacement";
@@ -25,6 +28,9 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
   updaterExitCode?: number;
+  updaterSignal?: NodeJS.Signals;
+  recoveryExitCode?: number;
+  recoveryHang?: boolean;
 };
 
 export type ManagedServiceCommandTiming = {
@@ -315,4 +321,108 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  return actualSpawn(command, args, options);",
     "};",
   ].join("\n");
+}
+
+export function createManagedServiceUpdateCommandFixture(params: {
+  kind: "systemd" | "launchd";
+  root: string;
+  statePath: string;
+  updaterPath: string;
+  options?: ManagedServiceManagerBoundaryOptions;
+}) {
+  const { kind, root, statePath, updaterPath, options } = params;
+  const recovery =
+    kind === "systemd"
+      ? { kind, unit: "openclaw-gateway.service" }
+      : {
+          kind,
+          uid: 501,
+          label: "ai.openclaw.gateway",
+          plistPath: path.join(root, "ai.openclaw.gateway.plist"),
+        };
+  return {
+    serviceRecovery: recovery,
+    commandArgv: [
+      process.execPath,
+      "-e",
+      [
+        `const fs = require("node:fs");`,
+        ...(kind === "launchd"
+          ? [
+              `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+              `if (!state.unloaded) process.exit(19);`,
+              `state.updaterObservedUnloaded = true;`,
+              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+            ]
+          : []),
+        `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
+        options?.updaterSignal
+          ? `process.kill(process.pid, ${JSON.stringify(options.updaterSignal)});`
+          : `process.exit(${options?.updaterExitCode ?? 80});`,
+      ].join(""),
+    ],
+    recoveryCommandArgv: [
+      process.execPath,
+      "-e",
+      [
+        `const fs = require("node:fs");`,
+        `const { spawnSync } = require("node:child_process");`,
+        `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+        `state.guardedRestart = process.argv.slice(1);`,
+        `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+        ...(options?.recoveryHang
+          ? [
+              `const { spawn } = require("node:child_process");`,
+              `state.recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `setInterval(() => {}, 1000);`,
+            ]
+          : options?.recoveryExitCode === undefined
+            ? (kind === "systemd"
+                ? [
+                    ["--user", "reset-failed", recovery.unit],
+                    ["--user", "start", recovery.unit],
+                    ["--user", "show", recovery.unit],
+                  ]
+                : [
+                    ["enable", `gui/501/ai.openclaw.gateway`],
+                    ["bootstrap", "gui/501", path.join(root, "ai.openclaw.gateway.plist")],
+                    ["print", "gui/501/ai.openclaw.gateway"],
+                  ]
+              ).map(
+                (args) =>
+                  `if (spawnSync(${JSON.stringify(kind === "systemd" ? "systemctl" : "launchctl")}, ${JSON.stringify(args)}).status !== 0) process.exit(1);`,
+              )
+            : [`process.exit(${options.recoveryExitCode});`]),
+      ].join(""),
+      "--",
+      "gateway",
+      "restart",
+      "--preserve-definition",
+      "--json",
+    ],
+  };
+}
+
+export async function waitForHandoffResponse(
+  output: Readable | null,
+  expected: string,
+): Promise<void> {
+  if (!output) {
+    throw new Error("expected managed handoff helper stdout");
+  }
+  await new Promise<void>((resolve, reject) => {
+    let buffered = "";
+    const onData = (chunk: Buffer | string) => {
+      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+      if (buffered.includes(`${expected}\n`)) {
+        output.removeListener("data", onData);
+        output.removeListener("end", onEnd);
+        resolve();
+      }
+    };
+    const onEnd = () => reject(new Error(`managed handoff helper exited before ${expected}`));
+    output.on("data", onData);
+    output.once("end", onEnd);
+  });
 }
