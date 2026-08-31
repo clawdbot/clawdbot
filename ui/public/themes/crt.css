@@ -22,7 +22,7 @@
    *
    * WCAG 2.1 AA audit (bg = #090a09, relative luminance ≈ 0.0030):
    *   --accent #e8e8e8  contrast ≈ 16.2:1 AAA ✓
-   *   --primary-foreground #111111 on #e8e8e8 button: 15.5:1 ✓
+   *   --primary-foreground / --accent-foreground #111111 on #e8e8e8: 15.5:1 ✓
    *   --destructive-foreground (base #fafafa) on #d0342d button: 4.7:1 AA ✓
    *   body text --text #c6c6c6: 11.6:1 ✓
    *   worst text pairing --muted on --bg-muted: 6.3:1 ✓
@@ -36,6 +36,11 @@
   --primary: #e8e8e8;
   --primary-hover: #ffffff;
   --primary-foreground: #111111;
+  /* Base :root inherits #fafafa ink for accent fills, which vanishes on the
+     white accent (1.17:1) — e.g. the selected default-accent swatch check.
+     First built-in theme to override; light mode keeps base white ink over
+     its near-black accent. */
+  --accent-foreground: #111111;
 
   --destructive: #d0342d;
   --destructive-hover: #b92d27;
