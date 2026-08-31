@@ -517,7 +517,7 @@ function Install-PortableNode {
         return
     }
 
-    Write-Host "  No package manager found; bootstrapping user-local portable Node.js..." -ForegroundColor Gray
+    Write-Host "  Bootstrapping user-local portable Node.js..." -ForegroundColor Gray
 
     $download = Resolve-PortableNodeDownload
     $portableRoot = Get-PortableNodeRoot
@@ -549,77 +549,78 @@ function Install-PortableNode {
     Write-Host "[OK] User-local Node.js ready: $nodeVersion" -ForegroundColor Green
 }
 
+function Invoke-NodePackageManagerInstall {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$InstallCommand,
+        [switch]$DiscoverProgramFilesNode
+    )
+
+    Write-Host "  Using $Name..." -ForegroundColor Gray
+    try {
+        & $InstallCommand
+    } catch {
+        Write-Host "[!] $Name could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    Refresh-ProcessPath
+    if ($DiscoverProgramFilesNode) {
+        Add-InstalledNodeToProcessPath | Out-Null
+    }
+    if (Check-Node) {
+        Write-Host "[OK] Node.js installed via $Name" -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host "[!] $Name did not make a supported Node.js runtime available" -ForegroundColor Yellow
+    return $false
+}
+
 # Install Node.js
 function Install-Node {
     Write-Host "[*] Installing Node.js..." -ForegroundColor Yellow
 
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "  Using winget..." -ForegroundColor Gray
-        try {
+        $installed = Invoke-NodePackageManagerInstall -Name "winget" -DiscoverProgramFilesNode -InstallCommand {
             winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
             if ($LASTEXITCODE -ne 0) {
                 throw "winget exited with code $LASTEXITCODE"
             }
-        } catch {
-            Write-Host "[!] winget could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
         }
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        Add-InstalledNodeToProcessPath | Out-Null
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] winget did not make a supported Node.js runtime available" -ForegroundColor Yellow
-        Write-Host "  Trying another installation method..." -ForegroundColor Gray
     }
 
     # Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Write-Host "  Using Chocolatey..." -ForegroundColor Gray
-        try {
+        $installed = Invoke-NodePackageManagerInstall -Name "Chocolatey" -InstallCommand {
             choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
             if ($LASTEXITCODE -ne 0) {
                 throw "Chocolatey exited with code $LASTEXITCODE"
             }
-        } catch {
-            Write-Host "[!] Chocolatey could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
         }
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] Chocolatey did not make a supported Node.js runtime available" -ForegroundColor Yellow
-        Write-Host "  Trying another installation method..." -ForegroundColor Gray
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
-        Write-Host "  Using Scoop..." -ForegroundColor Gray
-        try {
+        $installed = Invoke-NodePackageManagerInstall -Name "Scoop" -InstallCommand {
             scoop update | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Scoop update exited with code $LASTEXITCODE" }
             scoop install nodejs-lts | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Scoop install exited with code $LASTEXITCODE" }
             scoop update nodejs-lts | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Scoop Node.js update exited with code $LASTEXITCODE" }
-        } catch {
-            Write-Host "[!] Scoop could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
         }
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] Scoop did not make a supported Node.js runtime available" -ForegroundColor Yellow
-        Write-Host "  Trying user-local portable Node.js..." -ForegroundColor Gray
     }
 
     try {

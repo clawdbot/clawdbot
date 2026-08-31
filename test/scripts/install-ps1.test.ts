@@ -1282,8 +1282,10 @@ try {
 
   it("discovers a winget Node install before the machine PATH refreshes", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const packageManagerBody = extractFunctionBody(source, "Invoke-NodePackageManagerInstall");
     const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
-    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(installNodeBody).toContain("-DiscoverProgramFilesNode");
+    expect(packageManagerBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
     expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
     expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
     expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
@@ -1469,6 +1471,7 @@ try {
     expect(depsRootBody).toContain("OpenClaw\\deps");
     expect(portableNodeRootBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
+    expect(portableNodeBody).toContain("Bootstrapping user-local portable Node.js");
     expect(portableNodeBody).toContain(
       "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
     );
