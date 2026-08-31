@@ -135,12 +135,7 @@ function configureTaskMaintenanceFromConfig(): void {
 }
 
 function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return maxChars <= 0
-    ? ""
-    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function formatTokenCell(value: string | undefined, width = ID_PAD): string {

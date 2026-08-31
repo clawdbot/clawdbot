@@ -148,6 +148,42 @@ describe("openclaw attach (action)", () => {
         `Alpha${" ".repeat(37)}123456780bbb4000`,
       ],
     },
+    {
+      name: "a bounded zero-width label",
+      labels: ["\u200b".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        `${"\u200b".repeat(49)}…        123456780aaa4000`,
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized combining grapheme",
+      labels: ["e" + "\u0301".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized ZWJ grapheme",
+      labels: ["👩" + "\u200d👩".repeat(128), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "ordinary multi-person emoji",
+      labels: ["👨‍👩‍👧‍👦".repeat(5), "Alpha"],
+      expectedLines: [
+        "SESSION     ID PREFIX",
+        `${"👨‍👩‍👧‍👦".repeat(5)}  123456780aaa4000`,
+        "Alpha       123456780bbb4000",
+      ],
+    },
   ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {
     const response = {
       ok: false,

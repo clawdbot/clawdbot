@@ -174,6 +174,34 @@ describe("tasks list output", () => {
       expectedRun: "run-ascii ",
       expectedChild: "agent:main:xxxxxxxxxxxxxxxxxxxxxxxxe\u0301",
     },
+    {
+      name: "bounded zero-width run and child tokens",
+      runId: "\u200b".repeat(512),
+      childSessionKey: "agent:main:" + "\u200b".repeat(512),
+      expectedRun: "\u200b".repeat(70) + "…         ",
+      expectedChild: "agent:main:" + "\u200b".repeat(241) + "…" + " ".repeat(24),
+    },
+    {
+      name: "oversized combining run and child graphemes",
+      runId: "e" + "\u0301".repeat(512),
+      childSessionKey: "agent:main:e" + "\u0301".repeat(512),
+      expectedRun: "…         ",
+      expectedChild: "agent:main:…" + " ".repeat(24),
+    },
+    {
+      name: "oversized ZWJ run and child graphemes",
+      runId: "👩" + "\u200d👩".repeat(128),
+      childSessionKey: "agent:main:👩" + "\u200d👩".repeat(128),
+      expectedRun: "…         ",
+      expectedChild: "agent:main:…" + " ".repeat(24),
+    },
+    {
+      name: "ordinary multi-person emoji tokens",
+      runId: "👨‍👩‍👧‍👦".repeat(5),
+      childSessionKey: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12),
+      expectedRun: "👨‍👩‍👧‍👦".repeat(5),
+      expectedChild: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12) + " ",
+    },
   ])(
     "aligns task list columns for $name",
     async ({ runId, childSessionKey, expectedRun, expectedChild }) => {
