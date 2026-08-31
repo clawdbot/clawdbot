@@ -390,12 +390,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     ): ChannelAccountSnapshot | undefined => {
       const accounts = runtime.channelAccounts[channelId];
       const defaultRuntimeLocal = runtime.channels[channelId];
-      const raw =
-        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined);
-      if (!raw) {
-        return undefined;
-      }
-      return raw;
+      return (
+        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined)
+      );
     };
 
     const isAccountEnabled = (plugin: ChannelPlugin, account: unknown) =>
