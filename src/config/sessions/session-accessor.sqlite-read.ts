@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
@@ -37,6 +38,35 @@ export type SqliteTranscriptSnapshotRow = {
 export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
 };
+
+export function createTranscriptIdentityReader(database: OpenClawAgentDatabase, sessionId: string) {
+  const read = prepareSqliteQuerySync<
+    string,
+    { event_id: string; parent_id: string | null; seq: number }
+  >(database.db, (parameter) =>
+    getSessionKysely(database.db)
+      .selectFrom("transcript_event_identities")
+      .select(["event_id", "parent_id", "seq"])
+      .where("session_id", "=", sessionId)
+      .where(
+        "event_id",
+        "=",
+        parameter((eventId) => eventId),
+      ),
+  );
+  return (eventId: string) => {
+    const row = read(eventId).rows[0];
+    return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+  };
+}
+
+export function readTranscriptIdentityByEventId(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  eventId: string,
+): { eventId: string; parentId: string | null; seq: number } | undefined {
+  return createTranscriptIdentityReader(database, sessionId)(eventId);
+}
 
 /** Loads raw transcript events from the additive SQLite transcript store. */
 export async function loadTranscriptEvents(

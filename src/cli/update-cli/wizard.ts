@@ -23,7 +23,6 @@ import {
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
-import { updateCommand } from "./update-command.js";
 
 /** Run the TTY-only update wizard and preserve `updateCommand` as the single update executor. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
@@ -150,6 +149,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   }
 
   try {
+    const { updateCommand } = await import("./update-command.js");
     await updateCommand({
       channel: requestedChannel ?? undefined,
       restart,

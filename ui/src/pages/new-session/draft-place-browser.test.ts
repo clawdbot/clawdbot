@@ -66,6 +66,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     },
   );
   gateway.synchronize(context.gateway);
+  const onProjectMissing = vi.fn();
   const browser = new DraftPlaceBrowser(
     host,
     gateway,
@@ -75,7 +76,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     }),
     {
       requestUpdate: vi.fn(),
-      onProjectMissing: vi.fn(),
+      onProjectMissing,
       onSelectProject: vi.fn(),
       onApprovedListing: vi.fn(),
       querySelector: () => null,
@@ -89,6 +90,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
   });
   return {
     browser,
+    onProjectMissing,
     gateway,
     client,
     context,
@@ -103,6 +105,33 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
 }
 
 describe("DraftPlaceBrowser", () => {
+  it.each(["disconnect", "failure"])(
+    "retains the selected project until a catalog confirms its removal (%s)",
+    async (unavailable) => {
+      const project = { id: "project", displayName: "Project", repoRoot: "/project" };
+      const request = vi.fn(async () => ({ projects: [project] }));
+      const fixture = createBrowser(request);
+      await fixture.browser.refreshProjects();
+      fixture.browser.selectProject({ kind: "local", id: project.id });
+
+      if (unavailable === "disconnect") {
+        fixture.context.gateway.snapshot.phase = "reconnecting";
+        fixture.update();
+      } else {
+        request.mockRejectedValue(new Error("projects unavailable"));
+      }
+      await fixture.browser.refreshProjects();
+      expect(fixture.browser.selectedProject()).toEqual(project);
+      expect(fixture.onProjectMissing).not.toHaveBeenCalled();
+
+      fixture.context.gateway.snapshot.phase = "connected";
+      request.mockResolvedValue({ projects: [] });
+      fixture.update();
+      await fixture.browser.refreshProjects();
+      expect(fixture.onProjectMissing).toHaveBeenCalled();
+    },
+  );
+
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 

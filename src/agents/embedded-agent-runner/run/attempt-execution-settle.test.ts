@@ -233,6 +233,7 @@ function createFixture() {
     resolveActiveContextEnginePluginId: vi.fn(),
     runAbortController: new AbortController(),
     prepared: {
+      promptToolPolicy: { apply: vi.fn(), refresh: vi.fn(), current: {} },
       bootstrap: {
         bootstrapPromptWarning: {},
         shouldRecordCompletedBootstrapTurn: false,
@@ -376,12 +377,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             __openclaw: { senderName: "Alice" },
           }),
         }),
-        toolPolicy: expect.objectContaining({
-          baseline: {
-            activeToolNames: ["read"],
-            catalogEntries: [],
-          },
-        }),
+        toolPolicy: fixture.input.prepared.promptToolPolicy,
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(

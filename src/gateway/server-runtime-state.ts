@@ -297,6 +297,9 @@ export async function createGatewayHttpTransport(params: {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    // Yield between buffered frames so one RPC burst cannot monopolize the
+    // event loop before other connections and HTTP probes can run.
+    allowSynchronousEvents: false,
   });
   const preauthConnectionBudget = createPreauthConnectionBudget();
 

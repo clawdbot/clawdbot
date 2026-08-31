@@ -13,6 +13,9 @@ describe("resolveTheme", () => {
     ["beacon", "beacon", "beacon-light"],
     ["phosphor", "phosphor", "phosphor-light"],
     ["crt", "crt", "crt-light"],
+    ["manuscript", "manuscript", "manuscript-light"],
+    ["rose", "rose", "rose-light"],
+    ["miami", "miami", "miami-light"],
     ["custom", "custom", "custom-light"],
   ] satisfies [ThemeName, string, string][])(
     "resolves %s in both explicit modes",

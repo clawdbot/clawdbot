@@ -1881,6 +1881,18 @@ export const en: TranslationMap = {
         label: "CRT",
         description: "Console mono",
       },
+      manuscript: {
+        label: "Manuscript",
+        description: "Ink on paper",
+      },
+      rose: {
+        label: "Rosé",
+        description: "Plum & rose",
+      },
+      miami: {
+        label: "Miami",
+        description: "Magenta & cyan",
+      },
     },
     textSizes: {
       small: "Small",
@@ -6053,8 +6065,8 @@ export const en: TranslationMap = {
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose permissions for new runs.",
-      nextRun: "New permissions apply to the next run.",
+      help: "Choose permissions for this session.",
+      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",

@@ -136,9 +136,10 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
   // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
   const sessionPermissionPolicy = params.permissionMode
     ? {
-        root: params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)),
+        root: sessionPermissionRoot,
         mode: params.permissionMode,
       }
     : undefined;
@@ -156,6 +157,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionRoot,
     sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,

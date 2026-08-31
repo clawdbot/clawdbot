@@ -32,6 +32,9 @@ describe("typeface presentation", () => {
     ["beacon", ["atkinson-hyperlegible", "atkinson-hyperlegible"]],
     ["phosphor", ["jetbrains-mono", "jetbrains-mono"]],
     ["crt", ["jetbrains-mono", "jetbrains-mono"]],
+    ["manuscript", ["lora", "lora"]],
+    ["rose", ["dm-sans", "dm-sans"]],
+    ["miami", ["space-grotesk", "space-grotesk"]],
     ["custom", ["system", "system"]],
   ] as const)("loads %s's default faces plus the shared mono face", (theme, [ui, chat]) => {
     const faces = resolveTypefaces(theme);
