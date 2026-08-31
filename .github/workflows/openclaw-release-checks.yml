@@ -1213,7 +1213,7 @@ jobs:
           echo "json=" >> "$GITHUB_OUTPUT"
 
   install_smoke_release_checks:
-    needs: [resolve_target]
+    needs: [resolve_target, resolve_installer_smoke_baseline]
     if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
     permissions:
       actions: read
@@ -1224,6 +1224,61 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
+      update_baseline_version: ${{ needs.resolve_installer_smoke_baseline.outputs.value }}
+
+  resolve_installer_smoke_baseline:
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      value: ${{ steps.baseline.outputs.value }}
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: workflow
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install trusted workflow validation dependencies
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Resolve frozen installer baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          baseline=latest
+          if [[ "$TARGET_CONTEXT_REF" == "extended-stable/"* ||
+                "$TARGET_CONTEXT_REF" == "refs/heads/extended-stable/"* ]]; then
+            candidate_version="$(
+              gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${TARGET_SHA}" --jq .content |
+                base64 --decode |
+                jq -er '.version | select(type == "string" and length > 0)'
+            )"
+            published_versions="$RUNNER_TEMP/openclaw-published-versions.json"
+            npm view openclaw versions --json > "$published_versions"
+            baseline="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
+              --candidate-version "$candidate_version" \
+              --target-context-ref "$TARGET_CONTEXT_REF" \
+              --versions-json "$published_versions")"
+          fi
+          echo "value=${baseline}" >> "$GITHUB_OUTPUT"
 
   cross_os_release_checks:
     needs: [resolve_target, prepare_release_package]
