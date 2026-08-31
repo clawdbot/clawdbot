@@ -109,7 +109,9 @@ function evaluateWorkflowExpression(
     // Runner routing keys off contributor trust, so pull-request cases default
     // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
+    cancelled?: boolean;
     dispatchId?: string;
+    draft?: boolean;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
@@ -140,7 +142,7 @@ function evaluateWorkflowExpression(
   }
   return runInNewContext(source, {
     always: () => true,
-    cancelled: () => false,
+    cancelled: () => context.cancelled ?? false,
     // GitHub expression builtins the runner-routing clauses use.
     contains: (haystack: unknown, needle: unknown) =>
       Array.isArray(haystack)
@@ -158,6 +160,7 @@ function evaluateWorkflowExpression(
           ? {
               pull_request: {
                 author_association: context.authorAssociation ?? "CONTRIBUTOR",
+                draft: context.draft ?? false,
                 head: { repo: { full_name: context.headRepository ?? context.repository } },
               },
             }
@@ -1871,9 +1874,16 @@ NODE
       if (typeof runsOn !== "string" || !runsOn.includes("blacksmith-")) {
         continue;
       }
-      expect(runsOn, `${jobName} must use GitHub-hosted capacity for release gates`).toContain(
-        "github.event_name == 'workflow_dispatch'",
-      );
+      expect(
+        evaluateWorkflowExpression(runsOn, {
+          eventName: "workflow_dispatch",
+          releaseGate: true,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "hybrid",
+        }),
+        `${jobName} must use GitHub-hosted capacity for release gates`,
+      ).toMatch(/^(?:ubuntu|windows|macos)-/u);
     }
 
     for (const jobName of ["macos-node", "macos-swift", "ios-build"]) {
@@ -3318,12 +3328,39 @@ NODE
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps security checks hosted and the cache writer on Blacksmith", () => {
+  it("routes hybrid control jobs without changing hosted fallbacks", () => {
     const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerBackend: "hybrid",
+    } as const;
 
-    expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
-    expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
-    expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+    for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
+      const expression = workflow.jobs[jobName]["runs-on"];
+      for (const eventName of ["pull_request", "push"] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
+          "blacksmith-4vcpu-ubuntu-2404",
+        );
+      }
+      for (const override of [
+        { runAttempt: 2 },
+        { runnerBackend: "github" },
+        { eventName: "workflow_dispatch" },
+        { repository: "contributor/openclaw" },
+        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
+      ] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
+          "ubuntu-24.04",
+        );
+      }
+      for (const runnerBackend of ["", "blacksmith"] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, runnerBackend }), jobName).toBe(
+          jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+        );
+      }
+    }
   });
 
   it("resolves one event-aware logical runner profile without changing physical routing", () => {
@@ -3550,6 +3587,7 @@ NODE
       "check-additional-shard": "ubuntu-24.04",
       "check-docs": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
+      "ci-gate": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
       "checks-fast-plugin-contracts-shard": "ubuntu-24.04",
@@ -3567,6 +3605,7 @@ NODE
       "native-i18n": "ubuntu-24.04",
       "pnpm-store-warmup": "ubuntu-24.04",
       preflight: "ubuntu-24.04",
+      "security-fast": "ubuntu-24.04",
       "qa-smoke-ci-profile": "ubuntu-24.04",
       "skills-python": "ubuntu-24.04",
       "sqlite-session-lifecycle": "ubuntu-24.04",
@@ -3575,6 +3614,9 @@ NODE
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
+      preflight: "blacksmith-4vcpu-ubuntu-2404",
+      "security-fast": "blacksmith-4vcpu-ubuntu-2404",
+      "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
@@ -3612,7 +3654,6 @@ NODE
     expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
       const expression = jobs[jobName]?.["runs-on"];
-      expect(expression, jobName).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
@@ -9653,9 +9694,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         .toSorted(),
     );
     expect(gate.if).toBe(
-      "${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
+      "${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
     );
-    expect(gate["runs-on"]).toBe("ubuntu-24.04");
     expect(gate.permissions).toEqual({ contents: "read" });
 
     const verifyStep = gate.steps.find(
@@ -9674,6 +9714,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifyStep.run).toContain("Required CI job did not succeed");
     expect(verifyStep.run).toContain("success | skipped");
     expect(verifyStep.run).toContain("Selected CI job did not succeed");
+  });
+
+  it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+      for (const cancelled of [true, false]) {
+        for (const draft of [true, false]) {
+          expect(
+            evaluateWorkflowExpression(gate.if, {
+              cancelled,
+              draft,
+              eventName,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+            }),
+            JSON.stringify({ cancelled, draft, eventName }),
+          ).toBe(!cancelled && (eventName !== "pull_request" || !draft));
+        }
+      }
+    }
   });
 
   it("runs Node 22 compatibility only from manual CI dispatches", () => {

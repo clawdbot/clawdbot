@@ -173,13 +173,19 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
-- `preflight` and hosted `security-fast` start immediately without a debounce
+- `preflight` and `security-fast` start immediately without a debounce
   or standalone admission job. On Node-relevant canonical main pushes and
   same-repo pull requests, preflight owns the sole immutable semantic
   dependency-cache write of workspace `node_modules` plus the local pnpm store
   before fanout; all Blacksmith Node jobs are restore-only consumers and exact
   misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
   paths use only that store cache.
+- Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
+  the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
+  Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
+  `github` outage override remain intact. Budget all three registrations.
+  The aggregate uses `!cancelled()` to report failed prerequisites without
+  holding a superseded run open after workflow cancellation.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
   and 96 with the GitHub or hybrid planner profile, Windows at 3, and Android
   at 2.
