@@ -3,7 +3,10 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  type SessionTranscriptWriterFence,
+} from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
@@ -61,6 +64,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   lastRunPromptUsage: TerminalPreparationInput["lastRunPromptUsage"];
   finalization: {
     preparedAttempt: EmbeddedRunAttemptParams;
+    sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+    sessionWriterFence?: SessionTranscriptWriterFence;
     harness: AgentHarness;
     modelApi: Parameters<typeof resolveSettledTurnFinalizationRequest>[0]["modelApi"];
     executionContract: Parameters<
@@ -106,9 +111,15 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   }
   const settledFailureSignal = prepared.failureSignal;
   const settledTerminalToolFailure = prepared.terminalToolFailure;
+  const committedSessionTarget = resolveCommittedSessionTarget({
+    preparedAttempt: input.finalization.preparedAttempt,
+    sessionTarget: input.finalization.sessionTarget,
+    sessionWriterFence: input.finalization.sessionWriterFence,
+  });
   const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
     attempt: input.finalization.preparedAttempt,
-    sessionId: initial.sessionIdUsed,
+    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+    sessionTarget: committedSessionTarget,
   });
 
   const runParams = input.terminalBase.runParams;
@@ -190,7 +201,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     }
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
-      sessionId: initial.sessionIdUsed,
+      sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+      sessionTarget: committedSessionTarget,
     });
     if (input.finalization.preparedAttempt.abortSignal?.aborted) {
       log.warn(
@@ -262,10 +274,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 function resolveSessionWriterDeliveryAuthority(input: {
   attempt: EmbeddedRunAttemptParams;
   sessionId: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
-  const sessionKey = input.attempt.sessionTarget?.sessionKey ?? input.attempt.sessionKey;
-  const expectedLifecycleRevision = input.attempt.sessionTarget?.expectedLifecycleRevision;
-  const expectedWriterRunId = input.attempt.sessionTarget?.expectedWriterRunId;
+  const target = input.sessionTarget ?? input.attempt.sessionTarget;
+  const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
+  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
+  const expectedWriterRunId = target?.expectedWriterRunId;
   if (
     !sessionKey ||
     (expectedLifecycleRevision === undefined && expectedWriterRunId === undefined)
@@ -273,16 +287,30 @@ function resolveSessionWriterDeliveryAuthority(input: {
     return undefined;
   }
   return {
-    ...(input.attempt.sessionTarget?.agentId || input.attempt.agentId
-      ? { agentId: input.attempt.sessionTarget?.agentId ?? input.attempt.agentId }
+    ...(target?.agentId || input.attempt.agentId
+      ? { agentId: target?.agentId ?? input.attempt.agentId }
       : {}),
     expectedSessionId: input.sessionId,
     ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
     ...(expectedWriterRunId !== undefined ? { expectedWriterRunId } : {}),
     sessionKey,
-    ...(input.attempt.sessionTarget?.storePath
-      ? { storePath: input.attempt.sessionTarget.storePath }
-      : {}),
+    ...(target?.storePath ? { storePath: target.storePath } : {}),
+  };
+}
+
+function resolveCommittedSessionTarget(input: {
+  preparedAttempt: EmbeddedRunAttemptParams;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+  sessionWriterFence?: SessionTranscriptWriterFence;
+}): EmbeddedRunAttemptParams["sessionTarget"] {
+  const preparedTarget = input.preparedAttempt.sessionTarget;
+  if (!preparedTarget && !input.sessionTarget && !input.sessionWriterFence) {
+    return undefined;
+  }
+  return {
+    ...preparedTarget,
+    ...input.sessionTarget,
+    ...input.sessionWriterFence,
   };
 }
 
@@ -418,11 +446,12 @@ function buildSettledToolFallbackAttemptResult(input: {
 async function persistSettledToolFallbackTranscript(input: {
   attempt: EmbeddedRunAttemptParams;
   sessionId: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<string | undefined> {
-  const sessionKey = input.attempt.sessionTarget?.sessionKey ?? input.attempt.sessionKey;
+  const target = input.sessionTarget ?? input.attempt.sessionTarget;
+  const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
   const hasWriterFence =
-    input.attempt.sessionTarget?.expectedLifecycleRevision !== undefined ||
-    input.attempt.sessionTarget?.expectedWriterRunId !== undefined;
+    target?.expectedLifecycleRevision !== undefined || target?.expectedWriterRunId !== undefined;
   if (!sessionKey) {
     if (hasWriterFence) {
       throw new SessionTranscriptWriterClaimReboundError();
@@ -432,19 +461,17 @@ async function persistSettledToolFallbackTranscript(input: {
   const idempotencyKey = `${input.attempt.runId}:settled-finalization-fallback`;
   try {
     const result = await appendAssistantMirrorMessageByIdentity({
-      ...(input.attempt.sessionTarget?.agentId || input.attempt.agentId
-        ? { agentId: input.attempt.sessionTarget?.agentId ?? input.attempt.agentId }
+      ...(target?.agentId || input.attempt.agentId
+        ? { agentId: target?.agentId ?? input.attempt.agentId }
         : {}),
       sessionId: input.sessionId,
       sessionKey,
-      ...(input.attempt.sessionTarget?.storePath
-        ? { storePath: input.attempt.sessionTarget.storePath }
+      ...(target?.storePath ? { storePath: target.storePath } : {}),
+      ...(target?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: target.expectedLifecycleRevision }
         : {}),
-      ...(input.attempt.sessionTarget?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: input.attempt.sessionTarget.expectedLifecycleRevision }
-        : {}),
-      ...(input.attempt.sessionTarget?.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: input.attempt.sessionTarget.expectedWriterRunId }
+      ...(target?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: target.expectedWriterRunId }
         : {}),
       config: input.attempt.config,
       idempotencyKey,

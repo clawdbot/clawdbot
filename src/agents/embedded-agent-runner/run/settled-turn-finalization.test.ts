@@ -518,6 +518,47 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledOnce();
   });
 
+  it("uses a fresh session's committed writer fence for fallback persistence", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    input.finalization.preparedAttempt.agentId = "main";
+    input.finalization.preparedAttempt.sessionTarget = {
+      agentId: "main",
+      sessionId: "session-settled",
+      sessionKey: "agent:main:settled",
+      storePath: "/tmp/sessions.json",
+    } as never;
+    Object.assign(input.finalization, {
+      sessionWriterFence: {
+        expectedLifecycleRevision: "revision-committed",
+        expectedWriterRunId: "run-settled",
+      },
+    });
+    const emptyAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "" }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+    });
+    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockResolvedValueOnce({
+      ok: false,
+      code: "blocked",
+      reason: "writer replaced after the initial transcript commit",
+    });
+
+    await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toBeInstanceOf(
+      SessionTranscriptWriterClaimReboundError,
+    );
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedLifecycleRevision: "revision-committed",
+        expectedWriterRunId: "run-settled",
+      }),
+    );
+  });
+
   it("does not construct a fallback after its fenced session entry is removed", async () => {
     const attempt = settledFailedAttempt();
     const input = finalizationInput(attempt);

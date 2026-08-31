@@ -27,7 +27,6 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
-import { isDispatchFinalReplySessionWriterAuthorized } from "./dispatch-from-config.delivery-authority.js";
 import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -49,6 +48,7 @@ import {
   prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
+import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
@@ -695,6 +695,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     recordRoutedBlockReplyDelivery,
     wasReplyDeliveredAsBlock,
     sendFinalPayload,
+    isSessionWriterDeliveryAuthorized,
     deferFinalTtsText,
     routeState,
   });

@@ -591,6 +591,8 @@ export async function runPreparedEmbeddedLoop(
         lastRunPromptUsage,
         finalization: {
           preparedAttempt: dispatchedAttempt.preparedAttempt,
+          sessionTarget: sessionPromptState.sessionTarget,
+          sessionWriterFence: sessionPromptState.sessionWriterFence,
           harness: agentHarness,
           modelApi: effectiveModel.api,
           executionContract,

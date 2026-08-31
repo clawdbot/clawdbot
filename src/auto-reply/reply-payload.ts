@@ -276,6 +276,15 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
+export type SessionWriterDeliveryAuthority = {
+  agentId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  expectedWriterRunId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
 export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
@@ -299,14 +308,7 @@ export type ReplyPayloadMetadata = {
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
-  sessionWriterDeliveryAuthority?: {
-    agentId?: string;
-    expectedLifecycleRevision?: string;
-    expectedSessionId: string;
-    expectedWriterRunId?: string;
-    sessionKey: string;
-    storePath?: string;
-  };
+  sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */

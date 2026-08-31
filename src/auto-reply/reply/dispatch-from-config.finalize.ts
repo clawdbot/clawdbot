@@ -302,6 +302,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // (queued same-session mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
+  if (queuedSettleResult === "settled") {
+    sessionWriterDeliveryRevoked ||= replies.some(
+      (reply) => !state.isSessionWriterDeliveryAuthorized(reply),
+    );
+  }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
   // The agent-result classifier owns deliberate silence and pending continuation;
