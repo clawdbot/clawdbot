@@ -207,6 +207,33 @@ describe("msteams messenger", () => {
       expect(ids).toEqual(["id:one", "id:two"]);
     });
 
+    it("sends a card-only message instead of filtering it out as empty", async () => {
+      const activities: Array<Record<string, unknown>> = [];
+      const card = { type: "AdaptiveCard", version: "1.4", body: [], actions: [] };
+      const ctx = {
+        sendActivity: async (activity: Record<string, unknown>) => {
+          activities.push(activity);
+          return { id: "card-activity" };
+        },
+      };
+
+      // A reply whose only content is its controls has no text and no media; without the
+      // card in the emptiness check the user receives nothing at all.
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        app: createMockApp(),
+        appId: "app123",
+        conversationRef: baseRef,
+        context: ctx as never,
+        messages: [{ card }],
+      });
+
+      expect(ids).toEqual(["card-activity"]);
+      expect(activities[0]?.attachments).toEqual([
+        { contentType: "application/vnd.microsoft.card.adaptive", content: card },
+      ]);
+    });
+
     it("sends top-level messages via proactive send context", async () => {
       const texts: string[] = [];
       let capturedConversationId: string | undefined;

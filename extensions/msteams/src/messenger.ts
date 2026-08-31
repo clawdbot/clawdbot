@@ -236,8 +236,16 @@ export function renderReplyPayloadsToMessages(
     // monitor delivers itself still carry portable controls. Resolving here - the reply
     // path's one renderer - runs after the stream took the text Teams already showed.
     const payload = prepareMSTeamsReplyPayload(rawPayload, {
-      cardTextLimit: chunkLimit,
-      formatCardText: (text) => formatMSTeamsMarkdown(text, tableMode),
+      renderCardText: (text) => {
+        // A card is one activity: it cannot be chunked, and its body cannot carry the
+        // mention entity that notifies the person a reply names. Either way the reply
+        // keeps the text path, which does both.
+        if (parseMentions(text).entities.length > 0) {
+          return undefined;
+        }
+        const formatted = formatMSTeamsMarkdown(text, tableMode);
+        return formatted.length <= chunkLimit ? formatted : undefined;
+      },
     });
     // The card carries this reply's text, so it is the whole message, and it is content
     // on its own: a controls-only reply would otherwise be skipped as empty.

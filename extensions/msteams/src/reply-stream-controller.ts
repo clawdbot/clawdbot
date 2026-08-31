@@ -191,35 +191,13 @@ export function createTeamsReplyStreamController(params: {
     };
   };
 
-  const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
-    if (
-      !acknowledgedText ||
-      typeof payload.text !== "string" ||
-      !payload.text.startsWith(acknowledgedText)
-    ) {
-      return payload;
-    }
-    const remainingText = payload.text.slice(acknowledgedText.length);
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    if (!remainingText && !hasMedia) {
-      return undefined;
-    }
-    return { ...payload, text: remainingText || undefined };
-  };
-
-  // A native stream carries text and nothing else, so the text-free remainder still goes
-  // to block delivery; dropping the whole payload would drop media and controls with the
-  // streamed text. "fallback" text is the prose rendering of the whole presentation, so
-  // for those the stream already delivered every block that degrades to prose and only
-  // the natively rendered controls remain.
-  const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+  const withoutStreamedContent = (payload: ReplyPayload): ReplyPayload => {
     const presentation =
       payload.presentationTextMode === "fallback"
         ? normalizeMessagePresentation(payload.presentation)
         : undefined;
     if (!presentation) {
-      const remainder = { ...payload, text: undefined };
-      return hasOutboundReplyContent(remainder) ? remainder : undefined;
+      return { ...payload, text: undefined };
     }
     // What survives adaptation as interactive is what Teams renders natively; a select
     // degrades to a text list here, and that list was in the prose the stream delivered.
@@ -232,11 +210,38 @@ export function createTeamsReplyStreamController(params: {
       presentationTextMode: _presentationTextMode,
       ...withoutPresentation
     } = payload;
-    const remainder = {
+    return {
       ...withoutPresentation,
       text: undefined,
       ...(controls.length > 0 ? { presentation: { blocks: controls } } : {}),
     };
+  };
+
+  const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+    if (
+      !acknowledgedText ||
+      typeof payload.text !== "string" ||
+      !payload.text.startsWith(acknowledgedText)
+    ) {
+      return payload;
+    }
+    // Teams showed the acknowledged prefix, so subtract it the same way a suppressed
+    // final is subtracted, then re-attach the text the stream never delivered.
+    const remainingText = payload.text.slice(acknowledgedText.length);
+    const remainder = {
+      ...withoutStreamedContent(payload),
+      ...(remainingText ? { text: remainingText } : {}),
+    };
+    return hasOutboundReplyContent(remainder) ? remainder : undefined;
+  };
+
+  // A native stream carries text and nothing else, so the text-free remainder still goes
+  // to block delivery; dropping the whole payload would drop media and controls with the
+  // streamed text. "fallback" text is the prose rendering of the whole presentation, so
+  // for those the stream already delivered every block that degrades to prose and only
+  // the natively rendered controls remain.
+  const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+    const remainder = withoutStreamedContent(payload);
     return hasOutboundReplyContent(remainder) ? remainder : undefined;
   };
 

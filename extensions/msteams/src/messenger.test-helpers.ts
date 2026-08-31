@@ -8,7 +8,7 @@ import { sendMSTeamsMessages } from "./messenger.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export const chunkMarkdownTextForTests = (text: string, limit: number) => {
+const chunkMarkdownTextForTests = (text: string, limit: number) => {
   if (!text) {
     return [];
   }

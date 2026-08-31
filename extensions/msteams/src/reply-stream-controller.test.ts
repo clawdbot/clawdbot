@@ -924,6 +924,32 @@ describe("createTeamsReplyStreamController", () => {
       });
     });
 
+    it("does not redraw the acknowledged prose as a card after a stream failure", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+      const buttons = {
+        type: "buttons" as const,
+        buttons: [{ label: "Open run", value: "open" }],
+      };
+
+      ctrl.onPartialReply({ text: "Deploy summary" });
+      stream.acknowledge("Deploy summary");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "Deploy summary extended" });
+
+      // This is the third path that subtracts already-delivered text, and it subtracts
+      // the same way: the prose Teams acknowledged does not come back inside a card.
+      expect(
+        ctrl.preparePayload({
+          text: "Deploy summary and its options",
+          presentationTextMode: "fallback",
+          presentation: { blocks: [{ type: "text" as const, text: "Deploy summary" }, buttons] },
+        }),
+      ).toEqual({ text: " and its options", presentation: { blocks: [buttons] } });
+    });
+
     it("preserves the full fallback when a failed stream has no provider acknowledgement", () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });

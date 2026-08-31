@@ -169,6 +169,18 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
+  it("keeps the text path when a reply mentions someone", () => {
+    // A mention only notifies through the activity's entity list, which the text path
+    // builds from this syntax; a card body cannot carry it.
+    const messages = renderReply({
+      text: "@[Ada Lovelace](28:abc-def) deploy finished",
+      presentation: PRESENTATION,
+    });
+
+    expect(messages.every((message) => message.card === undefined)).toBe(true);
+    expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
+  });
+
   it("renders the card's text in the dialect a plain reply would use", () => {
     const table = "| Region | Runs |\n| --- | --- |\n| EU | 12 |";
 

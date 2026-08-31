@@ -152,10 +152,11 @@ export const readMSTeamsPresentationCard = (payload: ReplyPayload) =>
 export function prepareMSTeamsReplyPayload(
   payload: ReplyPayload,
   options?: {
-    /** Transport limit for the text a single card may carry; a card cannot be chunked. */
-    cardTextLimit?: number;
-    /** Renders the card's text in the same dialect the text path sends. */
-    formatCardText?: (text: string) => string;
+    /**
+     * Renders the text a card may carry, or returns undefined when this reply has to stay
+     * on the text path because one activity cannot hold it.
+     */
+    renderCardText?: (text: string) => string | undefined;
   },
 ): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
@@ -182,18 +183,19 @@ export function prepareMSTeamsReplyPayload(
     return rest;
   }
   const cardPayload = textIsFallback ? { ...rest, text: undefined } : rest;
-  const cardText = cardPayload.text ? options?.formatCardText?.(cardPayload.text) : undefined;
-  // A card cannot be split the way message text can, so a reply whose text does not fit
-  // one card keeps the text path's chunking and degrades its controls to prose instead -
-  // the same trade the media branch makes.
-  const fitsOneCard =
-    options?.cardTextLimit === undefined || (cardText ?? "").length <= options.cardTextLimit;
-  const rendered = fitsOneCard
-    ? renderMSTeamsPresentationPayload({
-        payload: { ...cardPayload, ...(cardText ? { text: cardText } : {}) },
-        presentation: adapted,
-      })
-    : null;
+  const cardText =
+    cardPayload.text && options?.renderCardText
+      ? options.renderCardText(cardPayload.text)
+      : cardPayload.text;
+  // A reply the caller will not put in a card keeps the text path and degrades its
+  // controls to prose - the same trade the media branch makes.
+  const rendered =
+    cardPayload.text && cardText === undefined
+      ? null
+      : renderMSTeamsPresentationPayload({
+          payload: { ...cardPayload, ...(cardText ? { text: cardText } : {}) },
+          presentation: adapted,
+        });
   if (rendered) {
     return rendered;
   }
