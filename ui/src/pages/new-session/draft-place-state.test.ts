@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -111,7 +112,7 @@ describe("DraftPlaceState repository selection", () => {
     "adopts a preference arriving during repository discovery without overwriting user edits (%s)",
     async (edited) => {
       const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
-      const discovery = Promise.withResolvers<WorktreesBranchesResult>();
+      const discovery = createDeferred<WorktreesBranchesResult>();
       request.mockImplementation(async (method) =>
         method === "worktrees.branches" ? discovery.promise : {},
       );
