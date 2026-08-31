@@ -220,12 +220,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
-  it("forwards trusted Vitest arguments after the target separator", async () => {
+  it("forwards job and group Vitest arguments without leaking them to sibling plans", async () => {
     const scratchDir = makeScratchDir();
     const seen: string[][] = [];
     const exitCode = await runShardPlans(
       resolveShardPlans({
-        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.unit.config.ts"]),
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+          {
+            configs: ["test/vitest/vitest.extensions.config.ts"],
+            env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/6"]) },
+          },
+          { configs: ["test/vitest/vitest.unit.config.ts"] },
+        ]),
       }),
       {
         concurrency: 1,
@@ -241,7 +247,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(seen).toEqual([["test/vitest/vitest.unit.config.ts", "--", "--hookTimeout=300000"]]);
+    expect(seen).toEqual([
+      ["test/vitest/vitest.extensions.config.ts", "--", "--hookTimeout=300000", "--shard=1/6"],
+      ["test/vitest/vitest.unit.config.ts", "--", "--hookTimeout=300000"],
+    ]);
   });
 
   it("reuses isolated persistent cache slots across serial work", async () => {
