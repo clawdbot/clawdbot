@@ -220,12 +220,6 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
-/* Only new-session remains in the sidebar on native web-chrome hosts; keep it
-   against the approved right padding instead of beside the fit-content card. */
-html.openclaw-native-web-chrome .sidebar-brand__actions {
-  margin-left: auto;
-}
-
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
@@ -1048,6 +1042,9 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   align-items: center;
   gap: 3px;
+  /* Keep the action rail independent from the fit-content identity card so
+     short agent names never pull navigation controls away from the edge. */
+  margin-left: auto;
   flex: 0 0 auto;
 }
 

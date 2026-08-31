@@ -251,7 +251,20 @@ suite.define(() => {
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      const sidebarBrand = sidebar.locator(".sidebar-brand");
+      await expect.poll(() => sidebarBrand.count()).toBe(1);
+      await expect
+        .poll(async () => {
+          const [brandBox, actionsBox] = await Promise.all([
+            sidebarBrand.boundingBox(),
+            sidebarBrand.locator(".sidebar-brand__actions").boundingBox(),
+          ]);
+          if (!brandBox || !actionsBox) {
+            return null;
+          }
+          return Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
+        })
+        .toBe(4);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
