@@ -357,9 +357,9 @@ function createMigrationDatabaseHandle(
 }
 
 function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
-  // This short-lived Doctor connection has no query history. The 0x10000 bit checks
-  // every table; analysis_limit also bounds work on supported pre-3.46 SQLite builds.
-  database.exec("PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+  // Doctor owns a stopped-writer maintenance window here. Explicitly analyze every
+  // table because the supported pre-3.46 SQLite floor lacks optimize's all-table bit.
+  database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
 }
 
 function migrateAgentDatabase(params: {
