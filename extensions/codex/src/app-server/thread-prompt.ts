@@ -13,6 +13,7 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
+import { CODEX_TOOL_SCHEMA_LOOKUP_NAME } from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
@@ -69,14 +70,12 @@ export function buildDeveloperInstructions(
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
     deferredToolNames.size > 0 || nativeDelegationAvailable
-      ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+      ? `Deferred tools may be absent from the direct tool list. Use \`tool_search\` when directly callable. On code-mode-only models, use \`exec\` instead: filter \`ALL_TOOLS\` by name and summary, fetch the exact contract with \`${CODEX_TOOL_SCHEMA_LOOKUP_NAME}\` when its arguments are unclear, then call the matching entry through \`tools\`.`
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     deferredToolNames.size > 0
-      ? `Deferred searchable OpenClaw dynamic tools available: ${[...deferredToolNames]
-          .toSorted((left, right) => left.localeCompare(right))
-          .join(", ")}.`
+      ? `${deferredToolNames.size} deferred searchable OpenClaw dynamic ${deferredToolNames.size === 1 ? "tool is" : "tools are"} available through discovery.`
       : undefined,
     deferredToolDiscoveryGuidance,
     hasSkillWorkshop ? buildSkillWorkshopPromptSection().join("\n") : undefined,

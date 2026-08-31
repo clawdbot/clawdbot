@@ -2321,10 +2321,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
     expect(normalInstructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+      "1 deferred searchable OpenClaw dynamic tool is available through discovery.",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "1 deferred searchable OpenClaw dynamic tool is available through discovery.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
@@ -2464,7 +2464,10 @@ describe("runCodexAppServerAttempt", () => {
       registeredTools,
       registeredTools,
     );
-    expect(specNames(heartbeatBridge.availableSpecs)).toEqual(["heartbeat_respond"]);
+    expect(specNames(heartbeatBridge.availableSpecs)).toEqual([
+      "heartbeat_respond",
+      "openclaw_tool_schema",
+    ]);
     expect(specNames(heartbeatBridge.specs)).toEqual(specNames(normalBridge.specs));
     expect(specNames(nextNormalBridge.specs)).toEqual(specNames(normalBridge.specs));
   });
@@ -2616,7 +2619,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.config?.project_doc_max_bytes).toBe(131_072);
     expect(startParams?.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
     expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
-    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
+    expect(dynamicToolNames.toSorted()).toEqual([
+      "apply_patch",
+      "openclaw_tool_schema",
+      "progress_card",
+      "read",
+    ]);
     const progressCardSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
       (tool) => tool.name === "progress_card",
     );

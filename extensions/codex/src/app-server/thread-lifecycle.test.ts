@@ -1118,7 +1118,7 @@ describe("Codex app-server native code mode config", () => {
     // always-direct sessions_spawn.
     expect(instructions).toContain("Use `tool_search` when directly callable");
     expect(instructions).toContain(
-      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and summary",
     );
     expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).toContain(
@@ -1280,11 +1280,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
+      "2 deferred searchable OpenClaw dynamic tools are available through discovery.",
     );
     expect(instructions).toContain("Use `tool_search` when directly callable");
     expect(instructions).toContain(
-      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and summary",
     );
     expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).not.toContain("message,");
@@ -1340,7 +1340,7 @@ describe("Codex app-server native code mode config", () => {
 
     expect(namespaceReads).toBe(1);
     expect(instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
+      "3 deferred searchable OpenClaw dynamic tools are available through discovery.",
     );
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Visible source replies are not automatically delivered");

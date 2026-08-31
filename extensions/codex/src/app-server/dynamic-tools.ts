@@ -460,8 +460,17 @@ function normalizeAcceptedSessionSpawn(result: unknown): {
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+export const CODEX_TOOL_SCHEMA_LOOKUP_NAME = "openclaw_tool_schema";
 const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
 const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
+const CODEX_DEFERRED_TOOL_DESCRIPTION_MAX_CHARS = 240;
+// Keep one broad nested result from dominating the following Codex turns. The
+// converter appends an explicit rerun-with-narrower-args notice when this cap is hit.
+const CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 32_000;
+const CODEX_DEFERRED_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+} as const satisfies JsonSchemaObject & JsonValue;
 
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
@@ -471,6 +480,7 @@ const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 // contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
+  CODEX_TOOL_SCHEMA_LOOKUP_NAME,
   "sessions_spawn",
   "sessions_yield",
 ]);
@@ -528,7 +538,10 @@ export function createCodexDynamicToolBridge(params: {
     typeof contextWindowTokens === "number" &&
     Number.isFinite(contextWindowTokens) &&
     contextWindowTokens > 0
-      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
+      ? Math.min(
+          CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+          Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens })),
+        )
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
@@ -546,6 +559,9 @@ export function createCodexDynamicToolBridge(params: {
   ).filter((entry) => !quarantinedAvailableToolNames.has(entry.name));
   const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
   const registeredToolNames = new Set(registeredSpecTools.map((entry) => entry.name));
+  const schemaLookupEnabled =
+    (params.loading ?? "searchable") === "searchable" &&
+    !registeredToolNames.has(CODEX_TOOL_SCHEMA_LOOKUP_NAME);
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
@@ -604,11 +620,13 @@ export function createCodexDynamicToolBridge(params: {
       entries: availableTools,
       loading: params.loading ?? "searchable",
       directToolNames,
+      includeSchemaLookup: schemaLookupEnabled,
     }),
     specs: createCodexDynamicToolSpecs({
       entries: registeredSpecTools,
       loading: params.loading ?? "searchable",
       directToolNames,
+      includeSchemaLookup: schemaLookupEnabled,
     }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     sideEffectOwnerKeyForTool: (toolName) => {
@@ -628,6 +646,51 @@ export function createCodexDynamicToolBridge(params: {
       return state?.snapshot;
     },
     handleToolCall: async (call, options) => {
+      if (schemaLookupEnabled && call.tool === CODEX_TOOL_SCHEMA_LOOKUP_NAME) {
+        const args = asNonArrayRecord(call.arguments);
+        const requestedName = normalizeOptionalString(args.name);
+        const requestedEntry = requestedName ? toolMap.get(requestedName) : undefined;
+        if (!requestedEntry) {
+          const message = requestedName
+            ? `OpenClaw tool is not available for this turn: ${requestedName}`
+            : `Invalid arguments for tool "${CODEX_TOOL_SCHEMA_LOOKUP_NAME}": name is required.`;
+          return withDynamicToolExecutionState(
+            {
+              contentItems: [{ type: "inputText", text: message }],
+              success: false,
+            },
+            {
+              executedArguments: args,
+              executionStarted: false,
+              sideEffectEvidence: false,
+            },
+          );
+        }
+        return withDynamicToolExecutionState(
+          {
+            contentItems: [
+              {
+                type: "inputText",
+                text: JSON.stringify(
+                  {
+                    name: requestedEntry.name,
+                    description: requestedEntry.description,
+                    inputSchema: requestedEntry.inputSchema,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            success: true,
+          },
+          {
+            executedArguments: args,
+            executionStarted: true,
+            sideEffectEvidence: false,
+          },
+        );
+      }
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
@@ -1099,6 +1162,7 @@ function createCodexDynamicToolSpecs(params: {
   entries: readonly ProjectedCodexDynamicTool[];
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
+  includeSchemaLookup: boolean;
 }): CodexDynamicToolSpec[] {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
@@ -1125,13 +1189,19 @@ function createCodexDynamicToolSpecs(params: {
       specs.push(functionSpec);
       continue;
     }
-    namespaceTools.push({ ...functionSpec, deferLoading: true });
+    namespaceTools.push({
+      ...functionSpec,
+      description: compactDeferredToolDescription(entry),
+      inputSchema: CODEX_DEFERRED_TOOL_INPUT_SCHEMA,
+      deferLoading: true,
+    });
   }
   if (namespaceTools.length > 0) {
     specs.push({
       type: "namespace",
       name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
+      description:
+        "Deferred OpenClaw tool discovery summaries. Fetch an exact contract with openclaw_tool_schema before calling when needed.",
       tools: namespaceTools,
     });
   }
@@ -1143,7 +1213,42 @@ function createCodexDynamicToolSpecs(params: {
       tools: directOnlyNamespaceTools,
     });
   }
+  if (params.includeSchemaLookup && namespaceTools.length > 0) {
+    specs.push({
+      type: "function",
+      name: CODEX_TOOL_SCHEMA_LOOKUP_NAME,
+      description:
+        "Return the complete description and exact input schema for one available deferred OpenClaw tool. Use after tool_search or ALL_TOOLS discovery before calling a tool whose arguments are unclear.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Exact deferred OpenClaw tool name.",
+          },
+        },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    });
+  }
   return specs;
+}
+
+function compactDeferredToolDescription(entry: ProjectedCodexDynamicTool): string {
+  let summary: unknown;
+  try {
+    summary = entry.tool.displaySummary;
+  } catch {
+    summary = undefined;
+  }
+  const normalized = (typeof summary === "string" && summary.trim() ? summary : entry.description)
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (normalized.length <= CODEX_DEFERRED_TOOL_DESCRIPTION_MAX_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, CODEX_DEFERRED_TOOL_DESCRIPTION_MAX_CHARS - 1).trimEnd()}…`;
 }
 
 function createCodexDynamicToolFunctionSpec(params: {
