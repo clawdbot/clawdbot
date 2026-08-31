@@ -56,6 +56,12 @@ This maintenance window also applies when repair ultimately finds no changes.
 Diagnostic runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
 
+When an updater supplies an explicit Gateway activation policy, Doctor leaves
+stop and restart ownership with that updater. The native manager must confirm
+the service is already offline before repair. If `openclaw update --no-restart`
+reaches Doctor while that service is running, repair fails without stopping or
+restarting it; stop the service through its owner, then retry the update.
+
 If service inspection is unavailable or an unmatched service can still run,
 Doctor refuses maintenance before changing config or state. Inspect it with
 `openclaw gateway status --deep`, restore service-manager access, and stop the

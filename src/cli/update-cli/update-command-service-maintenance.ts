@@ -417,7 +417,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     // Enabled systemd units may be manually stopped; loaded LaunchAgents can
     // respawn. Windows needs the live numeric task state, not its last result.
     offline:
-      (serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "unresolved") &&
       serviceState.runtime?.status === "stopped" &&
       (process.platform === "darwin"
         ? serviceState.loadState.status === "not-loaded" ||

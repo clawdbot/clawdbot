@@ -34,8 +34,10 @@ import {
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 import {
   isServiceRepairExternallyManaged,
+  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 
@@ -114,6 +116,9 @@ export async function beginDoctorMaintenance(params: {
     return undefined;
   }
   const env = { ...process.env };
+  const parentActivation = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options))
+    ? resolveUpdateParentGatewayActivation(env)
+    : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every explicit repair before running those inspections.
   await assertDoctorMaintenanceSchemasCompatible(env);
@@ -161,23 +166,34 @@ export async function beginDoctorMaintenance(params: {
         phase: "inspect",
       });
       assertDoctorMaintenanceInspection(inspection, env);
+      if (
+        parentActivation !== undefined &&
+        inspection.serviceUpdateVerdict?.kind !== "absent" &&
+        inspection.offline !== true
+      ) {
+        throw new Error(
+          "The update parent owns Gateway activation. Stop the service through its owner before retrying the update; Doctor will not stop or restart it.",
+        );
+      }
       if (inspection.serviceUpdateVerdict?.kind === "owned") {
         if (inspection.serviceEnv) {
           assertDoctorServiceSelection(env, inspection.serviceEnv);
         }
-        // Doctor never rewrites the launcher: pin its complete definition through
-        // stop and restart, including operator-owned environment overrides.
-        inspection.serviceUpdateVerdict.refreshDefinition = false;
-        stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateInstallKind: "package",
-          root: params.root,
-          shouldRestart: true,
-          jsonMode: true,
-          expectedService: inspection,
-        });
-        assertDoctorMaintenanceInspection(stopped, env);
-        if (stopped.stopped) {
-          params.runtime.log("Stopped the managed Gateway for Doctor repair.");
+        // An explicit update policy leaves activation with the parent. Ordinary
+        // Doctor pins and restores the same launcher; neither path rewrites it.
+        if (parentActivation === undefined) {
+          inspection.serviceUpdateVerdict.refreshDefinition = false;
+          stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateInstallKind: "package",
+            root: params.root,
+            shouldRestart: true,
+            jsonMode: true,
+            expectedService: inspection,
+          });
+          assertDoctorMaintenanceInspection(stopped, env);
+          if (stopped.stopped) {
+            params.runtime.log("Stopped the managed Gateway for Doctor repair.");
+          }
         }
       } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
         params.runtime.log(

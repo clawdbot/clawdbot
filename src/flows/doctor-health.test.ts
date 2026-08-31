@@ -1,10 +1,14 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  resolvePreparedGatewayUpdatePolicy,
+} from "../cli/update-cli/update-command-service-maintenance.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +22,7 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -176,6 +181,8 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 describe("runDoctorHealthFlow", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
@@ -190,33 +197,48 @@ describe("runDoctorHealthFlow", () => {
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
 
-  it.each([
-    "inspection-failed",
-    "runtime-only",
-    "owned-unknown",
-    "foreign-running",
-    "foreign-unknown",
-    "foreign-stopped",
-    "foreign-stopped-loaded",
-    "foreign-stopped-loaded-disabled",
-    "foreign-stopped-loaded-unknown",
-    "foreign-respawning",
-    "unresolved-running",
-    "unresolved-unknown",
-    "unresolved-stopped",
-    "unresolved-stopped-loaded",
-    "unresolved-respawning",
-    "absent",
-    "absent-unknown",
-    "windows-ready",
-    "windows-disabled",
-    "windows-queued",
-    "windows-running",
-    "windows-startup-stopped",
-    "windows-startup-unknown",
-  ] as const)(
-    "admits offline state repair only after safe service inspection: %s",
-    async (kind) => {
+  it.each(
+    [
+      "inspection-failed",
+      "runtime-only",
+      "owned-unknown",
+      "foreign-running",
+      "foreign-unknown",
+      "foreign-stopped",
+      "foreign-stopped-loaded",
+      "foreign-stopped-loaded-disabled",
+      "foreign-stopped-loaded-unknown",
+      "foreign-respawning",
+      "unresolved-running",
+      "unresolved-unknown",
+      "unresolved-stopped",
+      "unresolved-stopped-loaded",
+      "unresolved-respawning",
+      "absent",
+      "absent-unknown",
+      "windows-ready",
+      "windows-disabled",
+      "windows-queued",
+      "windows-running",
+      "windows-startup-stopped",
+      "windows-startup-unknown",
+    ].flatMap((kind) => [
+      { kind, updateParent: false },
+      { kind, updateParent: true },
+    ]),
+  )(
+    "admits offline state repair only after safe service inspection: $kind (update=$updateParent)",
+    async ({ kind, updateParent }) => {
+      if (updateParent) {
+        for (const [key, value] of Object.entries(
+          buildUpdateDoctorEnv({
+            allowGatewayServiceRepair: true,
+            allowGatewayActivation: false,
+          }),
+        )) {
+          vi.stubEnv(key, value);
+        }
+      }
       const windows = kind.startsWith("windows");
       mocks.emulateNativeInstall = kind !== "runtime-only";
       mocks.servicePlatform = windows ? "win32" : undefined;
@@ -379,6 +401,10 @@ describe("runDoctorHealthFlow", () => {
     "ready",
     "clean-repair",
     "clean-inspect",
+    "update-no-restart",
+    "update-no-restart-stopped",
+    "update-parent-stopped",
+    "update-legacy",
     "repair-failed",
     "store-close-failed",
     "config-refused",
@@ -389,7 +415,7 @@ describe("runDoctorHealthFlow", () => {
     "coordinates the matching managed writer through multi-agent repair: %s",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const clean = outcome.startsWith("clean-");
+        const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
@@ -438,7 +464,7 @@ describe("runDoctorHealthFlow", () => {
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
-        let running = true;
+        let running = outcome !== "update-no-restart-stopped";
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);
         const command = {
@@ -550,11 +576,48 @@ describe("runDoctorHealthFlow", () => {
           runtime.exit.mockImplementation(expectCoordinatorReleased);
         }
         try {
+          const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
+          if (modernUpdate) {
+            if (!running) {
+              releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+            }
+            const parentRestarts = outcome === "update-parent-stopped";
+            const prepared = await maybeStopManagedServiceBeforeMutableUpdate({
+              updateInstallKind: "package",
+              root: packageRoot,
+              shouldRestart: parentRestarts,
+              jsonMode: true,
+            });
+            expect(prepared.stopped).toBe(parentRestarts);
+            expect(running).toBe(outcome === "update-no-restart");
+            expect(events).toEqual(parentRestarts ? ["stop"] : []);
+            events.length = 0;
+            stop.mockClear();
+            const policy = resolvePreparedGatewayUpdatePolicy(prepared, parentRestarts);
+            expect(policy).toEqual({
+              allowGatewayServiceRepair: true,
+              allowGatewayActivation: parentRestarts,
+            });
+            for (const [key, value] of Object.entries(buildUpdateDoctorEnv(policy))) {
+              vi.stubEnv(key, value);
+            }
+          } else if (outcome === "update-legacy") {
+            vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+          }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
           const run = runDoctorHealthFlow(runtime, {
             ...(outcome === "clean-inspect" ? {} : { repair: true }),
             nonInteractive: true,
           });
+          if (outcome === "update-no-restart") {
+            await expect(run).rejects.toThrow("update parent");
+            expect(events).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           if (outcome === "ancestor-blocked") {
             await expect(run).rejects.toThrow("openclaw doctor --fix");
             await expect(run).rejects.toThrow("from a shell outside the gateway service");
@@ -577,8 +640,19 @@ describe("runDoctorHealthFlow", () => {
           } else {
             await run;
           }
+          if (modernUpdate) {
+            expect(events.filter((event) => event !== "repair")).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           const shouldRestart =
-            outcome === "ready" || outcome === "restart-unhealthy" || outcome === "clean-repair";
+            outcome === "ready" ||
+            outcome === "restart-unhealthy" ||
+            outcome === "clean-repair" ||
+            outcome === "update-legacy";
           expect(events).toEqual(
             outcome === "clean-inspect"
               ? ["repair"]

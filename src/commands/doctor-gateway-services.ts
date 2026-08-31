@@ -66,11 +66,11 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
   UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
@@ -92,9 +92,9 @@ function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolea
 }
 
 function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
-  const activationPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  const activationPolicy = resolveUpdateParentGatewayActivation(env);
   if (activationPolicy !== undefined) {
-    return isTruthyEnvValue(activationPolicy);
+    return activationPolicy;
   }
   // Shipped parents predate the marker. Recover their explicit CLI policy from
   // the direct parent; unreadable ancestry stays staged rather than disrupting it.
