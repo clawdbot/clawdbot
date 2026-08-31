@@ -74,9 +74,7 @@ export interface LineSendResult {
 }
 
 /** Console-side webhook state, which decides whether LINE delivers anything at all. */
-export type LineProbeWebhookState =
-  | { status: "active" | "disabled"; endpoint: string }
-  | { status: "unset" };
+export type LineProbeWebhookState = { status: "active" | "disabled" | "unset" };
 
 export type LineProbeResult = BaseProbeResult<string> & {
   elapsedMs?: number;

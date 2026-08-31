@@ -48,10 +48,9 @@ describe("probeLineBot", () => {
 
       const result = await probeLineBotUnderTest();
 
-      expect(result.webhook).toEqual({
-        status: expected,
-        endpoint: "https://gateway.example/line/webhook",
-      });
+      // LINE returns the registered URL; the probe deliberately does not carry it,
+      // because it would then reach logs and status output with no action to take on it.
+      expect(result.webhook).toEqual({ status: expected });
     },
   );
 

@@ -56,7 +56,7 @@ describe("lineGatewayAdapter.startAccount", () => {
   it.each([
     {
       name: "registered but switched off",
-      webhook: { status: "disabled", endpoint: "https://gateway.example/line/webhook" },
+      webhook: { status: "disabled" },
       expected: "webhook URL is registered but switched off",
     },
     {
@@ -77,7 +77,7 @@ describe("lineGatewayAdapter.startAccount", () => {
       name: "the webhook is on",
       probe: {
         ok: true,
-        webhook: { status: "active", endpoint: "https://gateway.example/line/webhook" },
+        webhook: { status: "active" },
       },
     },
     { name: "the probe reported no webhook state", probe: { ok: true } },

@@ -31,7 +31,10 @@ async function readLineWebhookState(
   }
   try {
     const registered = await withTimeout(client.getWebhookEndpoint(), budgetMs);
-    return { status: registered.active ? "active" : "disabled", endpoint: registered.endpoint };
+    // Only the switch is reported. The registered URL is not needed to act on this
+    // — the operator flips Use webhook in the console — and carrying it would put a
+    // URL that can hold opaque path or query credentials into logs and status output.
+    return { status: registered.active ? "active" : "disabled" };
   } catch (error) {
     // A channel with no endpoint registered answers 404; the response type has no
     // shape for "none", so the error is the only way that state arrives. Every other

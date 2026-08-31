@@ -77,10 +77,10 @@ describe("linePlugin status.collectStatusIssues", () => {
   it.each([
     {
       name: "registered but switched off",
-      webhook: { status: "disabled", endpoint: "https://gateway.example/line/webhook" },
+      webhook: { status: "disabled" },
       message:
         "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
-      fix: "turn Use webhook on for https://gateway.example/line/webhook in the channel's Messaging API tab in the LINE Developers Console",
+      fix: "turn Use webhook on in the channel's Messaging API tab in the LINE Developers Console",
     },
     {
       name: "never registered",
@@ -146,7 +146,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           tokenSource: "config",
           probe: {
             ok: true,
-            webhook: { status: "active", endpoint: "https://gateway.example/line/webhook" },
+            webhook: { status: "active" },
           },
         },
         {

@@ -31,15 +31,9 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
   if (!isRecord(probe) || !isRecord(probe.webhook)) {
     return undefined;
   }
-  const { status, endpoint } = probe.webhook;
-  if (status === "unset") {
-    return { status };
-  }
-  // An empty endpoint would render "turn Use webhook on for  in ...". LINE cannot return
-  // one: `endpoint` and `active` are both non-optional in the SDK's response type
-  // (@line/bot-sdk dist/messaging-api/model/getWebhookEndpointResponse.d.ts).
-  return (status === "active" || status === "disabled") && typeof endpoint === "string" && endpoint
-    ? { status, endpoint }
+  const { status } = probe.webhook;
+  return status === "active" || status === "disabled" || status === "unset"
+    ? { status }
     : undefined;
 }
 
@@ -48,10 +42,11 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
  * it will. Startup and status both report this, and share one wording so the account
  * that logged the warning cannot describe itself differently when asked again.
  *
- * Each state names the fact it actually holds: a registered-but-off webhook already
- * has a URL LINE handed back, while an unregistered one needs the route this account's
+ * Each state names the action it needs, and only the action: a registered-but-off
+ * webhook needs the console switch, an unregistered one needs the route this account's
  * monitor listens on. Naming a route the account does not serve would leave the bot
- * silent while the warning claims it is fixed.
+ * silent while the warning claims it is fixed; naming the registered URL would put a
+ * string that can carry credentials into logs and status output for no added action.
  */
 export function describeLineWebhookDelivery(params: {
   webhook: LineProbeWebhookState | undefined;
@@ -66,7 +61,7 @@ export function describeLineWebhookDelivery(params: {
     ? {
         message:
           "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
-        fix: `turn Use webhook on for ${webhook.endpoint} in ${consoleTab}`,
+        fix: `turn Use webhook on in ${consoleTab}`,
       }
     : {
         message:
