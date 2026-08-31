@@ -8852,6 +8852,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRunContract).not.toContain("--retry");
     expect(realGatewayRunContract).not.toContain("--hookTimeout");
     expect(realGatewayRunContract).not.toContain("--testTimeout");
+
+    const proofUploadIndex = uiE2eRealGateway.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Upload sanitized Control UI real-Gateway proof",
+    );
+    const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
+    for (const name of [
+      "Test Control UI auth transports with a real Gateway",
+      "Test Control UI usage sessions owner attribution with a real Gateway",
+      "Test Control UI agent file lifecycle with a real Gateway",
+    ]) {
+      const captureIndex = uiE2eRealGateway.steps.findIndex(
+        (step: WorkflowStep) => step.name === name,
+      );
+      expect(uiE2eRealGateway.steps[captureIndex].env, name).toEqual({
+        OPENCLAW_CAPTURE_UI_PROOF:
+          "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",
+        OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
+      });
+      expect(proofUploadIndex, name).toBeGreaterThan(captureIndex);
+    }
   });
 
   it("builds artifacts once and smoke-tests the built CLI with Node and Bun", () => {
