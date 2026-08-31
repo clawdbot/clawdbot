@@ -222,6 +222,7 @@ function startPendingOutboundDeliveryRecovery(params: {
           deliver: deliverWithCurrentConversationAuthority,
           log: logRecovery,
           cfg,
+          shouldContinue: () => !stopped,
         });
         return;
       }
@@ -234,6 +235,7 @@ function startPendingOutboundDeliveryRecovery(params: {
         log: logRecovery,
         deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
+        shouldContinue: () => !stopped,
       });
     }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
     const settled: Promise<void> = recovery.finally(() => {

@@ -1148,11 +1148,13 @@ type QueuedRecoveryContext =
       summary: DeliveryRecoverySummary;
       deadline: number;
       onDeadlineExceeded: () => void;
+      shouldContinue?: () => boolean;
     }
   | {
       kind: "drain";
       logLabel: string;
       selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+      shouldContinue?: () => boolean;
     };
 
 /** Startup and reconnect share custody, admission, retry, and settlement ordering. */
@@ -1161,6 +1163,9 @@ async function processQueuedRecovery(
   context: QueuedRecoveryContext,
 ): Promise<"continue" | "stop"> {
   const { entry, log } = opts;
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
   const label =
     context.kind === "startup" ? `Delivery ${entry.id}` : `${context.logLabel}: entry ${entry.id}`;
   if (entry.settlement) {
@@ -1242,6 +1247,11 @@ async function processQueuedRecovery(
     }
     return "stop";
   }
+  // Pacing is the final await before a new durable attempt is admitted. A
+  // lifecycle fence here leaves the untouched row and retry metadata intact.
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
   await drainQueuedEntry({
     ...opts,
     onRecovered: (recovered) => {
@@ -1278,6 +1288,7 @@ export async function drainPendingDeliveriesCore(opts: {
   stateDir?: string;
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+  shouldContinue?: () => boolean;
 }): Promise<void> {
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
@@ -1299,6 +1310,7 @@ export async function drainPendingDeliveriesCore(opts: {
             kind: "drain",
             logLabel: opts.logLabel,
             selectEntry: opts.selectEntry,
+            ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
           },
         ),
     });
@@ -1320,6 +1332,7 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  shouldContinue?: () => boolean;
 }): Promise<DeliveryRecoverySummary> {
   const pending = await loadUnfinishedDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -1353,6 +1366,7 @@ export async function recoverPendingDeliveries(opts: {
           summary,
           deadline,
           onDeadlineExceeded,
+          ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
         },
       ),
   });
