@@ -45,16 +45,11 @@ function requestWithoutInput(
     instructions: _instructions,
     ...rest
   } = request;
-  // `tools` gets the same treatment, but only where it's proven: the agent's
-  // available tool list legitimately varies turn to turn, and the official
-  // Responses API accepts previous_response_id after that list changes --
-  // confirmed live, over HTTP, in
-  // openai-responses-client.continuation-tools-change.live.test.ts. That
-  // proof doesn't cover the WebSocket transport, which shares this resolver
-  // and has its own test asserting a tool-schema change resets continuation
-  // (openai-responses-websocket.test.ts, "resets continuation on tool schema
-  // change") -- so the exclusion is HTTP-only until WS gets equivalent live
-  // proof (tracked as a follow-up, not assumed safe by inheritance).
+  // `tools` gets the same treatment, HTTP-only: proven live in
+  // openai-responses-client.continuation-tools-change.live.test.ts, but not
+  // for the WebSocket transport sharing this resolver, which still expects a
+  // tool-schema change to reset (openai-responses-websocket.test.ts, "resets
+  // continuation on tool schema change") until it gets its own proof.
   if (options.excludeTools) {
     delete rest.tools;
   }
