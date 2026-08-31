@@ -11,7 +11,7 @@ type CallGateway = (options: {
   params: SessionsDeleteParams;
   timeoutMs: number;
 }) => Promise<unknown>;
-type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
+export type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
 
 function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {

@@ -42,6 +42,7 @@ import {
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
 type LifecycleController = SubagentLifecycleController;
@@ -2195,6 +2196,71 @@ describe("subagent registry lifecycle hardening", () => {
     releaseAnnounce?.("delivered");
     await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
   });
+
+  it.each([
+    { name: "direct", expectsCompletionMessage: false as const },
+    { name: "announce", expectsCompletionMessage: true as const },
+  ])(
+    "keeps the live child link when $name delete cleanup is rejected as session-changed",
+    async ({ name, expectsCompletionMessage }) => {
+      const now = Date.now();
+      const archiveAtMs = now + 30 * 60_000;
+      const entry = createRunEntry({
+        cleanup: "delete",
+        expectsCompletionMessage,
+        archiveAtMs,
+        createdAt: now - 120_000,
+        startedAt: now - 90_000,
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      if (name === "direct") {
+        gatewayMocks.callGateway.mockImplementation((opts) => {
+          if (opts.method !== "sessions.delete") {
+            return Promise.resolve({});
+          }
+          return Promise.reject(
+            Object.assign(new Error("session changed"), {
+              name: "GatewayClientRequestError",
+              gatewayCode: "INVALID_REQUEST",
+              details: { reason: "session-changed" },
+            }),
+          );
+        });
+      }
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        ...(name === "announce"
+          ? {
+              runSubagentAnnounceFlow: vi.fn(async (announceParams) => {
+                expect(announceParams.onBeforeDeleteChildSession?.()).toBe(true);
+                announceParams.onChildSessionDeleteOutcome?.("changed");
+                return "delivered" as const;
+              }),
+            }
+          : {}),
+      });
+
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        endedAt: now - 60_000,
+        ...(expectsCompletionMessage
+          ? { terminalReply: { disposition: "visible", text: "final completion reply" } }
+          : {}),
+      });
+      await waitForLifecycleState(() => {
+        expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+        expect(entry.execution.suppressSessionEffects).toBe(true);
+      });
+
+      // Gateway confirmed the successor is still live. A leftover dispatch
+      // stamp would hide that child from parent navigation.
+      expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+      expect(shouldKeepSubagentRunChildLink(entry)).toBe(true);
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(false);
+    },
+  );
 
   it("discards completion capture when an authoritative yield arrives during the await", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });

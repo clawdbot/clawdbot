@@ -84,7 +84,8 @@ function isRecentlyEndedSubagentRun(
  * Only the dispatch stamp proves that handoff: it is persisted before the
  * gateway call, whereas `cleanupCompletedAt` is stamped for every finished
  * cleanup, including delete runs whose session effects were suppressed and
- * whose child session therefore still exists.
+ * whose child session therefore still exists. A confirmed session-changed
+ * rejection clears the stamp so a still-live successor stays navigable.
  */
 export function hasDispatchedDeleteCleanup<T extends SubagentDeleteCleanupFacts>(
   entry: T,

@@ -230,4 +230,120 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);
     expect(verdict.restartRecovery.present).toBe(true);
   });
+
+  test("keeps parent navigation when guarded sessions.delete is rejected as session-changed", async () => {
+    testState.sessionStorePath = gatewaySuite.sessionStorePath;
+    const parentSessionId = "sess-gw-delete-changed-parent";
+    const childSessionId = "sess-gw-delete-changed";
+    const originalRevision = "rev-gw-delete-changed";
+    const successorRevision = "rev-gw-delete-changed-successor";
+    const childSessionKey = `${CHILD_SESSION_KEY}-changed`;
+    const runId = `${RUN_ID}-changed`;
+
+    const callLiveGateway = async (options: { method: string; params?: unknown }) => {
+      if (options.method === "sessions.delete") {
+        await writeSessionStore({
+          entries: {
+            [REQUESTER_SESSION_KEY]: {
+              sessionId: parentSessionId,
+              updatedAt: Date.now(),
+            },
+            [childSessionKey]: {
+              sessionId: childSessionId,
+              updatedAt: Date.now(),
+              spawnedBy: REQUESTER_SESSION_KEY,
+              lifecycleRevision: successorRevision,
+            },
+          },
+        });
+      }
+      const res = await rpcReq<Record<string, unknown>>(
+        gatewaySuite.ws,
+        options.method,
+        options.params,
+      );
+      if (!res.ok) {
+        throw Object.assign(new Error(res.error?.message ?? `gateway ${options.method} failed`), {
+          name: "GatewayClientRequestError",
+          gatewayCode: res.error?.code ?? "INVALID_REQUEST",
+          details: res.error?.details,
+        });
+      }
+      return res.payload;
+    };
+    subagentRegistryTesting.setDepsForTest({
+      callGateway: callLiveGateway as unknown as typeof callGateway,
+    });
+
+    await writeSessionStore({
+      entries: {
+        [REQUESTER_SESSION_KEY]: {
+          sessionId: parentSessionId,
+          updatedAt: Date.now(),
+        },
+        [childSessionKey]: {
+          sessionId: childSessionId,
+          updatedAt: Date.now(),
+          spawnedBy: REQUESTER_SESSION_KEY,
+          lifecycleRevision: originalRevision,
+        },
+      },
+    });
+
+    registerSubagentRun({
+      runId,
+      childSessionKey,
+      requesterSessionKey: REQUESTER_SESSION_KEY,
+      requesterDisplayKey: "main",
+      task: "stay listed after rejected delete cleanup",
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+    });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "done" },
+      },
+    });
+
+    const retained = await vi.waitFor(
+      () => {
+        const entry = getSubagentRunByRunId(runId);
+        expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(entry?.execution.suppressSessionEffects).toBe(true);
+        expect(entry?.deleteCleanupDispatchedAt).toBeUndefined();
+        return entry!;
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+
+    const listed = await vi.waitFor(async () => {
+      const res = await rpcReq<{
+        sessions: Array<{ key: string; childSessions?: string[] }>;
+      }>(gatewaySuite.ws, "sessions.list", { includeUnknown: true });
+      expect(res.ok).toBe(true);
+      const keys = res.payload?.sessions.map((row) => row.key) ?? [];
+      expect(keys).toContain(childSessionKey);
+      return res.payload?.sessions ?? [];
+    });
+    const parentRow = listed.find((row) => row.key === REQUESTER_SESSION_KEY);
+    expect(parentRow?.childSessions).toEqual([childSessionKey]);
+    expect(shouldKeepSubagentRunChildLink(retained)).toBe(true);
+
+    const verdict = {
+      surface: "isolated-gateway",
+      path: "delete-cleanup session-changed rejection",
+      sessionNavigation: {
+        childSessionDeleted: false,
+        childSessionListed: true,
+        parentChildToggle: parentRow?.childSessions ?? null,
+        dispatchStampCleared: retained.deleteCleanupDispatchedAt === undefined,
+      },
+    };
+    console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);
+  });
 });

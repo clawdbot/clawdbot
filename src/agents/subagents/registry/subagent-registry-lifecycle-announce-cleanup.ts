@@ -449,6 +449,17 @@ export const startSubagentAnnounceCleanupFlow = (
       !suppressSessionEffects && context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
     );
   };
+  const releaseDeleteCleanupDispatchAfterSessionChanged = () => {
+    // The pre-request stamp survives only while deletion outcome is unknown.
+    // A confirmed session-changed rejection leaves the successor live, so
+    // parent navigation must not keep treating the child as already gone.
+    if (entry.deleteCleanupDispatchedAt === undefined) {
+      return;
+    }
+    entry.deleteCleanupDispatchedAt = undefined;
+    suppressChildSessionEffects();
+    params.persist(runId);
+  };
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
       runId,
@@ -489,7 +500,7 @@ export const startSubagentAnnounceCleanupFlow = (
               throw new Error("subagent session cleanup did not complete");
             }
             if (sessionCleanup === "changed") {
-              suppressChildSessionEffects();
+              releaseDeleteCleanupDispatchAfterSessionChanged();
             }
           }
         }
@@ -601,6 +612,18 @@ export const startSubagentAnnounceCleanupFlow = (
               entry.deleteCleanupDispatchedAt = previousDeleteCleanupDispatchedAt;
               throw error;
             }
+          }
+        : undefined,
+    onChildSessionDeleteOutcome:
+      cleanup === "delete"
+        ? (outcome) => {
+            if (
+              outcome !== "changed" ||
+              !context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+            ) {
+              return;
+            }
+            releaseDeleteCleanupDispatchAfterSessionChanged();
           }
         : undefined,
     onDeliveryResult: (delivery) => {
