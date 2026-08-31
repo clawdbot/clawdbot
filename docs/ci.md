@@ -490,6 +490,9 @@ ratchet-down when cleanup lowers the real count.
 
 ## Local equivalents
 
+Hosted extension lint also uses the local Go garbage-collection policy;
+limiting worker threads alone does not bound the helper's heap.
+
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
 type/value pairs with the same public name. `eslint/no-var` remains enabled
