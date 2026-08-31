@@ -204,6 +204,7 @@ function queueDelegatedApproval(params: {
     requestEventName: "openclaw.approval.requested",
     requestEvent,
     twoPhase: true,
+    approvalKind: "system-agent",
     deliverRequest: () => false,
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
