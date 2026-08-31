@@ -208,8 +208,25 @@ async function runBookmarkScenario(
   }
 }
 
+// A bookmark action succeeds when handleAction returns a result whose
+// jsonResult payload reports ok: true. A wire call recorded before a later
+// rejection would still populate calls, so the proof asserts this too.
+function resultOk(scenario: { result?: AgentToolResult<unknown>; error?: Error }): boolean {
+  if (scenario.error || !scenario.result) {
+    return false;
+  }
+  const details = scenario.result.details as { ok?: unknown } | undefined;
+  return details?.ok === true;
+}
+
 function buildBookmarkProofVerdict(
-  scenarios: { name: string; calls: WireCall[]; gateDisabled: boolean; error?: string }[],
+  scenarios: {
+    name: string;
+    calls: WireCall[];
+    gateDisabled: boolean;
+    returnedOk?: boolean;
+    error?: string;
+  }[],
   headSha: string,
 ): Record<string, unknown> {
   return {
@@ -225,10 +242,13 @@ function buildBookmarkProofVerdict(
       transport: "real SDK fetch; SLACK_API_URL redirected to 127.0.0.1",
       dispatch:
         "real createSlackActions().handleAction adapter -> lazy action-runtime -> actions-bookmarks",
+      resultAssertion:
+        "each happy-path scenario asserts error is absent and the returned AgentToolResult details.ok is true",
     },
     scenarios: scenarios.map((s) => ({
       name: s.name,
       gateDisabled: s.gateDisabled,
+      returnedOk: s.returnedOk,
       outMethods: s.calls.map((c) => c.method),
       wireCalls: s.calls,
       ...(s.error ? { error: s.error } : {}),
@@ -248,13 +268,17 @@ describe("Slack bookmark action real-transport trace", () => {
   });
 
   it("routes bookmark add through the real SDK transport to a bookmarks.add HTTP POST", async () => {
-    const { calls } = await runBookmarkScenario({
+    const { result, error, calls } = await runBookmarkScenario({
       op: "add",
       channelId: "C123",
       title: "Runbook",
       link: "https://runbook.example",
       emoji: "bookmark",
     });
+    // The action must complete successfully: a wire call can be recorded before
+    // a later SDK/action rejection, so assert the returned result as well.
+    expect(error).toBeUndefined();
+    expect(result?.details).toMatchObject({ ok: true, bookmark: { id: "B001" } });
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -272,7 +296,9 @@ describe("Slack bookmark action real-transport trace", () => {
   });
 
   it("routes bookmark list through the real SDK transport to a bookmarks.list HTTP POST", async () => {
-    const { calls } = await runBookmarkScenario({ channelId: "C123" });
+    const { result, error, calls } = await runBookmarkScenario({ channelId: "C123" });
+    expect(error).toBeUndefined();
+    expect(result?.details).toMatchObject({ ok: true, bookmarks: [{ id: "B001" }] });
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -284,13 +310,15 @@ describe("Slack bookmark action real-transport trace", () => {
   });
 
   it("routes bookmark edit through the real SDK transport to a bookmarks.edit HTTP POST", async () => {
-    const { calls } = await runBookmarkScenario({
+    const { result, error, calls } = await runBookmarkScenario({
       op: "edit",
       channelId: "C123",
       bookmarkId: "B001",
       title: "Updated",
       emoji: "rotating_light",
     });
+    expect(error).toBeUndefined();
+    expect(result?.details).toMatchObject({ ok: true, bookmark: { id: "B001", title: "Updated" } });
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -307,11 +335,13 @@ describe("Slack bookmark action real-transport trace", () => {
   });
 
   it("routes bookmark remove through the real SDK transport to a bookmarks.remove HTTP POST", async () => {
-    const { calls } = await runBookmarkScenario({
+    const { result, error, calls } = await runBookmarkScenario({
       op: "remove",
       channelId: "C123",
       bookmarkId: "B001",
     });
+    expect(error).toBeUndefined();
+    expect(result?.details).toMatchObject({ ok: true });
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -371,10 +401,10 @@ describe("Slack bookmark action real-transport trace", () => {
     );
     const verdict = buildBookmarkProofVerdict(
       [
-        { name: "add", calls: add.calls, gateDisabled: false },
-        { name: "list", calls: list.calls, gateDisabled: false },
-        { name: "edit", calls: edit.calls, gateDisabled: false },
-        { name: "remove", calls: remove.calls, gateDisabled: false },
+        { name: "add", calls: add.calls, gateDisabled: false, returnedOk: resultOk(add) },
+        { name: "list", calls: list.calls, gateDisabled: false, returnedOk: resultOk(list) },
+        { name: "edit", calls: edit.calls, gateDisabled: false, returnedOk: resultOk(edit) },
+        { name: "remove", calls: remove.calls, gateDisabled: false, returnedOk: resultOk(remove) },
         {
           name: "gate-disabled",
           calls: gated.calls,
