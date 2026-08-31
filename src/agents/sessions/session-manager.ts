@@ -10,8 +10,14 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import type {
@@ -118,6 +124,39 @@ export class SessionManager extends SessionManagerBranching {
       ...context,
       limits,
     });
+  }
+
+  /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
+  static openModelContext(
+    target: SessionTranscriptRuntimeTarget,
+    options: {
+      cwd?: string;
+      admission?: UserTurnTranscriptAdmissionReceipt;
+    } = {},
+  ): SessionManager {
+    const { admission } = options;
+    if (
+      admission &&
+      (target.agentId !== admission.agentId ||
+        target.sessionId !== admission.sessionId ||
+        target.sessionKey !== admission.sessionKey)
+    ) {
+      throw new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission belongs to a different transcript target",
+      );
+    }
+    const contextEntries = runWithSessionTranscriptReadFence(admission, () =>
+      readSessionTranscriptModelContext(target),
+    );
+    // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
+    const entries = contextEntries as FileEntry[];
+    const header = entries.find((entry) => entry.type === "session");
+    if (entries.length > 0 && (!header || (header.version ?? 1) < CURRENT_SESSION_VERSION)) {
+      throw new Error(
+        "Persisted legacy session transcripts require doctor/import migration before runtime use",
+      );
+    }
+    return new SessionManager(options.cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */
