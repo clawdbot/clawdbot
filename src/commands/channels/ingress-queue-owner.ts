@@ -41,38 +41,40 @@ import {
  *   plugin, so re-keying it would make N lanes alias a single queue. That is a
  *   contract decision, not a call-site fix.
  */
-export function resolveChannelIngressQueueOwnerId(params: {
-  channelId: string;
-  catalogPluginId?: string | undefined;
-}): string {
-  return (
-    getRegisteredChannelOwnerPluginId(params.channelId) ??
-    normalizeOptionalString(params.catalogPluginId) ??
-    params.channelId
-  );
-}
-
-/**
- * Resolves the account id a channel's durable ingress rows are stored under.
- *
- * The queue name has two halves and both are composed by the plugin, not by the
- * operator. The owner id above is the first; this is the second. WhatsApp opens its
- * queue with `hashNamespacePart(accountId)`, so addressing its rows by the configured
- * account id selects nothing at all - the same defect as the channel half, one field
- * over. Only a plugin that transforms the id declares `resolveDurableAccountKey`;
- * for every other channel this returns the account id unchanged.
- */
-export function resolveChannelIngressQueueAccountKey(params: {
+/** Both halves of the queue name a channel account's durable rows are stored under. */
+export type ChannelIngressQueueKey = {
   channelId: string;
   accountId: string;
+};
+
+/**
+ * Resolves the whole queue name, never one half of it.
+ *
+ * The two halves used to be two functions, and a caller resolved one and forgot the
+ * other within a day: the owner half went through the alias-aware registry key while
+ * the account half did not, so an operator typing a documented alias addressed half of
+ * one key and half of another. Returning the pair makes that a compile error rather
+ * than a silent miss, which is the only reason this is one function.
+ */
+export function resolveChannelIngressQueueKey(params: {
+  channelId: string;
+  accountId: string;
+  catalogPluginId?: string | undefined;
   plugin?: Pick<ChannelPlugin, "config"> | undefined;
-}): string {
-  // Canonicalize first. The owner half resolves through the alias-aware registry key,
-  // and `getChannelPlugin` is by canonical id only — so without this an operator typing
-  // a documented alias got the owner from one channel and the account key from no
-  // channel at all, addressing half of one key and half of another.
+}): ChannelIngressQueueKey {
+  // Canonicalize before the plugin lookup: `getChannelPlugin` is by canonical id only,
+  // while the owner half accepts aliases, and both halves must mean the same channel.
   const canonicalId = normalizeAnyChannelId(params.channelId) ?? params.channelId;
   const plugin = params.plugin ?? getChannelPlugin(canonicalId);
-  const stored = plugin?.config?.resolveDurableAccountKey?.(params.accountId);
-  return normalizeOptionalString(stored) ?? params.accountId;
+  // A declared resolver is authoritative, including when it returns an empty string:
+  // the write side normalizes empty to "default" too, so falling back to the configured
+  // id here would be the one case that silently addresses a different queue.
+  const storedAccountId = plugin?.config?.resolveDurableAccountKey?.(params.accountId);
+  return {
+    channelId:
+      getRegisteredChannelOwnerPluginId(params.channelId) ??
+      normalizeOptionalString(params.catalogPluginId) ??
+      params.channelId,
+    accountId: storedAccountId ?? params.accountId,
+  };
 }

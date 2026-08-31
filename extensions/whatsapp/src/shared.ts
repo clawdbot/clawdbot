@@ -69,7 +69,7 @@ const whatsappScopedConfigAdapter = createScopedChannelConfigAdapter<ResolvedWha
 const whatsappConfigAdapter = {
   ...whatsappScopedConfigAdapter,
   resolveDurableAccountKey: resolveWhatsAppDurableAccountKey,
-};
+} satisfies ChannelPlugin["config"];
 
 const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppAccount>({
   channelKey: WHATSAPP_CHANNEL,

@@ -46,8 +46,6 @@ type WhatsAppIngressFacts = {
   laneKey: string;
 };
 
-const hashNamespacePart = resolveWhatsAppDurableAccountKey;
-
 function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
@@ -72,7 +70,7 @@ export type WhatsAppDurableInboundQueue = ChannelIngressQueue<WhatsAppDurableInb
 /** Account-scoped queue shared with the pre-drain WhatsApp receive journal. */
 export function createWhatsAppDurableInboundQueue(accountId: string): WhatsAppDurableInboundQueue {
   return getWhatsAppRuntime().state.openChannelIngressQueue<WhatsAppDurableInboundPayload>({
-    accountId: hashNamespacePart(accountId),
+    accountId: resolveWhatsAppDurableAccountKey(accountId),
     stateDir: getWhatsAppRuntime().state.resolveStateDir(),
   });
 }

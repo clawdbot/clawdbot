@@ -23,10 +23,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import {
-  resolveChannelIngressQueueAccountKey,
-  resolveChannelIngressQueueOwnerId,
-} from "./ingress-queue-owner.js";
+import { resolveChannelIngressQueueKey } from "./ingress-queue-owner.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -272,13 +269,10 @@ export async function channelsRemoveCommand(
   // re-enabling it drains them.
   const discard = deleteConfig
     ? discardRemovedAccountIngressRows({
-        channelId: resolveChannelIngressQueueOwnerId({
-          channelId: plugin.id,
-          catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
-        }),
-        accountId: resolveChannelIngressQueueAccountKey({
+        ...resolveChannelIngressQueueKey({
           channelId: plugin.id,
           accountId: preparedRemoval.accountKey,
+          catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
           plugin,
         }),
       })
