@@ -970,6 +970,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Stripes partition the tooling files: no overlap, nothing dropped.
     const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
     expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
+    const processProofFiles = [
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/managed-child-process.test.ts",
+      "test/scripts/vitest-worker-artifacts.test.ts",
+      "test/scripts/vitest-worker-artifacts.transforms.test.ts",
+    ];
+    const processProofStripes = processProofFiles.map(
+      (file) => stripes.find((stripe) => stripe.includePatterns?.includes(file))?.shardName,
+    );
+    expect(processProofStripes).not.toContain(undefined);
+    expect(new Set(processProofStripes).size).toBe(processProofFiles.length);
     expect(
       stripes.find((stripe) =>
         stripe.includePatterns?.includes(
