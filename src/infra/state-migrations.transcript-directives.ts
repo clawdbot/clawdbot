@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
+import {
+  assertAgentDatabaseMaintenanceAuthority,
+  assertNoOpenClawAgentDatabaseLeases,
+} from "../state/openclaw-agent-db-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
@@ -13,7 +16,6 @@ import {
   type OpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
-import { resolveDatabasePath as resolveOpenClawStateDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -241,19 +243,12 @@ function transcriptSessionsNeedMigration(
   }
 }
 
-function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
-  const pathname = resolveOpenClawStateDatabasePath({ env });
-  const database = openNodeSqliteDatabase(pathname, { readOnly: true });
+function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): boolean {
   try {
-    const hasLeaseTable = database
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("agent_database_leases");
-    if (!hasLeaseTable) {
-      return false;
-    }
-    return Boolean(database.prepare("SELECT 1 FROM agent_database_leases LIMIT 1").get());
-  } finally {
-    database.close();
+    assertNoOpenClawAgentDatabaseLeases(agentId, { env });
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -400,12 +395,12 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get("session_transcript_archives");
     if (!hasArchiveTable) {
-      return !hasActiveAgentDatabaseLease(params.env);
+      return !hasActiveAgentDatabaseLease(params.agentId, params.env);
     }
     if (database.prepare("SELECT 1 FROM session_transcript_archives LIMIT 1").get()) {
       return true;
     }
-    return !hasActiveAgentDatabaseLease(params.env);
+    return !hasActiveAgentDatabaseLease(params.agentId, params.env);
   } catch {
     // The fenced migration owns validation and user-facing diagnostics.
     return true;
@@ -426,18 +421,30 @@ export async function migrateHistoricalTranscriptDirectives(
   const changes: string[] = [];
   const warnings: string[] = [];
   try {
-    const targets = resolveAgentDatabaseMigrationTargets({
+    const discoveredTargets = resolveAgentDatabaseMigrationTargets({
       changes,
       configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
       env,
       warnings,
-    }).filter((target) =>
-      agentDatabaseNeedsTranscriptDirectiveMigration({
-        agentId: target.agentId,
-        env,
-        pathname: target.path,
-      }),
-    );
+    });
+    const targets: typeof discoveredTargets = [];
+    for (const target of discoveredTargets) {
+      try {
+        if (
+          agentDatabaseNeedsTranscriptDirectiveMigration({
+            agentId: target.agentId,
+            env,
+            pathname: target.path,
+          })
+        ) {
+          targets.push(target);
+        }
+      } catch (error) {
+        warnings.push(
+          `Skipped historical transcript directive migration preflight for ${target.path}: ${String(error)}`,
+        );
+      }
+    }
     if (targets.length === 0) {
       return { changes, warnings };
     }
