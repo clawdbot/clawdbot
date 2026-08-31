@@ -31,12 +31,8 @@ describe("resolveToCwd", () => {
     const tempCwd = tempDirs.make("openclaw-at-path-");
     await fs.writeFile(path.join(tempCwd, "@literal.txt"), "literal", "utf8");
 
-    expect(resolveLocalPathToCwd("@literal.txt", tempCwd)).toBe(
-      path.join(tempCwd, "@literal.txt"),
-    );
-    expect(resolveLocalPathToCwd("@missing.txt", tempCwd)).toBe(
-      path.join(tempCwd, "missing.txt"),
-    );
+    expect(resolveLocalPathToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "@literal.txt"));
+    expect(resolveLocalPathToCwd("@missing.txt", tempCwd)).toBe(path.join(tempCwd, "missing.txt"));
     expect(resolveToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "literal.txt"));
   });
 
