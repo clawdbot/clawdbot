@@ -59,3 +59,44 @@ describe("irc normalizeCompatibilityConfig streaming aliases", () => {
     expect(second.config).toBe(first.config);
   });
 });
+
+describe("irc retired mentionPatterns migration", () => {
+  it("flags and strips the retired key at root and account scope", () => {
+    const cfg = ircConfig({
+      host: "irc.libera.chat",
+      mentionPatterns: ["\\bopenclaw\\b"],
+      accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
+    });
+
+    const rootRule = legacyConfigRules.find(
+      (rule) => rule.path.join(".") === "channels.irc" && rule.message?.includes("mentionPatterns"),
+    );
+    const accountRule = legacyConfigRules.find(
+      (rule) =>
+        rule.path.join(".") === "channels.irc.accounts" &&
+        rule.message?.includes("mentionPatterns"),
+    );
+    expect(rootRule?.match?.({ mentionPatterns: ["x"] }, {})).toBe(true);
+    expect(rootRule?.match?.({ host: "irc.libera.chat" }, {})).toBe(false);
+    expect(accountRule?.match?.({ work: { mentionPatterns: ["x"] } }, {})).toBe(true);
+    expect(accountRule?.match?.({ work: { nick: "n" } }, {})).toBe(false);
+
+    const result = normalizeCompatibilityConfig({ cfg });
+    const irc = expectDefined(
+      (result.config.channels as Record<string, Record<string, unknown>> | undefined)?.irc,
+      "channels.irc",
+    );
+    expect(irc.mentionPatterns).toBeUndefined();
+    expect(irc.host).toBe("irc.libera.chat");
+    const accounts = irc.accounts as Record<string, Record<string, unknown> | undefined>;
+    const workAccount = expectDefined(accounts.work, "channels.irc.accounts.work");
+    expect(workAccount.mentionPatterns).toBeUndefined();
+    expect(workAccount.nick).toBe("openclaw-ops");
+    expect(result.changes.some((change) => change.includes("mentionPatterns"))).toBe(true);
+  });
+
+  it("leaves a config without the retired key untouched", () => {
+    const result = normalizeCompatibilityConfig({ cfg: ircConfig({ host: "irc.libera.chat" }) });
+    expect(result.changes.some((change) => change.includes("mentionPatterns"))).toBe(false);
+  });
+});

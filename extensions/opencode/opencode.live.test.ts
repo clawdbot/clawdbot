@@ -1,4 +1,3 @@
-// Opencode tests cover opencode plugin behavior.
 import {
   completeSimple,
   type AssistantMessage,
@@ -17,28 +16,43 @@ const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
 const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash-free";
+  process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-const describeCatalogLive = LIVE ? describe : describe.skip;
 
 type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
 };
 
-function resolveOpencodeDeepSeekLiveModel(): Model<"openai-completions"> {
-  return {
-    id: LIVE_MODEL_ID,
-    name: LIVE_MODEL_ID,
-    api: "openai-completions",
+async function resolveOpencodeDeepSeekLiveModel() {
+  const provider = await buildOpencodeZenLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
+  const row = provider.models.find((model) => model.id === LIVE_MODEL_ID);
+  if (
+    !row ||
+    row.api !== "openai-completions" ||
+    !row.contextWindow ||
+    !row.reasoning ||
+    !row.compat?.supportsTools
+  ) {
+    throw new Error(`OpenCode catalog lacks a reasoning/tool-capable chat model: ${LIVE_MODEL_ID}`);
+  }
+  const input = row.input.filter((kind) => kind === "text" || kind === "image");
+  expect(input).toEqual(row.input);
+  const reasoning = (["low", "medium", "high", "max"] as const).find((effort) =>
+    row.compat?.supportedReasoningEfforts?.includes(effort),
+  );
+  if (!reasoning) {
+    throw new Error(`OpenCode catalog has no supported reasoning effort for ${LIVE_MODEL_ID}`);
+  }
+  const model: Model<"openai-completions"> = {
+    ...row,
+    api: row.api,
+    contextWindow: row.contextWindow,
     provider: "opencode",
-    baseUrl: "https://opencode.ai/zen/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 65_536,
-    maxTokens: 8192,
+    baseUrl: row.baseUrl ?? provider.baseUrl,
+    input,
   };
+  return { model, reasoning };
 }
 
 function liveEchoTool(): Tool {
@@ -70,7 +84,10 @@ function hasReasoningContentReplay(message: AssistantMessage): boolean {
 
 async function fetchOpencodeZenModelIds(): Promise<string[]> {
   const response = await fetch(OPENCODE_ZEN_MODELS_URL, {
-    headers: { "accept-encoding": "identity" },
+    headers: {
+      authorization: `Bearer ${OPENCODE_API_KEY}`,
+      "accept-encoding": "identity",
+    },
   });
   expect(response.ok).toBe(true);
   const json = (await response.json()) as OpencodeModelsResponse;
@@ -85,7 +102,7 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
   return modelIds;
 }
 
-describeCatalogLive("opencode Zen live catalog drift", () => {
+describeLive("opencode Zen live catalog drift", () => {
   it("discovers active live ids from authoritative metadata without hardcoding the catalog", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
     const discovered = await buildOpencodeZenLiveProviderConfig({
@@ -96,30 +113,22 @@ describeCatalogLive("opencode Zen live catalog drift", () => {
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
     const trustedRows = listOpencodeZenModelCatalogEntries();
-    const trustedIdSet = new Set(trustedRows.map((row) => row.id));
-    const missingTrustedMetadata = liveIds.filter((id) => !trustedIdSet.has(id));
-    const deprecatedIds = new Set(
-      trustedRows.filter((row) => row.status === "deprecated").map((row) => row.id),
+    const activeIds = new Set(
+      trustedRows.filter((row) => !row.status).map((row) => row.id.toLowerCase()),
     );
 
-    expect(missingTrustedMetadata).toEqual([]);
-    expect(discoveredIds.every((id) => liveIds.includes(id) && !deprecatedIds.has(id))).toBe(true);
-    expect(discovered.models.find((model) => model.id === "x-preview-f-free")).toMatchObject({
-      api: "openai-completions",
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-      compat: { supportedReasoningEfforts: ["low", "high", "max"] },
-    });
+    expect(discoveredIds.length).toBeGreaterThan(0);
+    expect(discoveredIds).toEqual(liveIds.filter((id) => activeIds.has(id)));
   }, 30_000);
 });
 
 describeLive("opencode plugin live", () => {
-  it("accepts DeepSeek V4 tier-suffixed thinking replay after a tool call", async () => {
-    const model = resolveOpencodeDeepSeekLiveModel();
+  it("accepts discovered DeepSeek V4 thinking replay after a tool call", async () => {
+    const { model, reasoning } = await resolveOpencodeDeepSeekLiveModel();
     const tool = liveEchoTool();
     const firstOptions = {
       apiKey: OPENCODE_API_KEY,
-      reasoning: "low",
+      reasoning,
       maxTokens: 128,
     } as const;
 
@@ -173,7 +182,7 @@ describeLive("opencode plugin live", () => {
       },
       {
         apiKey: OPENCODE_API_KEY,
-        reasoning: "low",
+        reasoning,
         maxTokens: 64,
       },
     );

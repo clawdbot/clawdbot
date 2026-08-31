@@ -3954,6 +3954,7 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "discord",
       currentChannelId: "channel:123",
+      currentChatType: "channel",
       currentThreadTs: "thread-456",
       currentMessageId: "msg-789",
       agentAccountId: "ops",
@@ -3968,6 +3969,7 @@ describe("message tool schema scoping", () => {
     }
     expect(context.currentChannelProvider).toBe("discord");
     expect(context.currentChannelId).toBe("channel:123");
+    expect(context.chatType).toBe("channel");
     expect(context.currentThreadTs).toBe("thread-456");
     expect(context.currentMessageId).toBe("msg-789");
     expect(context?.accountId).toBe("ops");

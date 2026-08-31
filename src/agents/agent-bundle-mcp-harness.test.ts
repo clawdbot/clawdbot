@@ -44,15 +44,21 @@ const mocks = vi.hoisted(() => {
     getOrCreateRequesterScopedMcpRuntime: vi.fn(
       async (params: { sessionId: string; requesterSenderId?: string | null }) => {
         if (resolveImpl) {
-          return resolveImpl(params);
+          const runtime = await resolveImpl(params);
+          return runtime
+            ? { runtime, advertisedCatalogConfigFingerprint: runtime.configFingerprint }
+            : undefined;
         }
         return undefined;
       },
     ),
     getOrCreateSessionMcpRuntime: vi.fn(),
     rememberAdvertisedScopedMcpCatalog: vi.fn(
-      (sessionId: string, catalog: typeof advertised extends Map<string, infer V> ? V : never) => {
-        advertised.set(sessionId, catalog);
+      (
+        handle: { runtime: Runtime },
+        catalog: typeof advertised extends Map<string, infer V> ? V : never,
+      ) => {
+        advertised.set(handle.runtime.sessionId, catalog);
       },
     ),
     getAdvertisedScopedMcpCatalog: vi.fn((sessionId: string) => advertised.get(sessionId) ?? null),
@@ -64,8 +70,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./agent-bundle-mcp-runtime.js")>();
+vi.mock("./agent-bundle-mcp-manager-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-bundle-mcp-manager-api.js")>();
   return {
     ...actual,
     getOrCreateRequesterScopedMcpRuntime: mocks.getOrCreateRequesterScopedMcpRuntime,

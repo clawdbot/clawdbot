@@ -208,23 +208,20 @@ struct IPadActivityScreen: View {
 
     private func refreshSessions() async {
         guard self.scenePhase == .active else { return }
-        guard self.sessionsAvailable else {
-            self.sessions = await self.appModel.loadCachedChatSessions()
-            self.loadErrorText = nil
-            return
-        }
-
         self.isLoading = true
         self.loadErrorText = nil
         defer { self.isLoading = false }
 
         do {
-            let transport = self.appModel.makeChatTransport()
-            let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
-            self.sessions = response.sessions
-            await self.appModel.storeCachedChatSessions(response.sessions)
+            let roster = try await self.appModel.loadChatSessionRoster(
+                limit: CommandCenterTab.recentSessionsFetchLimit)
+            self.sessions = roster.sessions
         } catch {
-            self.sessions = await self.appModel.loadCachedChatSessions()
+            let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
+            let sourceAgentID = self.appModel.chatDeliveryAgentId
+            self.sessions = await self.appModel.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }

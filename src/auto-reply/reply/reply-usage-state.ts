@@ -3,7 +3,7 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/us
 import type { OpenClawConfig } from "../../config/config.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
 const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
@@ -38,12 +38,6 @@ export function buildReplyUsageState(params: {
 }): PluginHookReplyUsageState {
   const resolvedProvider = params.fallbackExhausted ? undefined : params.winnerProvider;
   const resolvedModel = params.fallbackExhausted ? undefined : params.winnerModel;
-  const hasBillableUsageBuckets =
-    params.usage &&
-    (params.usage.input !== undefined ||
-      params.usage.output !== undefined ||
-      params.usage.cacheRead !== undefined ||
-      params.usage.cacheWrite !== undefined);
   return {
     provider: params.provider,
     model: params.model,
@@ -61,17 +55,15 @@ export function buildReplyUsageState(params: {
       params.requestedProvider && params.requestedModel
         ? `${params.requestedProvider}/${params.requestedModel}`
         : undefined,
-    turnUsd: hasBillableUsageBuckets
-      ? estimateUsageCost({
-          usage: params.usage,
-          cost: resolveModelCostConfig({
-            provider: params.provider,
-            model: params.model,
-            config: params.config,
-            agentDir: params.agentDir,
-          }),
-        })
-      : undefined,
+    turnUsd: estimateAggregateUsageCost({
+      usage: params.usage,
+      cost: resolveModelCostConfig({
+        provider: params.provider,
+        model: params.model,
+        config: params.config,
+        agentDir: params.agentDir,
+      }),
+    }),
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),
     compactionCount: params.compactionCount,

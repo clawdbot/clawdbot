@@ -13,7 +13,10 @@ import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.ful
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
-import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogSnapshot,
+  PreparedGatewayModelCatalog,
+} from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -170,17 +173,24 @@ export async function loadGatewayModelCatalog(
 /** Reads the newest completed published catalog without starting provider discovery. */
 export async function readPreparedGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[] | undefined> {
-  const { getAvailablePreparedModelCatalogSnapshot } =
+): Promise<PreparedGatewayModelCatalog | undefined> {
+  const { getPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
-  return getAvailablePreparedModelCatalogSnapshot({
+  const owner = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config,
     readOnly: true,
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  })?.entries;
+  });
+  if (!owner) {
+    return undefined;
+  }
+  return {
+    entries: (owner.readFullModelCatalog?.() ?? owner.modelCatalog).entries,
+    pluginRegistry: owner.pluginRegistry,
+  };
 }
 
 /** Reads the published owner generation without activating full catalog discovery. */

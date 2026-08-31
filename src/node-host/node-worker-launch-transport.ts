@@ -3,6 +3,11 @@ import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
 import {
+  buildWorkerProcessTurn,
+  serializeWorkerProcessInput,
+  type WorkerProcessInput,
+} from "../worker/worker-process-protocol.js";
+import {
   buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
@@ -57,7 +62,7 @@ export async function prepareNodeWorkerLaunchTransport(
     return {
       kind: "started",
       adapter: await createChildAdapter({
-        argv: [process.execPath, entry, "--internal-worker-ipc"],
+        argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
         env: options.workerEnv,
         exactEnv: true,
         ownedWorker: true,
@@ -74,7 +79,7 @@ export async function prepareNodeWorkerLaunchTransport(
               )
             : undefined;
         },
-        input: JSON.stringify(options.descriptor),
+        stdinMode: "pipe-open",
       }),
     };
   }
@@ -132,27 +137,40 @@ export async function prepareNodeWorkerLaunchTransport(
   }
 }
 
-/** Plain stdio workers cannot run until their journaled descriptor reaches EOF. */
+/** Both transports admit turns only after the physical owner has been journaled. */
 export async function startNodeWorkerLaunchTransport(params: {
   adapter: NodeWorkerChildAdapter;
   descriptor: WorkerLaunchDescriptor;
   container?: NodeWorkerContainerIdentity;
+  isCurrent: () => boolean;
 }): Promise<void> {
+  if (!params.isCurrent()) {
+    throw new Error("node worker admission closed before startup");
+  }
   if (!params.container) {
     await params.adapter.openStartGate?.();
-    return;
   }
-  const stdin = params.adapter.stdin;
+  if (!params.isCurrent()) {
+    throw new Error("node worker admission closed before descriptor dispatch");
+  }
+  await sendNodeWorkerInput(params.adapter, buildWorkerProcessTurn(params.descriptor));
+}
+
+export async function sendNodeWorkerInput(
+  adapter: NodeWorkerChildAdapter,
+  message: WorkerProcessInput,
+): Promise<void> {
+  const stdin = adapter.stdin;
   if (!stdin) {
-    throw new Error("node worker container launch did not provide a writable stdin pipe");
+    throw new Error("node worker did not provide a writable stdin pipe");
   }
+  const encoded = serializeWorkerProcessInput(message);
   await new Promise<void>((resolve, reject) => {
-    stdin.write(JSON.stringify(params.descriptor), (error) => {
+    stdin.write(encoded, (error) => {
       if (error) {
         reject(error);
         return;
       }
-      stdin.end();
       resolve();
     });
   });

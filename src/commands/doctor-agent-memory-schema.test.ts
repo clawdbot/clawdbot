@@ -89,83 +89,93 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
-  it("moves inline recall metadata, preserves rows, and lists the durable repair", async () => {
-    const { databasePath, env } = createRegisteredAgentDatabase();
-    recreateUnreleasedInlineMemoryMetadata(databasePath);
-    const writeNote = vi.fn();
+  it.each([17, 18])(
+    "moves v%s inline recall metadata, preserves rows, and lists the durable repair",
+    async (version) => {
+      const { databasePath, env } = createRegisteredAgentDatabase();
+      recreateUnreleasedInlineMemoryMetadata(databasePath);
+      if (version === 17) {
+        const legacy = openNodeSqliteDatabase(databasePath);
+        legacy.exec(
+          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+        );
+        legacy.close();
+      }
+      const writeNote = vi.fn();
 
-    const report = await noteDoctorAgentMemorySchemaHealth(
-      { env, shouldRepair: true },
-      { note: writeNote },
-    );
+      const report = await noteDoctorAgentMemorySchemaHealth(
+        { env, shouldRepair: true },
+        { note: writeNote },
+      );
 
-    expect(report).toEqual({
-      repaired: [
-        {
-          agentId: "worker-1",
-          columns: ["importance", "triggers", "project_key"],
-          path: databasePath,
-          removedTrigger: true,
-        },
-      ],
-      warnings: [],
-    });
-    expect(writeNote).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Agent worker-1: moved memory_index_chunks.importance, memory_index_chunks.triggers, memory_index_chunks.project_key to additive storage; removed memory_index_chunk_provenance_after_insert",
-      ),
-      "Doctor changes",
-    );
-
-    const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(readMemoryChunkColumns(databasePath)).toEqual([
-        "id",
-        "path",
-        "source",
-        "start_line",
-        "end_line",
-        "hash",
-        "model",
-        "text",
-        "embedding",
-        "updated_at",
-      ]);
-      expect(database.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
-        id: "pre-provenance-sentinel",
-        text: "sentinel text",
+      expect(report).toEqual({
+        repaired: [
+          {
+            agentId: "worker-1",
+            columns: ["importance", "triggers", "project_key"],
+            path: databasePath,
+            removedTrigger: true,
+          },
+        ],
+        warnings: [],
       });
-      expect(
-        database
-          .prepare(
-            `SELECT importance, triggers, project_key
+      expect(writeNote).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Agent worker-1: moved memory_index_chunks.importance, memory_index_chunks.triggers, memory_index_chunks.project_key to additive storage; removed memory_index_chunk_provenance_after_insert",
+        ),
+        "Doctor changes",
+      );
+
+      const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(readMemoryChunkColumns(databasePath)).toEqual([
+          "id",
+          "path",
+          "source",
+          "start_line",
+          "end_line",
+          "hash",
+          "model",
+          "text",
+          "embedding",
+          "updated_at",
+        ]);
+        expect(database.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
+          id: "pre-provenance-sentinel",
+          text: "sentinel text",
+        });
+        expect(
+          database
+            .prepare(
+              `SELECT importance, triggers, project_key
              FROM memory_index_chunk_recall_metadata
              WHERE chunk_id = 'pre-provenance-sentinel'`,
-          )
-          .get(),
-      ).toEqual({
-        importance: 9,
-        project_key: "project/key",
-        triggers: "when testing rollback",
-      });
-      expect(
-        database
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(
-        database
-          .prepare(
-            "SELECT origin_class FROM memory_index_chunk_provenance WHERE chunk_id = 'pre-provenance-sentinel'",
-          )
-          .get(),
-      ).toEqual({ origin_class: "agent" });
-    } finally {
-      database.close();
-    }
-  });
+            )
+            .get(),
+        ).toEqual({
+          importance: 9,
+          project_key: "project/key",
+          triggers: "when testing rollback",
+        });
+        expect(
+          database
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+            )
+            .get(),
+        ).toBeUndefined();
+        expect(
+          database
+            .prepare(
+              "SELECT origin_class FROM memory_index_chunk_provenance WHERE chunk_id = 'pre-provenance-sentinel'",
+            )
+            .get(),
+        ).toEqual({ origin_class: "agent" });
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("is idempotent on a second doctor fix run", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();

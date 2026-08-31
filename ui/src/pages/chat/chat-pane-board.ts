@@ -37,6 +37,7 @@ import {
 } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import { boardChatDockLayout, type ResolvedBoardView } from "./chat-pane-shared.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -243,26 +244,28 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
     const parentKey = this.resolveBoardSessionKey();
     const sourceEpoch = state.connectionEpoch;
+    const isCurrent = () =>
+      this.state === state &&
+      this.presented &&
+      state.connectionEpoch === sourceEpoch &&
+      parentKey === this.resolveBoardSessionKey();
     void import("../../lib/sessions/swarm-roster.ts").then(
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
-        if (
-          !this.state ||
-          !this.presented ||
-          this.state.connectionEpoch !== sourceEpoch ||
-          parentKey !== this.resolveBoardSessionKey()
-        ) {
+        if (!isCurrent()) {
           return;
         }
         const enabled =
-          this.state.connected &&
+          state.connected &&
           isSwarmEnabledInConfig(
             this.context.runtimeConfig?.state.configSnapshot?.config,
             resolveAgentIdFromSessionKey(parentKey),
           );
         if (!enabled) {
-          this.swarmHydrator?.dispose();
-          this.swarmHydrator = null;
-          this.requestUpdate();
+          if (this.swarmHydrator) {
+            this.swarmHydrator.dispose();
+            this.swarmHydrator = null;
+            requestChatPageUpdate(state, "animation-frame");
+          }
           return;
         }
         this.swarmHydrator ??= new SwarmRosterHydrator();
@@ -270,11 +273,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessions: this.context.sessions,
           parentKey,
           sourceEpoch,
-          currentRows: () =>
-            this.state?.connectionEpoch === sourceEpoch
-              ? (this.state.sessionsResult?.sessions ?? [])
-              : [],
-          onRows: () => this.requestUpdate(),
+          currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
+          onRows: () => {
+            if (isCurrent()) {
+              requestChatPageUpdate(state, "animation-frame");
+            }
+          },
         });
       },
     );

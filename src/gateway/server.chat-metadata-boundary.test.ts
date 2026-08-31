@@ -145,7 +145,7 @@ test("chat.metadata retries owner misses without broadly retrying cached failure
   const modelsListResult = await import("./server-methods/models-list-result.js");
   const projectionFailure = new Error("configured model catalog unavailable");
   const projectionSpy = vi
-    .spyOn(modelsListResult, "buildModelsListResult")
+    .spyOn(modelsListResult, "prepareModelsListResult")
     .mockRejectedValue(projectionFailure);
 
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "invalidated" });

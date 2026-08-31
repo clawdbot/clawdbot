@@ -22,7 +22,7 @@ import {
   classifyFailoverReasonFromCode,
   failoverReasonFromClassification,
   inferSignalStatus,
-  isClaudeCliLoggedOutError,
+  isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
   isTransientHttpError,
@@ -64,21 +64,15 @@ export {
 } from "./context-overflow.js";
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-  matchesFormatErrorPattern,
 } from "./message-patterns.js";
-export {
-  classifyProviderPluginError,
-  classifyProviderSpecificError,
-  matchesProviderContextOverflow,
-} from "./provider-patterns.js";
 export { extractFailoverSignalDetails } from "./signal-details.js";
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
@@ -129,6 +123,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isUnsupportedImageInputErrorMessage(raw)) {
     return toReasonClassification("format");
+  }
+  if (isClaudeCliAuthError(raw, provider)) {
+    return toReasonClassification("auth");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -199,9 +196,6 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
-  if (isClaudeCliLoggedOutError(raw, provider)) {
-    return toReasonClassification("auth");
-  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -285,7 +279,7 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(
   signal: FailoverSignal,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
@@ -427,7 +421,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
     classifyFailoverSignal(

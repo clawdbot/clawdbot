@@ -166,15 +166,19 @@ public enum OpenClawChatGatewayRequests {
 
     public static func resolveQuestion(
         id: String,
-        answers: [String: [String]]) -> OpenClawChatGatewayRequest
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]? = nil) -> OpenClawChatGatewayRequest
     {
-        let values = answers.mapValues(AnyCodable.init)
+        var params: [String: AnyCodable] = [
+            "id": AnyCodable(id),
+            "answers": AnyCodable(["answers": answers]),
+        ]
+        if let secretStoreAllowedHosts {
+            params["secretStoreAllowedHosts"] = AnyCodable(secretStoreAllowedHosts)
+        }
         return OpenClawChatGatewayRequest(
             method: "question.resolve",
-            params: [
-                "id": AnyCodable(id),
-                "answers": AnyCodable(values),
-            ],
+            params: params,
             timeoutMs: self.mutationTimeoutMs)
     }
 
@@ -192,6 +196,7 @@ public enum OpenClawChatGatewayRequests {
         limit: Int?,
         search: String?,
         archived: Bool,
+        agentID: String? = nil,
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
@@ -204,6 +209,9 @@ public enum OpenClawChatGatewayRequests {
             "includeGlobal": AnyCodable(includeGlobal),
             "includeUnknown": AnyCodable(includeUnknown),
         ]
+        if let agentID = normalized(agentID) {
+            params["agentId"] = AnyCodable(agentID)
+        }
         if let limit {
             params["limit"] = AnyCodable(limit)
         }
@@ -360,6 +368,7 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionID: String? = nil,
         label: String??,
         category: String??,
+        color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
@@ -375,6 +384,9 @@ public enum OpenClawChatGatewayRequests {
         }
         if let category {
             params["category"] = category.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
+        if let color {
+            params["color"] = color.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
         if let pinned {
             params["pinned"] = AnyCodable(pinned)
@@ -408,7 +420,7 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "sessions.delete",
             params: params,
-            timeoutMs: self.mutationTimeoutMs)
+            timeoutMs: self.archiveMutationTimeoutMs)
     }
 
     public static func forkSession(

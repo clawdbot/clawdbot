@@ -12,15 +12,14 @@ import {
   formatUnknownChannelMessage,
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
-import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
@@ -83,7 +82,7 @@ export async function channelsRemoveCommand(
     return;
   }
   const baseHash = configSnapshot.hash;
-  let cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
+  const cfg: OpenClawConfig = configSnapshot.sourceConfig;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
@@ -164,9 +163,6 @@ export async function channelsRemoveCommand(
         });
       })()
     : null;
-  if (resolvedPluginState?.configChanged) {
-    cfg = resolvedPluginState.cfg;
-  }
   const resolvedChannel = resolvedPluginState?.channelId ?? channel;
   if (!resolvedChannel) {
     runtime.error(formatUnknownChannelMessage({ channel: rawChannel }));
@@ -216,36 +212,12 @@ export async function channelsRemoveCommand(
     runtime.exit(1);
     return;
   }
-  let next = removal.value.nextConfig;
-
-  const shouldMovePluginInstalls = Boolean(
-    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
-  );
-  if (shouldMovePluginInstalls) {
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: next,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-    next = committed.config;
-    await refreshPluginRegistryAfterConfigMutation({
-      config: next,
-      reason: "source-changed",
-      installRecords: committed.installRecords,
-      logger: { warn: (message) => runtime.log(message) },
-    });
-  } else {
-    await replaceConfigFile({
-      nextConfig: next,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-    if (resolvedPluginState?.pluginInstalled) {
-      await refreshPluginRegistryAfterConfigMutation({
-        config: next,
-        reason: "source-changed",
-        logger: { warn: (message) => runtime.log(message) },
-      });
-    }
-  }
+  await persistChannelPluginConfig({
+    cfg: removal.value.nextConfig,
+    pluginInstalled: false,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+    runtime,
+  });
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig

@@ -40,6 +40,25 @@ describe("mime detection", () => {
     expect(await detectMime(params.input)).toBe(params.expected);
   }
 
+  it.each([{ filePath: "clip.avi" }, {}, { filePath: "clip.bin", headerMime: "video/x-msvideo" }])(
+    "normalizes byte-detected AVI independently of filename/header hints %#",
+    async (hints) => {
+      const buffer = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
+      const detected = await detectMime({ buffer, ...hints });
+
+      expect(detected).toBe("video/x-msvideo");
+      expect(extensionForMime(detected)).toBe(".avi");
+    },
+  );
+
+  it("normalizes byte-detected Matroska to the filename MIME spelling", async () => {
+    const buffer = Buffer.from("1a45dfa38b4282886d6174726f736b61", "hex");
+    const detected = await detectMime({ buffer, filePath: "clip.bin" });
+
+    expect(detected).toBe("video/x-matroska");
+    expect(extensionForMime(detected)).toBe(".mkv");
+  });
+
   it.each([
     { format: "avif", expected: "image/avif" },
     { format: "jpg", expected: "image/jpeg" },
@@ -484,6 +503,8 @@ describe("extensionForMime", () => {
     { mime: "audio/m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
     { mime: "video/x-msvideo", expected: ".avi" },
+    { mime: "video/vnd.avi", expected: ".avi" },
+    { mime: " VIDEO/VND.AVI; codec=DIVX ", expected: ".avi" },
     { mime: "video/x-m4v", expected: ".m4v" },
     { mime: "video/mp4", expected: ".mp4" },
     { mime: "video/x-matroska", expected: ".mkv" },

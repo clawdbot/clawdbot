@@ -375,6 +375,11 @@ All under `memory.search.query`:
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
+Without a per-call `maxResults`, primary-only `memory_search` calls use this
+configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
+combined searches (`corpus=wiki` or `corpus=all`) keep their separate default
+of 10 results. An explicit tool `maxResults` overrides the applicable default.
+
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance
 multiplier after hybrid relevance, then applies MMR diversity ordering with a
@@ -503,11 +508,13 @@ when you intentionally want both representations.
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
-`tree` visibility exposes the current session and sessions it spawned. When
-the caller is the canonical main session, it covers every same-agent session.
-Non-main callers require `agent` visibility for unrelated same-agent sessions
-(or `all` when cross-agent recall is also required and agent-to-agent policy
-allows it).
+`agent` visibility exposes same-agent sessions to unsandboxed callers, including
+non-main sessions and conversations with other users sharing the agent. Set
+`tree` explicitly for current plus spawned scope (main still sees all
+same-agent sessions), or `self` for strict current-session access. A per-peer
+DM scope alone does not restrict session-tool recall. Cross-agent recall
+requires `all` and agent-to-agent policy; sandbox clamps and incognito
+exclusions still apply.
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private
@@ -593,12 +600,20 @@ the normal provenance and session-kind gates still apply. Configured strings
 are trimmed, with empty values dropped, then matched exactly and case-sensitively.
 There are no glob patterns, substring matches, or message-content searches.
 
+Hook sources are exact identifiers: IMAP uses `email`, Gmail hooks use `gmail`,
+and generic webhooks use `webhook`. To exclude both IMAP and Gmail ingestion,
+set `hookExternalContentSources: ["email", "gmail"]`.
+
 Lists combine with **OR**. For example, configuring a hook source and
 `chatTypes: ["group"]` excludes that hook source **and every group session**,
 not just group sessions from that source. Matching uses retained live session
-metadata. Missing metadata does not match a rule. Automatic dreaming separately
-skips retained archives; these lists do not establish whether another memory
-path can read an archived transcript.
+metadata through the configured `session.store`, including custom and shared
+stores, scoped to the source agent. Missing metadata does not match a rule.
+Older retained records may contain only a coarse `webhook` classification;
+when the original exact source is gone, neither `email` nor `webhook` is
+inferred for matching. Explicitly forget those sessions by full ID when needed.
+Automatic dreaming separately skips retained archives; these lists do not
+establish whether another memory path can read an archived transcript.
 
 ```json5
 {

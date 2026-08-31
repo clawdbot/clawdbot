@@ -7,6 +7,7 @@ import type {
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
@@ -19,6 +20,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
 export type BlockReplyFlushContext =
@@ -47,6 +49,8 @@ export type EmbeddedAgentMeta = {
   contextTokens?: number;
   contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
+  /** Redacted credential source selected for the terminal physical model attempt. */
+  credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   clearCliSessionBinding?: boolean;
@@ -202,6 +206,7 @@ export type EmbeddedAgentRunMeta = {
     kind:
       | "context_overflow"
       | "compaction_failure"
+      | "compaction_replay_refresh_required"
       | "role_ordering"
       | "image_size"
       | "retry_limit"
@@ -288,6 +293,7 @@ export type EmbeddedAgentCompactResult = {
   result?: {
     /** Identifies summaryless provider compaction in RPC and UI consumers. */
     kind?: "server-endpoint";
+    sessionTarget?: ContextEngineSessionTarget;
     /** Server-endpoint compaction has no transcript summary or first-kept entry. */
     summary?: string;
     firstKeptEntryId?: string;

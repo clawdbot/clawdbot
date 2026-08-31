@@ -8,7 +8,10 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./realtime-talk-audio.ts";
-import { describeRealtimeTalkInputError, openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import {
+  describeRealtimeTalkInputError,
+  RealtimeTalkInputController,
+} from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -108,7 +111,7 @@ export function insertComposerDictation(
 }
 
 class ComposerDictationSession {
-  private media: MediaStream | null = null;
+  private readonly input = new RealtimeTalkInputController((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -129,7 +132,6 @@ class ComposerDictationSession {
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
-    private readonly abortController = new AbortController(),
   ) {}
 
   start(): Promise<void> {
@@ -139,14 +141,10 @@ class ComposerDictationSession {
 
   private async startInternal(): Promise<void> {
     const inputDeviceId = loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
-    const media = await openRealtimeTalkInput(inputDeviceId, {
-      signal: this.abortController.signal,
-    });
+    const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
-      media.getTracks().forEach((track) => track.stop());
       return;
     }
-    this.media = media;
     this.unsubscribe = this.client.addEventListener((frame) => this.handleEvent(frame));
     try {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
@@ -317,15 +315,13 @@ class ComposerDictationSession {
       return;
     }
     this.stopped = true;
-    this.abortController.abort();
+    this.input.stop();
     this.inputPump.stop();
     // Retire UI events immediately; queued audio may still drain into remote close.
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.inputMeter?.stop();
     this.inputMeter = null;
-    this.media?.getTracks().forEach((track) => track.stop());
-    this.media = null;
     await this.context?.close();
     this.context = null;
   }
@@ -582,8 +578,11 @@ export class ComposerDictationController {
         if (this.session !== session) {
           return;
         }
-        this.options.onError(message, { kind: "interrupted", preservesText });
-        void this.stop({ commit: true });
+        try {
+          this.options.onError(message, { kind: "interrupted", preservesText });
+        } finally {
+          void this.stop({ commit: true });
+        }
       },
       onLevel: (level) => this.inputLevel.set(level),
       onTranscriptChange: () => this.options.onStateChange(),

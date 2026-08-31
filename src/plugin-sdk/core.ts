@@ -21,6 +21,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
   ChannelPollResult,
+  ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -630,6 +631,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     approveChannelId?: string;
     approveHint?: string;
     normalizeEntry?: (raw: string) => string;
+    classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
   dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
@@ -740,6 +742,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         approveChannelId: security.dm.approveChannelId,
         approveHint: security.dm.approveHint,
         normalizeEntry: security.dm.normalizeEntry,
+        classifyEntryAuthentication: security.dm.classifyEntryAuthentication,
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),

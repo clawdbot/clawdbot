@@ -1,6 +1,7 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -205,12 +206,15 @@ function canSelfServeLocalPaths(params: {
   }
   const policySessionKey = resolveRuntimePolicySessionKey({
     cfg: params.cfg,
+    agentId: params.agentId,
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
   const sandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: policySessionKey,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: policySessionKey,
   }).sandboxed;
   if (
     (sandboxed && !params.stagedPathsAvailable) ||
@@ -516,6 +520,20 @@ export async function getReplyFromConfig(
     ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
     : optsWithSkillFilter;
 
+  const acpWorkspaceProvisioningInput = isImplicitAcpWorkspaceCandidate(cfg, agentId)
+    ? await traceGetReplyPhase("reply.resolve_acp_workspace_provisioning", async () => {
+        // Implicit ACP agents need the live session's ACP meta (per-session cwd
+        // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
+        const state = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        return {
+          cfg,
+          agentId,
+          sessionKey: state.sessionKey,
+          ...(state.sessionEntry ? { sessionEntry: state.sessionEntry } : {}),
+        };
+      })
+    : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
+
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
@@ -523,6 +541,9 @@ export async function getReplyFromConfig(
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          provisioning: await (
+            await import("../../agents/acp-workspace-provisioning.js")
+          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
         }),
   );
   const workspaceDir = workspace.dir;
@@ -537,6 +558,7 @@ export async function getReplyFromConfig(
       stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
       }),
@@ -616,6 +638,7 @@ export async function getReplyFromConfig(
               : {}),
             pinExpectedExistingSession:
               internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -660,6 +683,8 @@ export async function getReplyFromConfig(
     initialSessionEntry,
     sessionEntryHandle,
     previousSessionEntry,
+    previousSessionMemory,
+    previousSessionResetMessages,
     sessionStore,
     sessionKey,
     sessionId,
@@ -1057,6 +1082,8 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
@@ -1083,6 +1110,8 @@ export async function getReplyFromConfig(
       ...(initialSessionEntry ? { initialSessionEntry } : {}),
       allowCreateSessionEntry: useFastTestBootstrap && initialSessionEntry === undefined,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionStore,
       sessionKey,
       storePath,
@@ -1222,6 +1251,7 @@ export async function getReplyFromConfig(
         ctx,
         sessionCtx,
         cfg,
+        agentId,
         sessionKey,
         workspaceDir,
       }),

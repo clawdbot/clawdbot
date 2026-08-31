@@ -89,9 +89,6 @@ type SkillsProps = {
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeRef?: string;
-    acknowledgeVersion?: string;
-    acknowledgeLabel?: string;
   } | null;
   onFilterChange: (next: string) => void;
   onAgentChange: (agentId: string) => void;
@@ -107,7 +104,7 @@ type SkillsProps = {
   onClawHubQueryChange: (query: string) => void;
   onClawHubDetailOpen: (ref: string) => void;
   onClawHubDetailClose: () => void;
-  onClawHubInstall: (ref: string, acknowledgeClawHubRisk?: boolean, version?: string) => void;
+  onClawHubInstall: (ref: string, version?: string) => void;
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; labelKey: string };
@@ -418,22 +415,6 @@ function renderClawHubSection(props: SkillsProps) {
             >
               ${props.clawhubInstallMessage.text}
             </div>
-            ${props.clawhubInstallMessage.acknowledgeRef
-              ? html`<button
-                  type="button"
-                  class="btn btn--sm"
-                  style="margin-top: 10px; white-space: normal;"
-                  ?disabled=${skillInstallLocked(props)}
-                  @click=${() =>
-                    props.onClawHubInstall(
-                      props.clawhubInstallMessage?.acknowledgeRef ?? "",
-                      true,
-                      props.clawhubInstallMessage?.acknowledgeVersion,
-                    )}
-                >
-                  ${props.clawhubInstallMessage.acknowledgeLabel ?? t("skillsPage.acknowledgeRisk")}
-                </button>`
-              : nothing}
           </div>`
         : nothing}
       ${renderClawHubResults(props)}

@@ -44,25 +44,6 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
-function restoreEscapeFocus(picker: HTMLElement): void {
-  const trigger = pickerTrigger(picker);
-  if (!trigger || getComputedStyle(trigger).display !== "none") {
-    trigger?.focus({ preventScroll: true });
-    return;
-  }
-  const focusScope = picker.closest("openclaw-chat-pane") ?? picker.closest("openclaw-app");
-  // Closing can replace the composer subtree; resolve the visible trigger only
-  // after the retained pane has rendered the replacement controls.
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      const target = (focusScope ?? document).querySelector<HTMLElement>(
-        ".chat-controls__model-settings .chat-controls__model-picker > summary",
-      );
-      target?.focus({ preventScroll: true });
-    }),
-  );
-}
-
 function dismissChatComposerPickersOutside(event: PointerEvent): void {
   const path = event.composedPath();
   for (const picker of openChatComposerPickers()) {
@@ -82,7 +63,7 @@ function dismissChatComposerPickersOutside(event: PointerEvent): void {
 }
 
 function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
-  if (event.key !== "Escape") {
+  if (event.key !== "Escape" || document.querySelector(".shell-nav[aria-modal='true']")) {
     return;
   }
   const pickers = openChatComposerPickers();
@@ -101,7 +82,7 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
     ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
     ?.focus({ preventScroll: true });
   if (lastPicker) {
-    restoreEscapeFocus(lastPicker);
+    pickerTrigger(lastPicker)?.focus({ preventScroll: true });
   }
 }
 

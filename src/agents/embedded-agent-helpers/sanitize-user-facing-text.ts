@@ -51,22 +51,27 @@ function stripInternalPlaceholderLines(text: string): string {
   return result;
 }
 
-function stripVerifiedConversationContext(
-  text: string,
-  conversationContext?: string,
-  streaming = false,
-): string {
-  const source = conversationContext?.trim();
-  if (
-    !source ||
-    (!source.includes(HISTORY_CONTEXT_MARKER) && !source.includes(CURRENT_MESSAGE_MARKER))
-  ) {
-    return text;
-  }
-  const containsConversationMarker =
-    text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER);
-  if (!streaming && !containsConversationMarker) {
-    return text;
+const MARKDOWN_LINE_PREFIX =
+  "[ \\t]*(?:(?:>|[-+*](?=[ \\t])|#{1,6}(?=[ \\t])|\\d{1,9}[.)](?=[ \\t]))[ \\t]*)*";
+
+type VerifiedConversationContext = {
+  readonly normalizedSource: string;
+  sourceLines?: string[];
+  firstSourceLine?: string;
+  copiedPrompt?: RegExp;
+  markdownWrapper?: RegExp;
+  incompleteMarkdownWrapper?: RegExp;
+};
+
+function hasConversationContextMarker(text: string): boolean {
+  return text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER);
+}
+
+function prepareVerifiedConversationContext(
+  source: string | undefined,
+): VerifiedConversationContext | undefined {
+  if (!source || !hasConversationContextMarker(source)) {
+    return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
   const ownsConversationContext = [HISTORY_CONTEXT_MARKER, CURRENT_MESSAGE_MARKER].some(
@@ -86,42 +91,53 @@ function stripVerifiedConversationContext(
     },
   );
   if (!ownsConversationContext) {
-    return text;
+    return undefined;
   }
 
-  const normalizedSource = source.replace(/\r\n?/gu, "\n");
-  const markdownLinePrefix =
-    "[ \\t]*(?:(?:>|[-+*](?=[ \\t])|#{1,6}(?=[ \\t])|\\d{1,9}[.)](?=[ \\t]))[ \\t]*)*";
+  return { normalizedSource: source.replace(/\r\n?/gu, "\n") };
+}
+
+function stripVerifiedConversationContext(
+  text: string,
+  context: VerifiedConversationContext | undefined,
+  streaming = false,
+): string {
+  if (!context) {
+    return text;
+  }
+  const { normalizedSource } = context;
   let result = text;
-  if (containsConversationMarker) {
-    const promptPattern = normalizedSource
-      .split("\n")
-      .map(escapeRegExp)
-      .join(`(?:\\r\\n?|\\n)${markdownLinePrefix}`);
-    const copiedPrompt = new RegExp(`(?:^${markdownLinePrefix})?${promptPattern}`, "gmu");
+  if (hasConversationContextMarker(text)) {
+    if (!context.copiedPrompt) {
+      const promptPattern = (context.sourceLines ??= normalizedSource.split("\n"))
+        .map(escapeRegExp)
+        .join(`(?:\\r\\n?|\\n)${MARKDOWN_LINE_PREFIX}`);
+      context.copiedPrompt = new RegExp(`(?:^${MARKDOWN_LINE_PREFIX})?${promptPattern}`, "gmu");
+    }
     // Markdown formatting does not make an exact owner-bound private prompt safe to disclose.
-    result = text.replace(copiedPrompt, "");
+    result = text.replace(context.copiedPrompt, "");
   }
   if (!streaming) {
     return result;
   }
 
-  const sourceStart = normalizedSource[0];
-  if (!sourceStart) {
-    return result;
-  }
-  const firstSourceLine = normalizedSource.split("\n", 1)[0] ?? normalizedSource;
+  const sourceStart = normalizedSource.charAt(0);
+  const firstSourceLine = (context.firstSourceLine ??=
+    normalizedSource.split("\n", 1)[0] ?? normalizedSource);
   const completedSourceStart = result.indexOf(firstSourceLine);
   // Anchor every completed prompt start; wrappers can be arbitrarily wide and markers can repeat.
   const searchStart =
     completedSourceStart === -1
       ? Math.max(0, result.length - normalizedSource.length * 2)
       : completedSourceStart;
-  const markdownWrapper = new RegExp(`^${markdownLinePrefix}$`, "u");
-  const incompleteMarkdownWrapper = new RegExp(
-    `^${markdownLinePrefix}(?:[-+*]|#{1,6}|\\d{1,9}[.)]?)?$`,
+  const markdownWrapper = (context.markdownWrapper ??= new RegExp(
+    `^${MARKDOWN_LINE_PREFIX}$`,
     "u",
-  );
+  ));
+  const incompleteMarkdownWrapper = (context.incompleteMarkdownWrapper ??= new RegExp(
+    `^${MARKDOWN_LINE_PREFIX}(?:[-+*]|#{1,6}|\\d{1,9}[.)]?)?$`,
+    "u",
+  ));
   let candidateStart = result.indexOf(sourceStart, searchStart);
   let completedCandidates = 0;
   while (candidateStart !== -1) {
@@ -139,7 +155,7 @@ function stripVerifiedConversationContext(
       return result.slice(0, searchStart);
     }
     const suffix = result.slice(candidateStart).replace(/\r\n?/gu, "\n");
-    const sourceLines = normalizedSource.split("\n");
+    const sourceLines = (context.sourceLines ??= normalizedSource.split("\n"));
     let lineIndex = 0;
     const unwrappedSuffix = suffix.replace(/\n([^\n]*)/gu, (_match, line: string) => {
       const sourceLine = sourceLines[++lineIndex];
@@ -178,12 +194,26 @@ export function createVerifiedConversationContextStreamFilter(
 ): (delta: string) => string {
   let accumulatedText = "";
   let releasedText: string | null = "";
+  let conversationContextSource: string | undefined;
+  let preparedConversationContext: VerifiedConversationContext | undefined;
   return (delta) => {
     accumulatedText += delta;
     const conversationContext = getConversationContext?.();
-    const safeText = stripVerifiedConversationContext(accumulatedText, conversationContext, true);
-    // Already delivered stream text cannot be retracted if its safe projection changes.
-    if (releasedText === null || !safeText.startsWith(releasedText)) {
+    const sourceChanged = conversationContext !== conversationContextSource;
+    if (sourceChanged) {
+      preparedConversationContext = prepareVerifiedConversationContext(conversationContext?.trim());
+      conversationContextSource = conversationContext;
+    }
+    const safeText = stripVerifiedConversationContext(
+      accumulatedText,
+      preparedConversationContext,
+      true,
+    );
+    // An unchanged unowned source keeps the known prefix; changing ownership must recheck it.
+    if (
+      releasedText === null ||
+      ((sourceChanged || preparedConversationContext) && !safeText.startsWith(releasedText))
+    ) {
       releasedText = null;
       return "";
     }
@@ -223,11 +253,15 @@ export function sanitizeUserFacingText(
   if (!raw) {
     return raw;
   }
-  const withoutConversationContext = stripVerifiedConversationContext(
-    raw,
-    opts?.conversationContext,
-    opts?.streaming,
-  );
+  const conversationContext = opts?.conversationContext?.trim();
+  const withoutConversationContext =
+    conversationContext && (opts?.streaming || hasConversationContextMarker(raw))
+      ? stripVerifiedConversationContext(
+          raw,
+          prepareVerifiedConversationContext(conversationContext),
+          opts?.streaming,
+        )
+      : raw;
   const stripped = stripInboundMetadata(
     stripInternalRuntimeContext(stripFinalTagsFromText(withoutConversationContext)),
   );

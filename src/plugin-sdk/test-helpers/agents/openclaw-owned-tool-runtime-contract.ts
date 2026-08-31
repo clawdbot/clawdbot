@@ -19,7 +19,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 
 export function textToolResult(
   text: string,

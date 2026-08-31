@@ -190,6 +190,8 @@ describe("gateway server chat", () => {
       });
       return await run(dir);
     } finally {
+      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
@@ -436,33 +438,54 @@ describe("gateway server chat", () => {
     };
   };
 
-  test("sessions.send accepts dashboard messages for existing sessions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    try {
-      await writeSessionStore({
-        entries: {
-          "agent:main:dashboard:test-send": {
-            sessionId: "sess-dashboard-send",
-            updatedAt: Date.now(),
+  test.each([
+    { method: "send", message: "hello from dashboard" },
+    { method: "steer", message: "follow-up from dashboard" },
+  ])(
+    "sessions.$method accepts an existing session input before reporting its committed history position",
+    async ({ method, message }) => {
+      const sessionKey = `agent:main:dashboard:test-${method}`;
+      const runId = `idem-sessions-${method}-1`;
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-sessions-${method}-`));
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      try {
+        await writeSessionStore({
+          entries: {
+            [sessionKey]: {
+              sessionId: `sess-dashboard-${method}`,
+              updatedAt: Date.now(),
+            },
           },
-        },
-      });
+        });
 
-      const res = await rpcReq(ws, "sessions.send", {
-        key: "agent:main:dashboard:test-send",
-        message: "hello from dashboard",
-        idempotencyKey: "idem-sessions-send-1",
-      });
-      expect(res.ok).toBe(true);
-      expect(res.payload?.runId).toBe("idem-sessions-send-1");
-      expect(res.payload?.messageSeq).toBe(1);
-      await waitForAgentRunDrained("idem-sessions-send-1");
-    } finally {
-      testState.sessionStorePath = undefined;
-      await removeTempDir(dir);
-    }
-  });
+        const res = await rpcReq(ws, `sessions.${method}`, {
+          key: sessionKey,
+          message,
+          idempotencyKey: runId,
+        });
+        expect(res.ok).toBe(true);
+        expectRecordFields(res.payload, { runId, status: "started" });
+        // The suite's TEST client ACKs before dispatch can commit the user turn.
+        expect(res.payload).not.toHaveProperty("messageSeq");
+        await waitForAgentRunDrained(runId);
+
+        const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
+        expect(history.ok).toBe(true);
+        const users = (history.payload?.messages ?? []).filter(
+          (entry) => expectRecordFields(entry, {}).role === "user",
+        );
+        expect(users).toHaveLength(1);
+        const user = expectRecordFields(users[0], { role: "user" });
+        expectRecordFields(user["__openclaw"], { seq: 1, idempotencyKey: `${runId}:user` });
+        expect(collectHistoryTextValues(users)).toEqual([message]);
+      } finally {
+        // A failed ACK assertion must not retire storage before detached work finishes.
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        testState.sessionStorePath = undefined;
+        await removeTempDir(dir);
+      }
+    },
+  );
 
   test("chat.send interrupt drains the captured admission before starting", async () => {
     await withMainSessionStore(async () => {
@@ -672,34 +695,6 @@ describe("gateway server chat", () => {
       await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
-      await removeTempDir(dir);
-    }
-  });
-
-  test("sessions.steer accepts dashboard follow-up messages for existing sessions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-steer-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    try {
-      await writeSessionStore({
-        entries: {
-          "agent:main:dashboard:test-steer": {
-            sessionId: "sess-dashboard-steer",
-            updatedAt: Date.now(),
-          },
-        },
-      });
-
-      const res = await rpcReq(ws, "sessions.steer", {
-        key: "agent:main:dashboard:test-steer",
-        message: "follow-up from dashboard",
-        idempotencyKey: "idem-sessions-steer-1",
-      });
-      expect(res.ok).toBe(true);
-      expect(res.payload?.runId).toBe("idem-sessions-steer-1");
-      expect(res.payload?.messageSeq).toBe(1);
-      await waitForAgentRunDrained("idem-sessions-steer-1");
-    } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
@@ -2624,6 +2619,60 @@ describe("gateway server chat", () => {
     }
   });
 
+  test.each(["return", "throw"] as const)(
+    "retains the session fixture while admitted dispatch settles after callback %s",
+    async (outcome) => {
+      const runId = `idem-fixture-dispatch-${outcome}`;
+      const dispatchStarted = createDeferred();
+      const releaseDispatch = createDeferred();
+      const callbackFinished = createDeferred();
+      const callbackError = new Error("fixture callback failed");
+      let fixtureDir = "";
+      let storePath = "";
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        dispatchStarted.resolve();
+        await releaseDispatch.promise;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      const fixture = withMainSessionStore(async (dir) => {
+        fixtureDir = dir;
+        storePath = path.join(dir, "sessions.json");
+        try {
+          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+          await dispatchStarted.promise;
+          if (outcome === "throw") {
+            throw callbackError;
+          }
+          return "fixture result";
+        } finally {
+          callbackFinished.resolve();
+        }
+      });
+      const completion = Promise.allSettled([fixture]);
+      try {
+        await callbackFinished.promise;
+        // Let the fixture's finally run while the admitted dispatch is still held.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+        expect(testState.sessionStorePath).toBe(storePath);
+        expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
+      } finally {
+        releaseDispatch.resolve();
+        await completion;
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      }
+      expect(await completion).toEqual([
+        outcome === "throw"
+          ? { status: "rejected", reason: callbackError }
+          : { status: "fulfilled", value: "fixture result" },
+      ]);
+      expect(testState.sessionStorePath).toBeUndefined();
+      await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-vs-stale-agent";
@@ -2737,8 +2786,10 @@ describe("gateway server chat", () => {
           8_000,
         );
         blockedReply.resolve();
-        const settledEvent = await settledSessionChange.catch(() => {
-          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
+        const settledEvent = await settledSessionChange.catch((cause: unknown) => {
+          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup", {
+            cause,
+          });
         });
         await waitForAgentRunOk(runId);
         expectRecordFields(settledEvent.payload, {

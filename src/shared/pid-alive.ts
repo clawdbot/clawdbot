@@ -1,8 +1,13 @@
-// PID liveness helpers check whether process ids still refer to active processes.
+// Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+// Cron reads its own identity on every tick. Cache only a successful Windows
+// read: the identity cannot change while this process lives, and foreign PIDs
+// must stay live so PID reuse is still detected.
+let selfWindowsStartTime: number | null = null;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
@@ -56,27 +61,21 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getPlatformProcessStartTime(pid: number): number | null {
+function getDarwinProcessStartTime(pid: number): number | null {
   try {
-    const windows = process.platform === "win32";
-    const command = windows ? `(Get-Process -Id ${pid}).StartTime.ToString('o')` : String(pid);
-    const args = windows
-      ? ["-NoProfile", "-NonInteractive", "-Command", command]
-      : ["-o", "lstart=", "-p", command];
     const startedAt = childProcess
-      .execFileSync(windows ? "powershell.exe" : "/bin/ps", args, {
+      .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
         timeout: PROCESS_START_TIMEOUT_MS,
         killSignal: "SIGKILL",
-        windowsHide: windows,
       })
       .trim();
     // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so
     // a system timezone change cannot make a live lock owner look like PID reuse.
-    const startedAtMs = Date.parse(windows ? startedAt : `${startedAt} UTC`);
-    return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / (windows ? 1 : 1000)) : null;
+    const startedAtMs = Date.parse(`${startedAt} UTC`);
+    return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
   } catch {
     return null;
   }
@@ -110,7 +109,19 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  return process.platform === "darwin" || process.platform === "win32"
-    ? getPlatformProcessStartTime(pid)
-    : getProcessStartTime(pid);
+  if (process.platform === "darwin") {
+    return getDarwinProcessStartTime(pid);
+  }
+  if (process.platform !== "win32") {
+    return getProcessStartTime(pid);
+  }
+  const isSelf = pid === process.pid;
+  if (isSelf && selfWindowsStartTime !== null) {
+    return selfWindowsStartTime;
+  }
+  const startTime = readWindowsProcessStartTimeSync(pid);
+  if (isSelf && startTime !== null) {
+    selfWindowsStartTime = startTime;
+  }
+  return startTime;
 }

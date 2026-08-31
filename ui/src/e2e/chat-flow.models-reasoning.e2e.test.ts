@@ -1,8 +1,11 @@
 import { expect, it } from "vitest";
+import { t } from "../i18n/lib/translate.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -52,7 +55,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const picker = pane.locator(".chat-controls__model-picker");
       await picker.locator('[data-chat-model-select="true"]').click();
@@ -83,7 +86,7 @@ suite.define(() => {
     }
   });
 
-  it("patches the session permission mode and reflects sessions.changed", async () => {
+  it("settles permission patches before reflecting changes and observes remote updates", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -106,7 +109,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
@@ -153,12 +156,18 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 3,
       });
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-      expect(await trigger.textContent()).toContain("Workspace");
+      // The initiating picker owns the previous display until its canonical
+      // patch refresh settles, even when a session event arrives first.
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+      expect(await trigger.textContent()).toContain("Applying permissions");
+      expect(await trigger.isEnabled()).toBe(false);
       await gateway.resolveDeferred(
         "sessions.list",
         chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
       );
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      expect(await trigger.textContent()).toContain("Workspace");
 
       const secondListCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.deferNext("sessions.list");
@@ -179,11 +188,38 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 4,
       });
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
-      expect(await trigger.textContent()).toContain("Default");
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+      expect(await trigger.isEnabled()).toBe(false);
       await gateway.resolveDeferred(
         "sessions.list",
         chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
+      );
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      expect(await trigger.textContent()).toContain("Default");
+
+      const remoteChange = {
+        ...session,
+        permissionMode: "read-only",
+        reason: "patch",
+        sessionKey: session.key,
+      };
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...remoteChange,
+        permissionModePending: true,
+        updatedAt: 5,
+      });
+      await expect.poll(() => trigger.textContent()).toContain("Applying permissions");
+      expect(await trigger.isEnabled()).toBe(false);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...remoteChange,
+        permissionModePending: false,
+        updatedAt: 6,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      expect(await trigger.textContent()).toContain(
+        t("chat.permissionControls.modes.read-only.label"),
       );
     } finally {
       await suite.closeBrowserContext(context);
@@ -449,7 +485,10 @@ suite.define(() => {
         },
       ]);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+        : undefined;
       if (artifactDir) {
         await menu.screenshot({
           animations: "disabled",
@@ -480,7 +519,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       const openModelSelect = async () => {
@@ -595,7 +634,7 @@ suite.define(() => {
               },
             ],
           },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:ops:session-a",
           thinkingLevel: null,
         },
         "sessions.list": sessionsList,
@@ -608,7 +647,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:ops:session-a"));
       const main = page.getByRole("main");
       const modelSelect = main.locator('[data-chat-model-select="true"]').first();
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
@@ -647,7 +686,10 @@ suite.define(() => {
   });
 
   it("shows one canonical default model with matching inherited reasoning", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -689,6 +731,7 @@ suite.define(() => {
       sessions: [
         {
           key: "agent:main:session-default",
+          sessionId: "control-ui-profile-default-proof",
           kind: "direct",
           label: "Default Sol",
           updatedAt: 2,
@@ -724,7 +767,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-default"));
       const main = page.getByRole("main");
       const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const modelSelect = activePane.locator('[data-chat-model-select="true"]');
@@ -820,7 +863,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       await main.locator(setting.trigger).click();
@@ -888,7 +931,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
       const main = page.getByRole("main");
       const modelPicker = main.locator('[data-chat-model-select="true"]').first();

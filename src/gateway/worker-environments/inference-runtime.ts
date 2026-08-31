@@ -43,7 +43,7 @@ import {
   prepareSimpleCompletionModel,
   type PreparedSimpleCompletionModel,
 } from "../../agents/simple-completion-runtime.js";
-import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
+import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -268,7 +268,7 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
     return;
   }
   const usage = normalizeUsage(params.usage);
-  if (!hasNonzeroUsage(usage)) {
+  if (!hasObservedModelUsage(usage)) {
     return;
   }
   const input = usage.input ?? 0;
@@ -277,14 +277,16 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
   const cacheWrite = usage.cacheWrite ?? 0;
   const promptTokens = input + cacheRead + cacheWrite;
   const total = usage.total ?? promptTokens + output;
-  const costUsd = estimateUsageCost({
-    usage,
-    cost: resolveModelCostConfig({
-      provider: params.model.provider,
-      model: params.model.id,
-      config: params.config,
-    }),
-  });
+  const costUsd =
+    usage.cost?.total ??
+    estimateUsageCost({
+      usage,
+      cost: resolveModelCostConfig({
+        provider: params.model.provider,
+        model: params.model.id,
+        config: params.config,
+      }),
+    });
   emitTrustedDiagnosticEvent({
     type: "model.usage",
     trace: freezeDiagnosticTraceContext(params.trace),
