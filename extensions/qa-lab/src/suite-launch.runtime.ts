@@ -18,6 +18,7 @@ import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
+  prepareQaTransportAdapterFactories,
   type QaTransportDriver,
 } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
@@ -759,6 +760,17 @@ async function runUnifiedQaSuite(params: {
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
   await invalidateQaSuiteArtifactGeneration(outputDir);
+  params = {
+    ...params,
+    runParams: {
+      ...params.runParams,
+      adapterFactories: await prepareQaTransportAdapterFactories({
+        factories: params.runParams?.adapterFactories,
+        driver: params.runParams?.channelDriver,
+        cells: params.plan.expectedCells,
+      }),
+    },
+  };
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =
