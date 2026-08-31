@@ -8,6 +8,17 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+// Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
+vi.mock("../../../plugins/providers.runtime.js", () => {
+  const rejectProviderDiscovery = () => {
+    throw new Error("Prompt fixture unexpectedly discovered provider runtime");
+  };
+  return {
+    isPluginProvidersLoadInFlight: rejectProviderDiscovery,
+    resolvePluginProvidersCore: rejectProviderDiscovery,
+  };
+});
+
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

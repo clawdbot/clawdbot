@@ -1,5 +1,10 @@
+import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { chatMessagesContainQueuedSend } from "../../pages/chat/chat-send-support.ts";
+import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
+import {
+  chatMessagesContainQueuedSend,
+  readChatInputReceipt,
+} from "../../pages/chat/chat-send-support.ts";
 import { formatUiError } from "../format-error.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
@@ -18,6 +23,7 @@ import {
 
 export type SessionPlacementDraftAdvanceResult =
   | { status: "started"; messageId: string }
+  | { status: "accepted" }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
   | { status: "interrupted" }
@@ -51,34 +57,30 @@ export async function advanceSessionPlacementDraft(params: {
     (recovery.phase === "paused" && recovery.reason === "unconfirmed")
   ) {
     // A send key is not universal restart-safe deduplication. Only an exact
-    // authoritative user receipt can resolve uncertainty; absence proves nothing.
+    // authoritative input receipt can resolve uncertainty; absence proves nothing.
     if (!isCurrentOwner()) {
       return { status: "interrupted" };
     }
     const history = await params.client
-      .request<{ messages?: unknown[] }>("chat.history", {
+      .request<ChatHistoryResult>("chat.history", {
         sessionKey: recovery.sessionKey,
         ...(isUiGlobalSessionKey(recovery.sessionKey) ? { agentId: recovery.agentId } : {}),
         limit: 1000,
+        ...(recovery.messageId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS
+          ? { inputRunIds: [recovery.messageId] }
+          : {}),
       })
       .catch((error: unknown) => ({ messages: [], error: formatUiError(error) }));
     if (!isCurrentOwner()) {
       return { status: "interrupted" };
     }
-    if (
-      chatMessagesContainQueuedSend(
-        history.messages,
-        {
-          id: recovery.messageId,
-          text: recovery.message,
-          createdAt: Date.now(),
-          sendRunId: recovery.messageId,
-        },
-        true,
-      )
-    ) {
+    const input = { sendRunId: recovery.messageId };
+    const inputReceipt = readChatInputReceipt(history, input);
+    if (inputReceipt || chatMessagesContainQueuedSend(history.messages, input, true)) {
       params.clearRecovery("resolved");
-      return { status: "started", messageId: recovery.messageId };
+      return inputReceipt
+        ? { status: "accepted" }
+        : { status: "started", messageId: recovery.messageId };
     }
     return pause(
       "error" in history

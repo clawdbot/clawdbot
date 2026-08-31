@@ -13,6 +13,10 @@ import { toErrorObject } from "../infra/errors.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
+const stagedReportUpload = {
+  body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+  directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+};
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
@@ -410,10 +414,7 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("discards staged copies when the route rejects the upload", async () => {
-    const staged = {
-      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
-      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
-    };
+    const staged = stagedReportUpload;
     uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
     dispatcherMocks.dispatch.mockResolvedValueOnce({
       status: 400,
@@ -439,10 +440,7 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("retains staged copies when dispatch fails after Browser ownership is uncertain", async () => {
-    const staged = {
-      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
-      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
-    };
+    const staged = stagedReportUpload;
     uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
     dispatcherMocks.dispatch.mockRejectedValueOnce(new Error("dispatch failed"));
 
@@ -465,10 +463,8 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("retains staged copies when the timeout wins before dispatch settles", async () => {
-    const staged = {
-      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
-      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
-    };
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const staged = stagedReportUpload;
     uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
     dispatcherMocks.dispatch
       .mockImplementationOnce(() => new Promise(() => {}))
@@ -491,7 +487,9 @@ describe("runBrowserProxyCommand", () => {
         }),
         "browser.proxy.upload.v1",
       ),
-    ).rejects.toThrow("browser proxy timed out");
+    )
+      .rejects.toThrow("browser proxy timed out")
+      .finally(() => now.mockRestore());
 
     expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });

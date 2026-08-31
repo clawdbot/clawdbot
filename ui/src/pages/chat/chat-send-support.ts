@@ -17,6 +17,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -68,23 +69,28 @@ export function formatTerminalChatSendAckError(
       : "The run ended before the message was accepted.";
 }
 
-export function chatMessagesContainQueuedSend(
-  messages: unknown,
-  item: ChatQueueItem,
-  userRoleOnly = false,
-): boolean {
-  return findQueuedSendMessageIndex(messages, item, userRoleOnly) >= 0;
+export function readChatInputReceipt(
+  history: ChatHistoryResult,
+  item: Pick<ChatQueueItem, "sendRunId" | "sessionId">,
+): "pending" | "consumed" | undefined {
+  if (
+    !item.sendRunId ||
+    (item.sessionId && item.sessionId !== (history.sessionInfo?.sessionId ?? history.sessionId))
+  ) {
+    return undefined;
+  }
+  return history.inputReceipts?.find((input) => input.runId === item.sendRunId)?.state;
 }
 
-function findQueuedSendMessageIndex(
+export function chatMessagesContainQueuedSend(
   messages: unknown,
-  item: ChatQueueItem,
+  item: Pick<ChatQueueItem, "sendRunId">,
   userRoleOnly = false,
-): number {
+): boolean {
   if (!item.sendRunId) {
-    return -1;
+    return false;
   }
-  return (Array.isArray(messages) ? messages : []).findIndex((message) => {
+  return (Array.isArray(messages) ? messages : []).some((message) => {
     if (!isRecord(message)) {
       return false;
     }

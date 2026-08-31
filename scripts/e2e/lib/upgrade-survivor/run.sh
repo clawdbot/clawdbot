@@ -353,12 +353,14 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1"
+  local name="$1" phase_status
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name"
   json_event "$name" started
   "$@"
+  phase_status=$?
+  [ "$phase_status" -eq 0 ] || return "$phase_status"
   json_event "$name" passed
   CURRENT_PHASE=""
 }
@@ -480,13 +482,8 @@ configure_clawhub_fixture() {
   export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
 }
 
-prepublish_auto_auth_enabled() {
-  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
-    [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]
-}
-
 assert_prepublish_fixture_idle() {
-  prepublish_auto_auth_enabled || return 0
+  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
@@ -903,7 +900,7 @@ prepare_update_restart_probe() {
     write_update_restart_service_env || probe_status=$?
   fi
   if [ "$probe_status" -eq 0 ]; then
-    install_update_restart_probe_gateway 18789 "$COMMAND_TIMEOUT" legacy-ready-log-ok || probe_status=$?
+    run_update_restart_probe_gateway install 18789 "$COMMAND_TIMEOUT" legacy-ready-log-ok || probe_status=$?
   fi
   if [ "$probe_status" -eq 0 ]; then
     local STATUS_JSON="$ARTIFACT_ROOT/baseline-status.json" STATUS_ERR="$ARTIFACT_ROOT/baseline-status.err"
@@ -912,6 +909,8 @@ prepare_update_restart_probe() {
   if [ "$probe_status" -eq 0 ]; then
     assert_prepublish_fixture_idle || probe_status=$?
   fi
+  # The installed baseline must be offline before restoring authored config or seeding state.
+  stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
   if [ -e "$authored_config" ]; then
     node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
   fi
@@ -921,26 +920,6 @@ prepare_update_restart_probe() {
   if [ "$probe_status" -ne 0 ]; then
     return "$probe_status"
   fi
-}
-
-stop_update_restart_probe_for_migration() {
-  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || return 0
-  systemctl --user stop openclaw-gateway.service
-  local service_status=0
-  systemctl --user is-active --quiet openclaw-gateway.service || service_status=$?
-  if [ "$service_status" -ne 3 ] || openclaw_e2e_probe_tcp 127.0.0.1 18789 400; then
-    echo "Baseline gateway must be offline before injecting migration specimens." >&2
-    return 1
-  fi
-  gateway_pid=""
-}
-
-start_repaired_update_restart_probe() {
-  systemctl --user start openclaw-gateway.service
-  gateway_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 360 18789
-  local STATUS_JSON="$ARTIFACT_ROOT/repaired-status.json" STATUS_ERR="$ARTIFACT_ROOT/repaired-status.err"
-  check_gateway_status
 }
 
 assert_baseline_state() {
@@ -1131,10 +1110,18 @@ repair_fixture_plugin_consent() {
     assert_survival
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    # Historical update/repair deliberately stays offline. Start the repaired unit
-    # before the candidate update captures the live PID it must replace itself.
-    phase repaired-gateway-start start_repaired_update_restart_probe
+    # Start is preparation only. The following updater must replace this exact
+    # supervisor itself; its existing replacement and auth assertions remain required.
+    phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
+    local preparation_status=$?
+    [ "$preparation_status" -eq 0 ] || return "$preparation_status"
+    local STATUS_JSON="$ARTIFACT_ROOT/prepared-status.json" STATUS_ERR="$ARTIFACT_ROOT/prepared-status.err"
+    phase prepared-gateway-auth check_gateway_status
+    local auth_status=$?
+    [ "$auth_status" -eq 0 ] || return "$auth_status"
     phase recovery-update-restart update_candidate 1
+    local recovery_status=$?
+    [ "$recovery_status" -eq 0 ] || return "$recovery_status"
     assert_survival
     if [ "$update_repair_required" = "1" ]; then
       node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
@@ -1314,9 +1301,8 @@ phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
 phase configure-clawhub-fixture configure_clawhub_fixture
 phase prepare-update-restart-probe prepare_update_restart_probe
-phase stop-baseline-for-migration stop_update_restart_probe_for_migration
-# Finish baseline config/service setup before injecting migration specimens.
-# Only candidate update/Doctor may repair them; baseline startup must see clean state.
+# Start the published baseline before adding migration specimens: its startup
+# guards correctly reject them, and baseline Doctor would consume candidate proof.
 phase seed-state seed_state
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris

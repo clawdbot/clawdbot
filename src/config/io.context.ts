@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
@@ -234,8 +233,4 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     resolveRuntimePreflightSourceConfig,
     prepareRecoveryBackupCandidate,
   };
-}
-
-export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnapshot | undefined) {
-  return snapshot ? collectManifestModelIdNormalizationPolicies(snapshot.plugins) : undefined;
 }

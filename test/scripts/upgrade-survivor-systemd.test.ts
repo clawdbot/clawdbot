@@ -81,7 +81,11 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     );
     const command = await readSystemdServiceExecStart(env, { requireEffective: true });
     const stoppedRuntime = await readSystemdServiceRuntime(env);
-    expect(stoppedRuntime).toMatchObject({ status: "stopped" });
+    expect(stoppedRuntime).toMatchObject({
+      status: "stopped",
+      state: "inactive",
+      systemd: { unit: "openclaw-gateway.service" },
+    });
     expect(stoppedRuntime.missingUnit).not.toBe(true);
     // Published 8.1 omits LoadState from its runtime query during baseline bootstrap.
     const legacyRuntime = systemctl(

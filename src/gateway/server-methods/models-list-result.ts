@@ -575,7 +575,7 @@ export async function prepareModelsListResult(
     agentId,
     defaultModel,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot.plugins,
+    manifestPlugins: metadataSnapshot,
   }).byKey;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
@@ -636,7 +636,7 @@ export async function prepareModelsListResult(
     defaultModel,
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot?.plugins,
+    manifestPlugins: metadataSnapshot,
   });
   const evaluateEntry =
     (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??

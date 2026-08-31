@@ -1,7 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -43,7 +46,11 @@ function projectOptions(events: string[], controller = new AbortController()) {
     },
     prepareNodeRuntime: vi.fn(async () => {
       events.push("runtime-granted");
-      return { nodeBootstrap: createNodeBootstrapFixture(), signal: controller.signal };
+      return {
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle: createWorkerArchiveFixture(),
+        signal: controller.signal,
+      };
     }),
     beginNodeEnrollment: vi.fn(async () => {
       events.push("enrollment-begun");
@@ -245,6 +252,7 @@ describe("Crabbox project snapshot provisioning", () => {
         }
         return {
           nodeBootstrap: createNodeBootstrapFixture(),
+          workerBundle: createWorkerArchiveFixture(),
           signal: new AbortController().signal,
         };
       });

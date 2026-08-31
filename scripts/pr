@@ -75,6 +75,7 @@ pr_wrapper_components=(
   scripts/lib/vitest-local-scheduling.mts
   scripts/lib/vitest-process-env.mts
   scripts/lib/vitest-process.mts
+  scripts/lib/vitest-shard-metadata.mts
   scripts/lib/vitest-unhandled-errors.mts
   scripts/lib/vitest-worker-artifacts.mts
   scripts/lib/vitest-worker-run.mts
@@ -250,9 +251,15 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
             # Only third-party tooling comes from the installed canonical tree.
             # A whole node_modules link could load unanchored workspace source.
             mkdir "$anchor_exec_dir/node_modules"
-            for anchor_package in tsx zod minimatch yaml; do
-              ln -s "$canonical_repo_root/node_modules/$anchor_package" "$anchor_exec_dir/node_modules/$anchor_package"
-            done
+            # Native junctions avoid Git Bash copying package directories on Windows.
+            node --input-type=module - "$canonical_repo_root/node_modules" "$anchor_exec_dir/node_modules" <<'EOF_NODE'
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
+for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
+  symlinkSync(join(process.argv[2], dependency), join(process.argv[3], dependency),
+    process.platform === "win32" ? "junction" : "dir");
+}
+EOF_NODE
             # Not cleaned by trap: exec replaces this shell, and bash re-reads
             # the script file during execution, so the copy must outlive the
             # whole supervised run. OS tmp reaping owns this directory.

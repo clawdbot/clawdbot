@@ -1057,7 +1057,9 @@ describe("Crabbox worker provider", () => {
             options.input === setup
               ? forwardedEnv
               : {
-                  CRABBOX_WORKER_BOOTSTRAP_TOKEN: createNodeBootstrapFixture().token,
+                  CRABBOX_WORKER_BOOTSTRAP_TOKEN: JSON.stringify({
+                    nodeBootstrap: createNodeBootstrapFixture().token,
+                  }),
                   CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
                 };
           const profileFlagIndex = argv.indexOf("--env-from-profile");
@@ -1091,7 +1093,9 @@ describe("Crabbox worker provider", () => {
         [
           enrollmentCall,
           {
-            CRABBOX_WORKER_BOOTSTRAP_TOKEN: createNodeBootstrapFixture().token,
+            CRABBOX_WORKER_BOOTSTRAP_TOKEN: JSON.stringify({
+              nodeBootstrap: createNodeBootstrapFixture().token,
+            }),
             CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
           },
         ],

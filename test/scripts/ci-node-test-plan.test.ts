@@ -118,6 +118,69 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it.each(["github", "hybrid"])("keeps oversized sparse groups nonempty on %s", (runnerBackend) => {
+    const native = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const targets = [1, 2].map((count) =>
+      native.find(
+        (shard) =>
+          shard.includePatterns?.length === count && !shard.shardName.startsWith("core-tooling"),
+      )!,
+    );
+    expect(targets.every(Boolean)).toBe(true);
+    const original = testTimings.readCompactGroupTimings;
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+      ...original(profile),
+      ...Object.fromEntries(targets.map((target) => [target.shardName, 1_000])),
+    }));
+    const plan = createNodeTestShardBundles({
+      compactMode: "push",
+      runnerBackend,
+      includeReleaseOnlyPluginShards: false,
+    });
+    for (const target of targets) {
+      const groups = plan
+        .flatMap((job) => job.groups)
+        .filter(
+          (group) =>
+            group.shard_name === target.shardName ||
+            group.shard_name.startsWith(`${target.shardName}-hosted-`),
+        );
+      expect(groups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        target.includePatterns!.toSorted(),
+      );
+      expect(groups).toHaveLength(target.includePatterns!.length);
+    }
+  });
+
+  it("recomputes runtime preparation for hosted child groups", () => {
+    const consumer = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+    const target = createNodeTestShards().find((shard) =>
+      shard.includePatterns?.includes(consumer),
+    )!;
+    const original = testTimings.readCompactGroupTimings;
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+      ...original(profile),
+      [target.shardName]: 400,
+    }));
+    const plan = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+    });
+    const groups = plan
+      .flatMap((job) => job.groups)
+      .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
+    expect(groups).toHaveLength(3);
+    expect(
+      groups
+        .filter((group) => group.pretestBuildMode === "runtime")
+        .map((group) => group.includePatterns?.includes(consumer)),
+    ).toEqual([true]);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      target.includePatterns!.toSorted(),
+    );
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -133,9 +196,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("projects cache-warm groups from the owned node test plan", () => {
     const groups = createVitestCacheWarmGroups();
-    expect(groups).toHaveLength(11);
+    expect(groups).toHaveLength(12);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
-    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 10);
+    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 11);
     expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
 
     const coreStripeGroups = groups.filter(
@@ -179,6 +242,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(autoReplyGroups).toHaveLength(1);
     expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
     expect(autoReplyGroups[0]?.env).toBeUndefined();
+
+    expect(groups.find((group) => group.shard_name === "cache-warm:ui-package")).toEqual({
+      configs: ["ui/vitest.config.ts"],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "1" },
+      includePatterns: [
+        "ui/src/components/app-sidebar.test.ts",
+        "ui/src/pages/chat/chat-view.test.ts",
+        "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
+        "ui/src/pages/usage/metrics.node.test.ts",
+      ],
+      shard_name: "cache-warm:ui-package",
+    });
   });
 
   it("creates split shards without walking test roots", () => {
@@ -223,10 +298,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-unit-fast-1",
       "core-unit-fast-2",
       "core-tooling-1",
-      "core-tooling-2",
-      "core-tooling-3",
-      "core-tooling-4",
-      "core-tooling-5",
+      "core-tooling-10",
+      "core-tooling-11",
+      "core-tooling-12",
+      "core-tooling-13",
     ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast-1")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
@@ -298,63 +373,54 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each([
-    { profile: "blacksmith", addedSeconds: 175 },
-    { profile: "hybrid", addedSeconds: 107 },
-  ])(
-    "lets committed $profile measurements outrank pinned hints while unmeasured groups keep them",
-    ({ profile, addedSeconds }) => {
-      const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
-      const options = {
-        includeReleaseOnlyPluginShards: false,
-        compactMode: "push" as const,
-        runnerBackend: profile,
-      };
-      const fallback = createNodeTestShardBundles(options);
-      if (profile === "hybrid") {
-        expect(
-          fallback
-            .filter((shard) => !shard.requiresDist)
-            .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
-        ).toBe(true);
-        const agentChatStripes = fallback
-          .flatMap((shard) => shard.groups)
-          .filter((group) =>
-            group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"),
-          );
-        expect(agentChatStripes.length).toBeGreaterThan(1);
-        expect(
-          agentChatStripes.every(
-            (group) =>
-              !group.includePatterns?.includes(
-                "src/gateway/server.chat.gateway-server-chat.test.ts",
-              ) || !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
-          ),
-        ).toBe(true);
-      }
-      const totalSeconds = (plan: typeof fallback) =>
-        plan.reduce((sum, shard) => sum + (shard.predictedSeconds ?? 0), 0);
-      timings.mockImplementation(
-        (runner): Readonly<Record<string, number>> =>
-          runner === "blacksmith"
-            ? {
-                "agentic-agents-core-models": 123,
-                "core-unit-fast-1": 100,
-                "core-runtime-hooks": 80,
-              }
-            : {},
-      );
-      const updated = createNodeTestShardBundles(options);
-      expect(totalSeconds(updated) - totalSeconds(fallback)).toBe(addedSeconds);
-      if (profile === "hybrid") {
-        const tail = updated.find((shard) =>
-          shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
-        );
-        expect(tail?.groups.map((group) => group.shard_name)).toEqual(["agentic-gateway-core-3"]);
-        expect(tail?.predictedSeconds).toBe(140);
-      }
-    },
-  );
+  it("keeps hybrid fallback bounds and unmeasured stripes when other measurements change", () => {
+    const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+    const options = {
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push" as const,
+      runnerBackend: "hybrid",
+    };
+    const fallback = createNodeTestShardBundles(options);
+    // The whole CLI group pays 77s of tests plus its 100s runtime build.
+    // It must stay alone; all other non-dist fallback jobs remain within 150s.
+    expect(
+      fallback
+        .filter((shard) => !shard.requiresDist)
+        .filter((shard) => !((shard.predictedSeconds ?? Infinity) <= 150))
+        .map((shard) => ({
+          groups: shard.groups.map((group) => group.shard_name),
+          pretestBuildMode: shard.pretestBuildMode,
+          predictedSeconds: shard.predictedSeconds,
+        })),
+    ).toEqual([{ groups: ["agentic-cli"], pretestBuildMode: "runtime", predictedSeconds: 177 }]);
+    const agentChatStripes = fallback
+      .flatMap((shard) => shard.groups)
+      .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
+    expect(agentChatStripes.length).toBeGreaterThan(1);
+    expect(
+      agentChatStripes.every(
+        (group) =>
+          !group.includePatterns?.includes("src/gateway/server.chat.gateway-server-chat.test.ts") ||
+          !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
+      ),
+    ).toBe(true);
+    timings.mockImplementation(
+      (runner): Readonly<Record<string, number>> =>
+        runner === "blacksmith"
+          ? {
+              "agentic-agents-core-models": 123,
+              "core-unit-fast-1": 100,
+              "core-runtime-hooks": 80,
+            }
+          : {},
+    );
+    const updated = createNodeTestShardBundles(options);
+    const tail = updated.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
+    );
+    expect(tail?.groups.map((group) => group.shard_name)).toEqual(["agentic-gateway-core-3"]);
+    expect(tail?.predictedSeconds).toBe(140);
+  });
 
   it.each([
     { profile: "github", timingProfile: "github", addedSeconds: 40 },
@@ -426,13 +492,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
     const pushExcludedShardNames = new Set([
       "core-runtime-tui-pty",
-      "core-tooling-1",
-      "core-tooling-2",
-      "core-tooling-3",
-      "core-tooling-4",
-      "core-tooling-5",
-      "core-tooling-6",
-      "core-tooling-7",
+      ...Array.from({ length: 16 }, (_, index) => `core-tooling-${index + 1}`),
       "core-tooling-isolated",
     ]);
 
@@ -464,7 +524,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const names = plan.flatMap((shard) => shard.groups.map((group) => group.shard_name));
         expect(new Set(names).size).toBe(names.length);
         if (profile.name !== "Blacksmith") {
-          expect(plan.length, `${profile.name} registration budget`).toBeLessThanOrEqual(96);
+          expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(
+            profile.name === "GitHub-hosted" ? 112 : 96,
+          );
         }
       }
     }
@@ -771,7 +833,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(7);
+    expect(toolingGroups).toHaveLength(16);
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -965,6 +1027,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
+      "src/gateway/gateway-cron-process-identity.windows.test.ts",
     ];
     for (const shards of [
       createNodeTestShards(),
@@ -999,7 +1062,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    expect(stripes).toHaveLength(7);
+    expect(stripes).toHaveLength(16);
     for (const stripe of stripes) {
       expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
       expect(stripe.requiresDist).toBe(false);
@@ -1691,6 +1754,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
+          "src/gateway/gateway-cron-process-identity.windows.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,
@@ -1884,7 +1948,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         true,
       );
       if (runnerBackend !== "blacksmith") {
-        expect(after.length).toBeLessThanOrEqual(96);
+        expect(after.length).toBeLessThanOrEqual(runnerBackend === "github" ? 112 : 96);
       }
     },
   );

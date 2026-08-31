@@ -47,7 +47,10 @@ function isolatedWrapperEnv(root: string) {
   };
 }
 
-function makeMismatchedWrapperRepo({ realModules = false } = {}) {
+function makeMismatchedWrapperRepo({
+  realModules = false,
+  dispatchBody = 'echo "canonical wrapper executed";',
+} = {}) {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "openclaw-pr-dev-wrapper-")));
   const bin = join(root, "bin");
   const canonicalPath = join(root, "canonical");
@@ -91,7 +94,7 @@ function makeMismatchedWrapperRepo({ realModules = false } = {}) {
   if (!realModules)
     writeFileSync(
       join(canonical, "scripts", "pr-lib", "gates.sh"),
-      'ci_dispatch() { echo "canonical wrapper executed"; }\n',
+      `ci_dispatch() { ${dispatchBody} }\n`,
     );
   chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
@@ -724,6 +727,173 @@ exit 99
       fixture.cleanup();
     }
   });
+
+  it("initializes stamped review artifacts through the materialized anchor", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      writeFileSync(
+        join(fixture.bin, "gh"),
+        `#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  printf 'fixture-user\\n'
+  exit 0
+fi
+echo "Unexpected gh call: $*" >&2
+exit 99
+`,
+      );
+      const reviewRoot = join(fixture.canonical, ".worktrees", "pr-123");
+      fixture.git(fixture.canonical, [
+        "worktree",
+        "add",
+        "--detach",
+        reviewRoot,
+        fixture.localRevision,
+      ]);
+      mkdirSync(join(reviewRoot, ".local"));
+      writeFileSync(join(reviewRoot, ".local", "pr-meta.env"), "PR_NUMBER=123\n");
+      writeFileSync(
+        join(reviewRoot, ".local", "pr-meta.json"),
+        JSON.stringify({ number: 123, headRefOid: fixture.localRevision, files: [] }),
+      );
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(
+        join(fixture.linked, "scripts", "pr"),
+        ["review-artifacts-init", "123"],
+        {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        },
+      );
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.stderr).toContain("running wrapper code materialized from");
+      expect(JSON.parse(readScript(join(reviewRoot, ".local", "review.json"))).pr).toEqual({
+        number: 123,
+        headSha: fixture.localRevision,
+      });
+      expect(readScript(join(reviewRoot, ".local", "review.md")).split("\n")[0]).toBe(
+        `Review artifact for PR #123 at ${fixture.localRevision}`,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      script: "verify-pr-hosted-gates.mjs",
+      args: "--anchor-proof",
+      status: 1,
+      output: "Unknown option: --anchor-proof",
+      dependency: "minimatch",
+      binding: "minimatch",
+    },
+    {
+      script: "watch-pr-ci.mjs",
+      args: "--help",
+      status: 2,
+      output: "Usage:",
+      dependency: "zod",
+      binding: "z",
+    },
+    {
+      script: "check-changelog-attributions.mjs",
+      args: "--is-forbidden-handle codex",
+      status: 0,
+      output: "",
+      dependency: undefined,
+      binding: undefined,
+    },
+  ])(
+    "loads $script from the materialized anchor without caller-owned aliases",
+    ({ script, args, status, output, dependency, binding }) => {
+      const fixture = makeMismatchedWrapperRepo({
+        dispatchBody: `node "$script_parent_dir/${script}" ${args};`,
+      });
+      try {
+        if (dependency) {
+          symlinkSync(
+            realpathSync("node_modules"),
+            join(fixture.canonical, "node_modules"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+          writeFileSync(
+            join(fixture.linked, "caller-dependency.mts"),
+            `export const ${binding} = null;\nthrow new Error("caller workspace dependency executed");\n`,
+          );
+          writeFileSync(
+            join(fixture.linked, "tsconfig.json"),
+            JSON.stringify({
+              compilerOptions: {
+                paths: {
+                  [dependency]: ["./caller-dependency.mts"],
+                  "@openclaw/normalization-core/record-coerce": [
+                    "./packages/normalization-core/src/record-coerce.ts",
+                  ],
+                },
+              },
+            }),
+          );
+          fixture.git(fixture.linked, ["add", "caller-dependency.mts", "tsconfig.json"]);
+          fixture.git(fixture.linked, ["commit", "-m", "test: caller-owned dependency aliases"]);
+        }
+        if (script === "verify-pr-hosted-gates.mjs") {
+          const recordPath = "packages/normalization-core/src/record-coerce.ts";
+          writeFileSync(
+            join(fixture.linked, recordPath),
+            `throw new Error("caller workspace normalization executed");\n${readScript(recordPath)}`,
+          );
+          fixture.git(fixture.linked, ["add", recordPath]);
+          fixture.git(fixture.linked, ["commit", "-m", "test: caller-owned normalization"]);
+        }
+        parkCanonicalOffAnchor(fixture);
+        const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        });
+        expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(status);
+        expect(result.stderr).toContain("running wrapper code materialized from");
+        if (output) {
+          expect(`${result.stdout}${result.stderr}`).toContain(output);
+        }
+        expect(`${result.stdout}${result.stderr}`).not.toContain("Cannot find module");
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { script: "watch-pr-ci.mjs", dependency: "zod" },
+    { script: "verify-pr-hosted-gates.mjs", dependency: "minimatch" },
+  ])(
+    "reports the missing $dependency toolchain without installing dependencies",
+    ({ script, dependency }) => {
+      const fixture = makeMismatchedWrapperRepo({
+        dispatchBody: `node "$script_parent_dir/${script}" --help;`,
+      });
+      try {
+        writeFileSync(
+          join(fixture.bin, "pnpm"),
+          `#!/bin/sh\ntouch "${join(fixture.root, "installed")}"\nexit 1\n`,
+        );
+        parkCanonicalOffAnchor(fixture);
+        const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`Cannot find package '${dependency}'`);
+        expect(existsSync(join(fixture.root, "installed"))).toBe(false);
+        expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("keeps the refusal when the anchor wrapper predates the handoff contract", () => {
     const fixture = makeMismatchedWrapperRepo();

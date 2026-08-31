@@ -100,6 +100,9 @@ if (args[0] === "config") {
     "legacy session specimens must not exist during baseline bootstrap");
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false,
     "legacy cron specimens must not exist during baseline bootstrap");
+  const unitDir = path.join(process.env.HOME, ".config", "systemd", "user");
+  fs.mkdirSync(unitDir, { recursive: true });
+  fs.writeFileSync(path.join(unitDir, "openclaw-gateway.service"), "fixture unit");
   fs.writeFileSync(boot, "ready");
   fs.writeFileSync(live, "baseline");
   fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "1");

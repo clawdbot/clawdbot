@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -139,11 +140,11 @@ beforeEach(() => {
   mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
   mocks.resolveManifestProviderAuthChoice.mockReturnValue(authChoice);
   mocks.resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
-  mocks.loadManifestMetadataSnapshot.mockReturnValue({
-    manifestRegistry: {
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
       plugins: [{ id: "openrouter", packageName: "@openclaw/openrouter-provider" }],
-    },
-  });
+    }),
+  );
   mocks.promptYesNo.mockResolvedValue(false);
   mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
     config: cfg,

@@ -111,6 +111,12 @@ import {
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
 import {
+  estimateVitestTestFileSeconds,
+  estimateVitestToolingFileSeconds,
+  resolveShardTimingKey,
+  type VitestShardTimingSpec,
+} from "./lib/vitest-shard-metadata.mts";
+import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveVitestCliEntry,
@@ -358,8 +364,26 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
 ]);
 
-function resolveConfigSortWeight(config: string, shardTimings: ReadonlyMap<string, number>) {
-  return shardTimings.get(config) ?? (FULL_SUITE_CONFIG_WEIGHT.get(config) ?? 0) * 1000;
+function resolveSpecSortWeight(
+  spec: VitestShardTimingSpec,
+  shardTimings: ReadonlyMap<string, number>,
+) {
+  const observed = shardTimings.get(resolveShardTimingKey(spec));
+  if (observed !== undefined) {
+    return observed;
+  }
+  // Exact selections use their file costs; a whole-config sample would price a
+  // single worker proof like all tooling. Globs keep the whole-config fallback.
+  const includes = spec.includePatterns;
+  const estimateFileSeconds =
+    spec.config === TOOLING_VITEST_CONFIG
+      ? estimateVitestToolingFileSeconds
+      : estimateVitestTestFileSeconds;
+  const seconds =
+    includes?.length && includes.every((file) => isTestFileTarget(file) && !isGlobTarget(file))
+      ? includes.reduce((total, file) => total + estimateFileSeconds(file), 0)
+      : (FULL_SUITE_CONFIG_WEIGHT.get(spec.config) ?? 0);
+  return seconds * 1000;
 }
 
 function interleaveSlowAndFastSpecs<T>(sortedSpecs: T[]) {
@@ -394,14 +418,13 @@ function isPathAtOrUnder(relative: string, root: string) {
 /**
  * Orders full-suite specs so expensive shards start first in parallel runs.
  */
-export function orderFullSuiteSpecsForParallelRun<T extends { config: string }>(
+export function orderFullSuiteSpecsForParallelRun<T extends VitestShardTimingSpec>(
   specs: T[],
   shardTimings = new Map<string, number>(),
 ): T[] {
   const sortedSpecs = specs.toSorted((a, b) => {
     const weightDelta =
-      resolveConfigSortWeight(b.config, shardTimings) -
-      resolveConfigSortWeight(a.config, shardTimings);
+      resolveSpecSortWeight(b, shardTimings) - resolveSpecSortWeight(a, shardTimings);
     if (weightDelta !== 0) {
       return weightDelta;
     }
@@ -876,6 +899,7 @@ const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map<string, string>(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
 const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "ui/vitest.config.ts",
   "vitest.config.ts",
   DEFAULT_VITEST_CONFIG,
   ...Object.values(VITEST_CONFIG_BY_KIND),

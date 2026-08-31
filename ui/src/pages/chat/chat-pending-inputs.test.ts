@@ -148,8 +148,9 @@ describe("server-owned pending input display", () => {
           sessionId,
           messages: [],
           pendingInputs: { items: [], total: 0 },
-          inputConsumptions: params.inputRunIds?.map((runId) => ({
+          inputReceipts: params.inputRunIds?.map((runId) => ({
             runId,
+            state: "consumed",
             consumedByEventId: "aggregate",
           })),
         }),
@@ -206,7 +207,9 @@ describe("server-owned pending input display", () => {
             ...(delivery === "delta" ? { kind: "delta", deltaCursor: "next" } : { sessionId }),
             messages: delivery === "delta" ? [] : [aggregate],
             pendingInputs: { items: [], total: 0 },
-            inputConsumptions: [{ runId: "consumed-source", consumedByEventId: "aggregate" }],
+            inputReceipts: [
+              { runId: "consumed-source", state: "consumed", consumedByEventId: "aggregate" },
+            ],
             sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
           },
         },
@@ -294,11 +297,12 @@ describe("server-owned pending input display", () => {
                 },
               ],
             };
-      const consumptions =
+      const receipts =
         custody === "consumed"
           ? [
               {
                 runId: expectDefined(input.runId, "accepted input run"),
+                state: "consumed" as const,
                 consumedByEventId: "aggregate",
               },
             ]
@@ -322,7 +326,7 @@ describe("server-owned pending input display", () => {
             ...(delivery === "delta" ? { kind: "delta", deltaCursor: "next" } : { sessionId }),
             messages: delivery === "delta" ? [] : history,
             pendingInputs: acceptedPage,
-            inputConsumptions: consumptions,
+            inputReceipts: receipts,
             sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
           },
         },
@@ -373,7 +377,7 @@ describe("server-owned pending input display", () => {
       }
       const unrelated = host.chatMessages.at(-1);
       if (delivery === "direct") {
-        applyChatPendingInputs(host, acceptedPage, { consumptions });
+        applyChatPendingInputs(host, acceptedPage, { receipts });
       } else {
         await loadChatHistory(host);
         expect(host.lastError).toBeNull();

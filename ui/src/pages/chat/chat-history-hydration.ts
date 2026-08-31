@@ -183,9 +183,9 @@ export async function hydrateChatHistory(
         scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
       });
       applyChatPendingInputs(state, response.pendingInputs, {
-        consumptions:
+        receipts:
           !previousSessionId || previousSessionId === state.currentSessionId
-            ? response.inputConsumptions
+            ? response.inputReceipts
             : undefined,
       });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
@@ -214,7 +214,7 @@ export async function hydrateChatHistory(
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
         pendingInputs: response.pendingInputs,
-        inputConsumptions: response.inputConsumptions,
+        inputReceipts: response.inputReceipts,
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
@@ -289,10 +289,8 @@ export async function hydrateChatHistory(
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
-      consumptions:
-        !previousSessionId || previousSessionId === nextSessionId
-          ? res.inputConsumptions
-          : undefined,
+      receipts:
+        !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
     commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (

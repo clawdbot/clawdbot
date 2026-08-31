@@ -179,17 +179,18 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The seven application subprocess entries run as plain Node JavaScript without a
+The nine declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
-route ownership, the service relay, its POSIX and Windows anchors, and the memory
-plugin's KNN child. The same generation also compiles the fake-backend TUI
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, and the session transcript archive and reconciliation workers.
+The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Application/package build entries and Vitest source parents stay unchanged. This
-does not convert Worker-thread entries or arbitrary source CLI fixtures.
+Package build entry paths and Vitest source parents stay unchanged. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -283,11 +284,12 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
-Packaged declarations belong to the public/private tsdown SDK groups. Full and
-package builds emit them in the canonical build; `ciArtifacts` stages only those
-two groups and publishes after both succeed and their relative declaration closure
-is complete. Local preparation never overwrites packaged declarations or writes
-workspace forwarding bridges.
+Packaged SDK declarations belong to one staged owner shared by full, package, and
+`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+and caches their complete staged generation. Cache hits restore into fresh staging
+and pass the same entry and relative declaration closure checks before publication.
+Local preparation never overwrites packaged declarations or writes workspace
+forwarding bridges.
 
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed

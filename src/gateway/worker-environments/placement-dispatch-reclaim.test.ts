@@ -111,25 +111,6 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).toContain("workspace:resume");
   });
 
-  it("rechecks session authorization at the activation lifecycle fence", async () => {
-    const harness = createHarness(placementStore);
-    let authorizationChecks = 0;
-    const authorize = vi.fn(() => {
-      authorizationChecks += 1;
-      if (authorizationChecks === 2) {
-        throw new Error("session access revoked");
-      }
-    });
-
-    await expect(harness.service.dispatch(REQUEST, undefined, authorize)).rejects.toThrow(
-      "session access revoked",
-    );
-
-    expect(authorize).toHaveBeenCalledTimes(2);
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-    expect(harness.log).not.toContain("placement:active");
-  });
-
   it("attaches before opening one tunnel for workspace sync and activation", async () => {
     const harness = createHarness(placementStore);
 

@@ -18,6 +18,7 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+const localGit = options.localGit ?? options.performance;
 // Preload identity support before the cleanup handshake; its TypeScript graph
 // uses .js specifiers that native Node type stripping cannot resolve.
 let getFileLockProcessStartTime;
@@ -427,7 +428,7 @@ async function command() {
     if (count === (fault.occurrence ?? 1)) commandResult = fault;
   }
   const operation = args.shift();
-  if (operation === "init" && !options.performance) {
+  if (operation === "init" && !localGit) {
     boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
@@ -461,7 +462,7 @@ async function command() {
     }
   } else if (
     options.publisher ||
-    options.performance ||
+    localGit ||
     options.pluginRelease ||
     options.releaseAdmission ||
     commandResult ||
@@ -475,8 +476,7 @@ async function command() {
     // independent results but share unique tree identities with those transports.
     const counterName =
       commandResult ||
-      ((options.performance || options.pluginRelease || options.releaseAdmission) &&
-        operation !== "fetch") ||
+      ((localGit || options.pluginRelease || options.releaseAdmission) && operation !== "fetch") ||
       ["rebase", "push", "rev-parse"].includes(operation)
         ? `${operation}-attempt.json`
         : "attempt.json";
@@ -502,7 +502,7 @@ async function command() {
         flag: "wx",
       });
     }
-    if (["fetch", "rebase", "push"].includes(operation) && !options.performance) {
+    if (["fetch", "rebase", "push"].includes(operation) && !localGit) {
       const lock = path.join(cwd, operation === "fetch" ? ".git/shallow.lock" : ".git/index.lock");
       fs.mkdirSync(path.dirname(lock), { recursive: true });
       try {
@@ -608,7 +608,7 @@ async function command() {
                 ? options.pushResults
                 : operation === "rev-parse" && options.revParseResult !== undefined
                   ? [options.revParseResult]
-                  : (options.performance || options.pluginRelease || options.releaseAdmission) &&
+                  : (localGit || options.pluginRelease || options.releaseAdmission) &&
                       operation !== "fetch"
                     ? undefined
                     : options.fetchResults;
@@ -620,7 +620,7 @@ async function command() {
       if (remoteResult) {
         fs.writeSync(1, remoteResult.output);
       }
-      if (options.performance && ["fetch", "push"].includes(operation) && result !== 0) {
+      if (localGit && ["fetch", "push"].includes(operation) && result !== 0) {
         const lock = path.join(cwd, ".git/shallow.lock");
         fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
         process.on("SIGTERM", () => {});
@@ -644,16 +644,16 @@ async function command() {
         stall(attempt);
         return;
       }
-      if (result === 0 && options.performance && commandResult?.output === undefined) {
+      if (result === 0 && localGit && commandResult?.output === undefined) {
         const commandArgs = [...args];
         if (["fetch", "push"].includes(operation)) {
           const index = commandArgs.indexOf("origin");
-          if (index < 0) throw new Error("Unexpected performance transport remote");
-          commandArgs[index] = options.performance.remote;
+          if (index < 0) throw new Error("Unexpected local Git transport remote");
+          commandArgs[index] = localGit.remote;
         }
         // Only local file transport is allowed; never fall through to a live URL.
         const result = spawnSync(
-          options.performance.git,
+          localGit.git,
           [
             "-C",
             cwd,
@@ -670,6 +670,15 @@ async function command() {
         if (operation === "init" && result.status === 0) {
           const directory = args.at(-1) === "main" ? cwd : insideOwnedPath(args.at(-1));
           fs.writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+        if (
+          options.localGit &&
+          operation === "checkout" &&
+          cwd === workspace &&
+          result.status === 0
+        ) {
+          // Capture the candidate index at its producer, before harness materialization.
+          fs.copyFileSync(path.join(workspace, ".git/index"), path.join(root, "candidate-index"));
         }
         process.exit(result.status ?? 1);
       }

@@ -9,26 +9,28 @@ import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
-  finalizeBuildAllStepCache,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllEnvironment,
-  resolveBuildAllStepCacheState,
-  resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
   resolveBuildAllStepOnCacheHit,
   resolveBuildAllSteps,
   resolveBuildAllTsdownPlan,
-  restoreBuildAllStepCacheOutputs,
   runBuildAllSteps,
-  writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mts";
 import {
-  listPluginSdkDistArtifacts,
-  listPluginSdkDeclarationOutputs,
-  pluginSdkEntrypoints,
-} from "../../scripts/lib/plugin-sdk-entries.mts";
+  resolveBuildStepCacheState,
+  writeBuildStepCacheStamp,
+  resolveBuildStepCacheStampState,
+  restoreBuildStepCacheOutputs,
+  finalizeBuildStepCache,
+} from "../../scripts/lib/build-artifact-cache.mts";
+import { listPluginSdkDistArtifacts } from "../../scripts/lib/plugin-sdk-entries.mts";
+import {
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "../../scripts/lib/tsdown-config-groups.mts";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -225,7 +227,7 @@ describe("resolveBuildAllStep", () => {
     {
       label: "write-plugin-sdk-entry-dts",
       scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
-      expectedEnv: { FOO: "bar" },
+      expectedEnv: { FOO: "bar", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
     },
     {
       label: "write-build-info",
@@ -367,6 +369,7 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+      "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
       "ui:build",
       "write-build-info",
@@ -636,9 +639,17 @@ describe("resolveBuildAllSteps", () => {
     expect(packages.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.config.ts", "--filter", "openclaw-packages"]),
     );
-    expect(unified.args).toEqual(
-      expect.arrayContaining(["--config", "tsdown.config.ts", "--filter", "openclaw-unified"]),
-    );
+    expect(unified.args).toEqual([
+      "--import",
+      "tsx",
+      "scripts/tsdown-build.mts",
+      "--config",
+      "tsdown.config.ts",
+      ...[TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS].flatMap((group) => [
+        "--filter",
+        group,
+      ]),
+    ]);
     for (const step of [ai, packages, unified]) {
       expect(step.cache?.restore).toBe("always");
       expect(step.cache?.env).toContain("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD");
@@ -656,23 +667,11 @@ describe("resolveBuildAllSteps", () => {
     expect(unified.cache?.inputs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "src",
+          path: ".",
           extensions: expect.arrayContaining([".sql"]),
         }),
       ]),
     );
-    const requiredOutputs = unified.cache?.requiredOutputs;
-    if (typeof requiredOutputs !== "function") {
-      throw new Error("Missing tsdown-unified required output resolver");
-    }
-    const productionOutputs = requiredOutputs({});
-    const privateQaOutputs = requiredOutputs({ OPENCLAW_BUILD_PRIVATE_QA: "1" });
-    expect(productionOutputs).toEqual(listPluginSdkDeclarationOutputs());
-    expect(privateQaOutputs).toEqual(listPluginSdkDeclarationOutputs(pluginSdkEntrypoints));
-    expect(productionOutputs).toContain("dist/plugin-sdk/core.d.ts");
-    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
-    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
-    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(unified.cache?.requiredCacheHitOutputs).toEqual(listPluginSdkDistArtifacts());
   });
 
@@ -719,7 +718,7 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("uses only the canonical SDK stage for CI artifacts and keeps full builds free of bridges", () => {
+  it("shares the canonical staged SDK owner across full, package and CI artifacts", () => {
     const steps = resolveBuildAllSteps("ciArtifacts");
     const tsdown = expectDefined(
       steps.find((step) => step.label === "tsdown"),
@@ -735,7 +734,11 @@ describe("resolveBuildAllSteps", () => {
     expect(stage.env).toMatchObject({ OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" });
     expect(stage.cache).toBeUndefined();
     for (const profile of ["full", "package"]) {
-      expect(resolveBuildAllSteps(profile).some((step) => step.label === stage.label)).toBe(false);
+      const profileSteps = resolveBuildAllSteps(profile);
+      expect(profileSteps.find((step) => step.label === stage.label)).toEqual(stage);
+      const labels = profileSteps.map((step) => step.label);
+      expect(labels.indexOf(stage.label)).toBeGreaterThan(labels.indexOf("tsdown-unified"));
+      expect(labels.indexOf(stage.label)).toBeLessThan(labels.indexOf("check-plugin-sdk-exports"));
     }
   });
 
@@ -865,7 +868,7 @@ describe("resolveBuildAllSteps", () => {
             OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
           }).map((step) => step.label),
         );
-        expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(false);
+        expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
         expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
         expect(labels.includes("clean:dist")).toBe(profile === "package");
         const compilers = invocations.filter((call) =>
@@ -1053,25 +1056,25 @@ describe("build-all timing output", () => {
   });
 });
 
-describe("resolveBuildAllStepCacheState", () => {
+describe("resolveBuildStepCacheState", () => {
   it("rejects a snapshot replaced after lookup without changing live outputs", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
-      const state = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, state, { rootDir });
+      const state = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, state, { rootDir });
       fs.rmSync(outputPath);
-      const pendingRestore = resolveBuildAllStepCacheState(step, { rootDir });
+      const pendingRestore = resolveBuildStepCacheState(step, { rootDir });
       expect(pendingRestore.restorable).toBe(true);
       fs.writeFileSync(outputPath, "next complete generation");
-      writeBuildAllStepCacheStamp(step, state, { rootDir });
-      expect(restoreBuildAllStepCacheOutputs(pendingRestore, { rootDir })).toBe(false);
+      writeBuildStepCacheStamp(step, state, { rootDir });
+      expect(restoreBuildStepCacheOutputs(pendingRestore, { rootDir })).toBe(false);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("next complete generation");
     });
   });
 
   it("invalidates publication before copying and never accepts a partial cached tree", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
-      const state = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, state, { rootDir });
+      const state = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, state, { rootDir });
       fs.writeFileSync(outputPath, "changed bytes");
       const rename = fs.renameSync.bind(fs);
       const fail = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
@@ -1082,14 +1085,14 @@ describe("resolveBuildAllStepCacheState", () => {
         return rename(source, target);
       });
       try {
-        expect(() => writeBuildAllStepCacheStamp(step, state, { rootDir })).toThrow(
+        expect(() => writeBuildStepCacheStamp(step, state, { rootDir })).toThrow(
           "fixture copy failure",
         );
       } finally {
         fail.mockRestore();
       }
       expect(fs.existsSync(state.stampPath!)).toBe(false);
-      expect(resolveBuildAllStepCacheState(step, { rootDir })).toMatchObject({
+      expect(resolveBuildStepCacheState(step, { rootDir })).toMatchObject({
         fresh: false,
         restorable: false,
       });
@@ -1126,17 +1129,17 @@ describe("resolveBuildAllStepCacheState", () => {
       fs.writeFileSync(removedDts, "export declare const removed: true;");
       fs.writeFileSync(removedJs, "export const removed = true;");
 
-      const sourceState = resolveBuildAllStepCacheState(step, { rootDir: firstRoot, env });
-      writeBuildAllStepCacheStamp(
+      const sourceState = resolveBuildStepCacheState(step, { rootDir: firstRoot, env });
+      writeBuildStepCacheStamp(
         step,
-        resolveBuildAllStepCacheStampState(step, sourceState, { rootDir: firstRoot }),
+        resolveBuildStepCacheStampState(step, sourceState, { rootDir: firstRoot }),
         { rootDir: firstRoot },
       );
 
-      const targetState = resolveBuildAllStepCacheState(step, { rootDir: secondRoot, env });
+      const targetState = resolveBuildStepCacheState(step, { rootDir: secondRoot, env });
       expect(targetState).toMatchObject({ fresh: true, restorable: true });
       expect(targetState.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
-      expect(restoreBuildAllStepCacheOutputs(targetState, { rootDir: secondRoot })).toBe(true);
+      expect(restoreBuildStepCacheOutputs(targetState, { rootDir: secondRoot })).toBe(true);
       fs.rmSync(removedJs);
 
       expect({
@@ -1189,38 +1192,36 @@ describe("resolveBuildAllStepCacheState", () => {
         fs.writeFileSync(filePath, contents);
       }
       for (const step of [ai, packages, unified]) {
-        const state = resolveBuildAllStepCacheState(step, { rootDir });
-        writeBuildAllStepCacheStamp(
-          step,
-          resolveBuildAllStepCacheStampState(step, state, { rootDir }),
-          { rootDir },
-        );
+        const state = resolveBuildStepCacheState(step, { rootDir });
+        writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, state, { rootDir }), {
+          rootDir,
+        });
       }
 
       fs.writeFileSync(sourcePath, "export const core = 2;");
-      expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(true);
-      expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(true);
-      expect(resolveBuildAllStepCacheState(unified, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(ai, { rootDir }).fresh).toBe(true);
+      expect(resolveBuildStepCacheState(packages, { rootDir }).fresh).toBe(true);
+      expect(resolveBuildStepCacheState(unified, { rootDir }).fresh).toBe(false);
 
       fs.writeFileSync(sourcePath, "export const core = 1;");
       fs.writeFileSync(packageSourcePath, "export const net = 2;");
-      expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(false);
-      expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(false);
-      expect(resolveBuildAllStepCacheState(unified, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(ai, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(packages, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(unified, { rootDir }).fresh).toBe(false);
 
       fs.writeFileSync(packageSourcePath, "export const net = 1;");
       fs.writeFileSync(aiSourcePath, "export const ai = 2;");
-      expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(false);
-      expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(false);
-      expect(resolveBuildAllStepCacheState(unified, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(ai, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(packages, { rootDir }).fresh).toBe(false);
+      expect(resolveBuildStepCacheState(unified, { rootDir }).fresh).toBe(false);
 
       fs.writeFileSync(aiSourcePath, "export const ai = 1;");
       for (const helper of buildHelpers) {
-        const signature = resolveBuildAllStepCacheState(unified, { rootDir }).signature;
+        const signature = resolveBuildStepCacheState(unified, { rootDir }).signature;
         fs.appendFileSync(path.join(rootDir, helper), "\n// changed build helper\n");
-        expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(true);
-        expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(true);
-        expect(resolveBuildAllStepCacheState(unified, { rootDir }).signature).not.toBe(signature);
+        expect(resolveBuildStepCacheState(ai, { rootDir }).fresh).toBe(true);
+        expect(resolveBuildStepCacheState(packages, { rootDir }).fresh).toBe(true);
+        expect(resolveBuildStepCacheState(unified, { rootDir }).signature).not.toBe(signature);
       }
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });
@@ -1229,10 +1230,10 @@ describe("resolveBuildAllStepCacheState", () => {
 
   it("marks cacheable steps fresh when the input signature matches", () => {
     withBuildCacheFixture(({ rootDir, step }) => {
-      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
-      const fresh = resolveBuildAllStepCacheState(step, { rootDir });
+      const fresh = resolveBuildStepCacheState(step, { rootDir });
       expect(fresh.cacheable).toBe(true);
       expect(fresh.fresh).toBe(true);
       expect(fresh.reason).toBe("fresh");
@@ -1268,8 +1269,8 @@ describe("resolveBuildAllStepCacheState", () => {
 
   it("rejects a matching legacy stamp that omits a required output", () => {
     withBuildCacheFixture(({ rootDir, step }) => {
-      const legacyState = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, legacyState, { rootDir });
+      const legacyState = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, legacyState, { rootDir });
       const legacyStamp = JSON.parse(fs.readFileSync(legacyState.stampPath!, "utf8"));
       expect(legacyStamp).toMatchObject({
         version: 6,
@@ -1286,7 +1287,7 @@ describe("resolveBuildAllStepCacheState", () => {
           restore: "always" as const,
         },
       };
-      const stale = resolveBuildAllStepCacheState(completeStep, { rootDir });
+      const stale = resolveBuildStepCacheState(completeStep, { rootDir });
 
       expect(stale).toMatchObject({
         fresh: false,
@@ -1295,7 +1296,7 @@ describe("resolveBuildAllStepCacheState", () => {
         signature: legacyState.signature,
         stampedOutputs: ["dist/output.js"],
       });
-      expect(restoreBuildAllStepCacheOutputs(stale, { rootDir })).toBe(false);
+      expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
     });
   });
 
@@ -1312,16 +1313,16 @@ describe("resolveBuildAllStepCacheState", () => {
           restore: "always" as const,
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(guardedStep, { rootDir });
-      writeBuildAllStepCacheStamp(guardedStep, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(guardedStep, { rootDir });
+      writeBuildStepCacheStamp(guardedStep, cacheState, { rootDir });
 
-      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+      expect(resolveBuildStepCacheState(guardedStep, { rootDir })).toMatchObject({
         fresh: true,
         restorable: true,
       });
       fs.rmSync(outputPath);
 
-      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+      expect(resolveBuildStepCacheState(guardedStep, { rootDir })).toMatchObject({
         fresh: false,
         reason: "stale",
         restorable: false,
@@ -1331,8 +1332,8 @@ describe("resolveBuildAllStepCacheState", () => {
 
   it("does not replace a cache stamp from incomplete current outputs", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
-      const initialState = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, initialState, { rootDir });
+      const initialState = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, initialState, { rootDir });
       const stampBefore = fs.readFileSync(initialState.stampPath!, "utf8");
       const cachedOutputPath = path.join(initialState.outputRoot!, "dist/output.js");
       expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
@@ -1345,25 +1346,51 @@ describe("resolveBuildAllStepCacheState", () => {
           requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"],
         },
       };
-      const incompleteState = resolveBuildAllStepCacheState(completeStep, { rootDir });
-      expect(finalizeBuildAllStepCache(completeStep, incompleteState, { rootDir })).toBe(true);
+      const incompleteState = resolveBuildStepCacheState(completeStep, { rootDir });
+      expect(finalizeBuildStepCache(completeStep, incompleteState, { rootDir })).toBe(true);
 
       expect(fs.readFileSync(initialState.stampPath!, "utf8")).toBe(stampBefore);
       expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
-      expect(resolveBuildAllStepCacheState(completeStep, { rootDir })).toMatchObject({
+      expect(resolveBuildStepCacheState(completeStep, { rootDir })).toMatchObject({
         fresh: false,
         reason: "stale",
       });
     });
   });
 
+  it.each(["current", "legacy", "missing"])(
+    "replaces obsolete cached outputs with a %s previous stamp",
+    (stampKind) => {
+      withBuildCacheFixture(({ rootDir, inputPath, step }) => {
+        const obsolete = path.join(rootDir, "dist/obsolete.js");
+        fs.writeFileSync(obsolete, "obsolete output");
+        const initial = resolveBuildStepCacheState(step, { rootDir });
+        writeBuildStepCacheStamp(step, initial, { rootDir });
+        if (stampKind === "legacy") {
+          const record = JSON.parse(fs.readFileSync(initial.stampPath!, "utf8"));
+          fs.writeFileSync(initial.stampPath!, JSON.stringify({ ...record, version: 5 }));
+        } else if (stampKind === "missing") {
+          fs.rmSync(initial.stampPath!);
+        }
+        fs.rmSync(obsolete);
+        fs.writeFileSync(inputPath, "changed input");
+
+        const refreshed = resolveBuildStepCacheState(step, { rootDir });
+        writeBuildStepCacheStamp(step, refreshed, { rootDir });
+
+        expect(fs.readdirSync(path.join(refreshed.outputRoot!, "dist"))).toEqual(["output.js"]);
+        expect(resolveBuildStepCacheState(step, { rootDir }).fresh).toBe(true);
+      });
+    },
+  );
+
   it("marks cacheable steps stale when an input changes", () => {
     withBuildCacheFixture(({ rootDir, inputPath, step }) => {
-      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, cacheState, { rootDir });
       fs.writeFileSync(inputPath, "changed");
 
-      const stale = resolveBuildAllStepCacheState(step, { rootDir });
+      const stale = resolveBuildStepCacheState(step, { rootDir });
       expect(stale.cacheable).toBe(true);
       expect(stale.fresh).toBe(false);
       expect(stale.reason).toBe("stale");
@@ -1418,12 +1445,12 @@ describe("resolveBuildAllStepCacheState", () => {
           ],
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(broadStep, { rootDir });
-      writeBuildAllStepCacheStamp(broadStep, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(broadStep, { rootDir });
+      writeBuildStepCacheStamp(broadStep, cacheState, { rootDir });
 
       fs.writeFileSync(ignoredDist, "changed generated output");
       fs.writeFileSync(ignoredModules, "changed installed dependency");
-      const fresh = resolveBuildAllStepCacheState(broadStep, { rootDir });
+      const fresh = resolveBuildStepCacheState(broadStep, { rootDir });
 
       expect(fresh.fresh).toBe(true);
       expect(fresh.inputFiles).toBe(1);
@@ -1432,12 +1459,12 @@ describe("resolveBuildAllStepCacheState", () => {
 
   it("reuses the pre-run input signature when stamping successful cacheable steps", () => {
     withBuildCacheFixture(({ rootDir, step, inputPath }) => {
-      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      const cacheState = resolveBuildStepCacheState(step, { rootDir });
       const readSpy = vi.spyOn(fs, "readFileSync");
 
       try {
-        const stampState = resolveBuildAllStepCacheStampState(step, cacheState, { rootDir });
-        writeBuildAllStepCacheStamp(step, stampState, { rootDir });
+        const stampState = resolveBuildStepCacheStampState(step, cacheState, { rootDir });
+        writeBuildStepCacheStamp(step, stampState, { rootDir });
 
         expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(inputPath);
         expect(stampState.signature).toBe(cacheState.signature);
@@ -1458,16 +1485,16 @@ describe("resolveBuildAllStepCacheState", () => {
           restore: "always" as const,
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(envStep, {
+      const cacheState = resolveBuildStepCacheState(envStep, {
         rootDir,
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       });
-      writeBuildAllStepCacheStamp(envStep, cacheState, {
+      writeBuildStepCacheStamp(envStep, cacheState, {
         rootDir,
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       });
 
-      const stale = resolveBuildAllStepCacheState(envStep, {
+      const stale = resolveBuildStepCacheState(envStep, {
         rootDir,
         env: {},
       });
@@ -1480,11 +1507,11 @@ describe("resolveBuildAllStepCacheState", () => {
 
   it("restores cached outputs when generated files were removed", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
-      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
-      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, cacheState, { rootDir });
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
-      const restorable = resolveBuildAllStepCacheState(step, { rootDir });
+      const restorable = resolveBuildStepCacheState(step, { rootDir });
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
@@ -1515,7 +1542,7 @@ describe("resolveBuildAllStepCacheState", () => {
         stampPath: restorable.stampPath,
         record: restorable.record,
       });
-      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
     });
   });
@@ -1529,11 +1556,11 @@ describe("resolveBuildAllStepCacheState", () => {
           restore: "always" as const,
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
-      writeBuildAllStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
+      const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
       fs.writeFileSync(outputPath, "overwritten by earlier build step");
 
-      const restorable = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
@@ -1542,7 +1569,7 @@ describe("resolveBuildAllStepCacheState", () => {
       expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
       expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
 
-      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
     });
   });
@@ -1556,13 +1583,13 @@ describe("resolveBuildAllStepCacheState", () => {
           restore: "always" as const,
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
-      writeBuildAllStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
-      const restorable = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
+      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
 
       fs.rmSync(outputPath);
       expect(
-        finalizeBuildAllStepCache(alwaysRestoreStep, restorable, { rootDir, reusedCache: true }),
+        finalizeBuildStepCache(alwaysRestoreStep, restorable, { rootDir, reusedCache: true }),
       ).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
     });
@@ -1578,19 +1605,19 @@ describe("resolveBuildAllStepCacheState", () => {
           runOnHit: { finalize: "refresh" as const },
         },
       };
-      const cacheState = resolveBuildAllStepCacheState(refreshStep, { rootDir });
-      writeBuildAllStepCacheStamp(refreshStep, cacheState, { rootDir });
-      const restorable = resolveBuildAllStepCacheState(refreshStep, { rootDir });
-      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      const cacheState = resolveBuildStepCacheState(refreshStep, { rootDir });
+      writeBuildStepCacheStamp(refreshStep, cacheState, { rootDir });
+      const restorable = resolveBuildStepCacheState(refreshStep, { rootDir });
+      expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
 
       fs.writeFileSync(outputPath, "validated refresh");
-      expect(
-        finalizeBuildAllStepCache(refreshStep, restorable, { rootDir, reusedCache: true }),
-      ).toBe(true);
+      expect(finalizeBuildStepCache(refreshStep, restorable, { rootDir, reusedCache: true })).toBe(
+        true,
+      );
       fs.rmSync(outputPath);
 
-      const refreshed = resolveBuildAllStepCacheState(refreshStep, { rootDir });
-      expect(restoreBuildAllStepCacheOutputs(refreshed, { rootDir })).toBe(true);
+      const refreshed = resolveBuildStepCacheState(refreshStep, { rootDir });
+      expect(restoreBuildStepCacheOutputs(refreshed, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("validated refresh");
     });
   });
@@ -1611,7 +1638,7 @@ describe("resolveBuildAllStepCacheState", () => {
         },
       };
 
-      const cacheState = resolveBuildAllStepCacheState(flatOnlyStep, { rootDir });
+      const cacheState = resolveBuildStepCacheState(flatOnlyStep, { rootDir });
       expect(cacheState.relativeOutputFiles).toEqual(["dist/output.d.ts"]);
     });
   });

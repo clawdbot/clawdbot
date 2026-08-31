@@ -169,7 +169,7 @@ function run() {
     return;
   }
   if (operation === "load-state" && !args.length) {
-    console.log(`Id=${unitName}\nLoadState=${readUnit() ? "loaded" : "not-found"}`);
+    console.log(readUnit() ? "loaded" : "not-found");
     return;
   }
   if (operation === "command" && !args.length) {

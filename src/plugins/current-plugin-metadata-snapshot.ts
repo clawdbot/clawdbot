@@ -159,7 +159,9 @@ function publishCurrentPluginMetadataSnapshot(
     configFingerprint,
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
-    owner === "gateway" || defaultDiscoveryCompatible ? snapshot?.plugins : undefined,
+    owner === "gateway" || defaultDiscoveryCompatible
+      ? snapshot?.owners.modelIdNormalizationPolicies
+      : undefined,
     owner,
   );
   if (!snapshot) {
@@ -239,7 +241,7 @@ function restoreCapturedCurrentPluginMetadataSnapshotState(
     state.configFingerprint,
     state.compatiblePolicyHashes,
     state.compatibleConfigFingerprints,
-    state.manifestModelIdNormalizationRecords,
+    state.modelIdNormalizationPolicies,
     state.owner,
   );
 }

@@ -175,73 +175,134 @@ describe("application placement delivery recovery", () => {
     },
   );
 
-  it.each(["exact-user", "assistant", "same-text", "unavailable"])(
-    "delivery recovery settles only an exact user receipt (%s)",
-    async (evidence) => {
-      const request = vi.fn((method: string) => {
-        if (method === "chat.history") {
-          if (evidence === "unavailable") {
-            return Promise.reject(new Error("history unavailable"));
-          }
-          return Promise.resolve({
-            messages: [
-              {
-                role: evidence === "assistant" ? "assistant" : "user",
-                content: [{ type: "text", text: "fix the cloud task" }],
-                __openclaw: {
-                  idempotencyKey: evidence === "same-text" ? "other:user" : "message-stable:user",
+  it.each([
+    "exact-user",
+    "pending-queued",
+    "pending-interrupted",
+    "pending-cancelled",
+    "retained-outside-page",
+    "consumed",
+    "assistant",
+    "same-text",
+    "unavailable",
+  ])("delivery recovery settles only authoritative input custody (%s)", async (evidence) => {
+    const acceptedInput =
+      evidence.startsWith("pending-") ||
+      evidence === "retained-outside-page" ||
+      evidence === "consumed";
+    const delivered = evidence === "exact-user" || acceptedInput;
+    const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
+      if (method === "chat.history") {
+        if (evidence === "unavailable") {
+          return Promise.reject(new Error("history unavailable"));
+        }
+        return Promise.resolve({
+          sessionId: "physical-cloud-session",
+          messages: acceptedInput
+            ? []
+            : [
+                {
+                  role: evidence === "assistant" ? "assistant" : "user",
+                  content: [{ type: "text", text: "fix the cloud task" }],
+                  __openclaw: {
+                    idempotencyKey: evidence === "same-text" ? "other:user" : "message-stable:user",
+                  },
                 },
-              },
-            ],
-          });
-        }
-        if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
-        }
-        return Promise.resolve({ status: "started" });
-      });
-      const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
-      input.recovery = { ...input.recovery, phase: "sending" };
-      writeSessionPlacementRecovery(input.recovery);
-      startup.resumeRecovery();
-      try {
-        await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
-        );
-        await vi.waitFor(() => {
-          if (evidence === "exact-user") {
-            expect(startup.get(input.recovery.sessionKey)).toBeNull();
-            expect(initialUserMessage.read(input.recovery.sessionKey, client)?.pendingRunId).toBe(
-              input.recovery.messageId,
-            );
-          } else {
-            expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-              phase: "failed",
-              action: "check-delivery",
-              initialTurn: { text: input.recovery.message },
-            });
-          }
+              ],
+          pendingInputs: {
+            items: evidence.startsWith("pending-")
+              ? [
+                  {
+                    id: "accepted-initial-input",
+                    runId: "message-stable",
+                    state: evidence.slice("pending-".length),
+                    acceptedAt: 1_000,
+                    message: {
+                      role: "user",
+                      content: "fix the cloud task",
+                      __openclaw: { id: "pending:accepted-initial-input" },
+                    },
+                  },
+                ]
+              : evidence === "retained-outside-page"
+                ? Array.from({ length: 20 }, (_, index) => ({
+                    id: `newer-${index}`,
+                    runId: `newer-${index}`,
+                    state: "interrupted",
+                    acceptedAt: 1_001 + index,
+                    message: { role: "user", content: `newer-${index}` },
+                  }))
+                : [],
+            total:
+              evidence === "retained-outside-page" ? 21 : evidence.startsWith("pending-") ? 1 : 0,
+          },
+          ...(acceptedInput &&
+          Array.isArray(payload?.inputRunIds) &&
+          payload.inputRunIds.includes("message-stable")
+            ? {
+                inputReceipts: [
+                  evidence === "consumed"
+                    ? {
+                        runId: "message-stable",
+                        state: "consumed",
+                        consumedByEventId: "aggregate-user",
+                      }
+                    : { runId: "message-stable", state: "pending" },
+                ],
+              }
+            : {}),
         });
-        expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
-        const stored = readSessionPlacementRecovery(
-          input.recovery.gatewayUrl,
-          input.recovery.recoveryScope,
-          input.recovery.sessionKey,
-        );
-        if (evidence === "exact-user") {
-          expect(stored).toBeNull();
+      }
+      if (method === "sessions.describe") {
+        return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
+      }
+      return Promise.resolve({ status: "started" });
+    });
+    const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
+    input.recovery = { ...input.recovery, phase: "sending" };
+    writeSessionPlacementRecovery(input.recovery);
+    startup.resumeRecovery();
+    try {
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
+      );
+      await vi.waitFor(() => {
+        if (delivered) {
+          expect(startup.get(input.recovery.sessionKey)).toBeNull();
+          expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+          const handoff = initialUserMessage.read(input.recovery.sessionKey, client);
+          if (acceptedInput) {
+            expect(handoff).toBeNull();
+          } else {
+            expect(handoff?.pendingRunId).toBe(input.recovery.messageId);
+          }
         } else {
-          expect(stored).toMatchObject({
-            phase: "paused",
-            reason: "unconfirmed",
-            messageId: input.recovery.messageId,
+          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+            phase: "failed",
+            action: "check-delivery",
+            initialTurn: { text: input.recovery.message },
           });
         }
-      } finally {
-        startup.dispose();
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+      const stored = readSessionPlacementRecovery(
+        input.recovery.gatewayUrl,
+        input.recovery.recoveryScope,
+        input.recovery.sessionKey,
+      );
+      if (delivered) {
+        expect(stored).toBeNull();
+      } else {
+        expect(stored).toMatchObject({
+          phase: "paused",
+          reason: "unconfirmed",
+          messageId: input.recovery.messageId,
+        });
       }
-    },
-  );
+    } finally {
+      startup.dispose();
+    }
+  });
 
   it.each(["message", "credential"])(
     "delivery recovery fences a stale observation after %s ownership changes",

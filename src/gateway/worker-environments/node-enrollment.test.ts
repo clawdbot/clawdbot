@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +15,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerBootstrapArtifactTransferHttpCallback,
+  handleWorkerBootstrapArtifactTransferHttpRequest,
+} from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -61,6 +67,11 @@ describe("worker node enrollment", () => {
     buildId: "gateway-source-build",
     enabledPluginIds: ["runtime-plugin"],
   });
+  const bundle = () => ({
+    tarballPath: path.join(root, "worker-bundle.tgz"),
+    tarballSha256: "b".repeat(64),
+    tarballBytes: 6,
+  });
   const createManager = (
     overrides: Partial<Parameters<typeof createWorkerNodeEnrollmentManager>[0]> = {},
   ) => {
@@ -69,6 +80,7 @@ describe("worker node enrollment", () => {
       getConfig: () => createConfig(),
       resolveAvailability: async () => ({ available: false }),
       prepareArtifact: async () => artifact(),
+      prepareBundle: async () => bundle(),
       transfer,
       ...overrides,
     });
@@ -98,6 +110,7 @@ describe("worker node enrollment", () => {
     transfer = createWorkerBootstrapArtifactTransferService();
     managers = [];
     await fs.writeFile(artifact().tarballPath, "x");
+    await fs.writeFile(bundle().tarballPath, "worker");
   });
 
   afterEach(async () => {
@@ -128,11 +141,25 @@ describe("worker node enrollment", () => {
     const opened = await transfer.openFile(authorization);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
     await opened?.handle.close();
+    expect(runtime.workerBundle).toMatchObject({
+      sha256: bundle().tarballSha256,
+      bytes: 6,
+      packageRelativePath: `worker-artifacts/${bundle().tarballSha256}.tgz`,
+    });
+    const bundleAuthorization = transfer.authorize({
+      token: runtime.workerBundle.token,
+      artifactKey: runtime.workerBundle.sha256,
+    })!;
+    const bundleOpened = await transfer.openFile(bundleAuthorization);
+    expect(await bundleOpened?.handle.readFile("utf8")).toBe("worker");
+    await bundleOpened?.handle.close();
     const enrollment = await manager.begin(record);
+    expect(enrollment).not.toHaveProperty("workerBundle");
     expect(runtime.signal?.aborted).toBe(true);
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
+    expect(transfer.isAuthorizationCurrent(bundleAuthorization)).toBe(false);
     manager.closeRuntime(runtime);
-    manager.closeRuntime({ ...enrollment });
+    manager.close({ ...enrollment });
     expect(enrollment.signal?.aborted).toBe(false);
     expect(
       transfer.authorize({
@@ -142,73 +169,156 @@ describe("worker node enrollment", () => {
     ).toBeDefined();
   });
 
-  it.each(["close", "shutdown", "destroy", "operation-abort"] as const)(
+  it.each(["close", "shutdown", "destroy", "operation-abort", "replacement"] as const)(
     "revokes runtime preparation on %s",
     async (reason) => {
       const record = createProvisioning();
       const manager = createManager();
       const operation = new AbortController();
       const runtime = await manager.prepareRuntime(record, operation.signal);
-      const request = {
-        token: runtime.nodeBootstrap.token,
-        artifactKey: runtime.nodeBootstrap.sha256,
-      };
-      const authorization = transfer.authorize(request)!;
+      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
+        token: descriptor.token,
+        artifactKey: descriptor.sha256,
+      }));
+      const authorizations = requests.map((request) => transfer.authorize(request)!);
       if (reason === "close") {
         manager.closeRuntime(runtime);
       } else if (reason === "shutdown") {
         manager.stop();
       } else if (reason === "operation-abort") {
         operation.abort();
+      } else if (reason === "replacement") {
+        await manager.prepareRuntime(record);
       } else {
         store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
-      expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
-      expect(transfer.authorize(request)).toBeUndefined();
-      await expect(transfer.openFile(authorization)).resolves.toBeNull();
+      for (const [index, authorization] of authorizations.entries()) {
+        expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
+        expect(transfer.authorize(requests[index]!)).toBeUndefined();
+        await expect(transfer.openFile(authorization)).resolves.toBeNull();
+      }
     },
   );
 
-  it.each(["enrollment", "operation-abort", "destroy"] as const)(
-    "rejects late runtime preparation after %s",
-    async (reason) => {
-      const record = createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let preparations = 0;
+  it("serves both preparation archives through HTTP only while their exact owner is current", async () => {
+    const callback = createWorkerBootstrapArtifactTransferHttpCallback(transfer);
+    const server = http.createServer((req, res) => {
+      void handleWorkerBootstrapArtifactTransferHttpRequest({
+        req,
+        res,
+        clientIp: "127.0.0.1",
+        callback,
+      }).catch(() => res.writeHead(500).end());
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("HTTP proof server did not bind");
+      }
+      const publicOrigin = `http://127.0.0.1:${address.port}`;
       const manager = createManager({
-        prepareArtifact: async () => {
-          if (++preparations === 1) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return artifact();
-        },
+        getConfig: () => ({ gateway: { ...createConfig().gateway, publicOrigin } }),
+        prepareArtifact: async () => ({
+          ...artifact(),
+          tarballSha256: createHash("sha256").update("x").digest("hex"),
+        }),
+        prepareBundle: async () => ({
+          ...bundle(),
+          tarballSha256: createHash("sha256").update("worker").digest("hex"),
+        }),
       });
-      const operation = new AbortController();
-      const pending = manager.prepareRuntime(record, operation.signal);
-      const rejected = expect(pending).rejects.toThrow();
-      await entered.promise;
-      const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
-      if (reason === "operation-abort") {
-        operation.abort();
-      }
-      if (reason === "destroy") {
-        store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-      }
-      resume.resolve();
-      await rejected;
-      if (enrollment) {
-        expect(enrollment.signal?.aborted).toBe(false);
-        expect(
-          transfer.authorize({
-            token: enrollment.nodeBootstrap.token,
-            artifactKey: enrollment.nodeBootstrap.sha256,
-          }),
-        ).toBeDefined();
-      }
-    },
-  );
+      const record = createProvisioning();
+      const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+      vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
+      const requestPair = async (
+        runtime: Awaited<ReturnType<typeof manager.prepareRuntime>>,
+        status: number,
+      ) => {
+        for (const descriptor of [runtime.nodeBootstrap, runtime.workerBundle]) {
+          const response = await fetch(descriptor.url, {
+            headers: { authorization: `Bearer ${descriptor.token}` },
+          });
+          expect(response.status).toBe(status);
+          const body = Buffer.from(await response.arrayBuffer());
+          if (status === 200) {
+            expect(body.byteLength).toBe(descriptor.bytes);
+            expect(createHash("sha256").update(body).digest("hex")).toBe(descriptor.sha256);
+          }
+        }
+      };
+      await requestPair(await manager.prepareRuntime(record), 200);
+      const closed = await manager.prepareRuntime(record);
+      manager.closeRuntime(closed);
+      await requestPair(closed, 404);
+      const previous = await manager.prepareRuntime(record);
+      const current = await manager.prepareRuntime(record);
+      await requestPair(previous, 404);
+      await requestPair(current, 200);
+      expect(ensureEnrollment).not.toHaveBeenCalled();
+      expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
+      expect(store.get(record.environmentId)).toMatchObject({
+        nodeSetupId: null,
+        nodeDeviceId: null,
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it.each(
+    ["artifact", "bundle"].flatMap((stage) =>
+      ["enrollment", "operation-abort", "destroy"].map((reason) => ({ stage, reason })),
+    ),
+  )("rejects late $stage preparation after $reason", async ({ stage, reason }) => {
+    const record = createProvisioning();
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let preparations = 0;
+    const manager = createManager({
+      prepareArtifact: async () => {
+        if (stage === "artifact" && ++preparations === 1) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return artifact();
+      },
+      prepareBundle: async () => {
+        if (stage === "bundle") {
+          entered.resolve();
+          await resume.promise;
+        }
+        return bundle();
+      },
+    });
+    const operation = new AbortController();
+    const pending = manager.prepareRuntime(record, operation.signal);
+    const rejected = expect(pending).rejects.toThrow();
+    await entered.promise;
+    const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
+    if (reason === "operation-abort") {
+      operation.abort();
+    }
+    if (reason === "destroy") {
+      store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+    }
+    resume.resolve();
+    await rejected;
+    if (enrollment) {
+      expect(enrollment.signal?.aborted).toBe(false);
+      expect(
+        transfer.authorize({
+          token: enrollment.nodeBootstrap.token,
+          artifactKey: enrollment.nodeBootstrap.sha256,
+        }),
+      ).toBeDefined();
+    }
+  });
 
   it.each(
     [

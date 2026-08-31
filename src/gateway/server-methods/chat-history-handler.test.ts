@@ -123,6 +123,7 @@ describe("chat history consumption receipts", () => {
           }),
           "aggregate receipt",
         );
+        const retained = [];
         try {
           await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
           await appendTranscriptMessage(scope, {
@@ -130,24 +131,56 @@ describe("chat history consumption receipts", () => {
           });
           const inputRunIds = ["source-a", "missing"];
           const page = await call({ inputRunIds, limit: 1 });
-          const expected = [{ runId: "source-a", consumedByEventId: aggregate.inputId }];
-          expect(page.inputConsumptions).toEqual(expected);
+          const expected = [
+            { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
+          ];
+          expect(page.inputReceipts).toEqual(expected);
+          expect(page.inputConsumptions).toEqual([
+            { runId: "source-a", consumedByEventId: aggregate.inputId },
+          ]);
           expect(page.pendingInputs).toEqual({ items: [], total: 0 });
           expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
           const delta = await call({ inputRunIds, cursor: page.deltaCursor });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inputConsumptions: expected });
+          expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
+          for (let index = 0; index < 21; index += 1) {
+            retained.push(
+              expectDefined(
+                await stageSessionPendingInput(scope, {
+                  runId: `retained-${index}`,
+                  assertCurrent: () => {},
+                  message: {
+                    role: "user",
+                    content: `retained-${index}`,
+                    timestamp: index + 3,
+                    idempotencyKey: `retained-${index}:user`,
+                  },
+                }),
+                "retained receipt",
+              ),
+            );
+          }
+          const retainedPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
+          expect(retainedPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
+          expect(retainedPage.inputConsumptions).toEqual([]);
+          expect(retainedPage.pendingInputs).toMatchObject({
+            total: 21,
+            items: [{ runId: "retained-20" }],
+          });
           const anchor = await call({
             inputRunIds,
             messageId: aggregate.inputId,
             sessionId: scope.sessionId,
           });
-          expect(anchor.inputConsumptions).toEqual([]);
+          expect(anchor.inputReceipts).toEqual([]);
           await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
-          expect((await call({ inputRunIds })).inputConsumptions).toEqual([]);
+          expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
         } finally {
           aggregate.finish("interrupted");
           for (const source of sources) {
             source.finish("interrupted");
+          }
+          for (const receipt of retained) {
+            receipt.finish("interrupted");
           }
         }
       });

@@ -3,13 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { RemoteModelCatalogBundle } from "@openclaw/model-catalog-core";
+import {
+  LITELLM_PRICING_URL,
+  OPENROUTER_MODELS_URL,
+} from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
   enrichModelCatalogPricing,
-  LITELLM_PRICING_URL,
   MODEL_CATALOG_MIN_MODELS,
-  OPENROUTER_MODELS_URL,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
   serializeModelCatalogBundle,

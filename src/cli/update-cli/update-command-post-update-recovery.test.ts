@@ -120,7 +120,7 @@ describe("failed Git update recovery restart", () => {
 
       await finishFailedUpdate({ ...failedResult({ serviceRestartSafe: true }), status });
 
-      expect(mocks.restart).toHaveBeenCalledWith(expect.objectContaining({ root: "/repo" }));
+      expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
       expect(mocks.printResult).toHaveBeenCalledOnce();
@@ -143,14 +143,23 @@ describe("failed Git update recovery restart", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("rerun `openclaw update`"));
   });
 
+  it("does not restart when the mutation owner returned no recovery verdict", async () => {
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+    await finishFailedUpdate(failedResult(undefined), { json: true, stopped: false });
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each([
-    { handoff: false, restoreFails: false, safe: false, expected: 1 },
-    { handoff: true, restoreFails: false, safe: false, expected: 79 },
-    { handoff: true, restoreFails: true, safe: false, expected: 79 },
-    { handoff: true, restoreFails: false, safe: true, expected: 1 },
+    { handoff: false, restoreFails: false, safe: false, stopped: true, expected: 1 },
+    { handoff: true, restoreFails: false, safe: false, stopped: false, expected: 1 },
+    { handoff: true, restoreFails: true, safe: false, stopped: true, expected: 1 },
+    { handoff: true, restoreFails: false, safe: true, stopped: true, expected: 1 },
+    { handoff: true, restoreFails: false, safe: true, stopped: false, expected: 80 },
+    { handoff: true, restoreFails: true, safe: true, stopped: false, expected: 1 },
   ])(
-    "preserves unsafe recovery at the exit boundary ($handoff, $restoreFails, $safe)",
-    async ({ handoff, restoreFails, safe, expected }) => {
+    "delegates only verified, unhandled recovery ($handoff, $restoreFails, $safe, $stopped)",
+    async ({ handoff, restoreFails, safe, stopped, expected }) => {
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", handoff ? "1" : undefined);
       if (restoreFails) {
         mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
@@ -161,30 +170,35 @@ describe("failed Git update recovery restart", () => {
             ? { serviceRestartSafe: true }
             : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         ),
-        { json: true },
+        { json: true, stopped },
       );
       expect(defaultRuntime.exit).toHaveBeenCalledWith(expected);
-      expect(mocks.restart).toHaveBeenCalledTimes(safe ? 1 : 0);
+      expect(mocks.restart).toHaveBeenCalledTimes(safe && !restoreFails ? 1 : 0);
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.recovery?.serviceRestartSafe).toBe(safe);
     },
   );
 
-  it("preserves a fresh child's unsafe exit when Windows autostart restoration fails", async () => {
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-    mocks.freshProcess.mockResolvedValueOnce({ resumed: false, exitCode: 79 });
-    mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
-    await finishUpdate({
-      result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
-      root: "/repo",
-      configSnapshot: { valid: false },
-      opts: { json: true },
-      showProgress: false,
-      startedAt: Date.now(),
-      controlPlaneUpdateSentinelMeta: undefined,
-    } as unknown as FinishUpdateParams);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(79);
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "never forwards a nested recovery exit (autostart failure: %s)",
+    async (restoreFails) => {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+      mocks.freshProcess.mockResolvedValueOnce({ resumed: false, exitCode: 80 });
+      if (restoreFails) {
+        mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
+      }
+      await finishUpdate({
+        result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
+        root: "/repo",
+        configSnapshot: { valid: false },
+        opts: { json: true },
+        showProgress: false,
+        startedAt: Date.now(),
+        controlPlaneUpdateSentinelMeta: undefined,
+      } as unknown as FinishUpdateParams);
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.restart).not.toHaveBeenCalled();
+    },
+  );
 
   it("explains how to recover from a dirty rollback checkout", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
