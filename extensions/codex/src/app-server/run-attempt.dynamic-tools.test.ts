@@ -13,13 +13,11 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
-import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -34,7 +32,6 @@ import {
 } from "./run-attempt-test-harness.js";
 const testing = {
   hasPendingDynamicToolTerminalDiagnostic,
-  resolveCodexAppServerHookChannelId,
 };
 
 function flushDiagnosticEvents() {
@@ -818,29 +815,33 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.messageChannel = "telegram";
     params.messageProvider = "telegram";
     params.currentChannelId = "telegram:-100123";
-    const sessionKey = "agent:main:session-1";
-    const hookChannelId = testing.resolveCodexAppServerHookChannelId(params, sessionKey);
-
-    const bridge = createCodexDynamicToolBridge({
-      tools: [createRuntimeDynamicTool("echo")],
-      signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey,
-        runId: "run-1",
-        channelId: hookChannelId,
-      },
-    });
-
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-echo-1",
-      namespace: null,
-      tool: "echo",
-      arguments: {},
-    });
+    params.sandboxSessionKey = "agent:main:policy";
+    setCodexTestModelSupportsTools(params, true);
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [createRuntimeDynamicTool("echo")];
+    const harness = createStartedThreadHarness();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await harness.waitForMethod("turn/start");
+      await expect(
+        harness.handleServerRequest({
+          id: "call-echo-1",
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-echo-1",
+            namespace: null,
+            tool: "echo",
+            arguments: {},
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).promptError).toBeNull();
+    } finally {
+      closeHostCapabilities();
+    }
 
     await vi.waitFor(() => {
       expect(afterToolCall).toHaveBeenCalledTimes(1);

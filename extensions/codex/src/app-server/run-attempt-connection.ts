@@ -100,6 +100,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       ? params.sandbox
       : await resolveSandboxContext({
           config: params.config,
+          agentId: params.sandboxAgentId,
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
