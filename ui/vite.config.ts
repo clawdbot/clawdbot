@@ -340,10 +340,27 @@ export function resolveExternalPackageAliasesForVite(
 ): ControlUiViteAlias[] {
   const packageRoot = (specifier: string) =>
     path.dirname(resolvePackage(`${specifier}/package.json`));
+  const packageDist = (specifier: string) => path.join(packageRoot(specifier), "dist");
   return [
+    {
+      find: "@openclaw/fs-safe",
+      replacement: path.join(packageDist("@openclaw/fs-safe"), "index.js"),
+    },
+    {
+      find: /^@openclaw\/fs-safe\/(.+)$/u,
+      replacement: path.join(packageDist("@openclaw/fs-safe"), "$1.js"),
+    },
     {
       find: "@openclaw/libterminal/browser",
       replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
+    },
+    {
+      find: "@openclaw/proxyline",
+      replacement: path.join(packageDist("@openclaw/proxyline"), "index.js"),
+    },
+    {
+      find: /^@openclaw\/proxyline\/(.+)$/u,
+      replacement: path.join(packageDist("@openclaw/proxyline"), "$1.js"),
     },
     {
       find: "@openclaw/uirouter",
