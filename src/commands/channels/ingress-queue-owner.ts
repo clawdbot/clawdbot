@@ -17,13 +17,24 @@ import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
  * registered, and finally to the channel id, which every bundled channel also
  * registers as its plugin id.
  *
- * Scope: this covers the commands an operator drives by channel name. Doctor's
- * per-plugin ingress lane still keys on the channel id
- * (`state-migrations.plugin-doctor-context.ts:229` and `:244`) and is deliberately
- * left alone here, because its `channelId` is the selector plugins choose a lane
- * with across a published SDK contract (`plugins/doctor-contract-module.ts:57`,
- * re-exported by `plugin-sdk/runtime-doctor-migrations.ts`), so re-keying it is a
- * contract change rather than a call-site fix.
+ * The queue is one per PLUGIN, while a manifest may declare several channels for it
+ * (`loader-channel-setup.ts:231`), and the stored rows carry no channel dimension of
+ * their own. Two consequences worth stating plainly:
+ *
+ * - Removing one channel's account on a plugin that serves several would discard the
+ *   sibling channels' rows for that account id as well. There is nothing to narrow it
+ *   by; the row simply does not record which channel it arrived on. No bundled plugin
+ *   is in that shape today - of the 27 manifests declaring channels, none declares
+ *   more than one.
+ * - Doctor's ingress lane still keys on the channel id
+ *   (`state-migrations.plugin-doctor-context.ts:230` and `:244`) and is deliberately
+ *   left alone here. Not because its `channelId` is untouchable - the SDK-visible
+ *   selector is the separate `access.channelId` at `:236`, which is what a plugin
+ *   matches on (`extensions/line/doctor-contract-api.ts:18`) - but because the
+ *   contract hands out "one entry per manifest-declared channel"
+ *   (`plugins/doctor-contract-module.ts:42`) while the queue underneath is one per
+ *   plugin, so re-keying it would make N lanes alias a single queue. That is a
+ *   contract decision, not a call-site fix.
  */
 export function resolveChannelIngressQueueOwnerId(params: {
   channelId: string;

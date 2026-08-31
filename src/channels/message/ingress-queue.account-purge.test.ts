@@ -84,8 +84,10 @@ describe("channel ingress queue account purge", () => {
         },
       ]);
 
-      // The account id is omitted the way the removal command omits it for the default
-      // account, so the purge and the queue must agree on the same default.
+      // Omitting the account id pins that the purge falls back to the same default the
+      // queue writes under, so the two cannot drift apart. The removal command itself
+      // always passes one (`accountId || DEFAULT_ACCOUNT_ID`), so this covers the
+      // library contract rather than a path that command reaches.
       expect(purgeChannelIngressQueueAccount({ channelId: "line", stateDir })).toEqual({
         discarded: 4,
         // Completed and dead-lettered rows are already settled; only the pending and
