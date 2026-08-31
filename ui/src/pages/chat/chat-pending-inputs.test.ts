@@ -10,7 +10,8 @@ import {
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import {
