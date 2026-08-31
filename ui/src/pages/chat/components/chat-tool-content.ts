@@ -240,6 +240,9 @@ function extraArgsBeyondRowTarget(
 }
 
 export function toolWorkspacePath(card: ToolCard, view: ToolCallView): string | null {
+  if (view.kind !== "read" && view.kind !== "edit" && view.kind !== "write") {
+    return null;
+  }
   const singleOperation = view.fileOperations?.length === 1 ? view.fileOperations[0] : undefined;
   // A delete removes its own target, so the workspace loader would always
   // report "Failed to load"; the row keeps its disclosure but no file action.
@@ -370,18 +373,13 @@ export function renderExpandedToolCardContent(
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   // File/search rows already carry their target; the "with …" connector only
   // reads well for generic tools ("with query …"), not "with from sessions.ts".
-  const detail =
-    view.kind === "read" || view.kind === "search" || view.kind === "fetch"
-      ? display.detail
-      : formatToolDetail(display);
+  const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
+  const detail = summarizedKind ? display.detail : formatToolDetail(display);
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const outcome = resolveToolCardOutcome(card, runActive);
-  const workspaceFilePath =
-    view.kind === "read" || view.kind === "edit" || view.kind === "write"
-      ? toolWorkspacePath(card, view)
-      : null;
+  const workspaceFilePath = toolWorkspacePath(card, view);
   const canOpenSidebar = Boolean(onOpenSidebar);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
@@ -454,7 +452,6 @@ export function renderExpandedToolCardContent(
   // File reads and searches summarize their primary target in the row, so the
   // full args JSON is noise — but any remaining args (filters, limits, request
   // options…) stay visible as key-value rows for auditability.
-  const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
   const inputBlockArgs = summarizedKind
     ? extraArgsBeyondRowTarget(card.args, view.kind)
     : card.args;

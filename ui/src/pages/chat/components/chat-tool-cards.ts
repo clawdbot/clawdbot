@@ -434,10 +434,7 @@ export function renderToolCard(
   const isRunning = outcome === "running";
   const expanded = opts.expanded;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
-  const workspaceFilePath =
-    view.kind === "read" || view.kind === "edit" || view.kind === "write"
-      ? toolWorkspacePath(card, view)
-      : null;
+  const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const rowContent = html`
     <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>

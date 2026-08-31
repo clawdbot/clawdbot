@@ -1,8 +1,8 @@
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -21,23 +21,8 @@ const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
 
 type ChatSessionMessageSubscriptionState = ChatState & {
   sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
-  sessionsResult?: SessionsListResult | null;
   sessionsError?: string | null;
-  chatSessionMessageSubscriptionRequestedKey?: string | null;
-  chatSessionMessageSubscription?: SessionMessageSubscription | null;
 };
-
-function normalizeSubscriptionKey(value: string | null | undefined): string | null {
-  const normalized = typeof value === "string" ? value.trim() : "";
-  return normalized ? normalized : null;
-}
-
-function resolveSelectedGlobalAliasAgentId(
-  state: ChatSessionMessageSubscriptionState,
-  key: string | null | undefined,
-): string | null {
-  return resolveUiGlobalAliasAgentId(state, key);
-}
 
 function resolveSelectedGlobalAgentId(state: ChatSessionMessageSubscriptionState): string {
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -54,7 +39,7 @@ function resolveSelectedSessionMessageSubscriptionAgentId(
   if (isUiGlobalSessionKey(key)) {
     return resolveSelectedGlobalAgentId(state);
   }
-  return resolveSelectedGlobalAliasAgentId(state, key);
+  return resolveUiGlobalAliasAgentId(state, key);
 }
 
 function isCurrentSelectedSessionMessageSubscriptionSync(
@@ -149,11 +134,11 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
-  const previousRequestedKey = normalizeSubscriptionKey(
+  const previousRequestedKey = normalizeNullableString(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
   const previousSubscription = state.chatSessionMessageSubscription ?? null;
-  const previousCanonicalKey = normalizeSubscriptionKey(previousSubscription?.key);
+  const previousCanonicalKey = normalizeNullableString(previousSubscription?.key);
   const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
   const nextSubscriptionAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey);
   const selectedAgentChanged =

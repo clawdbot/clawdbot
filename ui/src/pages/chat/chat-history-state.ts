@@ -17,7 +17,7 @@ type ChatHistoryLoadRequest = {
   startup: boolean;
 };
 
-export type ChatHistoryLoadState =
+type ChatHistoryLoadState =
   | { phase: "idle" }
   | ({ phase: "pending-connection" } & ChatHistoryLoadRequest)
   | ({
