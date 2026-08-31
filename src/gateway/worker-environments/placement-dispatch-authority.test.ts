@@ -12,6 +12,7 @@ import {
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -32,7 +33,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("worker placement reclaim authority", () => {
+describe("worker placement cancellation and reclaim authority", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
@@ -49,6 +50,94 @@ describe("worker placement reclaim authority", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each(["requested", "syncing", "starting"] as const)(
+    "does not activate after Stop closes the %s dispatch owner",
+    async (stage) => {
+      const controller = new AbortController();
+      const harness = createTestHarness();
+      await expect(
+        harness.service.dispatch(
+          REQUEST,
+          (placement) => {
+            if (placement.state === stage) {
+              controller.abort(new Error("Stop dispatch"));
+            }
+          },
+          undefined,
+          controller.signal,
+        ),
+      ).rejects.toThrow("Stop dispatch");
+      expect(harness.log).not.toContain("activation");
+      expect(harness.placements.current()?.state).toBe("failed");
+      if (stage === "requested") {
+        expect(harness.environments.create).not.toHaveBeenCalled();
+      } else {
+        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("passes the Move admission signal through destination provisioning", async () => {
+    const harness = createTestHarness();
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(`INSERT INTO worker_environments (
+      environment_id, provider_id, profile_id, profile_snapshot_json, provision_operation_id,
+      lease_id, state, owner_epoch, attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+    ) VALUES (?, 'fake', ?, '{}', 'move-source', 'lease-1', 'attached', ?, ?, 1000, 1000, 1000)`)
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+    const entered = createDeferredCore();
+    const settled = createDeferredCore();
+    const controller = new AbortController();
+    let provisionSignal: AbortSignal | undefined;
+    vi.mocked(harness.environments.create).mockImplementation(
+      async (_profile, _id, _machine, _mode, _projectPath, signal) => {
+        provisionSignal = signal;
+        entered.resolve();
+        await settled.promise;
+        signal?.throwIfAborted();
+        throw new Error("destination unexpectedly finished");
+      },
+    );
+    const moving = harness.service
+      .move(
+        {
+          ...REQUEST,
+          source: {
+            generation: active.generation,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+          target: { kind: "profile", profileId: "destination" },
+        },
+        undefined,
+        undefined,
+        controller.signal,
+      )
+      .catch((error: unknown) => error);
+    await Promise.race([
+      entered.promise,
+      moving.then((error) => {
+        throw error;
+      }),
+    ]);
+    try {
+      controller.abort(new Error("Stop Move"));
+      expect(provisionSignal?.aborted).toBe(true);
+    } finally {
+      settled.resolve();
+      await moving;
+    }
+    expect(await moving).toMatchObject({ message: "Stop Move" });
+    expect(harness.placements.current()?.state).toBe("failed");
+    expect(harness.log.filter((event) => event === "activation")).toHaveLength(1);
   });
 
   it("stops final effects when authority closes during workspace reconciliation", async () => {

@@ -1,10 +1,53 @@
 import { isDeepStrictEqual } from "node:util";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
+import type {
+  WorkerPlacementDispatchRequest,
+  WorkerPlacementReclaimRequest,
+} from "./service-contract.js";
+
+export type WorkerPlacementDispatchAdmission = <T>(
+  request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
+  run: (signal?: AbortSignal) => Promise<T>,
+  authorize?: () => void,
+) => Promise<T>;
+
+function trackPlacementOperation<T extends WorkerDispatchPlacement>(
+  run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
+  onTransition?: (placement: WorkerDispatchPlacement) => void,
+) {
+  let current: WorkerPlacementCancellationTarget | undefined;
+  let completed: WorkerPlacementCancellationTarget | undefined;
+  const record = (placement: WorkerDispatchPlacement) => {
+    // Retain the producer's authority by value before an observer can mutate its snapshot.
+    current = {
+      state: placement.state,
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      activeOwnerEpoch: placement.activeOwnerEpoch,
+    };
+  };
+  return {
+    currentPlacement: () => current,
+    completedPlacement: () => completed,
+    operation: run((placement) => {
+      record(placement);
+      onTransition?.({ ...placement });
+    }).then((placement) => {
+      // Completion can outlive the map entry while Stop is loading cancellation support.
+      record(placement);
+      completed = current;
+      return placement;
+    }),
+  };
+}
 
 /** Serializes reconciliation sweeps against dispatches and deduplicates exact requests. */
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
+  admitDispatch: WorkerPlacementDispatchAdmission,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
 } {
@@ -65,34 +108,48 @@ export function coordinateWorkerPlacementDispatch(
     placementFence = sweep;
     return current;
   };
-  const runExclusivePlacementOperation = <T>(operation: () => Promise<T>): Promise<T> => {
-    const current = (async () => {
+  const runExclusivePlacementOperation = <T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const ready = (async () => {
       const pendingFence = placementFence;
       if (pendingFence) {
         await pendingFence.promise.catch(() => undefined);
       }
       await waitForDispatchIdle();
+    })();
+    const current = (async () => {
+      await racePromiseWithAbortSignal(ready, signal);
+      signal?.throwIfAborted();
       return await operation();
     })();
-    const barrier = current.then(
-      () => undefined,
-      () => undefined,
-    );
+    // A canceled waiter releases its admission immediately, but its fence must still
+    // carry older work forward so later requests cannot overtake the predecessor.
+    const barrier = Promise.allSettled([ready, current]).then(() => undefined);
     const exclusive: PlacementFence = { promise: barrier };
     placementFence = exclusive;
-    return current.finally(() => {
+    void barrier.then(() => {
       if (placementFence === exclusive) {
         placementFence = undefined;
       }
     });
+    return current;
   };
-  const runPlacementOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
+  const runPlacementOperation = async <T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
     for (;;) {
+      signal?.throwIfAborted();
       const pendingFence = placementFence;
       if (!pendingFence) {
         break;
       }
-      await pendingFence.promise.catch(() => undefined);
+      await racePromiseWithAbortSignal(
+        pendingFence.promise.catch(() => undefined),
+        signal,
+      );
     }
     activeDispatchCount += 1;
     try {
@@ -113,6 +170,8 @@ export function coordinateWorkerPlacementDispatch(
     {
       request: WorkerPlacementDispatchRequest;
       operation: ReturnType<WorkerPlacementDispatchService["dispatch"]>;
+      currentPlacement: () => WorkerPlacementCancellationTarget | undefined;
+      completedPlacement: () => WorkerPlacementCancellationTarget | undefined;
     }
   >();
   const moveInFlight = new Map<
@@ -120,17 +179,14 @@ export function coordinateWorkerPlacementDispatch(
     {
       request: Parameters<WorkerPlacementDispatchService["move"]>[0];
       operation: ReturnType<WorkerPlacementDispatchService["move"]>;
+      currentPlacement: () => WorkerPlacementCancellationTarget | undefined;
+      completedPlacement: () => WorkerPlacementCancellationTarget | undefined;
     }
   >();
-  const reclaimsInFlight = new Map<string, Set<Promise<unknown>>>();
-  const afterSessionReclaims = async <T>(sessionId: string, run: () => Promise<T>): Promise<T> => {
-    // Later caller mutations cannot replace the worker while Stop prepares. Recovery
-    // bypasses this session intent so it can release the very run Stop is draining.
-    while (reclaimsInFlight.has(sessionId)) {
-      await Promise.allSettled(reclaimsInFlight.get(sessionId)!);
-    }
-    return await run();
-  };
+  const reclaimsInFlight = new Map<
+    string,
+    Set<ReturnType<typeof trackPlacementOperation> & { request: WorkerPlacementReclaimRequest }>
+  >();
   const joinOperation = async <T>(operation: Promise<T>, authorize?: () => void): Promise<T> => {
     // Shared placement work must never inherit another caller's authority across an await.
     authorize?.();
@@ -151,10 +207,23 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = afterSessionReclaims(request.sessionId, () =>
-        runPlacementOperation(() => service.dispatch(request, onTransition, authorize)),
-      );
-      dispatchInFlight.set(request.sessionId, { request, operation });
+      // Capture predecessors before admission yields. A later Stop awaits this operation
+      // and must never become a predecessor of the dispatch it is cancelling.
+      const predecessors = [...(reclaimsInFlight.get(request.sessionId) ?? [])];
+      const tracked = trackPlacementOperation(async (report) => {
+        await Promise.allSettled(predecessors.map((pending) => pending.operation));
+        return await admitDispatch(
+          request,
+          (signal) =>
+            runPlacementOperation(
+              () => service.dispatch(request, report, authorize, signal),
+              signal,
+            ),
+          authorize,
+        );
+      }, onTransition);
+      const { operation } = tracked;
+      dispatchInFlight.set(request.sessionId, { request, ...tracked });
       try {
         return await operation;
       } finally {
@@ -175,10 +244,21 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = afterSessionReclaims(request.sessionId, () =>
-        runExclusivePlacementOperation(() => service.move(request, onTransition, authorize)),
-      );
-      moveInFlight.set(request.sessionId, { request, operation });
+      const predecessors = [...(reclaimsInFlight.get(request.sessionId) ?? [])];
+      const tracked = trackPlacementOperation(async (report) => {
+        await Promise.allSettled(predecessors.map((pending) => pending.operation));
+        return await admitDispatch(
+          request,
+          (signal) =>
+            runExclusivePlacementOperation(
+              () => service.move(request, report, authorize, signal),
+              signal,
+            ),
+          authorize,
+        );
+      }, onTransition);
+      const { operation } = tracked;
+      moveInFlight.set(request.sessionId, { request, ...tracked });
       try {
         return await operation;
       } finally {
@@ -189,19 +269,62 @@ export function coordinateWorkerPlacementDispatch(
     },
     reclaim: async (request, authorize, beforeDrain) => {
       // Cancellation may need coordinated recovery. Reserve exclusivity only after it drains.
-      const operation = service.reclaim(
-        request,
-        authorize,
-        beforeDrain,
-        runExclusivePlacementOperation,
+      // Retain only predecessors: later dispatches wait for these Stops and cannot become
+      // work a Stop awaits. Each caller still revalidates its own lifecycle and authority.
+      const predecessors = [...(reclaimsInFlight.get(request.sessionId) ?? [])];
+      const operations = [
+        dispatchInFlight.get(request.sessionId),
+        moveInFlight.get(request.sessionId),
+        ...predecessors,
+      ].filter(
+        (operation): operation is NonNullable<typeof operation> =>
+          operation !== undefined &&
+          operation.request.sessionKey === request.sessionKey &&
+          operation.request.agentId === request.agentId,
       );
+      const hasPendingDispatch = () =>
+        operations.some(
+          (operation) =>
+            dispatchInFlight.get(request.sessionId) === operation ||
+            moveInFlight.get(request.sessionId) === operation,
+        );
+      const isPending = () =>
+        hasPendingDispatch() ||
+        operations.some((operation) => reclaimsInFlight.get(request.sessionId)?.has(operation));
+      // Generation increases within the lifecycle revalidated by the reclaim owner.
+      // Dispatch, Move and predecessor Stop publish through the same transition owner.
+      const latestPlacement = (read: "currentPlacement" | "completedPlacement") =>
+        operations.reduce<WorkerPlacementCancellationTarget | undefined>((latest, pending) => {
+          const current = pending[read]();
+          return current && (!latest || current.generation > latest.generation) ? current : latest;
+        }, undefined);
+      const tracked = trackPlacementOperation((report) =>
+        service.reclaim(
+          request,
+          authorize,
+          beforeDrain,
+          runExclusivePlacementOperation,
+          operations.length
+            ? {
+                isCurrent: isPending,
+                hasPendingDispatch,
+                currentPlacement: () => latestPlacement("currentPlacement"),
+                completedPlacement: () => latestPlacement("completedPlacement"),
+                settled: Promise.allSettled(operations.map((pending) => pending.operation)),
+              }
+            : undefined,
+          report,
+        ),
+      );
+      const { operation } = tracked;
+      const record = { request, ...tracked };
       const pending = reclaimsInFlight.get(request.sessionId) ?? new Set();
-      pending.add(operation);
+      pending.add(record);
       reclaimsInFlight.set(request.sessionId, pending);
       try {
         return await operation;
       } finally {
-        pending.delete(operation);
+        pending.delete(record);
         if (pending.size === 0) {
           reclaimsInFlight.delete(request.sessionId);
         }

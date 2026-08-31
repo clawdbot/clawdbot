@@ -48,7 +48,9 @@ describe("worker placement dispatch reclaim", () => {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
     });
-    const coordinated = coordinateWorkerPlacementDispatch(harness.service);
+    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+      run(),
+    );
     const provisionStarted = createDeferredCore();
     const releaseProvision = createDeferredCore();
     vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
@@ -449,7 +451,7 @@ describe("worker placement dispatch reclaim", () => {
       });
 
       const service = coordinated
-        ? coordinateWorkerPlacementDispatch(harness.service)
+        ? coordinateWorkerPlacementDispatch(harness.service, (_request, run) => run())
         : harness.service;
       const results = await Promise.all([service.reclaim(REQUEST), service.reclaim(REQUEST)]);
       expect(results[1]).toEqual(results[0]);

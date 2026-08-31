@@ -106,6 +106,20 @@ export function createWorkerPlacementDispatchStartup(options: {
 }) {
   const { environments, failure, placements } = options;
 
+  const validateDevicePlacement = async (request: WorkerPlacementDispatchRequest) => {
+    if (!request.deviceId) {
+      return;
+    }
+    const eligibility = await resolveDevicePlacementEligibility({
+      environmentService: environments,
+      deviceId: request.deviceId,
+      requirement: request.devicePlacement,
+      config: getRuntimeConfig(),
+    });
+    if (!eligibility.ok) {
+      throw new Error(eligibility.error);
+    }
+  };
   const requireNodePlacementEligibility = async (
     request: WorkerPlacementDispatchRequest,
     environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
@@ -151,12 +165,14 @@ export function createWorkerPlacementDispatchStartup(options: {
     localPath: string;
     onTransition?: (placement: WorkerDispatchPlacement) => void;
     authorize?: WorkerPlacementAuthorization;
+    signal?: AbortSignal;
     recovery?: true;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
     }
     const { request } = params;
+    params.signal?.throwIfAborted();
     const provisioned = requireProvisionedEnvironment(
       params.environment,
       params.expectedEnvironmentId,
@@ -165,6 +181,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     );
     const admittedNode = await requireNodePlacementEligibility(request, params.environment);
     // Provisioning and transport setup yield; revoked callers must not attach or upload.
+    params.signal?.throwIfAborted();
     params.authorize?.();
     let placement = placements.transition({
       sessionId: request.sessionId,
@@ -177,17 +194,20 @@ export function createWorkerPlacementDispatchStartup(options: {
       },
     });
     options.reportTransition(params.onTransition, placement);
+    params.signal?.throwIfAborted();
     const credential = await environments.attachSession({
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
     });
+    params.signal?.throwIfAborted();
     params.authorize?.();
     const ownerEpoch = credential.ownerEpoch;
     const tunnel = await environments.startTunnel({
       environmentId: provisioned.environmentId,
       ownerEpoch,
     });
+    params.signal?.throwIfAborted();
     params.authorize?.();
     const gitAuthor = options.resolveGitAuthor?.(request.agentId);
     const project = readWorkerProjectSnapshot(params.environment.profileSnapshot.project);
@@ -198,6 +218,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       ...(gitAuthor ? { gitAuthor } : {}),
       ...(project ? { projectKey: project.key } : {}),
     });
+    params.signal?.throwIfAborted();
     params.authorize?.();
     placement = placements.transition({
       sessionId: request.sessionId,
@@ -212,6 +233,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     options.reportTransition(params.onTransition, placement);
     const startingPlacement = placement;
     const requireAttachedEnvironment = () => {
+      params.signal?.throwIfAborted();
       const attachedEnvironment = environments.get(provisioned.environmentId);
       if (
         !attachedEnvironment ||
@@ -396,5 +418,5 @@ export function createWorkerPlacementDispatchStartup(options: {
     }
   };
 
-  return { continueProvisionedDispatch, resumeProvisioning };
+  return { validateDevicePlacement, continueProvisionedDispatch, resumeProvisioning };
 }

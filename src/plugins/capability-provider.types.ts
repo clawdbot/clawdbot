@@ -122,7 +122,7 @@ type WorkerNodeBootstrapAccess = {
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
   };
-  /** Closing the provision operation revokes artifact access. */
+  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
   signal?: AbortSignal;
 };
 
@@ -248,6 +248,8 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;

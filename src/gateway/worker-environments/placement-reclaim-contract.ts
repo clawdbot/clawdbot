@@ -13,11 +13,24 @@ export type WorkerReclaimPlacement = Extract<
   { state: "local" | "reclaimed" }
 >;
 
+export type WorkerPlacementCancellationTarget = Readonly<
+  Pick<WorkerDispatchPlacement, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
+>;
+
+export type WorkerPlacementPendingOperations = {
+  isCurrent: () => boolean;
+  hasPendingDispatch: () => boolean;
+  currentPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  completedPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  settled: Promise<unknown>;
+};
+
 export type WorkerPlacementReclaimBarriers = {
   runReclaimPreparation: (
     params: WorkerPlacementReclaimRequest & {
       authorize?: WorkerPlacementAuthorization;
       beforeDrain?: WorkerPlacementAuthorization;
+      pendingOperations?: WorkerPlacementPendingOperations;
       run: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
     },
   ) => Promise<WorkerReclaimPlacement>;

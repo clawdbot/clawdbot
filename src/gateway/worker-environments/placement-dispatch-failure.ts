@@ -33,7 +33,6 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
-  | "preparePlacementMove"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
@@ -105,6 +104,21 @@ export function isUnavailableEnvironment(
     environment.state === "destroyed" ||
     environment.state === "failed" ||
     environment.state === "orphaned"
+  );
+}
+
+export function isExactAttachedEnvironment(
+  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+): boolean {
+  return Boolean(
+    environment &&
+    environment.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId,
   );
 }
 

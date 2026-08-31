@@ -75,7 +75,11 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     }
   };
 
-  const createEnrollmentOperation = (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+  const createEnrollmentOperation = (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    signal?: AbortSignal,
+  ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
     }
@@ -90,6 +94,26 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
     let enrollment: WorkerNodeEnrollment | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
+    const close = () => {
+      if (!open) {
+        return;
+      }
+      open = false;
+      signal?.removeEventListener("abort", close);
+      controller.abort();
+      if (runtime) {
+        options.closeNodeRuntime?.(runtime);
+        runtime = undefined;
+      }
+      if (enrollment) {
+        options.closeNodeEnrollment?.(enrollment);
+        enrollment = undefined;
+      }
+    };
+    signal?.addEventListener("abort", close, { once: true });
+    if (signal?.aborted) {
+      close();
+    }
     const assertCurrent = () => {
       const current = options.store.get(record.environmentId);
       if (
@@ -146,18 +170,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         });
         return await pending;
       },
-      close: () => {
-        open = false;
-        controller.abort();
-        if (runtime) {
-          options.closeNodeRuntime?.(runtime);
-          runtime = undefined;
-        }
-        if (enrollment) {
-          options.closeNodeEnrollment?.(enrollment);
-          enrollment = undefined;
-        }
-      },
+      close,
     };
   };
 
@@ -166,6 +179,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     lease: NodeLease,
     provider: WorkerProvider,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
+    assertActive?: () => void,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -178,6 +192,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         throw new Error("Device worker bundle installer is unavailable");
       }
       nodeBuild = await options.ensureNodeWorkerBundle(lease.node.deviceId);
+      assertActive?.();
     } catch (error) {
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }

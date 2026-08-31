@@ -26,8 +26,10 @@ export async function runCrabboxCommand(params: {
   signal?: AbortSignal;
   timeoutMs: number;
 }): Promise<SpawnResult> {
+  params.signal?.throwIfAborted();
+  let result: SpawnResult;
   try {
-    return await params.runCommand([params.binary, ...params.args], {
+    result = await params.runCommand([params.binary, ...params.args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
@@ -36,8 +38,12 @@ export async function runCrabboxCommand(params: {
       ...(params.signal ? { signal: params.signal } : {}),
     });
   } catch {
+    params.signal?.throwIfAborted();
     throw new Error(`Crabbox ${params.action} could not start`);
   }
+  // The runner owns child/tree settlement; cancellation must not release that custody early.
+  params.signal?.throwIfAborted();
+  return result;
 }
 
 // Recognition failure does not prove resource absence; only the stop owner can confirm cleanup.

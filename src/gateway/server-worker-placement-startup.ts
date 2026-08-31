@@ -18,6 +18,7 @@ import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
+import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -255,6 +256,7 @@ export function createGatewayWorkerPlacementRuntime(
         agentId,
         executionMode,
         authorize,
+        signal,
         startDispatch,
       }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
@@ -311,7 +313,7 @@ export function createGatewayWorkerPlacementRuntime(
               );
             }
             const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
-            await preflightWorkerWorkspace({ localPath: worktree.path });
+            await preflightWorkerWorkspace({ localPath: worktree.path, signal });
             authorize?.();
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
@@ -437,6 +439,7 @@ export function createGatewayWorkerPlacementRuntime(
           })
         )?.gitAuthor,
     }),
+    createGatewayWorkerDispatchAdmission(loadWorkerPlacementSessionRuntimeModule),
   );
   const dispatchService = {
     ...rawDispatchService,
