@@ -113,6 +113,22 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    heartbeat: {
+      // Core drives the typing indicator for replies the plugin does not deliver
+      // itself, such as a heartbeat turn. LINE rejects a group id outright here, and
+      // showLoadingAnimation swallows its own errors, so the target kind has to be
+      // decided before the call or every group heartbeat becomes a silent 400.
+      sendTyping: async ({ cfg, to, accountId }) => {
+        const chatId = normalizeLineMessagingTarget(to);
+        if (!chatId || inferLineTargetChatType(to) !== "direct") {
+          return;
+        }
+        const showLoadingAnimation =
+          getLineRuntime().channel.line?.showLoadingAnimation ??
+          (await loadLineChannelRuntime()).showLoadingAnimation;
+        await showLoadingAnimation(chatId, { cfg, ...(accountId ? { accountId } : {}) });
+      },
+    },
     message: lineMessageAdapter,
     actions: lineMessageActions,
     bindings: lineBindingsAdapter,
