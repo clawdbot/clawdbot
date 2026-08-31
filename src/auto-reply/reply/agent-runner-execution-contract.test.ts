@@ -35,7 +35,11 @@ describe("executeAgentTurn contract", () => {
   it("keeps publisher-only compaction counts presentation-only after a late user abort", async () => {
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "late reply" }],
-      meta: { durationMs: 1, agentMeta: { compactionCount: 1, compactionTokensAfter: 40 } },
+      meta: {
+        durationMs: 1,
+        contextManagement: { lastTurnCompactions: 1 },
+        agentMeta: { compactionCount: 1, compactionTokensAfter: 40 },
+      },
     });
     const { replyOperation } = createMockReplyOperation();
     let operationResult: typeof replyOperation.result = null;

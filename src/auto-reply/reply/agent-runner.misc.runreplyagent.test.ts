@@ -1691,7 +1691,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("stopReason=end_turn");
     expect(traceText).toContain("refusal=no");
     expect(traceText).toContain("🔎 Context Management:");
-    expect(traceText).toContain("sessionCompactions=3");
+    expect(traceText).toContain("sessionCompactions=4");
     expect(traceText).toContain("lastTurnCompactions=1");
     expect(traceText).toContain("🔎 Model Input (User Role):");
     expect(traceText).toContain("🔎 Model Output (Assistant Role):");
