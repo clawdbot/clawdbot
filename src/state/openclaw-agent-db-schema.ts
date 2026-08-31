@@ -719,12 +719,14 @@ export function ensureOpenClawAgentDatabaseSchema(
     // Keep canonical index recovery reachable before rebuilding the v17 identity table.
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
       allowMissingColumns: true,
-      validateAfterRepair: () =>
+      validateAfterRepair: () => {
+        ensureSessionAdditiveColumns(db);
         assertAgentSchemaVersion(
           db,
           { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
           legacySql,
-        ),
+        );
+      },
     });
   }
   assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
