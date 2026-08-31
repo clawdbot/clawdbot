@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { expect, it } from "vitest";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -114,7 +115,9 @@ it.each(["global", "shared-project"])(
           overrides: {
             fixture: [
               process.execPath,
-              path.resolve("extensions/acpx/test/fixtures/owner-agent.mjs"),
+              fileURLToPath(
+                new URL("../../../extensions/acpx/test/fixtures/owner-agent.mjs", import.meta.url),
+              ),
               peer,
             ].join(" "),
           },

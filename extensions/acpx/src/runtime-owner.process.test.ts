@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
@@ -18,7 +19,7 @@ import {
 } from "./runtime.js";
 
 const harness = "owner-fixture";
-const script = path.resolve("extensions/acpx/test/fixtures/owner-agent.mjs");
+const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
 
 it.each(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",

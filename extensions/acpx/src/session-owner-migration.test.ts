@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AcpxRuntime as UpstreamRuntime,
   createAgentRegistry,
@@ -36,7 +37,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
       overrides: {
         fixture: [
           process.execPath,
-          path.resolve("extensions/acpx/test/fixtures/owner-agent.mjs"),
+          fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url)),
           peer,
         ].join(" "),
       },
