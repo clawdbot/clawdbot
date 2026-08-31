@@ -242,7 +242,7 @@ describe("worker placement dispatch authority", () => {
         const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
         vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
           const tunnel = await startTunnel(request);
-          const sync = tunnel.syncWorkspace;
+          const sync = tunnel.syncWorkspace.bind(tunnel);
           tunnel.syncWorkspace = async (syncRequest) => {
             const synced = await sync(syncRequest);
             revokeAt("workspace sync");

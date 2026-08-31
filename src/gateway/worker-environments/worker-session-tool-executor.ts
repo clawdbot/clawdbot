@@ -132,13 +132,13 @@ export function createWorkerSessionToolExecutor(params: {
               throw new Error("Worker source turn owner changed");
             }
           };
-          const callGateway = async <T = Record<string, unknown>>(
+          const callGateway = async <R = Record<string, unknown>>(
             request: Parameters<AgentToolGatewayRequestCaller>[0],
             sessionSpawnContext?: ReturnType<typeof buildSubagentExecutionSessionSpawnContext>,
-          ): Promise<T> => {
+          ): Promise<R> => {
             assertSource();
             return await capability.run(() =>
-              callAgentToolGatewayRequest<T>(
+              callAgentToolGatewayRequest<R>(
                 withAgentToolGatewayRuntimeIdentity(
                   {
                     ...request,

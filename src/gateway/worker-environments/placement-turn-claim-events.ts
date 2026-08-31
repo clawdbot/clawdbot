@@ -113,7 +113,6 @@ export function bindWorkerTurnOwner(
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
   const owners = workerTurnOwners.get(path) ?? new Map();
-  let owner: BoundWorkerTurnOwner;
   const assertActive = () => {
     assertRunActive();
     if (
@@ -145,7 +144,7 @@ export function bindWorkerTurnOwner(
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
   existing?.runtime.scope?.release();
-  owner = {
+  const owner: BoundWorkerTurnOwner = {
     capability,
     claim,
     claimKey: currentClaimKey,
