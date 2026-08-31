@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  MODEL_PRICING_SOURCES,
   normalizeModelPricingProvider,
   normalizeOpenRouterModelPricing,
   normalizeUpstreamModelPricing,
   type ModelPricingProvider,
   type ModelPricingSource,
-  type ModelPricingSourceId,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -19,6 +19,10 @@ import type {
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+export {
+  LITELLM_PRICING_URL,
+  OPENROUTER_MODELS_URL,
+} from "@openclaw/model-catalog-core/model-catalog-pricing";
 
 type ModelCatalogManifestInput = {
   pluginId: string;
@@ -34,12 +38,7 @@ type PublishedModelPricing = RemoteModelCatalogPricing;
 type PublishedModelCatalogBundle = RemoteModelCatalogBundle;
 type PricingPolicies = Map<string, ModelPricingProvider>;
 type PricingCatalog = Map<string, PublishedModelPricing>;
-type PricingSource = {
-  id: ModelPricingSourceId;
-  label: string;
-  url: string;
-  authoritative?: boolean;
-};
+type PricingSource = (typeof MODEL_PRICING_SOURCES)[number];
 type LoadedPricingSource = PricingSource & {
   catalog: PricingCatalog;
   aliases: string[][];
@@ -47,25 +46,6 @@ type LoadedPricingSource = PricingSource & {
 type BundleValidator = (bundle: unknown) => PublishedModelCatalogBundle;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
-export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-export const LITELLM_PRICING_URL =
-  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const PRICING_SOURCES: readonly PricingSource[] = [
-  {
-    id: "openCode",
-    label: "OpenCode",
-    url: "https://models.opencode.ai/api.json",
-    authoritative: true,
-  },
-  {
-    id: "venice",
-    label: "Venice",
-    url: "https://api.venice.ai/api/v1/models",
-    authoritative: true,
-  },
-  { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL },
-  { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL },
-];
 
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
@@ -466,7 +446,7 @@ function parsePricingCatalog(
 }
 
 async function fetchPricingSources(fetchImpl: typeof fetch, policies: PricingPolicies) {
-  const sources = PRICING_SOURCES.filter(
+  const sources = MODEL_PRICING_SOURCES.filter(
     (source) =>
       !source.authoritative ||
       [...policies.keys()].some((id) => sourcePolicy(policies, id, source)),

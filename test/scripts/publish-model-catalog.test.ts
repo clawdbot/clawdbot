@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { RemoteModelCatalogBundle } from "@openclaw/model-catalog-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
@@ -14,10 +15,20 @@ import {
   serializeModelCatalogBundle,
   summarizeModelCatalogBundle,
 } from "../../scripts/publish-model-catalog.mts";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
+import {
+  estimateAggregateUsageCost,
+  resetUsageFormatCachesForTest,
+  resolveModelCostConfig,
+} from "../../src/utils/usage-format.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  setRemoteModelCatalogOverlaySourcesForTest();
+  resetUsageFormatCachesForTest();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -34,6 +45,29 @@ function fixtureProvider(
 
 function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
+function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-pricing-"));
+  tempDirs.push(agentDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+  setRemoteModelCatalogOverlaySourcesForTest({
+    bundledGeneratedAt: () => 1,
+    readStoredCatalog: () => ({
+      id: 1,
+      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      bundle_json: serializeModelCatalogBundle(bundle),
+      generated_at: bundle.generatedAt,
+      min_version: bundle.minVersion ?? null,
+      etag: null,
+      last_modified: null,
+      checked_at: bundle.generatedAt,
+    }),
+  });
+  const config: OpenClawConfig = {
+    plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+  };
+  return { config, agentDir, provider };
 }
 
 function writeFixtureManifest(root: string, pluginId: string, providers: Record<string, unknown>) {
@@ -266,9 +300,9 @@ describe("publish model catalog", () => {
               pricing: {
                 prompt: "0.000003",
                 completion: "0.000004",
-                overrides: [
-                  { min_prompt_tokens: 1000, prompt: "0.000007", completion: "0.000008" },
-                ],
+                input_cache_read: "0.0000005",
+                input_cache_write: "0.0000025",
+                overrides: [{ min_prompt_tokens: 1000, prompt: "0.000007" }],
               },
             },
             { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
@@ -323,14 +357,14 @@ describe("publish model catalog", () => {
     });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     const tieredPricing = [
-      { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, range: [0, 1000] },
-      { input: 7, output: 8, cacheRead: 0, cacheWrite: 0, range: [1000] },
+      { input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [0, 1001] },
+      { input: 7, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [1001] },
     ];
     expect(bundle.providers.openai?.models[0]?.cost).toEqual({
       input: 3,
       output: 4,
-      cacheRead: 0,
-      cacheWrite: 0,
+      cacheRead: 0.5,
+      cacheWrite: 2.5,
       tieredPricing,
     });
     expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
@@ -343,7 +377,13 @@ describe("publish model catalog", () => {
       "forbidden-model": { input: 9, output: 10 },
       "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "openrouter/mapped/wrong-source": { input: 13, output: 14 },
-      "openrouter/openai/gpt-special": { input: 3, output: 4, tieredPricing },
+      "openrouter/openai/gpt-special": {
+        input: 3,
+        output: 4,
+        cacheRead: 0.5,
+        cacheWrite: 2.5,
+        tieredPricing,
+      },
       "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
       "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
@@ -459,7 +499,7 @@ describe("publish model catalog", () => {
       }
     });
 
-    it("accepts authoritative zero schedules for paid seeds and new models", async () => {
+    it("resolves published native zeros as free for paid seeds and standalone models", async () => {
       const manifests = nativeManifests(source);
       const bundle = await assembleModelCatalogBundle({
         manifests,
@@ -483,8 +523,61 @@ describe("publish model catalog", () => {
         cacheRead: 0,
         cacheWrite: 0,
       });
-      expect(bundle.pricing?.[`${provider}/new-priced-fixture`]).toEqual({ input: 0, output: 0 });
+      const params = publishedPricingParams(bundle, provider);
+      for (const model of ["priced-fixture", "new-priced-fixture"]) {
+        expect(bundle.pricing?.[`${provider}/${model}`]).toEqual({ input: 0, output: 0 });
+        const cost = resolveModelCostConfig({ ...params, model });
+        expect.soft(cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+        expect
+          .soft(estimateAggregateUsageCost({ cost, usage: { input: 1000, output: 1000 } }))
+          .toBe(0);
+      }
     });
+
+    it.each(["missing", "invalid"])(
+      "keeps zero seeds unknown when native pricing is %s",
+      async (scenario) => {
+        const manifests = nativeManifests(source);
+        const bundle = await assembleModelCatalogBundle({
+          manifests,
+          generatedAt: Date.now(),
+          sourceCommit: "fixture",
+        });
+        bundle.providers[provider]!.models[0]!.cost = { input: 0, output: 0 };
+        await enrichModelCatalogPricing({
+          bundle,
+          manifests,
+          fetchImpl: async (input) => {
+            if (requestUrl(input) === OPENROUTER_MODELS_URL) {
+              return Response.json({
+                data: [
+                  { id: `${provider}/priced-fixture`, pricing: { prompt: "0", completion: "0" } },
+                ],
+              });
+            }
+            if (requestUrl(input) !== url) {
+              return Response.json({ data: [] });
+            }
+            return Response.json(
+              source === "OpenCode"
+                ? scenario === "missing"
+                  ? { "upstream-zen": { id: "upstream-zen", models: {} } }
+                  : openCodePrices({ input: 0 })
+                : scenario === "missing"
+                  ? { data: [] }
+                  : venicePrices({ input: { usd: 0 } }),
+            );
+          },
+        });
+        expect(bundle.pricing).toEqual({});
+        expect(
+          resolveModelCostConfig({
+            ...publishedPricingParams(bundle, provider),
+            model: "priced-fixture",
+          }),
+        ).toBeUndefined();
+      },
+    );
 
     it.each(["unreachable", "malformed JSON", "malformed body", "missing model", "invalid price"])(
       "rejects %s instead of re-stamping stale paid seed rates",

@@ -228,7 +228,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("preserves native OpenRouter pricing tiers in memory and across SQLite reads", async () => {
+  it("preserves partial native OpenRouter pricing overrides in memory and across SQLite reads", async () => {
     await withOpenRouterStateDir(async () => {
       const cost = {
         input: 2,
@@ -241,14 +241,14 @@ describe("openrouter-model-capabilities", () => {
             output: 10,
             cacheRead: expect.closeTo(0.2, 12),
             cacheWrite: 2.5,
-            range: [0, 272_000],
+            range: [0, 272_001],
           },
           {
             input: 4,
-            output: 15,
-            cacheRead: expect.closeTo(0.4, 12),
-            cacheWrite: 5,
-            range: [272_000],
+            output: 10,
+            cacheRead: expect.closeTo(0.2, 12),
+            cacheWrite: 2.5,
+            range: [272_001],
           },
         ],
       };
@@ -273,9 +273,6 @@ describe("openrouter-model-capabilities", () => {
                       {
                         min_prompt_tokens: 272_000,
                         prompt: "0.000004",
-                        completion: "0.000015",
-                        input_cache_read: "0.0000004",
-                        input_cache_write: "0.000005",
                       },
                     ],
                   },

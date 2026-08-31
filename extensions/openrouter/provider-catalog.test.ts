@@ -16,8 +16,8 @@ describe("OpenRouter provider catalog", () => {
       response: Response.json({
         data: [
           {
-            id: "google/gemini-3.6-flash",
-            name: "Google: Gemini 3.6 Flash",
+            id: "acme/partial-pricing",
+            name: "Partial Pricing Fixture",
             architecture: {
               input_modalities: ["text", "image", "audio", "video"],
               output_modalities: ["text"],
@@ -32,13 +32,11 @@ describe("OpenRouter provider catalog", () => {
               prompt: "0.0000015",
               completion: "0.0000075",
               input_cache_read: "0.00000015",
+              input_cache_write: "0.0000025",
               overrides: [
                 {
                   min_prompt_tokens: 272_000,
                   prompt: "0.000004",
-                  completion: "0.000015",
-                  input_cache_read: "0.0000004",
-                  input_cache_write: "0.000005",
                 },
               ],
             },
@@ -73,12 +71,12 @@ describe("OpenRouter provider catalog", () => {
       expect.arrayContaining([
         "openrouter/auto",
         "google/gemini-3.5-flash-lite",
-        "google/gemini-3.6-flash",
+        "acme/partial-pricing",
       ]),
     );
     expect(provider.models.map((model) => model.id)).not.toContain("google/gemini-3.1-flash-image");
-    expect(provider.models.find((model) => model.id === "google/gemini-3.6-flash")).toMatchObject({
-      name: "Google: Gemini 3.6 Flash",
+    expect(provider.models.find((model) => model.id === "acme/partial-pricing")).toMatchObject({
+      name: "Partial Pricing Fixture",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 1_048_576,
@@ -87,15 +85,15 @@ describe("OpenRouter provider catalog", () => {
         input: 1.5,
         output: 7.5,
         cacheRead: 0.15,
-        cacheWrite: 0,
+        cacheWrite: 2.5,
         tieredPricing: [
-          { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0, range: [0, 272_000] },
+          { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 2.5, range: [0, 272_001] },
           {
             input: 4,
-            output: 15,
-            cacheRead: expect.closeTo(0.4, 12),
-            cacheWrite: 5,
-            range: [272_000],
+            output: 7.5,
+            cacheRead: 0.15,
+            cacheWrite: 2.5,
+            range: [272_001],
           },
         ],
       },

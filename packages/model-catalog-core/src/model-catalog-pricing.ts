@@ -1,4 +1,5 @@
 import {
+  asFiniteNumberInRange,
   asNonNegativeFiniteNumber,
   asPositiveSafeInteger,
   parseStrictFiniteNumber,
@@ -9,8 +10,26 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { normalizeModelCatalogProviderId } from "./model-catalog-refs.js";
 import type { ModelCatalogCost, ModelCatalogTieredCost } from "./model-catalog-types.js";
 
-const MODEL_PRICING_SOURCES = ["openCode", "venice", "openRouter", "liteLLM"] as const;
-export type ModelPricingSourceId = (typeof MODEL_PRICING_SOURCES)[number];
+export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+export const LITELLM_PRICING_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+export const MODEL_PRICING_SOURCES = [
+  {
+    id: "openCode",
+    label: "OpenCode",
+    url: "https://models.opencode.ai/api.json",
+    authoritative: true,
+  },
+  {
+    id: "venice",
+    label: "Venice",
+    url: "https://api.venice.ai/api/v1/models",
+    authoritative: true,
+  },
+  { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL, authoritative: false },
+  { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL, authoritative: false },
+] as const;
+export type ModelPricingSourceId = (typeof MODEL_PRICING_SOURCES)[number]["id"];
 export type ModelPricingSource = {
   provider?: string;
   passthroughProviderModel?: boolean;
@@ -32,7 +51,7 @@ export function normalizeModelPricingProvider(value: unknown): ModelPricingProvi
   }
   const policy: ModelPricingProvider =
     typeof record.external === "boolean" ? { external: record.external } : {};
-  for (const sourceId of MODEL_PRICING_SOURCES) {
+  for (const { id: sourceId } of MODEL_PRICING_SOURCES) {
     const raw = record[sourceId];
     if (raw === false) {
       policy[sourceId] = false;
@@ -114,24 +133,59 @@ function withContextPrices(
   return { ...cost, tieredPricing };
 }
 
+// OpenRouter's /models price keys include charge dimensions outside our four token rates.
+// Keep this closed so unknown predicates cannot silently become unconditional prices.
+const OPENROUTER_PRICE_FIELDS = new Set([
+  "prompt",
+  "completion",
+  "request",
+  "image",
+  "web_search",
+  "internal_reasoning",
+  "input_cache_read",
+  "input_cache_write",
+  "audio",
+  "input_audio_cache",
+  "input_cache_write_1h",
+  "image_output",
+  "audio_output",
+]);
+
 /** Read native OpenRouter per-token prices and static prompt-length overrides. */
 export function normalizeOpenRouterModelPricing(value: unknown): CompleteModelCost | undefined {
   const row = asOptionalRecord(value);
-  const tiers: ContextPrice[] = [];
+  const overrides: { size: number; prices: Record<string, unknown> }[] = [];
   for (const raw of Array.isArray(row?.overrides) ? row.overrides : []) {
     const override = asOptionalRecord(raw);
-    // UTC schedules are not static context tiers, even when a prompt threshold is also present.
+    // All predicates must match; UTC schedules and unknown conditions are not static tiers.
     if (
       !override ||
-      ["utc_days", "utc_start", "utc_end"].some((key) => override[key] !== undefined)
+      Object.keys(override).some(
+        (key) => key !== "min_prompt_tokens" && !OPENROUTER_PRICE_FIELDS.has(key),
+      )
     ) {
       continue;
     }
-    const size = asPositiveSafeInteger(override.min_prompt_tokens);
-    if (size) {
-      tiers.push({ size, cost: readPricingCost(override, "openRouter") });
+    const threshold = asFiniteNumberInRange(override.min_prompt_tokens, {
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      maxExclusive: true,
+    });
+    if (threshold !== undefined) {
+      overrides.push({ size: Math.floor(threshold) + 1, prices: override });
     }
   }
+  // Token counts are integral and thresholds strict. Resolve every boundary from the
+  // native base, then apply matching overrides per key in their original source order.
+  const tiers = [...new Set(overrides.map(({ size }) => size))].map((size) => {
+    const prices = { ...row };
+    for (const override of overrides) {
+      if (size >= override.size) {
+        Object.assign(prices, override.prices);
+      }
+    }
+    return { size, cost: readPricingCost(prices, "openRouter") };
+  });
   return withContextPrices(readPricingCost(value, "openRouter"), tiers);
 }
 

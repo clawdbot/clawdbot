@@ -391,8 +391,8 @@ export function resolveModelCostConfig(params: {
     return normalizeModelCostConfig(rawModelsJsonCost);
   }
 
-  // Materialized catalog defaults are not authored overrides. Keep raw partial
-  // fields and empty tiers until they have been merged with current catalog rates.
+  // Materialized catalog defaults are not authored overrides. Preserve raw
+  // partial fields and empty tiers until merging with the inherited schedule.
   const sourceConfig = params.config
     ? projectConfigOntoRuntimeSourceSnapshot(params.config)
     : undefined;
@@ -402,11 +402,11 @@ export function resolveModelCostConfig(params: {
     allowPluginNormalization: false,
   });
 
-  if (params.allowPluginNormalization === false) {
-    return configuredCost ? normalizeModelCostConfig(configuredCost) : undefined;
-  }
-
-  if (!configuredCost && shouldUseNormalizedCostLookup(params)) {
+  if (
+    params.allowPluginNormalization !== false &&
+    !configuredCost &&
+    shouldUseNormalizedCostLookup(params)
+  ) {
     const key = toResolvedModelKey(params);
     if (key && key !== rawKey) {
       const modelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(key);
@@ -427,13 +427,18 @@ export function resolveModelCostConfig(params: {
   ) {
     return normalizeModelCostConfig(configuredCost);
   }
-  const catalogPricing = resolveCatalogModelPricing({
-    config: params.config,
-    provider: params.provider ?? "",
-    model: params.model ?? "",
-  });
+  // Display-only lookups reuse prepared prices without discovering plugins;
+  // ordinary lookups inherit current catalog rates, never materialized defaults.
+  const inheritedCost =
+    params.allowPluginNormalization === false
+      ? findConfiguredProviderCost(params)
+      : resolveCatalogModelPricing({
+          config: params.config,
+          provider: params.provider ?? "",
+          model: params.model ?? "",
+        });
   const merged = mergeModelCost(
-    catalogPricing ? normalizeResolvedPricing(catalogPricing) : undefined,
+    inheritedCost ? normalizeResolvedPricing(inheritedCost) : undefined,
     configuredCost,
   );
   return merged ? normalizeResolvedPricing(merged) : undefined;

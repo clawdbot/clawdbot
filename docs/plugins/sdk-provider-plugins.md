@@ -412,9 +412,13 @@ catalog, API-key auth, and dynamic model resolution.
     The same subpath exposes `normalizeOpenRouterModelPricing(pricing)` for
     native OpenRouter pricing objects. It converts per-token rates and static
     prompt-length overrides into a complete per-million cost schedule, without
-    network access or prices from another source. Missing cache rates become zero;
-    invalid required rates or conflicting context tiers return `undefined`.
-    Time-based overrides are not represented as static context tiers.
+    network access or prices from another source. Overrides apply strictly above
+    `min_prompt_tokens`, counting uncached input, cache reads, and cache writes.
+    Matching entries apply in source order: later entries win per price key,
+    including at equal thresholds; omitted keys inherit the native base or an
+    earlier matching entry. Cache rates absent from the base default to zero.
+    Invalid effective token rates return `undefined`. Entries with time-based or
+    unknown conditions are skipped; other known charge dimensions are ignored.
 
     When `ctx.providerIds` is present, it contains the normalized provider
     identities selected for that catalog owner. Return `null` before resolving
