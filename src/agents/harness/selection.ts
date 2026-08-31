@@ -790,7 +790,10 @@ function resolvePluginHarnessToolPolicies(
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.config,
-    sessionKey: sandboxSessionKey,
+    agentId: params.agentId,
+    // Compaction can supply an execution owner without its own session key.
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
+    classificationSessionKey: sandboxSessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

@@ -36,6 +36,7 @@ function makeParams(
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir,
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },

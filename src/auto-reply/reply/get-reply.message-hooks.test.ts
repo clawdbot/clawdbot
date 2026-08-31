@@ -64,6 +64,9 @@ async function loadGetReplyRuntimeForTest() {
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
   ({ stageSandboxMedia: stageSandboxMediaMock } = await import("./stage-sandbox-media.runtime.js"));
+  const scope = await import("../../agents/agent-scope.js");
+  const actualScope = await vi.importActual<typeof scope>("../../agents/agent-scope.js");
+  vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
 }
 
 function emptyAliasIndex() {
@@ -196,6 +199,7 @@ async function runLocalPathSelfServeCase(params: {
   provider?: string;
   model?: string;
   senderIsOwner?: boolean;
+  sessionKey?: string;
 }) {
   const ctx = buildCtx(params.ctx);
   const enableLocalPathSelfServe = vi.fn();
@@ -212,7 +216,7 @@ async function runLocalPathSelfServeCase(params: {
   mocks.initSessionState.mockResolvedValueOnce(
     createGetReplySessionState({
       sessionCtx: ctx,
-      sessionKey: ctx.SessionKey,
+      sessionKey: params.sessionKey ?? ctx.SessionKey,
       isGroup: false,
     }),
   );
@@ -424,10 +428,17 @@ describe("getReplyFromConfig message hooks", () => {
     SenderId: "operator",
   } as const;
 
-  it("promotes local document self-service for a host main session", async () => {
-    const enable = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg: {} });
-    expect(enable).toHaveBeenCalledOnce();
-  });
+  it.each(["agent:main:main", "global"])(
+    "promotes local document self-service for the prepared %s owner",
+    async (sessionKey) => {
+      const enable = await runLocalPathSelfServeCase({
+        ctx: hostDocumentCtx,
+        sessionKey,
+        cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      });
+      expect(enable).toHaveBeenCalledOnce();
+    },
+  );
 
   it("promotes the staged document path for a sandboxed external conversation", async () => {
     const stagedPath = "media/inbound/report.docx";
@@ -449,6 +460,9 @@ describe("getReplyFromConfig message hooks", () => {
       },
     });
     expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
+    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it("withholds local document self-service when sandbox staging fails", async () => {
@@ -508,6 +522,9 @@ describe("getReplyFromConfig message hooks", () => {
     });
 
     expect(stageSandboxMediaMock).toHaveBeenCalledOnce();
+    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
   });
 

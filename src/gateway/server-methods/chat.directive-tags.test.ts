@@ -6535,6 +6535,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    const { ensureSandboxWorkspaceForSession } = await import("../../agents/sandbox/context.js");
+    const { stageSandboxMedia } = await import("../../auto-reply/reply/stage-sandbox-media.js");
+    expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(stageSandboxMedia).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
         path: "media/inbound/report.pdf",

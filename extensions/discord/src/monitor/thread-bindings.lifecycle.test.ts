@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -298,7 +299,7 @@ describe("thread binding lifecycle", () => {
     "ignores stale sweep results after rebinding (restart=%s)",
     async (restart) => {
       vi.useFakeTimers();
-      const probe = Promise.withResolvers<void>();
+      const probe = createDeferred<void>();
       let manager = createDefaultSweeperManager();
       try {
         await bindDefaultThreadTarget(manager);

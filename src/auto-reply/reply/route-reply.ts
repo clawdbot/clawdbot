@@ -79,6 +79,8 @@ type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
+  agentId?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
   policySessionKey?: string;
   /** Explicit conversation type for policy resolution when the policy key is generic. */
@@ -200,19 +202,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
-  const resolvedAgentId = params.sessionKey
-    ? resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: cfg,
-      })
-    : undefined;
+  const resolvedAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: cfg,
+    fallbackAgentId: params.agentId,
+  });
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = resolveEffectiveMessagesConfig(
-    cfg,
-    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-    { channel: normalizedChannel, accountId },
-  ).responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, resolvedAgentId, {
+    channel: normalizedChannel,
+    accountId,
+  }).responsePrefix;
   const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
   const normalization = normalizeReplyPayloadOutcome(payload, {
     responsePrefix,

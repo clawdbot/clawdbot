@@ -250,7 +250,11 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
+  });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: `agent:${targetAgentId}:dashboard:pending`,
@@ -409,7 +413,7 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,

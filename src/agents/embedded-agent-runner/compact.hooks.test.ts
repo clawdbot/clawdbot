@@ -1123,6 +1123,51 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it.each([undefined, "global", "agent:main:policy"])(
+    "prepares global compaction with the selected sandbox policy (%s)",
+    async (sandboxSessionKey) => {
+      const agentScope =
+        await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+      const { resolveSandboxContext } = await import("../sandbox/context.js");
+      const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
+      resolveSessionAgentIdMock.mockImplementation(agentScope.resolveSessionAgentId);
+      resolveSessionAgentIdsMock.mockImplementation(agentScope.resolveSessionAgentIds);
+      resolveSandboxContextMock.mockImplementation(resolveSandboxContext);
+      const config = {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { sandbox: { mode: "off" as const } },
+          list: [{ id: "main" }, { id: "marketing" }],
+        },
+      };
+      const { snapshot } = await acquireAgentRunPreparedModelRuntimeMock({
+        config,
+        agentId: "marketing",
+        workspaceDir: TEST_WORKSPACE_DIR,
+      });
+
+      const result = await prepareDirectCompactionAttempt({
+        config,
+        agentId: "marketing",
+        sessionId: TEST_SESSION_ID,
+        sessionKey: "global",
+        sandboxSessionKey,
+        sessionFile: "global",
+        workspaceDir: TEST_WORKSPACE_DIR,
+        preparedModelRuntime: snapshot as never,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          earlyAgentIds: { sessionAgentId: "marketing" },
+          effectiveWorkspace: TEST_WORKSPACE_DIR,
+          sandbox: null,
+        },
+      });
+    },
+  );
+
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",

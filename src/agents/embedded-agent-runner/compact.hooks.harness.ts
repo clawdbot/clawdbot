@@ -113,8 +113,12 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
     },
   },
 }));
-export const resolveSessionAgentIdMock = vi.fn(() => "main");
-export const resolveSessionAgentIdsMock = vi.fn(() => ({
+export const resolveSessionAgentIdMock = vi.fn<
+  typeof import("../agent-scope.js").resolveSessionAgentId
+>(() => "main");
+export const resolveSessionAgentIdsMock = vi.fn<
+  typeof import("../agent-scope.js").resolveSessionAgentIds
+>(() => ({
   defaultAgentId: "main",
   sessionAgentId: "main",
 }));
@@ -301,7 +305,9 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileS
 const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> = vi.fn(
   () => undefined,
 );
-export const resolveSandboxContextMock = vi.fn(async () => null);
+export const resolveSandboxContextMock = vi.fn<
+  typeof import("../sandbox/context.js").resolveSandboxContext
+>(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);

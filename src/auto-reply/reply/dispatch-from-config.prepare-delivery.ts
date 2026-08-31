@@ -109,6 +109,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
     normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
       cfg,
+      agentId: state.sessionAgentId,
       sessionKey: state.acpDispatchSessionKey,
       workspaceDir: state.workspaceDir,
       messageProvider: deliveryChannel,
@@ -170,6 +171,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
+      agentId: state.sessionAgentId,
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
