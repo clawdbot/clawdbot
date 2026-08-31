@@ -183,9 +183,12 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 
-vi.mock("../infra/update-check.js", () => ({
+vi.mock("../infra/update-check.js", async (importOriginal) => ({
+  formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
+    .formatGitInstallLabel,
   checkUpdateStatus: vi.fn(),
   resolveUpdateInstallKind: vi.fn(),
+  resolveUpdateInstallIdentity: vi.fn(),
   compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
     const parse = (value: string | null) => {
       if (!value) {
@@ -505,6 +508,7 @@ const {
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
+  resolveUpdateInstallIdentity,
 } = await import("../infra/update-check.js");
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
@@ -612,6 +616,7 @@ describe("update-cli", () => {
   const mockPackageInstallStatus = (root: string) => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(resolveUpdateInstallKind).mockResolvedValue("package");
+    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "package" });
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root,
       installKind: "package",
@@ -1581,6 +1586,10 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "9999.0.0");
     nodeVersionSatisfiesEngine.mockReturnValue(true);
     vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
+      installKind: "git",
+      git: { tag: "v1.2.3", branch: "main" },
+    });
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/test/path",
       installKind: "git",
@@ -2044,6 +2053,20 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it.each([true, false])("honors --yes=%s for optional shell completion setup", async (yes) => {
+    setTty(true);
+    confirm.mockResolvedValue(true);
+
+    await updateCommand({ yes, restart: false });
+
+    expect(confirm).toHaveBeenCalledTimes(yes ? 0 : 1);
+    if (yes) {
+      expect(installCompletion).not.toHaveBeenCalled();
+    } else {
+      expect(installCompletion).toHaveBeenCalledWith("zsh", false, "openclaw");
+    }
+  });
+
   it("respawns into the updated package root before running post-update tasks", async () => {
     const { entrypoints } = setupUpdatedRootRefresh();
 
@@ -2303,7 +2326,7 @@ describe("update-cli", () => {
     }
   });
 
-  it("keeps post-restart doctor in the stopped service profile", async () => {
+  it("finishes a human restart without rerunning stale doctor or leaking the service profile", async () => {
     mockOwnedGitService();
     mockGitUpdateAfterMutation();
     pathExists.mockImplementation(
@@ -2326,10 +2349,6 @@ describe("update-cli", () => {
     });
     prepareRestartScript.mockResolvedValue(null);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
-    let doctorProfile: string | undefined;
-    vi.mocked(doctorCommand).mockImplementationOnce(async () => {
-      doctorProfile = process.env.OPENCLAW_PROFILE;
-    });
 
     await withEnvAsync(
       {
@@ -2343,7 +2362,7 @@ describe("update-cli", () => {
       },
     );
 
-    expect(doctorProfile).toBe("work");
+    expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDaemonRestart).toHaveBeenCalledOnce();
     const completionCall = vi
       .mocked(spawnSync)
@@ -7873,7 +7892,7 @@ describe("update-cli", () => {
     { previous: "1", mutatesCore: true },
     { previous: "1", mutatesCore: false },
   ])(
-    "restores update flag $previous after the doctor sub-step (core mutation: $mutatesCore)",
+    "restores update flag $previous after restart (core mutation: $mutatesCore)",
     async ({ previous, mutatesCore }) => {
       await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: previous }, async () => {
         mockRunningManagedGateway([
@@ -7886,27 +7905,18 @@ describe("update-cli", () => {
         }
         prepareRestartScript.mockResolvedValue(null);
         vi.mocked(runDaemonRestart).mockResolvedValue(true);
-        vi.mocked(doctorCommand).mockResolvedValue(undefined);
         vi.mocked(defaultRuntime.log).mockClear();
 
         await updateCommand({});
 
-        const doctorCall = vi.mocked(doctorCommand).mock.calls[0];
-        expect(doctorCall?.[0]).toBe(defaultRuntime);
-        expect(doctorCall?.[1]?.nonInteractive).toBe(true);
+        expect(doctorCommand).not.toHaveBeenCalled();
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBe(previous);
         const snapshotOrders = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder;
-        expect(createPreUpdateConfigSnapshotMock).toHaveBeenCalledTimes(2);
+        expect(createPreUpdateConfigSnapshotMock).toHaveBeenCalledTimes(1);
         expect(requireValue(snapshotOrders[0], "restart snapshot call order")).toBeLessThan(
           requireValue(
             vi.mocked(runDaemonRestart).mock.invocationCallOrder[0],
             "daemon restart call order",
-          ),
-        );
-        expect(requireValue(snapshotOrders[1], "doctor snapshot call order")).toBeLessThan(
-          requireValue(
-            vi.mocked(doctorCommand).mock.invocationCallOrder[0],
-            "doctor command call order",
           ),
         );
 
@@ -7917,7 +7927,10 @@ describe("update-cli", () => {
         expect(
           vi.mocked(defaultRuntime.log).mock.invocationCallOrder[successIndex],
         ).toBeGreaterThan(
-          requireValue(vi.mocked(doctorCommand).mock.invocationCallOrder[0], "doctor call order"),
+          requireValue(
+            vi.mocked(runDaemonRestart).mock.invocationCallOrder[0],
+            "restart call order",
+          ),
         );
       });
     },
@@ -8389,6 +8402,18 @@ describe("update-cli", () => {
           (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
         ),
     ).toBe(shouldRunPackageUpdate);
+  });
+
+  it("opens and cancels the wizard without inspecting update freshness", async () => {
+    setTty(true);
+    select.mockResolvedValue("cancel");
+    vi.mocked(checkUpdateStatus).mockRejectedValue(new Error("Freshness inspection unavailable"));
+
+    await updateWizardCommand();
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Update channel" }));
+    expect(defaultRuntime.log).toHaveBeenCalledWith(expect.stringContaining("Update cancelled."));
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
   });
 
   it.each(["before", "after"])(

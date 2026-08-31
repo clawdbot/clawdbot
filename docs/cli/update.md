@@ -63,6 +63,10 @@ are labeled explicitly. The final total includes plugin updates and requested
 Gateway restart checks. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+`--yes` also skips the optional shell-completion setup prompt. Existing
+completion profiles and caches are still repaired when needed; installing
+completion in a new shell profile remains an interactive choice.
+
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
 changes before modifying the checkout. Use `openclaw update status` to inspect
@@ -153,6 +157,10 @@ Interactive flow to pick an update channel and confirm whether to restart the
 Gateway afterward (defaults to restart). Selecting `dev` without a git
 checkout offers to create one.
 
+The channel picker reads the local install identity without checking Git
+freshness or dependencies. Those checks run when you apply the update; use
+`openclaw update status` to inspect availability first.
+
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
 | `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
@@ -198,6 +206,8 @@ package-manager and git-checkout updates stop the running service before
 replacing the package tree or mutating the checkout/build output. The updater
 then refreshes service metadata, restarts the service, and verifies the
 restarted Gateway before reporting `Gateway: restarted and verified.`.
+Doctor repair and plugin validation run before restart; a verified restart
+does not run another Doctor from the old updater process.
 Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
