@@ -13,7 +13,7 @@
 //
 // With OPENCLAW_BOOKMARK_PROOF=1 the scenario emits a `kind: "live-transport"`
 // verdict JSON on stdout for pasting into the PR body.
-import { createServer, type RequestListener } from "node:http";
+import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
@@ -56,35 +56,36 @@ function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-// Read the URL-encoded form body the @slack/web-api WebClient sends for a
-// bookmarks.* call, returning the parsed key/value arguments.
-async function collect(request: import("node:http").IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+// Parse the URL-encoded form body the @slack/web-api WebClient sends for a
+// bookmarks.* call into its key/value arguments.
+function parseFormBody(raw: string): Record<string, unknown> {
+  const parsed: Record<string, unknown> = {};
+  for (const pair of raw.split("&")) {
+    const [key, value] = pair.split("=");
+    if (key === undefined) {
+      continue;
+    }
+    parsed[decodeURIComponent(key.replace(/\+/g, " "))] = decodeURIComponent(
+      (value ?? "").replace(/\+/g, " "),
+    );
   }
-  return Buffer.concat(chunks);
+  return parsed;
 }
 
 async function startTransportServer(calls: WireCall[]): Promise<TestServer> {
-  const handler: RequestListener = async (request, response) => {
+  const server = createServer((request, response) => {
     const url = request.url ?? "";
     const method = url.replace(/^\/api\//, "");
-    const body = await collect(request);
-    const parsed: Record<string, unknown> = {};
-    for (const pair of body.toString("utf8").split("&")) {
-      const [key, value] = pair.split("=");
-      if (key === undefined) continue;
-      parsed[decodeURIComponent(key.replace(/\+/g, " "))] = decodeURIComponent(
-        (value ?? "").replace(/\+/g, " "),
-      );
-    }
-    calls.push({ method, args: parsed });
-    const payload = respondTo(method, parsed);
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(`${JSON.stringify(payload)}\n`);
-  };
-  const server = createServer(handler);
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.once("end", () => {
+      const parsed = parseFormBody(Buffer.concat(chunks).toString("utf8"));
+      calls.push({ method, args: parsed });
+      const payload = respondTo(method, parsed);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(payload)}\n`);
+    });
+  });
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
