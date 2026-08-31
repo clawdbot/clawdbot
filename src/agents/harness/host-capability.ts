@@ -43,7 +43,10 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { registerAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
+import {
+  registerAgentHarnessScheduledToolProjectionCapability,
+  registerAgentHarnessTtsProvenanceTransferCapability,
+} from "./host-private-capabilities.js";
 import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
@@ -449,22 +452,6 @@ export function createAgentHarnessHostCapabilities(params: {
       }
       return tools;
     },
-    transferCoreTtsToolResultProvenance: (toolResult, attemptResult, eligibleMediaUrls) => {
-      assertActive();
-      if (
-        typeof toolResult !== "object" ||
-        toolResult === null ||
-        !coreTtsToolResults.has(toolResult)
-      ) {
-        return attemptResult;
-      }
-      return transferCoreTtsToolResultProvenance(
-        toolResult,
-        attemptResult,
-        eligibleMediaUrls,
-        operationalRunInstance,
-      );
-    },
     prepareMutableFileApproval: async (request) => {
       assertActive();
       const prepared = await prepareSystemRunMutableFileApproval(request);
@@ -560,6 +547,26 @@ export function createAgentHarnessHostCapabilities(params: {
         assertActive,
         source.targetTool,
         projection,
+      );
+    },
+  });
+  registerAgentHarnessTtsProvenanceTransferCapability({
+    hostCapabilities: capabilities,
+    ownerPluginId: params.pluginId,
+    transfer: (toolResult, attemptResult, eligibleMediaUrls) => {
+      assertActive();
+      if (
+        typeof toolResult !== "object" ||
+        toolResult === null ||
+        !coreTtsToolResults.has(toolResult)
+      ) {
+        return attemptResult;
+      }
+      return transferCoreTtsToolResultProvenance(
+        toolResult,
+        attemptResult,
+        eligibleMediaUrls,
+        operationalRunInstance,
       );
     },
   });

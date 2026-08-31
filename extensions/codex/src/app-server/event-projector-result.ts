@@ -5,6 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -245,12 +246,9 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
+  const transferTtsProvenance = resolveCodexTtsProvenanceTransfer(input.runParams.hostCapabilities);
   for (const toolResult of input.toolTelemetry.coreTtsToolResults ?? []) {
-    input.runParams.hostCapabilities.transferCoreTtsToolResultProvenance?.(
-      toolResult,
-      result,
-      toolAutoDeliveryMediaUrls ?? [],
-    );
+    transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
   }
   return result;
 }

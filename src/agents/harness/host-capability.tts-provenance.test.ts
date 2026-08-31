@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { resolveCodexTtsProvenanceTransfer } from "../../plugin-sdk/codex-mcp-projection.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../tools/tts-tool-result-provenance.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
@@ -46,9 +47,8 @@ describe("agent harness TTS provenance capability", () => {
     }
 
     const firstResult = {};
-    first.hostCapabilities.transferCoreTtsToolResultProvenance?.(observedResult, firstResult, [
-      "/tmp/voice.opus",
-    ]);
+    const firstTransfer = resolveCodexTtsProvenanceTransfer(first.hostCapabilities);
+    firstTransfer?.(observedResult, firstResult, ["/tmp/voice.opus"]);
     expect(
       getCoreTtsAttemptResultMediaUrls(
         firstResult,
@@ -58,11 +58,9 @@ describe("agent harness TTS provenance capability", () => {
     ).toEqual(["/tmp/voice.opus"]);
 
     first.closeHost();
-    expect(() =>
-      first.hostCapabilities.transferCoreTtsToolResultProvenance?.(observedResult, {}, [
-        "/tmp/voice.opus",
-      ]),
-    ).toThrow("no longer active");
+    expect(() => firstTransfer?.(observedResult, {}, ["/tmp/voice.opus"])).toThrow(
+      "no longer active",
+    );
 
     const second = await createHost("run-tts-second");
     const replayTool: AnyAgentTool = {
@@ -75,7 +73,7 @@ describe("agent harness TTS provenance capability", () => {
     const reboundReplayTool = second.hostCapabilities.bindToolSurface([replayTool])[0];
     await reboundReplayTool?.execute?.("call-replay", {});
     const replayedResult = {};
-    second.hostCapabilities.transferCoreTtsToolResultProvenance?.(observedResult, replayedResult, [
+    resolveCodexTtsProvenanceTransfer(second.hostCapabilities)?.(observedResult, replayedResult, [
       "/tmp/voice.opus",
     ]);
 
