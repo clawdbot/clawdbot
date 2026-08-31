@@ -1009,9 +1009,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
-          runStep: async ({ name, argv }) => ({
+          runStep: async ({ name, argv, cwd }) => ({
             name,
             command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
             durationMs: 0,
             exitCode: 1,
             stderrTail: "retry install failed before activation",
