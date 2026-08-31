@@ -1101,12 +1101,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       return packageUpdateFailure(failedStep, null, [...steps, failedStep]);
     }
 
-    if (
-      finalInstallStep.exitCode === 0 &&
-      !stagedInstall &&
-      params.installTarget.manager === "pnpm" &&
-      verificationPackageRoot
-    ) {
+    if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
       let failedLifecycleStep: PackageUpdateStepResult | null = null;
       try {
         await completePendingPackageLifecycle({
@@ -1114,7 +1109,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           timeoutMs: params.timeoutMs,
           runScript: async (script) => {
             const lifecycleStep = await params.runStep({
-              name: `pnpm package ${script.name}`,
+              name: `${params.installTarget.manager} package ${script.name}`,
               argv: [process.execPath, path.join(verificationPackageRoot, script.relativePath)],
               cwd: verificationPackageRoot,
               env: effectiveInstallEnv,
@@ -1132,7 +1127,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           return packageUpdateFailure(failedLifecycleStep, verifiedPackageRoot, steps);
         }
         const lifecycleStep: PackageUpdateStepResult = {
-          name: "pnpm package lifecycle",
+          name: `${params.installTarget.manager} package lifecycle`,
           command: `complete ${verificationPackageRoot}`,
           cwd: verificationPackageRoot,
           durationMs: 0,
