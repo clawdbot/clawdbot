@@ -17,6 +17,7 @@ process.stdin.once("end", () => {
     return;
   }
   if (input.databasePath === "fixture:early-exit") {
+    process.stderr.write("fixture KNN failure\n");
     process.exit(7);
   }
   process.stderr.write("ready\n");
