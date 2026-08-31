@@ -748,7 +748,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? []
       : resolveOpenClawPluginToolsForOptions({
           options: {
-            agentSessionKey: executionSessionKey,
+            agentSessionKey: options?.sessionKey,
+            runSessionKey: options?.runSessionKey,
             runId: options?.runId,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
