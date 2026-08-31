@@ -28,7 +28,7 @@ import type {
   CompactionStatus,
   FallbackStatus,
   WaitingApprovalStatus,
-} from "./tool-stream-status.ts";
+} from "./tool-stream-contract.ts";
 // Control UI chat module implements run lifecycle behavior.
 import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
 

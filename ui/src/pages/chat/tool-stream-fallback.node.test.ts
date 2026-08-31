@@ -6,7 +6,8 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
-import { handleSessionOperationEvent, type FallbackStatus } from "./tool-stream-status.ts";
+import type { FallbackStatus } from "./tool-stream-contract.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,

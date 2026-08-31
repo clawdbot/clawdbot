@@ -14,8 +14,9 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
-import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {

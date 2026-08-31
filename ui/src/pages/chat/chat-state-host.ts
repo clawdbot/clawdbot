@@ -32,9 +32,9 @@ import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
+  ToolStreamEntry,
   WaitingApprovalStatus,
-} from "./tool-stream-status.ts";
-import type { ToolStreamEntry } from "./tool-stream.ts";
+} from "./tool-stream-contract.ts";
 
 export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 

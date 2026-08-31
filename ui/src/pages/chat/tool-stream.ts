@@ -22,81 +22,15 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup, type ChatRunStartupState } from "./chat-run-startup.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
+import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
-import {
-  handleStreamStatus,
-  resolveAcceptedSession,
-  type WaitingApprovalStatus,
-  type CompactionStatus,
-  type FallbackStatus,
-} from "./tool-stream-status.ts";
+import { handleStreamStatus, resolveAcceptedSession } from "./tool-stream-status.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
-
-export type AgentEventPayload = {
-  runId: string;
-  seq: number;
-  stream: string;
-  ts: number;
-  sessionKey?: string;
-  agentId?: string;
-  data: Record<string, unknown>;
-};
-
-export type ToolStreamEntry = {
-  toolCallId: string;
-  runId: string;
-  sessionKey?: string;
-  name: string;
-  args?: unknown;
-  output?: string;
-  /** Structured result details (e.g. edit diff) captured from the result event. */
-  details?: unknown;
-  /** Monotonic edit counts received while the tool arguments stream. */
-  liveDiffStat?: DiffStat;
-  isError?: boolean;
-  exitCode?: number;
-  /** True once a result event landed, even when the output text is empty. */
-  resultReceived?: boolean;
-  startedAt: number;
-  receivedAt: number;
-  message: Record<string, unknown>;
-};
-
-export type RunOutputUsage = { outputTokens: number; seq: number };
-
-export type ToolStreamHost = {
-  sessionKey: string;
-  assistantAgentId?: string | null;
-  agentsList?: UiSessionDefaultsHost["agentsList"];
-  hello?: { snapshot?: unknown } | null;
-  chatRunId: string | null;
-  chatMessages?: unknown[];
-  chatRunUsageById?: Map<string, RunOutputUsage>;
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  chatStreamSegments: ChatStreamSegment[];
-  toolStreamById: Map<string, ToolStreamEntry>;
-  toolStreamOrder: string[];
-  activityEventSeqById?: Map<string, number>;
-  chatToolMessages: Record<string, unknown>[];
-  guardianNotices?: ChatGuardianNotice[];
-  compactionStatus?: CompactionStatus | null;
-  compactionClearTimer?: number | null;
-  fallbackStatus?: FallbackStatus | null;
-  fallbackClearTimer?: number | null;
-  toolStreamSyncTimer: number | null;
-  knownAgentRunIds?: Set<string>;
-  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
-  waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
-  sessions: Pick<SessionCapability, "refreshReplacement">;
-};
 
 function extractToolOutputText(value: unknown): string | null {
   const record = readRecord(value);

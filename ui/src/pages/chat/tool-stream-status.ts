@@ -7,7 +7,13 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
-import type { AgentEventPayload, ToolStreamHost } from "./tool-stream.ts";
+import type {
+  AgentEventPayload,
+  CompactionStatus,
+  FallbackStatus,
+  ToolStreamHost,
+  WaitingApprovalStatus,
+} from "./tool-stream-contract.ts";
 
 type SessionOperationEventPayload = {
   operationId?: string;
@@ -79,29 +85,6 @@ function parseFallbackAttemptSummaries(summaries: unknown, attempts: unknown): s
   }
   return out;
 }
-
-export type CompactionStatus = {
-  phase: "active" | "retrying" | "complete";
-  runId: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-};
-
-export type FallbackStatus = {
-  phase?: "active" | "cleared";
-  selected: string;
-  active: string;
-  previous?: string;
-  reason?: string;
-  attempts: string[];
-  occurredAt: number;
-};
-
-export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
-  runId: string;
-};
 
 export function resolveChatProjectionRunId(params: {
   localRunId?: string | null;
