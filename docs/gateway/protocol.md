@@ -15,15 +15,15 @@ handshake time.
 
 ## npm packages
 
-Usable packages are published as beta `2026.9.1-beta.1`. Follow
+The verified stable package release is `2026.8.1`. Follow
 [Install the packages](/gateway/clients#install-the-packages) for exact-version
-commands and the current `latest` placeholder warning. Package release versions
-are separate from the wire protocol version.
+commands and compatibility guidance. Package release versions are separate from
+the wire protocol version and the root `openclaw` CLI release.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error
   helpers, and version constants. Its tarball includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.9.1-beta.1/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.8.1/protocol.schema.json)
   machine-readable contract as a downloadable file, not an exported import subpath.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   publishes the reference Node client and a browser-safe entry at

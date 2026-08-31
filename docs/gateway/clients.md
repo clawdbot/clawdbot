@@ -18,31 +18,28 @@ For frame shapes, the handshake, errors, and the complete method surface, read t
 
 ## Install the packages
 
-The verified published beta is `2026.9.1-beta.1` for both packages. Install that
-exact version; it is a prerelease, not a stable release:
+Install the verified stable release, `2026.8.1`, with exact version pins:
 
 ```bash
-npm install --save-exact @openclaw/gateway-client@2026.9.1-beta.1 @openclaw/gateway-protocol@2026.9.1-beta.1
+npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-<Warning>
-As verified on August 30, 2026, unqualified installs select the `latest` tag,
-which points to the reserved `0.0.0` placeholder for both packages. Those
-artifacts contain only a README and package manifest, with no JavaScript or
-TypeScript declarations. Installation succeeds, but package imports fail.
-</Warning>
+If an existing lockfile still pins either package to the reserved `0.0.0`
+artifact, rerun the command above to replace it. Those reserved artifacts have no
+runnable entrypoint or TypeScript declarations.
 
 Package versions follow the OpenClaw release train and are separate from the wire
-protocol version. This beta exports wire version `4`; that does not guarantee
-compatibility with every Gateway release. Pin and test the client and Gateway
+protocol version. The `2026.8.1` packages export wire version `4`; that does not
+guarantee compatibility with every Gateway release. The root `openclaw` CLI has
+its own package versions and dist-tags. Pin and test the client and Gateway
 versions together, and check the [wire-version rules](/gateway/clients#track-protocol-versions)
-before upgrading. The client pins the matching protocol package version.
+before upgrading. The `2026.8.1` client pins protocol package `2026.8.1` exactly.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.9.1-beta.1/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.8.1/protocol.schema.json)
   machine-readable contract. Download it as a file; it is not an exported package
   import subpath.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
@@ -50,7 +47,7 @@ before upgrading. The client pins the matching protocol package version.
   client and `@openclaw/gateway-client/browser` for the browser-safe protocol,
   device-auth, and reconnect helpers.
 
-These beta packages declare Node.js `>=22.19.0`. The Node entry includes the `ws`
+These package releases declare Node.js `>=22.19.0`. The Node entry includes the `ws`
 transport; device identity, signing, and device-token storage remain host-owned
 through `GatewayClientHostDeps`. A browser host supplies a WebSocket adapter plus
 persistent storage and signing callbacks for the device identity and device token.

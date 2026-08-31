@@ -25,17 +25,18 @@ separate from the Gateway's current wire protocol number reported in `hello-ok`.
 
 ## Install
 
-Use the verified beta with exact pins:
+Use the verified stable release with exact pins:
 
 ```bash
-npm install --save-exact @openclaw/gateway-client@2026.9.1-beta.1 @openclaw/gateway-protocol@2026.9.1-beta.1
+npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
 See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
-for the current `latest` placeholder warning and package/wire-version rules.
-This is a beta release; test it with the Gateway version you deploy.
+for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
+Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
+package versions and dist-tags.
 
-This beta declares Node.js `>=22.19.0`. Node consumers use the `ws` transport
+This release declares Node.js `>=22.19.0`. Node consumers use the `ws` transport
 included as a runtime dependency. Browser consumers provide their platform
 WebSocket through the browser-safe protocol client surface.
 
