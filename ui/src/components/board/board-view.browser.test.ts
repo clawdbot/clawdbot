@@ -81,12 +81,26 @@ afterEach(() => {
 describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   it("lays out adjacent first-fit cells without pixel overlap", async () => {
     const view = await mount();
+    view.style.width = "1200px";
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     expect(cells).toHaveLength(2);
     const [first, second] = cells.map((cell) => cell.getBoundingClientRect());
     expect(first?.width).toBeGreaterThan(0);
     expect(second?.left).toBeGreaterThanOrEqual((first?.right ?? 0) + BOARD_GRID_GAP - 1);
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
+  });
+
+  it("stacks persisted desktop spans across a narrow board", async () => {
+    const view = await mount();
+    view.style.width = "354px";
+    const grid = view.querySelector<HTMLElement>(".board-grid");
+    const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
+    const gridBounds = grid!.getBoundingClientRect();
+    const [first, second] = cells.map((cell) => cell.getBoundingClientRect());
+
+    expect(Math.round(first?.width ?? 0)).toBe(Math.round(gridBounds.width));
+    expect(Math.round(second?.width ?? 0)).toBe(Math.round(gridBounds.width));
+    expect(second?.top).toBeGreaterThanOrEqual((first?.bottom ?? 0) + BOARD_GRID_GAP - 1);
   });
 
   it("hides widget chrome by default on fine-pointer devices", async () => {
@@ -192,6 +206,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
     const view = await mount();
+    view.style.width = "700px";
     view.snapshot = {
       ...structuredClone(source),
       widgets: [

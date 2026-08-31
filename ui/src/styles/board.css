@@ -135,6 +135,14 @@ openclaw-board-view {
   position: relative;
 }
 
+@container (max-width: 560px) {
+  /* Persisted desktop cells can share a row, so narrow boards must replace
+     both axes to stack full-width cards without overlap. */
+  .board-widget {
+    grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
+  }
+}
+
 .board-grid__append-zone {
   border-top: 1px dashed color-mix(in srgb, var(--accent) 48%, transparent);
   bottom: -42px;

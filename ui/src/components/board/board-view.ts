@@ -646,7 +646,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       : (rects[0]?.name ?? "");
     const widgetByName = new Map(widgets.map((widget) => [widget.name, widget]));
     return html`
-      <div class="board-grid" role="list" aria-label=${t("board.gridLabel")}>
+      <div
+        class="board-grid"
+        style="container-type: inline-size"
+        role="list"
+        aria-label=${t("board.gridLabel")}
+      >
         ${repeat(
           stableRects,
           (rect) => `${sessionKey}\u0000${rect.name}`,
