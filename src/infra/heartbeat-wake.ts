@@ -214,6 +214,17 @@ function mergePendingWakeReasons(
   return merged;
 }
 
+function* pendingTargetsBeforeGlobal(globalWakeGroup: PendingWakeGroup) {
+  // Selection only updates/deletes the current target, with no callbacks or
+  // awaits. Keep target insertion order without materializing the whole queue.
+  for (const entry of pendingWakes) {
+    if (entry[0] !== GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) {
+      yield entry;
+    }
+  }
+  yield [GLOBAL_HEARTBEAT_WAKE_TARGET_KEY, globalWakeGroup] as const;
+}
+
 function takePendingWakeBatch(maxGroups: number, now = performance.now()): ReadyWakeGroup[] {
   if (maxGroups <= 0) {
     return [];
@@ -246,10 +257,9 @@ function takePendingWakeBatch(maxGroups: number, now = performance.now()): Ready
   const readyGroups: Array<{ targetKey: string; group: PendingWakeGroup }> = [];
   const pendingEntries = globalBarrierReady
     ? flushPendingCoalescing
-      ? [...pendingWakes.entries()].toSorted(
-          ([leftTarget], [rightTarget]) =>
-            Number(leftTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) -
-            Number(rightTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY),
+      ? pendingTargetsBeforeGlobal(
+          // SAFETY: Readiness rejects an absent global group.
+          globalWakeGroup as PendingWakeGroup,
         )
       : [[GLOBAL_HEARTBEAT_WAKE_TARGET_KEY, globalWakeGroup as PendingWakeGroup] as const]
     : pendingWakes.entries();
@@ -624,7 +634,6 @@ function schedulePendingWakes(readyDelayMs: number) {
       ? pendingGlobalImmediateWake.immediateBarrierSequence
       : undefined;
   let earliestNotBeforeMs = Number.POSITIVE_INFINITY;
-  let hasReadyWake = false;
   for (const [targetKey, group] of pendingWakes) {
     if (activeWakeTargets.has(targetKey)) {
       continue;
@@ -660,15 +669,13 @@ function schedulePendingWakes(readyDelayMs: number) {
       }
       const nextReadyAtMs = Math.max(pending.readyAtMs ?? 0, pending.notBeforeMs ?? 0);
       if (nextReadyAtMs <= now) {
-        hasReadyWake = true;
-      } else {
-        earliestNotBeforeMs = Math.min(earliestNotBeforeMs, nextReadyAtMs);
+        schedule(readyDelayMs);
+        return;
       }
+      earliestNotBeforeMs = Math.min(earliestNotBeforeMs, nextReadyAtMs);
     }
   }
-  if (hasReadyWake) {
-    schedule(readyDelayMs);
-  } else if (Number.isFinite(earliestNotBeforeMs)) {
+  if (Number.isFinite(earliestNotBeforeMs)) {
     schedule(earliestNotBeforeMs - now);
   }
 }
