@@ -230,6 +230,42 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
+  it("recognizes trusted-proxy as an explicit auth mode without certifying readiness", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["192.0.2.10"],
+        controlUi: { allowedOrigins: ["https://control.example.test"] },
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["operator@example.test"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const findings = await collectSecurityWarnings(cfg, {});
+    const exposureFindings = findings.filter((finding) =>
+      finding.checkId.startsWith("gateway.bind_"),
+    );
+    expect(exposureFindings).toEqual([
+      expect.objectContaining({
+        checkId: "gateway.bind_network_accessible",
+        severity: "warn",
+        detail: expect.stringContaining("configured authentication boundary"),
+        remediation: expect.not.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("without authentication");
+    expect(message).toContain("direct Gateway access is restricted");
+    expect(message).toContain("openclaw security audit --deep");
+  });
+
   it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
     const cfg = {
