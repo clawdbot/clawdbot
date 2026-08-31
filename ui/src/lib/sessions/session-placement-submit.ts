@@ -70,9 +70,12 @@ export async function advanceSessionPlacementDraft(params: {
           ? { inputRunIds: [recovery.messageId] }
           : {}),
       })
-      .catch((error: unknown) => ({ messages: [], error: formatUiError(error) }));
+      .catch((error: unknown) => ({ error: formatUiError(error) }));
     if (!isCurrentOwner()) {
       return { status: "interrupted" };
+    }
+    if ("error" in history) {
+      return pause(history.error, "unconfirmed");
     }
     const input = { sendRunId: recovery.messageId };
     const inputReceipt = readChatInputReceipt(history, input);
@@ -83,9 +86,7 @@ export async function advanceSessionPlacementDraft(params: {
         : { status: "started", messageId: recovery.messageId };
     }
     return pause(
-      "error" in history
-        ? history.error
-        : "No matching user message was found in the available history. Delivery remains unconfirmed.",
+      "No matching user message was found in the available history. Delivery remains unconfirmed.",
       "unconfirmed",
     );
   }
