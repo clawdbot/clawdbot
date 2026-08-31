@@ -21,6 +21,7 @@ import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../../../infra/device-auth-store.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
+import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../../../infra/device-identity.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
@@ -616,6 +617,78 @@ describe("gateway connect pairing exemptions", () => {
       }
       await Promise.all([client?.stopAndWait(), provisionClient?.stopAndWait()]);
       started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("pauses a real GatewayClient after role-policy identity rejection", async () => {
+    const origin = "https://localhost";
+    const auth = { mode: "token", token: "local-secret" } as const;
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth,
+          controlUi: { allowedOrigins: [origin] },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: ["guest"],
+                scopes: ["operator.read"],
+              },
+            },
+          },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const started = await startServer(undefined, { auth, controlUiEnabled: true });
+    const loaded = loadDeviceIdentity("roles-bootstrap-owner-client");
+    const issued = await issueDeviceBootstrapToken({
+      profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    });
+    let client: GatewayClient | undefined;
+    const paused = new Promise<{ code: number; detailCode: string | null }>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for reconnect pause")),
+        5_000,
+      );
+      timer.unref();
+      client = new GatewayClient({
+        url: `ws://127.0.0.1:${started.port}`,
+        bootstrapToken: issued.token,
+        deviceIdentity: loaded.identity,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "role-policy-proof",
+        clientVersion: "test",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        role: "operator",
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+        hostDeps: { publicKeyRawBase64UrlFromPem, signDevicePayload },
+        onReconnectPaused: (info) => {
+          clearTimeout(timer);
+          console.log(
+            `real-gateway-client: reconnect-paused code=${info.code} detail=${info.detailCode}`,
+          );
+          resolve({ code: info.code, detailCode: info.detailCode });
+        },
+        onConnectError: () => undefined,
+      });
+      client.start();
+    });
+
+    try {
+      await expect(paused).resolves.toMatchObject({
+        code: 1008,
+        detailCode: ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+      });
+    } finally {
+      await client?.stopAndWait().catch(() => undefined);
       await started.server.close();
       started.envSnapshot.restore();
     }
