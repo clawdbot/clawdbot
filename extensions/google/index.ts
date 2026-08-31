@@ -103,7 +103,7 @@ function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: "gemini-3.1-flash-image",
-    models: ["gemini-3.1-flash-image", "gemini-3-pro-image"],
+    models: ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image", "gemini-3-pro-image"],
     capabilities: {
       generate: {
         maxCount: 4,

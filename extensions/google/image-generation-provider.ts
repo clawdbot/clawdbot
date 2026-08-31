@@ -146,7 +146,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
+    models: ["gemini-3.1-flash-lite-image", DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
     capabilities: {
       generate: {
