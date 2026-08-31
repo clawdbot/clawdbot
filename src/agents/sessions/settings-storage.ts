@@ -134,10 +134,11 @@ function stripRetiredProviderMaxRetries(content: string | undefined): string | u
   if (content === undefined) {
     return undefined;
   }
-  const settings = JSON.parse(content) as Record<string, unknown>;
-  const retry = asOptionalObjectRecord(settings.retry);
+  const parsed: unknown = JSON.parse(content);
+  const settings = asOptionalObjectRecord(parsed);
+  const retry = asOptionalObjectRecord(settings?.retry);
   const provider = asOptionalObjectRecord(retry?.provider);
-  if (!provider || !("maxRetries" in provider)) {
+  if (!settings || !provider || !("maxRetries" in provider)) {
     return content;
   }
   delete provider.maxRetries;
