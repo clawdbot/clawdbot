@@ -45,6 +45,17 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
       executionStarted,
       ...(Object.keys(record).length > 0 ? { executedArguments: record } : {}),
       sideEffectEvidence: executionStarted && !mutation.replaySafe,
+      effectReceipt: {
+        state: !executionStarted
+          ? "uncertain"
+          : mutation.replaySafe
+            ? observation.outcome === "success"
+              ? "read_completed"
+              : "failed_no_effect"
+            : mutation.mutatingAction && observation.outcome === "success"
+              ? "mutation_committed"
+              : "uncertain",
+      },
     };
   };
 }

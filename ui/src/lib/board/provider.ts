@@ -346,7 +346,6 @@ class ScopedGatewayBoardProvider implements BoardProvider {
 const nullProviders = new Map<string, NullProvider>();
 const mockProviders = new Map<string, MockBoardProvider>();
 const gatewayProviders = new Map<string, { provider: GatewayBoardProvider; consumers: number }>();
-const boardAvailability = new Map<string, boolean>();
 let mockProviderScope: object | null = null;
 
 function resolveMockBoardScope(): object | null {
@@ -461,9 +460,6 @@ export function acquireBoardProviderForSession(
       if (current.consumers > 0) {
         return;
       }
-      if (current.provider.hasLoadedSnapshot) {
-        boardAvailability.set(key, boardExists(current.provider.snapshot$.value));
-      }
       gatewayProviders.delete(key);
       current.provider.dispose();
     },
@@ -475,27 +471,4 @@ export function hasLoadedBoardSnapshot(provider: BoardProvider): boolean {
     return provider.hasLoadedSnapshot;
   }
   return true;
-}
-
-export function recordSessionBoardAvailability(sessionKey: string, available: boolean): boolean {
-  const key = boardProviderCacheKey(sessionKey);
-  const previous = boardAvailability.get(key);
-  boardAvailability.set(key, available);
-  return previous !== available;
-}
-
-export function clearSessionBoardAvailability(): boolean {
-  const changed = boardAvailability.size > 0;
-  boardAvailability.clear();
-  return changed;
-}
-
-export function sessionHasBoard(sessionKey: string): boolean {
-  const key = boardProviderCacheKey(sessionKey);
-  const provider = gatewayProviders.get(key)?.provider ?? mockProviders.get(key);
-  // An unloaded gateway provider holds a placeholder, not an authoritative empty board.
-  if (provider instanceof GatewayBoardProvider && !provider.hasLoadedSnapshot) {
-    return boardAvailability.get(key) ?? false;
-  }
-  return provider ? boardExists(provider.snapshot$.value) : (boardAvailability.get(key) ?? false);
 }

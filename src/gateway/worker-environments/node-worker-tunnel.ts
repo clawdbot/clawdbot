@@ -13,7 +13,10 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorReceipt,
+} from "../../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -28,7 +31,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  measureNodeWorkerLaunchBytes,
+  type createNodeWorkerLaunchAdapter,
+} from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import {
@@ -188,6 +194,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     entry: NodeTunnelEntry,
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
   ): Promise<NodeWorkerWorkspaceExecResult> => {
+    const assertCurrent = () => {
+      if (!isEnvironmentOwner(entry)) {
+        throw new Error("node worker workspace authority closed");
+      }
+      command.assertCurrent?.();
+    };
     const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
     // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
@@ -209,11 +221,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       timeoutMs: commandTimeoutMs,
       ...(command.resetWorkspace === undefined ? {} : { resetWorkspace: command.resetWorkspace }),
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
+      ...(command.seed === undefined ? {} : { seed: command.seed }),
     };
     while (true) {
-      if (!isEnvironmentOwner(entry)) {
-        throw new Error("node worker workspace authority closed");
-      }
+      assertCurrent();
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0 || signal.aborted) {
         throw signal.reason ?? new Error("node worker workspace command timed out");
@@ -221,15 +232,20 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       let result: Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>;
       try {
         const { node, transport } = await findNode(entry, signal);
+        assertCurrent();
         result = await transport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
           params: input,
           timeoutMs: remainingMs,
           signal,
-          isDispatchAuthorized: () => isEnvironmentOwner(entry),
+          isDispatchAuthorized: () => {
+            assertCurrent();
+            return true;
+          },
         });
       } catch (error) {
+        assertCurrent();
         if (
           command.transportRetry !== "idempotent" ||
           signal.aborted ||
@@ -269,6 +285,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     entry: NodeTunnelEntry,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+    const buildLaunchInput = (
+      plan: NodeWorkerLaunchInput["descriptor"],
+      claim: WorkerSessionTurnClaim,
+    ): NodeWorkerLaunchInput => ({
+      environmentSession: 1,
+      launchId: plan.assignment.turnId,
+      gatewayNamespace,
+      expectedBundleHash: entry.expectedBuild.bundleHash,
+      placementGeneration: claim.placementGeneration,
+      descriptor: plan,
+    });
     const { validateRestoredWorkspace, ...workspaceActions } = createNodeWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
@@ -283,6 +310,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...workspaceActions,
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
+      measureLaunchTurn: (plan, claim) =>
+        measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
       launchTurn: async (request) => {
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
@@ -299,14 +328,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           options.validateWorkerTurn(claim);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
-          input: {
-            environmentSession: 1,
-            launchId: plan.assignment.turnId,
-            gatewayNamespace,
-            expectedBundleHash: entry.expectedBuild.bundleHash,
-            placementGeneration: claim.placementGeneration,
-            descriptor: plan,
-          },
+          input: buildLaunchInput(plan, claim),
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,

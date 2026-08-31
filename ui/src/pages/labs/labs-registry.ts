@@ -85,9 +85,7 @@ export const LAB_FEATURES = [
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    // Mirrors resolveCodeModeConfig: no config is off, while an object that
-    // configures another Code Mode option preserves the prior "auto" behavior.
-    readEnabled: (raw) => readConfiguredFeatureEnabled(raw, [true, "auto"]),
+    readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,

@@ -1,7 +1,11 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { checkoutDisplayName, foldWorktreeCheckoutPath } from "./catalog-project-grouping.ts";
+import {
+  checkoutDisplayName,
+  foldWorktreeCheckoutPath,
+  sessionActorGroupId,
+} from "./catalog-project-grouping.ts";
 import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
@@ -38,7 +42,7 @@ export type SidebarSessionSection<Row> = {
     | `project:${string}`
     | `catalog:${string}`;
   category?: string;
-  personOwner?: { type: string; id: string; label?: string; avatarUrl?: string };
+  personOwner?: NonNullable<GatewaySessionRow["owner"]>["actor"] & { id: string };
   /** Repo/workspace section (project grouping); `path` disambiguates same-named repos. */
   project?: { name: string; path: string };
   /** Built-in smart group-conversation section (kind "group" rows). */
@@ -156,7 +160,7 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, no
     case "category":
       return row.category?.trim() ?? UNGROUPED_ID;
     case "person":
-      return row.owner?.actor.id?.trim() || UNGROUPED_ID;
+      return sessionActorGroupId(row.owner?.actor);
     case "channel":
       return sessionRowChannel(row);
     case "kind":
@@ -208,7 +212,7 @@ export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsG
 type SidebarGroupableRow = {
   pinned?: boolean;
   category?: string | null;
-  owner?: { actor: { type: string; id?: string; label?: string; avatarUrl?: string } };
+  owner?: GatewaySessionRow["owner"];
   /** Resolved repo/workspace of the session's checkout (project grouping). */
   workContext?: { path: string };
   /** Session kind from the gateway row; "group" rows form the Groups zone. */
@@ -303,20 +307,16 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       continue;
     }
     const owner = grouping === "person" ? row.owner?.actor : undefined;
-    const ownerId = owner?.id?.trim();
-    if (owner && ownerId) {
-      const personSection = people.get(ownerId);
+    const ownerId = owner?.identity?.id;
+    const ownerKey = sessionActorGroupId(owner);
+    if (owner && ownerId && ownerKey) {
+      const personSection = people.get(ownerKey);
       if (personSection) {
         personSection.rows.push(row);
       } else {
-        people.set(ownerId, {
-          id: `person:${ownerId}`,
-          personOwner: {
-            type: owner.type,
-            id: ownerId,
-            ...(owner.label ? { label: owner.label } : {}),
-            ...(owner.avatarUrl ? { avatarUrl: owner.avatarUrl } : {}),
-          },
+        people.set(ownerKey, {
+          id: `person:${ownerKey}`,
+          personOwner: { ...owner, id: ownerId },
           rows: [row],
         });
       }
@@ -352,9 +352,17 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       const leftOwner = left.personOwner!;
       const rightOwner = right.personOwner!;
       const leftRank =
-        leftOwner.id === options.selfOwnerId ? 0 : leftOwner.type === "agent" ? 2 : 1;
+        leftOwner.identity?.type === "agent"
+          ? 2
+          : leftOwner.identity?.type === "profile" && leftOwner.id === options.selfOwnerId
+            ? 0
+            : 1;
       const rightRank =
-        rightOwner.id === options.selfOwnerId ? 0 : rightOwner.type === "agent" ? 2 : 1;
+        rightOwner.identity?.type === "agent"
+          ? 2
+          : rightOwner.identity?.type === "profile" && rightOwner.id === options.selfOwnerId
+            ? 0
+            : 1;
       return (
         leftRank - rightRank ||
         (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||

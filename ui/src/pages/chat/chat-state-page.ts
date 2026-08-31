@@ -30,6 +30,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -39,7 +40,7 @@ import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
-  isQueuedMessageRemovalBlocked,
+  isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
   QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
   updateQueuedMessageEdit,
@@ -60,6 +61,7 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
@@ -106,6 +108,7 @@ async function loadPageAssistantIdentity(
       !state.connected ||
       state.assistantIdentityRequestVersion !== requestVersion ||
       state.sessionKey.trim() !== expectedSessionKey ||
+      resolveAgentIdForSession(state) !== agentId ||
       !identity
     ) {
       return;
@@ -143,6 +146,8 @@ export function createPageState(
   const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
+    hasPendingInitialTurn: (sessionKey: string) =>
+      context.placementStartup.hasPendingTurn(sessionKey),
     initialUserMessage: context.initialUserMessage,
     settings,
     password: "",
@@ -186,7 +191,7 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [],
     chatRunId: null,
-    chatRunUsageById: new Map<string, number>(),
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
@@ -209,9 +214,9 @@ export function createPageState(
     chatModelSwitchPromises: {},
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
+    modelAuthStatusRequestVersion: 0,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
     sessionsResult: null,
@@ -227,6 +232,7 @@ export function createPageState(
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
     chatComposerFallbackByScope: {},
@@ -319,7 +325,7 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
-    if (isQueuedMessageRemovalBlocked(state, id)) {
+    if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
       return;
@@ -371,7 +377,10 @@ export function createPageState(
       );
   };
   state.cancelQueuedChatMessageEdit = () => {
-    cancelQueuedMessageEdit(state);
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {
@@ -444,14 +453,22 @@ export function createPageState(
       item.release?.();
       return;
     }
-    const safeSrc = resolveSafeExternalUrl(item.src, window.location.href, {
-      allowDataImage: true,
-    });
-    if (!safeSrc) {
+    const video = item.kind === "video";
+    const resolveSrc = (src: string) =>
+      video
+        ? safeMediaAttachmentHref(src, "video")
+        : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
+    const safeSrc = resolveSrc(item.src);
+    const safeOriginalSrc = item.originalSrc ? resolveSrc(item.originalSrc) : undefined;
+    if (!safeSrc || (item.originalSrc && !safeOriginalSrc)) {
       item.release?.();
       return;
     }
-    state.imageLightbox = { ...item, src: safeSrc };
+    state.imageLightbox = {
+      ...item,
+      src: safeSrc,
+      ...(safeOriginalSrc ? { originalSrc: safeOriginalSrc } : {}),
+    };
     renderLifecycle.invalidate();
   };
   state.handleCloseImage = () => {

@@ -28,6 +28,9 @@ const {
 
 vi.mock("./update-cli/update-command.js", () => ({
   updateCommand: (opts: unknown) => mocks.updateCommand(opts),
+}));
+
+vi.mock("./update-cli/update-command-finalize.js", () => ({
   updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
 }));
 
@@ -152,6 +155,7 @@ describe("update cli option collisions", () => {
     { name: "repair", handler: updateFinalizeCommand },
     { name: "finalize", handler: updateFinalizeCommand },
     { name: "wizard", handler: updateWizardCommand },
+    { name: "status", handler: updateStatusCommand },
   ])("rejects parent --dry-run before running update $name", async ({ name, handler }) => {
     await runRegisteredCli({
       register: registerUpdateCli as (program: Command) => void,

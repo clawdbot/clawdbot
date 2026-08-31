@@ -605,6 +605,121 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it.each([
+    "absent",
+    "cleared",
+    "retired",
+    "other generation cleared",
+    "other generation active",
+    "exact pending",
+    "changed snapshot",
+    "changed connection",
+    "tracking successor",
+    "materialized successor",
+    "ordinary successor",
+  ])("guards failed-creation cleanup against an %s owner", async (owner) => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "creation",
+      sessionKey: "agent:main:fork",
+    };
+    const expected = {
+      sourceThreadId: "thread-fork",
+      connectionFingerprint: "connection-one",
+      lastTurnId: "turn-terminal",
+    };
+    const key = bindingStoreKey(identity);
+    if (owner !== "absent") {
+      const generation = owner.startsWith("other generation") ? "successor" : identity.sessionId;
+      const cleared = owner.includes("cleared") || owner === "retired";
+      state.register(
+        key,
+        cleared
+          ? {
+              version: 1,
+              state: "cleared",
+              sessionId: generation,
+              ...(owner === "retired" ? { retired: true } : {}),
+            }
+          : {
+              version: 1,
+              state: "active",
+              sessionId: generation,
+              binding:
+                owner === "ordinary successor"
+                  ? { threadId: expected.sourceThreadId, cwd: "/repo" }
+                  : {
+                      threadId:
+                        owner === "materialized successor"
+                          ? "thread-final"
+                          : expected.sourceThreadId,
+                      cwd: "/repo",
+                      connectionScope: "supervision",
+                      supervisionSourceThreadId: expected.sourceThreadId,
+                      preserveNativeModel: true,
+                      conversationSourceTransferComplete: true,
+                      model: "native-model",
+                      modelProvider: "native-provider",
+                      ...(owner === "materialized successor"
+                        ? {}
+                        : {
+                            pendingSupervisionBranch: {
+                              ...expected,
+                              ...(owner === "changed snapshot"
+                                ? { lastTurnId: "turn-successor" }
+                                : {}),
+                              ...(owner === "changed connection"
+                                ? { connectionFingerprint: "connection-two" }
+                                : {}),
+                              ...(owner === "tracking successor"
+                                ? { cleanupThreadIds: ["thread-probe"] }
+                                : {}),
+                            },
+                          }),
+                    },
+            },
+      );
+    }
+    const before = state.lookup(key);
+    const cleared = ["absent", "cleared", "retired", "exact pending"].includes(owner);
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: expected.sourceThreadId,
+        expectedPendingSupervisionBranch: expected,
+      }),
+    ).resolves.toBe(cleared);
+    if (!cleared) {
+      expect(state.lookup(key)).toEqual(before);
+      return;
+    }
+    await expect(store.read(identity)).resolves.toBeUndefined();
+    // Compensation is idempotent, but an ordinary thread-specific clear still needs its owner.
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: expected.sourceThreadId,
+        expectedPendingSupervisionBranch: expected,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: expected.sourceThreadId,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: "different-thread",
+        expectedPendingSupervisionBranch: expected,
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("round-trips account app policy context", async () => {
     const { state } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

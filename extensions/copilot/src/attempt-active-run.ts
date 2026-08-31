@@ -76,7 +76,10 @@ export function registerCopilotActiveRun(params: {
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }
-      messageId = await params.session.send({ prompt: text });
+      messageId = await params.transcriptJournal.sendSdkUser(
+        () => params.session.send({ prompt: text }),
+        options?.userTurnTranscriptRecorder,
+      );
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);

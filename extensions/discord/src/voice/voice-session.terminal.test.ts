@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -38,10 +39,7 @@ defineDiscordVoiceTests(
           allowFrom: ["discord:u-owner"],
           voice: { mode },
         });
-        let finishDecoding!: () => void;
-        const decoding = new Promise<void>((resolve) => {
-          finishDecoding = resolve;
-        });
+        const decoding = createDeferred<void>();
         let receive: Promise<void> | undefined;
         try {
           await manager.join({ guildId: "g1", channelId: "1001" });
@@ -56,7 +54,7 @@ defineDiscordVoiceTests(
             },
           };
           await manager.join({ guildId: "g1", channelId: "1001" }, { transcripts });
-          decodeOpusStreamChunksMock.mockReturnValueOnce(decoding);
+          decodeOpusStreamChunksMock.mockReturnValueOnce(decoding.promise);
           receive = handleSpeakingStart(manager, entry, "u-owner");
           await vi.waitFor(() => expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce());
           const captureStream = expectDefined(
@@ -74,7 +72,7 @@ defineDiscordVoiceTests(
           provider.onClose?.(reason);
 
           expect(manager.status()).toEqual([]);
-          expect(entry.realtime).toBeUndefined();
+          expect(entry.realtimeLifecycle.status).toBe("stopped");
           expect(entry.transcripts).toBeUndefined();
           expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
@@ -106,8 +104,8 @@ defineDiscordVoiceTests(
             { transcripts: replacementTranscripts },
           );
           const inputCalls = realtimeSessionMock.sendAudio.mock.calls.length;
-          turn?.sendInputAudio(Buffer.alloc(3840));
-          turn?.close();
+          turn.sendInputAudio(Buffer.alloc(3840));
+          turn.close();
           provider.onClose?.(reason);
           provider.onReady?.();
           provider.onEvent?.({ direction: "client", type: "session.reconnect.ready" });
@@ -130,7 +128,7 @@ defineDiscordVoiceTests(
           beginSpeakerTurn(replacement);
           expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(inputCalls + 1);
         } finally {
-          finishDecoding();
+          decoding.resolve();
           await receive;
           await manager.destroy();
         }

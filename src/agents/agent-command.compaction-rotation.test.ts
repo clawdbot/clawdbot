@@ -16,8 +16,13 @@ import {
   GATEWAY_INGRESS_ARGS,
   type ProviderModelNormalizationParams,
 } from "./agent-command.compaction.test-support.js";
+import type { CompactionAccountingFact } from "./embedded-agent-runner/run/internal-params.js";
 
 const {
+  acceptCompactionSuccessor,
+  appendTranscriptMessage,
+  loadSessionEntry,
+  patchSessionEntryCore,
   createSessionDiffBaselineCaptureClaim,
   formatSqliteSessionFileMarker,
   listSessionEntriesCore,
@@ -28,6 +33,48 @@ const {
 
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
+
+async function commitAttemptCompaction(
+  params: Parameters<typeof state.runAgentAttemptMock>[0],
+  accounting: Pick<CompactionAccountingFact, "count" | "currentContextSnapshot"> = {
+    count: 1,
+    currentContextSnapshot: { tokens: 42 },
+  },
+) {
+  const target = params.sessionTarget;
+  if (!target) {
+    throw new Error("expected command transcript target");
+  }
+  const entry = loadSessionEntry(target);
+  if (!entry) {
+    throw new Error("expected command predecessor");
+  }
+  const accepted = await acceptCompactionSuccessor({
+    currentTarget: target,
+    currentSessionFile: params.sessionFile,
+    expectedEntry: {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+    },
+    assertActive: () => params.opts.abortSignal?.throwIfAborted(),
+    result: {
+      ok: true,
+      compacted: true,
+      result: { sessionId: "rotated-session", tokensBefore: 120, tokensAfter: 42 },
+    },
+  });
+  params.onCompactionAccounting?.({
+    kind: "durable",
+    ...accounting,
+    target: {
+      ...accepted.sessionTarget,
+      lifecycleRevision: accepted.entry.lifecycleRevision,
+      activeWriterRunId: accepted.entry.activeWriterRunId,
+    },
+  });
+  return accepted;
+}
 
 describe("agentCommand compaction transcript rotation", () => {
   it.each([
@@ -170,49 +217,167 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("keeps SQLite session state on the rotated successor", async () => {
-    const storePath = requireStorePath();
-    const rotatedSessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: "rotated-session",
-      storePath,
-    });
-    state.runAgentAttemptMock.mockResolvedValueOnce(
-      makeResult({
+  it.each([42, 95_000, 0, undefined])(
+    "keeps successor context %s from the private ordered fact, not public snapshots",
+    async (tokens) => {
+      const storePath = requireStorePath();
+      const rotatedSessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
         sessionId: "rotated-session",
-        sessionFile: rotatedSessionFile,
-        text: "first answer after rotation",
+        storePath,
+      });
+      const usage = { input: 100_000, output: 3_000, cacheRead: 20_000, cacheWrite: 1_000 };
+      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+        const accepted = await commitAttemptCompaction(params, {
+          count: 1,
+          currentContextSnapshot: { tokens },
+        });
+        await appendTranscriptMessage(accepted.sessionTarget, {
+          message: { role: "assistant", content: "first answer after rotation", timestamp: 1 },
+        });
+        const result = makeResult({
+          sessionId: "native-thread-is-not-host-identity",
+          text: "first answer after rotation",
+          runner: "embedded",
+        });
+        result.meta.agentMeta = {
+          sessionId: "native-thread-is-not-host-identity",
+          sessionFile: rotatedSessionFile,
+          provider: "openai",
+          model: "gpt-5.5",
+          compactionCount: 99,
+          compactionTokensAfter: 42,
+          promptTokens: 95_000,
+          lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+          usage,
+        };
+        return result;
+      });
+
+      await agentCommand({
+        message: "first prompt",
+        sessionId: "old-session",
+        cwd: state.workspaceDir,
+      });
+
+      const entries = listSessionEntriesCore({ storePath });
+      expect(entries).toHaveLength(1);
+      const { sessionKey, entry } = entries[0]!;
+      expect(sessionKey).toBe("agent:main:explicit:old-session");
+      expect(entry).toMatchObject({
+        sessionId: "rotated-session",
+        usageFamilyKey: sessionKey,
+        usageFamilySessionIds: ["old-session", "rotated-session"],
         compactionCount: 1,
-      }),
-    );
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        totalTokensFresh: tokens !== undefined,
+      });
+      expect(entry.totalTokens).toBe(tokens);
+      await expect(
+        loadTranscriptEvents({ agentId: "main", sessionId: "rotated-session", storePath }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "assistant" }),
+        }),
+      );
+    },
+  );
 
-    await agentCommand({
-      message: "first prompt",
-      sessionId: "old-session",
-      cwd: state.workspaceDir,
+  it("persists a count-zero model context against its private writer fact", async () => {
+    const sessionId = "model-context-only";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const storePath = requireStorePath();
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      if (!entry || !params.sessionTarget) {
+        throw new Error("expected a prepared command session");
+      }
+      await patchSessionEntryCore({ sessionKey, storePath }, () => ({
+        activeWriterRunId: "current-command-writer",
+      }));
+      params.onCompactionAccounting?.({
+        kind: "durable",
+        count: 0,
+        currentContextSnapshot: { tokens: 95_000 },
+        target: {
+          ...params.sessionTarget,
+          lifecycleRevision: entry.lifecycleRevision,
+          activeWriterRunId: "current-command-writer",
+        },
+      });
+      const result = makeResult({ sessionId, text: "model answer", runner: "embedded" });
+      result.meta.agentMeta = {
+        sessionId,
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+        compactionTokensAfter: 42,
+      };
+      return result;
     });
 
-    const storeAfterRotation = Object.fromEntries(
-      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
-    );
-    const entriesAfterRotation = Object.entries(storeAfterRotation);
-    expect(entriesAfterRotation).toHaveLength(1);
-    const [sessionKey, rotatedEntry] = entriesAfterRotation[0] ?? [];
-    expect(sessionKey).toBe("agent:main:explicit:old-session");
-    expect(rotatedEntry).toMatchObject({
-      sessionId: "rotated-session",
-      usageFamilyKey: "agent:main:explicit:old-session",
-      usageFamilySessionIds: ["old-session", "rotated-session"],
-      compactionCount: 1,
+    await agentCommand({ message: "continue", sessionId, sessionKey });
+
+    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+      sessionId,
+      activeWriterRunId: "current-command-writer",
+      totalTokens: 95_000,
+      totalTokensFresh: true,
+      inputTokens: 100_000,
+      outputTokens: 3_000,
+      cacheRead: 20_000,
     });
+    expect(findStoredSessionEntry(sessionKey)?.compactionCount).toBeUndefined();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+  });
+
+  it("records completed compaction before a rejected attempt releases its writer", async () => {
+    const storePath = requireStorePath();
+    const sessionId = "aborted-command-compaction";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const controller = new AbortController();
+    const aborted = new Error("caller aborted after compaction");
+    aborted.name = "AbortError";
+    let released = false;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      await patchSessionEntryCore({ sessionKey, storePath }, () => ({
+        activeWriterRunId: params.runId,
+      }));
+      params.deferredLifecycle?.adopt({
+        discard: () => {},
+        complete: async () => {
+          expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+            sessionId: "rotated-session",
+            compactionCount: 2,
+            activeWriterRunId: params.runId,
+          });
+          released = true;
+        },
+      });
+      await commitAttemptCompaction(params, { count: 2, currentContextSnapshot: { tokens: 42 } });
+      controller.abort(aborted);
+      throw aborted;
+    });
+
     await expect(
-      loadTranscriptEvents({ agentId: "main", sessionId: "rotated-session", storePath }),
-    ).resolves.toContainEqual(
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({ role: "assistant" }),
+      agentCommand({
+        message: "compact then stop",
+        sessionId,
+        sessionKey,
+        abortSignal: controller.signal,
       }),
-    );
+    ).rejects.toThrow("caller aborted after compaction");
+
+    expect(released).toBe(true);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "rotated-session",
+      compactionCount: 2,
+    });
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
@@ -342,7 +507,7 @@ describe("agentCommand compaction transcript rotation", () => {
     let successorBeforeCleanup: SessionEntry | undefined;
     let compactionSetupError: Error | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
-    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params, host) => {
       if (!params.sessionEntry || !params.sessionStore || !params.storePath) {
         compactionSetupError = new Error("compaction test requires persisted session state");
         throw compactionSetupError;
@@ -357,6 +522,18 @@ describe("agentCommand compaction transcript rotation", () => {
         successorBeforeCleanup,
       );
       params.sessionStore[params.sessionKey] = successorBeforeCleanup;
+      host?.onCommitted?.({
+        sessionId: successorSessionId,
+        sessionFile: params.sessionKey,
+        sessionTarget: {
+          agentId: params.sessionAgentId,
+          sessionId: successorSessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        },
+        entry: successorBeforeCleanup,
+        previousSessionId: params.sessionId,
+      });
       return successorBeforeCleanup;
     });
 

@@ -35,8 +35,8 @@ async function invokeWebhookRequestListener(params: {
     method: "POST",
     url: params.path,
     headers: params.headers,
-    socket: { remoteAddress: params.remoteAddress },
-  }) as unknown as IncomingMessage;
+  });
+  Object.defineProperty(req.socket, "remoteAddress", { value: params.remoteAddress });
 
   return await new Promise<{ body: string; status: number }>((resolve) => {
     let status = 0;

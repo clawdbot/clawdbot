@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { TRANSCRIPT_PATH_SEGMENT_MAX_BYTES } from "../transcripts/store-artifacts.js";
+import {
+  TRANSCRIPT_EXPORT_FILE_NAMES,
+  TRANSCRIPT_PATH_SEGMENT_MAX_BYTES,
+} from "../transcripts/store-artifacts.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   hasMatchingRecordedTranscriptArtifact,
@@ -26,18 +29,11 @@ type MeetingTranscriptMigrationDetectionState = {
   hasOversizedSessionSlugs: boolean;
 };
 
-const TRANSCRIPT_ARTIFACT_NAMES = new Set([
-  "metadata.json",
-  "summary.json",
-  "summary.md",
-  "transcript.jsonl",
-]);
-
 function hasLegacyArtifactsSync(directory: string): boolean {
   const entries = fs.readdirSync(directory, { withFileTypes: true });
   let found = false;
   for (const entry of entries) {
-    if (!TRANSCRIPT_ARTIFACT_NAMES.has(entry.name.toLowerCase())) {
+    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name.toLowerCase())) {
       continue;
     }
     const stat = fs.lstatSync(path.join(directory, entry.name));

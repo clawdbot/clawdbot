@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   isProtectedMainWorkflowPath,
   parseCrabboxGateCheckSummary,
+  validateForwardAncestry,
 } from "./crabbox-gate-contract.mjs";
 
 const CHECK_APP_ID = 15368;
@@ -133,8 +134,10 @@ export function validateCrabboxMergeBypass({
   checkRuns,
   expectedLeaseId,
   expectedRunId,
+  finalMainRef,
   headSha,
   jobs,
+  mainComparison,
   mainRef,
   membership,
   pullRequest,
@@ -187,7 +190,6 @@ export function validateCrabboxMergeBypass({
   }
   const publisherRunId = parsePublisherDetailsUrl(crabboxCheck.details_url);
   const publisher = record(publisherRun, "Crabbox publisher workflow run");
-  const mainRefRecord = record(mainRef, "protected main ref");
   if (
     publisher.id !== publisherRunId ||
     publisher.status !== "completed" ||
@@ -195,14 +197,26 @@ export function validateCrabboxMergeBypass({
     publisher.event !== "workflow_dispatch" ||
     publisher.head_branch !== "main" ||
     publisher.head_sha !== binding.workflowSha ||
-    !isProtectedMainWorkflowPath(
-      publisher.path,
-      ".github/workflows/pr-crabbox-gate-publisher.yml",
-    ) ||
-    mainRefRecord.ref !== "refs/heads/main" ||
-    record(mainRefRecord.object, "protected main ref.object").sha !== binding.workflowSha
+    !isProtectedMainWorkflowPath(publisher.path, ".github/workflows/pr-crabbox-gate-publisher.yml")
   ) {
     throw new Error("Crabbox check is not bound to the current protected-main publisher workflow");
+  }
+  const mainRefRecord = record(mainRef, "protected main ref");
+  const mainSha = record(mainRefRecord.object, "protected main ref.object").sha;
+  if (mainRefRecord.ref !== "refs/heads/main") {
+    throw new Error("protected main ref is malformed");
+  }
+  validateForwardAncestry(
+    mainComparison,
+    { baseSha: binding.workflowSha, headSha: mainSha },
+    "protected main",
+  );
+  const finalMainRefRecord = record(finalMainRef, "final protected main ref");
+  if (
+    finalMainRefRecord.ref !== "refs/heads/main" ||
+    record(finalMainRefRecord.object, "final protected main ref.object").sha !== mainSha
+  ) {
+    throw new Error("protected main moved during final Crabbox merge validation");
   }
 
   const ciCheck = latestNamedCheck(checkRunList, CI_CHECK_NAME);
@@ -300,6 +314,7 @@ export function validateCrabboxMergeBypass({
     ciGateUrl: requiredString(ciCheck.details_url, "openclaw/ci-gate URL"),
     ciRunId,
     infrastructureJobs,
+    mainSha,
     planDigest: binding.planDigest,
     targetCount: binding.targetCount,
     workflowSha: binding.workflowSha,
@@ -337,6 +352,8 @@ function main() {
     expectedRunId: requiredString(args["run-id"], "run id"),
     headSha: requiredString(args.head, "head SHA"),
     jobs,
+    finalMainRef: readJson(args["final-main-ref"], "final protected main ref"),
+    mainComparison: readJson(args["main-comparison"], "protected main comparison"),
     mainRef: readJson(args["main-ref"], "protected main ref"),
     membership: readJson(args.membership, "organization membership"),
     pullRequest: readJson(args["pull-request"], "pull request"),

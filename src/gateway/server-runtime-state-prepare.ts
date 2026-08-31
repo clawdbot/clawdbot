@@ -13,6 +13,8 @@ import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -174,6 +176,7 @@ export async function prepareGatewayKernelState(params: {
     bindNodeWorkspaceBindingResolver,
     bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
+    handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
@@ -208,17 +211,34 @@ export async function prepareGatewayKernelState(params: {
             getSessionChangeContext: () => pluginGatewayContext.current,
             persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; moves invoke this only after startup.
-              const text = connectionState.chatRunState.resolveBuffer(runId).text;
+              const text = connectionState.chatRunState.resolveBuffer(runId, { final: true }).text;
               if (!text.trim()) {
                 return;
               }
-              const { persistAbortedPartials } =
-                await import("./server-methods/chat-abort-runtime.js");
+              const { captureAbortedPartial, persistAbortedPartials } =
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
               await persistAbortedPartials({
                 context: { logGateway: log },
-                sessionKey,
-                snapshots: [{ sessionId, agentId, runId, text, abortOrigin: "placement-abandon" }],
+                snapshots: [
+                  captureAbortedPartial({
+                    sessionKey,
+                    sessionId,
+                    agentId,
+                    runId,
+                    text,
+                    abortOrigin: "placement-abandon",
+                  }),
+                ],
               });
+            },
+            cancelSessionWork: async (request) => {
+              const context = pluginGatewayContext.current;
+              if (!context) {
+                throw new Error("Worker session cancellation is not ready");
+              }
+              const { cancelGatewayWorkerSessionWork } =
+                await import("./server-worker-placement-cancel.js");
+              await cancelGatewayWorkerSessionWork(context, request);
             },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             info: (message) => log.info(message),
@@ -440,6 +460,8 @@ export async function prepareGatewayKernelState(params: {
     channelManager,
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    getStateDatabaseFailure: () =>
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
@@ -492,6 +514,7 @@ export async function prepareGatewayKernelState(params: {
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     handleNodeWorkerBundleTransferRequest,
+    handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,

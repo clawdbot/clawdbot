@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -115,6 +116,57 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  it("repairs a large unowned store with one active-receipt query", async () => {
+    const { storePath } = await makeStorePath();
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const jobs = Array.from({ length: 100 }, (_, index) => {
+      const entry = makeJob(`batch-repair-${index}`, nowMs);
+      entry.state = {};
+      return entry;
+    });
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const owned = jobs[0]!;
+    const receipt = claimReceipt(storePath, owned, nowMs);
+    const database = openOpenClawStateDatabase().db;
+    const ownedRowBefore = database
+      .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+      .get(receipt.storeKey, owned.id);
+    const receiptBefore = database
+      .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = ?")
+      .get(receipt.receiptId);
+    const statements = trackSqliteStatementExecutions(
+      database,
+      ["active-receipts"] as const,
+      (sql) =>
+        sql.toLowerCase().includes('from "cron_run_receipts"') &&
+        sql.toLowerCase().includes('"status" =')
+          ? "active-receipts"
+          : null,
+    );
+
+    try {
+      const result = recomputeUnownedCronSchedules(makeState(storePath, nowMs));
+      expect(result.jobs).toHaveLength(99);
+      expect(statements.counts["active-receipts"]).toBe(1);
+      expect(
+        database
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(receipt.storeKey, owned.id),
+      ).toEqual(ownedRowBefore);
+      expect(
+        database
+          .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ).toEqual(receiptBefore);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
+        jobs.map((job) => job.id),
+      );
+    } finally {
+      statements.restore();
+      finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: nowMs + 1 });
+    }
+  });
+
   it("rolls back receipt retirement when the pending recovery slot cannot commit", async () => {
     const { storePath } = await makeStorePath();
     const startedAtMs = Date.now();

@@ -2,8 +2,8 @@ import { mkdir } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
@@ -35,27 +35,26 @@ async function selectMenuValue(menu: Locator, value: string) {
 }
 
 function sessionsList(owners: [string, string], withAvatars = false) {
-  const ownerFacet = [
-    {
-      type: "human" as const,
-      id: owners[0],
-      label: "Ada",
-      ...(withAvatars ? { avatarUrl: `/api/users/${owners[0]}/avatar?v=1` } : {}),
-    },
-    ...(owners[1] === owners[0]
-      ? []
-      : [
-          {
-            type: "human" as const,
-            id: owners[1],
-            label: "Bob",
-            ...(withAvatars ? { avatarUrl: `/api/users/${owners[1]}/avatar?v=1` } : {}),
-          },
-        ]),
-  ];
+  const ada = {
+    type: "human" as const,
+    id: owners[0],
+    identity: { type: "profile" as const, id: owners[0] },
+    label: "Ada",
+  };
+  const bob = {
+    type: "human" as const,
+    id: owners[1],
+    identity: { type: "profile" as const, id: owners[1] },
+    label: owners[1] === owners[0] ? "Ada" : "Bob",
+  };
+  const ownerFacet = owners[1] === owners[0] ? [ada] : [ada, bob];
   return {
     count: 2,
-    owners: ownerFacet,
+    owners: ownerFacet.map((actor) =>
+      withAvatars
+        ? Object.assign({}, actor, { avatarUrl: `/api/users/${actor.id}/avatar?v=1` })
+        : actor,
+    ),
     defaults: { contextTokens: null, model: null, modelProvider: null },
     path: "",
     sessions: [
@@ -64,8 +63,8 @@ function sessionsList(owners: [string, string], withAvatars = false) {
         kind: "direct",
         label: "Ada research",
         category: "Research",
-        createdActor: { type: "human", id: owners[0], label: "Ada" },
-        owner: { actor: { type: "human", id: owners[0], label: "Ada" } },
+        createdActor: ada,
+        owner: { actor: ada },
         updatedAt: 2,
       },
       {
@@ -73,18 +72,8 @@ function sessionsList(owners: [string, string], withAvatars = false) {
         kind: "direct",
         label: "Bob operations",
         category: "Operations",
-        createdActor: {
-          type: "human",
-          id: owners[1],
-          label: owners[1] === owners[0] ? "Ada" : "Bob",
-        },
-        owner: {
-          actor: {
-            type: "human",
-            id: owners[1],
-            label: owners[1] === owners[0] ? "Ada" : "Bob",
-          },
-        },
+        createdActor: bob,
+        owner: { actor: bob },
         updatedAt: 1,
       },
     ],
@@ -104,12 +93,14 @@ function collaborativeSessionsList() {
   const ada = {
     type: "human" as const,
     id: "profile-ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
     label: "Ada",
     avatarUrl: "/api/users/profile-ada/avatar?v=1",
   };
   const bob = {
     type: "human" as const,
     id: "profile-bob",
+    identity: { type: "profile" as const, id: "profile-bob" },
     label: "Bob",
     avatarUrl: "/api/users/profile-bob/avatar?v=1",
   };
@@ -126,7 +117,7 @@ function collaborativeSessionsList() {
         label: "Fix issue #127689",
         createdActor: ada,
         owner: { actor: ada },
-        participants: [bob],
+        participants: [{ identity: bob.identity, label: bob.label, avatarUrl: bob.avatarUrl }],
         participantCount: 1,
         updatedAt: 3,
       },
@@ -136,7 +127,10 @@ function collaborativeSessionsList() {
         label: "Release planning",
         createdActor: bob,
         owner: { actor: bob },
-        participants: [ada, { type: "agent" as const, id: "research", label: "Research" }],
+        participants: [
+          { identity: ada.identity, label: ada.label, avatarUrl: ada.avatarUrl },
+          { identity: { type: "agent" as const, id: "research" }, label: "Research" },
+        ],
         participantCount: 2,
         updatedAt: 2,
       },
@@ -177,7 +171,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": collaborativeSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:collaboration"));
     const collaborativeRow = currentPage.locator('[data-session-key="agent:main:collaboration"]');
     const overflowRow = currentPage.locator('[data-session-key="agent:main:release-planning"]');
     const singleOwnerRow = currentPage.locator('[data-session-key="agent:main:single-owner"]');
@@ -310,7 +304,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"], true) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -331,10 +325,10 @@ suite.define(() => {
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
     await selectMenuValue(ownerMenu, "grouping:person");
     await expectBrowser(
-      currentPage.locator('[data-session-section="person:profile-ada"]'),
+      currentPage.locator('[data-session-section="person:profile:profile-ada"]'),
     ).toContainText("Ada research");
     await expectBrowser(
-      currentPage.locator('[data-session-section="person:profile-bob"]'),
+      currentPage.locator('[data-session-section="person:profile:profile-bob"]'),
     ).toContainText("Bob operations");
 
     const groupedMenu = await openSidebarSortMenu(currentPage);
@@ -431,7 +425,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": allSessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await gateway.setMethodResponse("sessions.list", {
       ...allSessions,
@@ -488,7 +482,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -513,7 +507,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
@@ -558,7 +552,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": draftSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -666,7 +660,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
@@ -702,7 +696,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
@@ -759,7 +753,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     await gateway.waitForRequest("session.members.listEvidence");
@@ -796,7 +790,14 @@ suite.define(() => {
     }
     Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     sessions.count = 1;
-    sessions.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
+    sessions.owners = [
+      {
+        type: "human",
+        id: "profile-ada",
+        identity: { type: "profile", id: "profile-ada" },
+        label: "Ada",
+      },
+    ];
     sessions.sessions = [activeSession];
     const longMemberLabel =
       "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
@@ -868,7 +869,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");
@@ -997,12 +998,12 @@ suite.define(() => {
     // Agent and system identities render the non-human icon from identity.type,
     // not from an ID-string heuristic; owner-chip presentation is human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    expect(
-      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
-    ).toBe(longMemberLabel);
-    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
-      longMemberId,
-    );
+    await expect
+      .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberLabel);
+    await expect
+      .poll(() => tooltipTitleText(longIdItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });

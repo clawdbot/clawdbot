@@ -6,8 +6,29 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 
 const tempDirs = createTrackedTempDirs();
+
+describe("git commit prefix matching", () => {
+  const fullCommit = "abcdef0123456789abcdef0123456789abcdef01";
+  const unrelatedCommit = "1234567890abcdef1234567890abcdef12345678";
+  const sharedPrefixCommit = "abcdef0fedcba9876543210fedcba9876543210f";
+
+  it.each([
+    ["exact equality", fullCommit, fullCommit, true],
+    ["short left prefix", "abcdef0", fullCommit, true],
+    ["short right prefix", fullCommit, "abcdef0", true],
+    ["whitespace and case normalization", "  ABCDEF0  ", fullCommit, true],
+    ["unrelated commits", fullCommit, unrelatedCommit, false],
+    ["distinct full commits sharing seven characters", fullCommit, sharedPrefixCommit, false],
+    ["short left operand", "abcdef", fullCommit, false],
+    ["short right operand", fullCommit, "abcdef", false],
+    ["whitespace-only operand", "   ", fullCommit, false],
+  ])("%s", (_name, left, right, expected) => {
+    expect(gitCommitPrefixesMatch(left, right)).toBe(expected);
+  });
+});
 
 async function makeTempDir(label: string): Promise<string> {
   return await tempDirs.make(`openclaw-${label}-`);
@@ -76,13 +97,14 @@ function limitPositionalReads(maxBytes: number) {
 
 describe("git commit resolution", () => {
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
+  let resolveLoadedCommitHash: (typeof import("./git-commit.js"))["resolveLoadedCommitHash"];
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
     vi.resetModules();
-    ({ resolveCommitHash } = await import("./git-commit.js"));
+    ({ resolveCommitHash, resolveLoadedCommitHash } = await import("./git-commit.js"));
   });
 
   afterEach(async () => {
@@ -127,6 +149,94 @@ describe("git commit resolution", () => {
         },
       }),
     ).toBe(repoCommit.slice(0, 7));
+  });
+
+  it.each([
+    {
+      name: "uses matching local build stamps",
+      buildCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      runtimeCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      expected: "aaaaaaa",
+    },
+    {
+      name: "rejects conflicting local build stamps",
+      buildCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      runtimeCommit: "cccccccccccccccccccccccccccccccccccccccc",
+      expected: null,
+    },
+  ])(
+    "$name instead of mutable checkout metadata",
+    async ({ buildCommit, runtimeCommit, expected }) => {
+      const root = await makeTempDir("git-commit-loaded-build");
+      const dist = path.join(root, "dist");
+      await makeFakeGitRepo(root, {
+        head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      });
+      await fs.mkdir(dist, { recursive: true });
+      await fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: buildCommit }));
+      await fs.writeFile(
+        path.join(dist, ".runtime-postbuildstamp"),
+        JSON.stringify({ head: runtimeCommit }),
+      );
+
+      expect(
+        resolveLoadedCommitHash({
+          env: { GIT_COMMIT: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+          moduleUrl: pathToFileURL(path.join(dist, "version-chunk.js")).href,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it("uses build info when source-archive stamps have no Git head", async () => {
+    const root = await makeTempDir("git-commit-headless-build");
+    const dist = path.join(root, "dist");
+    await fs.mkdir(dist, { recursive: true });
+    await fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: null }));
+    await fs.writeFile(path.join(dist, ".runtime-postbuildstamp"), JSON.stringify({}));
+    await fs.writeFile(
+      path.join(dist, "build-info.json"),
+      JSON.stringify({ commit: "0123456789abcdef0123456789abcdef01234567" }),
+    );
+
+    expect(
+      resolveLoadedCommitHash({
+        env: {},
+        moduleUrl: pathToFileURL(path.join(dist, "version-chunk.js")).href,
+      }),
+    ).toBe("0123456");
+  });
+
+  it("does not guess when commitless build stamps lack build info", async () => {
+    const root = await makeTempDir("git-commit-headless-build-no-info");
+    const dist = path.join(root, "dist");
+    await makeFakeGitRepo(root, {
+      head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    });
+    await fs.mkdir(dist, { recursive: true });
+    await fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: null }));
+    await fs.writeFile(path.join(dist, ".runtime-postbuildstamp"), JSON.stringify({}));
+
+    expect(
+      resolveLoadedCommitHash({
+        env: { GIT_COMMIT: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        moduleUrl: pathToFileURL(path.join(dist, "version-chunk.js")).href,
+      }),
+    ).toBeNull();
+  });
+
+  it("falls back to Git for true source execution without build metadata", async () => {
+    const root = await makeTempDir("git-commit-source-runtime");
+    await makeFakeGitRepo(root, {
+      head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+    });
+
+    expect(
+      resolveLoadedCommitHash({
+        env: {},
+        moduleUrl: pathToFileURL(path.join(root, "src", "version.ts")).href,
+      }),
+    ).toBe("bbbbbbb");
   });
 
   it("caches build-info fallback results per resolved search directory", async () => {

@@ -1,4 +1,5 @@
 import { nothing, render } from "lit";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -129,7 +130,7 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const id = row.querySelector<HTMLElement>("[data-online-user-id]")?.dataset.onlineUserId;
+    const id = row.querySelector<HTMLElement>("[data-online-user-key]")?.dataset.onlineUserKey;
     const trigger = row.querySelector<HTMLElement>(".sidebar-online__person");
     if (!id || !trigger || !this.host.connected) {
       return;
@@ -201,9 +202,9 @@ export class SidebarPeopleRuntime {
     });
     const user = projectOnlinePresenceViewers(
       data.presencePayload,
-      self?.id,
+      self,
       data.presenceInstanceId,
-    ).find((person) => person.id === active.id);
+    ).find((person) => presenceUserKey(person) === active.id);
     if (!user) {
       this.close();
       return;

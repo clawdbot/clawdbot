@@ -90,7 +90,11 @@ export async function readMirroredSessionHistoryMessages(params: {
   admission?: TranscriptTurnAdmission;
 }): Promise<AgentMessage[] | undefined> {
   const { admission, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
+  const messages = await readCodexMirroredSessionHistoryMessages(
+    target,
+    admission,
+    "model-context",
+  );
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,

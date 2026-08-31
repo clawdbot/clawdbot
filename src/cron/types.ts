@@ -9,10 +9,16 @@ import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
+export type {
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
+} from "./scheduled-tool-policy.js";
 export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
@@ -541,6 +547,9 @@ export type CronStoredJob = CronJob & {
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
   createdActor?: SessionCreatedActor;
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  /** Exact expected pin for jobs created from a verified host-owned exec projection. */
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   /** Runtime-private authority omitted from public Gateway and wire contracts. */
   runtimeAuthority?: CronRuntimeAuthority;
   /** Authority was explicitly cleared and must be reauthorized before app reuse. */

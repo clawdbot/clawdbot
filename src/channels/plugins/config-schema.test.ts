@@ -3,7 +3,6 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import {
   ChannelGroupEntrySchema,
-  ChannelMentionPatternsSchemas,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildJsonChannelConfigSchema,
@@ -38,16 +37,6 @@ describe("channel config composition", () => {
 
     expect(schema.safeParse({ topic: true, allowFrom: ["U1"] }).success).toBe(true);
     expect(schema.safeParse({ skills: ["search"] }).success).toBe(false);
-  });
-
-  it("keeps canonical mention policy while allowing IRC array sugar", () => {
-    const canonical = ChannelMentionPatternsSchemas.canonical;
-    const arraySugar = ChannelMentionPatternsSchemas.stringArray;
-
-    expect(canonical.safeParse({ mode: "allow", denyIn: ["room"] }).success).toBe(true);
-    expect(canonical.safeParse(["openclaw"]).success).toBe(false);
-    expect(arraySugar.safeParse(["openclaw"]).success).toBe(true);
-    expect(arraySugar.safeParse({ mode: "deny", allowIn: ["#bots"] }).success).toBe(false);
   });
 
   it("applies one shared refinement to root and account entries", () => {

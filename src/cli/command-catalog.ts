@@ -15,7 +15,8 @@ export type CliPluginRegistryScope =
   | "channels"
   | "configured-channels"
   | "memory"
-  | "sandbox-backends";
+  | "sandbox-backends"
+  | "sandbox-management";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -142,6 +143,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
         ),
       pluginRegistry: { scope: "sandbox-backends" },
     },
+  },
+  {
+    commandPath: ["sandbox", "list"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
+  {
+    commandPath: ["sandbox", "recreate"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
   },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
@@ -272,7 +281,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   { commandPath: ["gateway", "start"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "stop"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "stop"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "uninstall"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "usage-cost"],
@@ -492,6 +505,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node", "worker"],
     exact: true,
     policy: {
+      // The app worker owns node startup, not Gateway channel schemas or Doctor preflight.
+      configGuard: "validate",
       hideBanner: true,
       loadPlugins: "never",
       ownsProtocolStdout: true,
@@ -597,6 +612,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "plugins-list" },
   },
+  // Authoring commands operate on a target package, not operator config, and a
+  // scaffolded plugin build can run through an older CLI; the startup guard
+  // would abort them on a host config they never read.
+  { commandPath: ["plugins", "build"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "validate"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "init"], exact: true, policy: { configGuard: "skip" } },
   {
     commandPath: ["onboard"],
     exact: true,

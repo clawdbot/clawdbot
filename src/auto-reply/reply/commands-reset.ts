@@ -5,13 +5,13 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isResetAuthorizedForContext } from "../command-auth.js";
 import { applyCommandTextToContext } from "./command-context-rewrite.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import { isResetAuthorizedForContext } from "./reset-authorization.js";
 
 type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
@@ -106,6 +106,8 @@ export async function maybeHandleResetCommand(
       storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
+      previousSessionMemory: params.previousSessionMemory,
+      previousSessionResetMessages: params.previousSessionResetMessages,
       onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
       workspaceDir: params.workspaceDir,
     });
@@ -182,6 +184,8 @@ export async function maybeHandleResetCommand(
     storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
+    previousSessionMemory: params.previousSessionMemory,
+    previousSessionResetMessages: params.previousSessionResetMessages,
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
     workspaceDir: params.workspaceDir,
   });

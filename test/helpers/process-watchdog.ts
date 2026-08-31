@@ -15,7 +15,11 @@ export function startProcessWatchdogFixture<T>(start: () => Promise<T>) {
       }, ms),
     );
   try {
-    return { runPromise: start(), releaseTimeout: ready.resolve };
+    const completion = start();
+    return function releaseAndWait() {
+      ready.resolve();
+      return completion;
+    };
   } finally {
     timeoutSpy.mockRestore();
   }

@@ -2,10 +2,10 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -313,7 +313,7 @@ describe("gateway sessions patch", () => {
 
   afterEach(() => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
 
@@ -647,6 +647,34 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(cleared.category).toBeUndefined();
+  });
+
+  test("persists, normalizes, and clears color", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "  Blue " },
+      }),
+    );
+    expect(entry.color).toBe("blue");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ color: "blue" }),
+        patch: { key: MAIN_SESSION_KEY, color: null },
+      }),
+    );
+    expect(cleared.color).toBeUndefined();
+  });
+
+  test("rejects unknown color names", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "crimson" },
+      }),
+      "color must be one of: red, blue, green, yellow, purple, orange, pink, cyan",
+    );
   });
 
   test("allows duplicate categories across sessions", async () => {
@@ -1128,10 +1156,7 @@ describe("gateway sessions patch", () => {
     },
     {
       name: "accepts explicit allowlisted refs absent from bundled catalog",
-      catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
-      ],
+      catalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.2" }],
     },
   ])("$name", async ({ catalog }) => {
     const entry = expectPatchOk(
@@ -1144,25 +1169,52 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
-  test("supports uncataloged configured primary and session override refs", async () => {
-    const primary = "openai/o3";
-    const override = "openai/o1";
-    const entry = expectPatchOk(
-      await runPatch({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary },
-              modelPolicy: { allow: [] },
+  test.each([false, true])(
+    "supports uncataloged refs with agent policy=%s",
+    async (agentPolicy) => {
+      const primary = "synthetic/primary";
+      const override = "synthetic/uncataloged";
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary },
+                modelPolicy: { allow: agentPolicy ? [primary] : [] },
+              },
+              entries: { main: agentPolicy ? { modelPolicy: { allow: [] } } : {} },
             },
-          },
-        } as OpenClawConfig,
-        patch: { key: MAIN_SESSION_KEY, model: override },
-        loadGatewayModelCatalog: async () => [],
-      }),
-    );
+          } as OpenClawConfig,
+          storeKey: "global",
+          patch: { key: "global", model: override },
+          loadGatewayModelCatalog: async () => [],
+        }),
+      );
 
-    expectModelSelection(entry, "openai", "o1");
+      expectModelSelection(entry, "synthetic", "uncataloged");
+      expect(entry.modelOverrideSource).toBe("user");
+    },
+  );
+
+  test("enforces the default agent policy without an explicit agent or qualified key", async () => {
+    const key = "global";
+    const existing: SessionEntry = { sessionId: "default-policy", updatedAt: 1, label: "Original" };
+    const store = { [key]: existing };
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: { model: "synthetic/primary", modelPolicy: { allow: [] } },
+          entries: { main: { modelPolicy: { allow: ["synthetic/allowed"] } } },
+        },
+      },
+      store,
+      storeKey: key,
+      patch: { key, model: "synthetic/outside", label: "Changed" },
+      loadGatewayModelCatalog: loadCatalog("synthetic/allowed", "synthetic/outside"),
+    });
+
+    expectPatchError(result, "model not allowed: synthetic/outside");
+    expect(store[key]).toEqual(existing);
   });
 
   test("persists provider-qualified aliases without cross-provider collisions", async () => {
@@ -1636,8 +1688,6 @@ describe("gateway sessions patch", () => {
         patch: {
           key: MAIN_SESSION_KEY,
           execHost: " AUTO ",
-          execSecurity: " ALLOWLIST ",
-          execAsk: " ON-MISS ",
           execNode: " worker-1 ",
           sendPolicy: "DENY" as unknown as "allow",
           groupActivation: "Always" as unknown as "mention",
@@ -1645,8 +1695,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.execHost).toBe("auto");
-    expect(entry.execSecurity).toBe("allowlist");
-    expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.groupActivation).toBe("always");
@@ -1670,6 +1718,36 @@ describe("gateway sessions patch", () => {
     );
     expect(cleared.permissionMode).toBeUndefined();
     expect(cleared.sessionRoot).toBe("/workspace/project");
+  });
+
+  test.each([
+    { execSecurity: "deny" },
+    { execSecurity: null },
+    { execAsk: "always" },
+    { execAsk: null },
+  ])("rejects retired session policy patch %j without writing", async (retiredPatch) => {
+    for (const store of [{}, mainStoreEntry({ label: "Original", permissionMode: "read-only" })]) {
+      const before = structuredClone(store);
+      const result = await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          label: "Changed",
+          permissionMode: "guarded",
+          ...retiredPatch,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+        },
+      });
+      expect(store).toEqual(before);
+    }
   });
 
   test("stores and clears a session permission mode without a recorded root", async () => {

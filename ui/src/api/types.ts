@@ -484,11 +484,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   };
 };
 
-export type {
-  CostUsageSummary,
-  SessionsUsageResult,
-  SessionUsageTimeSeries,
-} from "../pages/usage/data-types.ts";
+export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
@@ -645,12 +641,15 @@ export type ModelCatalogEntry = {
   alias?: string;
   tags?: string[];
   available?: boolean;
+  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
+  unavailableUntil?: number;
   contextWindow?: number;
   contextWindows?: GatewayContextWindowOption[];
   contextWindowDefault?: string;
   reasoning?: boolean;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingDefault?: string;
+  effectiveFastMode?: FastMode;
   supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;

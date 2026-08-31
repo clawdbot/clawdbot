@@ -81,10 +81,16 @@ function mountIntegratedPresenceHeader(params: {
 }) {
   const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
   const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const actor = {
+    type: "human" as const,
+    id: "profile-ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
+    label: "Ada",
+  };
   const session = row({
     key: state.sessionKey,
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+    createdActor: actor,
+    owner: { actor },
   });
   state.settings = {} as ChatPageHost["settings"];
   state.sessionsResult = {
@@ -486,8 +492,8 @@ describe("chat pane header", () => {
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
         owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
         participants: [
-          { type: "human", id: "profile-bob", label: "Bob" },
-          { type: "agent", id: "research", label: "Research" },
+          { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+          { identity: { type: "agent", id: "research" }, label: "Research" },
         ],
         participantCount: 2,
       }),
@@ -499,10 +505,11 @@ describe("chat pane header", () => {
 
     expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     expect(
-      [...(facepile?.querySelectorAll("[data-viewer-id]") ?? [])].map((avatar) =>
-        avatar.getAttribute("data-viewer-id"),
+      [...(facepile?.querySelectorAll(".viewer-avatar") ?? [])].map((avatar) =>
+        avatar.getAttribute("aria-label"),
       ),
-    ).toEqual(["profile-bob", "research"]);
+    ).toEqual(["Bob", "Research"]);
+    expect(facepile?.querySelector("[data-viewer-id]")).toBeNull();
   });
 
   it.each([
@@ -513,6 +520,7 @@ describe("chat pane header", () => {
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada", "profile-zoe"],
+      qualified: true,
       expectedChip: true,
       expectedViewers: ["profile-zoe"],
     },
@@ -520,6 +528,7 @@ describe("chat pane header", () => {
       name: "keeps the owner when the owner chip is hidden",
       owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
+      qualified: true,
       expectedChip: false,
       expectedViewers: ["profile-ada", "profile-zoe"],
     },
@@ -530,17 +539,33 @@ describe("chat pane header", () => {
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada"],
+      qualified: true,
       expectedChip: true,
       expectedViewers: [],
     },
-  ])("$name", async ({ owners, viewers, expectedChip, expectedViewers }) => {
+    {
+      name: "keeps a raw viewer whose ID matches the displayed profile owner",
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada"],
+      qualified: false,
+      expectedChip: true,
+      expectedViewers: ["profile-ada"],
+    },
+  ])("$name", async ({ owners, viewers, qualified, expectedChip, expectedViewers }) => {
     const sessionKey = "agent:main:current";
     const { container } = mountIntegratedPresenceHeader({
       owners,
       presence: viewers.map((id) => ({
         instanceId: `${id}-instance`,
         ts: 1,
-        user: { id, name: id },
+        user: {
+          id,
+          name: id,
+          ...(qualified ? { identity: { type: "profile" as const, id } } : {}),
+        },
         watchedSessions: [sessionKey],
       })),
     });
@@ -570,7 +595,11 @@ describe("chat pane header", () => {
     const guest = {
       instanceId: "profile-zoe-instance",
       ts: 1,
-      user: { id: "profile-zoe", name: "Zoe" },
+      user: {
+        id: "profile-zoe",
+        identity: { type: "profile", id: "profile-zoe" },
+        name: "Zoe",
+      },
       watchedSessions: [sessionKey],
     } satisfies PresenceEntry;
     const mounted = mountIntegratedPresenceHeader({ owners, presence: [guest] });
@@ -582,22 +611,26 @@ describe("chat pane header", () => {
     expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).toContain(
       "session-owner-chip--away",
     );
-    mounted.pane.presencePayload = {
-      presence: [
-        {
-          instanceId: "profile-ada-instance",
-          ts: 1,
-          user: { id: "profile-ada", name: "Ada" },
-          watchedSessions: [sessionKey],
-        },
-        guest,
-      ],
-    };
-    mounted.renderHeader();
-    await ownerChip?.updateComplete;
-    expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).not.toContain(
-      "session-owner-chip--away",
-    );
+    for (const identity of [undefined, { type: "profile" as const, id: "profile-ada" }]) {
+      mounted.pane.presencePayload = {
+        presence: [
+          {
+            instanceId: "profile-ada-instance",
+            ts: 1,
+            user: { id: "profile-ada", identity, name: "Ada" },
+            watchedSessions: [sessionKey],
+          },
+          guest,
+        ],
+      };
+      mounted.renderHeader();
+      await ownerChip?.updateComplete;
+      expect(
+        mounted.container
+          .querySelector(".session-owner-chip--header")
+          ?.classList.contains("session-owner-chip--away"),
+      ).toBe(identity === undefined);
+    }
   });
 
   it("renders the durable session actor avatar with the header attribution semantics", async () => {

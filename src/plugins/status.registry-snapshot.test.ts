@@ -5,10 +5,8 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -575,9 +573,8 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
       expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBeUndefined();
-      // Discovery, manifest validation, and index hashing already read this manifest.
-      // Status must carry that prepared metadata rather than read it a fourth time.
-      expect(manifestOpens).toBe(3);
+      // Discovery, validation, index hashing, and status share one checked manifest read.
+      expect(manifestOpens).toBe(1);
     },
   );
 

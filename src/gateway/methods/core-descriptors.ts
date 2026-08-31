@@ -117,6 +117,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approval.request", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.resolve", null, "operator.approvals", "<=2026.7"],
+  ["exec.approval.grants.list", null, "operator.approvals", "2026.8"],
+  ["exec.approval.grants.revoke", null, "operator.approvals", "2026.8"],
   ["question.request", null, "operator.questions", "2026.7"],
   ["question.waitAnswer", null, "operator.questions", "2026.7"],
   ["question.resolve", null, "operator.questions", "2026.7"],
@@ -285,6 +287,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // in shared/session-method-scopes.ts. The admin-only sticky configured-default
   // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
+  ["sessions.goal.update", "sessions-goal", "operator.write", "2026.8"],
+  ["sessions.goal.clear", "sessions-goal", "operator.write", "2026.8"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
   ["sessions.reset", "sessions-mutations", "operator.admin", "<=2026.7"],
@@ -379,7 +383,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.abort", "chat", "operator.write", "<=2026.7"],
+  ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
@@ -417,6 +421,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["push.web.subscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.web.preferences.get", "push", "operator.read", "2026.8"],
+  ["push.web.preferences.set", "push", "operator.write", "2026.8"],
   ["config.openFile", "config", "operator.admin", "<=2026.7", { advertise: false }],
   ["connect", "connect", "operator.admin", "<=2026.7", { advertise: false }],
   ["chat.inject", "chat", "operator.admin", "<=2026.7", { advertise: false }],

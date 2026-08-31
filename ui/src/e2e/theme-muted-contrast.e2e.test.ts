@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,6 +26,14 @@ const themeCases = [
   { family: "beacon", mode: "light", resolved: "beacon-light" },
   { family: "phosphor", mode: "dark", resolved: "phosphor" },
   { family: "phosphor", mode: "light", resolved: "phosphor-light" },
+  { family: "crt", mode: "dark", resolved: "crt" },
+  { family: "crt", mode: "light", resolved: "crt-light" },
+  { family: "manuscript", mode: "dark", resolved: "manuscript" },
+  { family: "manuscript", mode: "light", resolved: "manuscript-light" },
+  { family: "rose", mode: "dark", resolved: "rose" },
+  { family: "rose", mode: "light", resolved: "rose-light" },
+  { family: "miami", mode: "dark", resolved: "miami" },
+  { family: "miami", mode: "light", resolved: "miami-light" },
 ] as const;
 
 const textTokens = [
@@ -39,11 +48,23 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor",
+  family:
+    | "claw"
+    | "knot"
+    | "dash"
+    | "absolutely"
+    | "tide"
+    | "beacon"
+    | "phosphor"
+    | "crt"
+    | "manuscript"
+    | "rose"
+    | "miami",
   mode: "dark" | "light",
+  accent?: string,
 ) {
   const config = {
-    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode } },
+    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
   };
   const hash = `theme-contrast-${family}-${mode}`;
   return {
@@ -82,9 +103,15 @@ function parseRenderedColor(color: string): RenderedColor {
     /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d*\.?\d+))?\s*\)$/u.exec(
       trimmed,
     );
-  if (rgb) {
-    const [red, green, blue] = rgb.slice(1, 4).map(Number);
-    const alpha = rgb[4] === undefined ? 1 : Number(rgb[4]);
+  const srgb = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\s*\)$/u.exec(
+    trimmed,
+  );
+  const rendered = rgb ?? srgb;
+  if (rendered) {
+    const [red, green, blue] = rendered
+      .slice(1, 4)
+      .map((value) => Number(value) * (srgb ? 255 : 1));
+    const alpha = rendered[4] === undefined ? 1 : Number(rendered[4]);
     if (
       red !== undefined &&
       green !== undefined &&
@@ -144,9 +171,18 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each(themeCases)(
-    "keeps the real $resolved appearance selection at WCAG AA",
-    async ({ family, mode, resolved }) => {
+  it.each(
+    themeCases.flatMap(({ family, mode, resolved }) =>
+      (family === "claw" ? [undefined, "#000000", "#ffffff"] : [undefined]).map((accent) => ({
+        family,
+        mode,
+        resolved,
+        accent,
+      })),
+    ),
+  )(
+    "keeps $resolved appearance and picker states legible (accent $accent)",
+    async ({ family, mode, resolved, accent }) => {
       const context = await suite.newBrowserContext({
         colorScheme: mode,
         locale: "en-US",
@@ -171,7 +207,7 @@ suite.define(() => {
       const page = await context.newPage();
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "config.get": themeConfigResponse(initialFamily, mode),
+          "config.get": themeConfigResponse(initialFamily, mode, accent),
         },
       });
 
@@ -183,7 +219,7 @@ suite.define(() => {
         await selectedCard.waitFor({ state: "visible" });
         await gateway.waitForRequest("config.get");
         const initialConfigGets = (await gateway.getRequests("config.get")).length;
-        const committed = themeConfigResponse(family, mode);
+        const committed = themeConfigResponse(family, mode, accent);
         await gateway.deferNext("config.patch");
         await selectedCard.click();
         const patch = await gateway.waitForRequest("config.patch");
@@ -290,17 +326,78 @@ suite.define(() => {
           `${resolved}: actual rendered muted Appearance description, including ancestor backgrounds and opacity`,
         ).toBeGreaterThanOrEqual(4.5);
 
+        const picker = page.locator("#settings-font-chat");
+        await picker.click();
+        const selected = picker.locator("wa-option:state(selected)");
+        await selected.waitFor({ state: "visible" });
+        const optionPaint = async (option: typeof selected) => {
+          await option.evaluate(finishElementAnimations);
+          return option.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              background: style.backgroundColor,
+              label: getComputedStyle(element.querySelector(".picker-select__label")!).color,
+              description: getComputedStyle(element.querySelector(".picker-select__description")!)
+                .color,
+              outline: style.outlineStyle,
+              outlineWidth: Number.parseFloat(style.outlineWidth),
+              outlineColor: style.outlineColor,
+            };
+          });
+        };
+        // Options are slotted into a shadow listbox: light-DOM ancestors miss its painted surface.
+        const listboxBackground = await picker
+          .locator('[part="listbox"]')
+          .evaluate((element) => getComputedStyle(element).backgroundColor);
+        const assertOptionContrast = async (option: typeof selected) => {
+          const paint = await optionPaint(option);
+          const background = compositeColor(
+            parseRenderedColor(paint.background),
+            parseRenderedColor(listboxBackground),
+          );
+          for (const text of [paint.label, paint.description]) {
+            expect(
+              contrastRatio(text, background),
+              `${resolved} picker text`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+          return { paint, background };
+        };
+        const selectedValue = await selected.getAttribute("value");
+        const initialPaint = await optionPaint(selected);
+        await page.keyboard.press("ArrowDown");
+        const current = picker.locator("wa-option:state(current)");
+        await expect.poll(() => current.getAttribute("value")).not.toBe(selectedValue);
+        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        await expect
+          .poll(async () => (await optionPaint(selected)).background)
+          .toBe(initialPaint.background);
+        await assertOptionContrast(selected);
+        const focused = await assertOptionContrast(current);
+        expect(focused.paint.outline).not.toBe("none");
+        expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
+        expect(
+          contrastRatio(focused.paint.outlineColor, focused.background),
+        ).toBeGreaterThanOrEqual(3);
+        await picker.locator('wa-option[value="system"]').hover();
+        await assertOptionContrast(picker.locator('wa-option[value="system"]'));
+        await page.keyboard.press("Escape");
+        expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+        expect(await selected.getAttribute("value")).toBe(selectedValue);
+
         if (captureUiProof) {
           await mkdir(proofDirectory, { recursive: true });
+          const proofName = accent ? `${resolved}-${accent.slice(1)}` : resolved;
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDirectory, `${resolved}.png`),
+            path: path.join(proofDirectory, `${proofName}.png`),
           });
           await writeFile(
-            path.join(proofDirectory, `${resolved}.json`),
+            path.join(proofDirectory, `${proofName}.json`),
             `${JSON.stringify(
               {
+                accent,
                 description: {
                   background: descriptionBackground,
                   contrast: Number(descriptionContrast.toFixed(3)),

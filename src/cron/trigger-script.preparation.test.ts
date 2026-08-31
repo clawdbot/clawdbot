@@ -8,10 +8,11 @@ import {
   loadPreparedInboundPluginRegistry,
 } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
-import { resolveToolSearchConfig, ToolSearchRuntime } from "../agents/tool-search.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import { resolveToolSearchConfig } from "../agents/tool-search.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,

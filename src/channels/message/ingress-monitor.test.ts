@@ -70,6 +70,7 @@ function createMonitor(
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
         retryPolicy?: IngressRetryPolicyConfig;
+        deferredLaneOccupancy?: "hold" | "release";
         runPumpTask?: (work: () => Promise<void>) => Promise<void>;
       },
   onError?: (error: unknown) => void,
@@ -81,7 +82,7 @@ function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
-  const { inspect, retryPolicy, ...baseMonitorOptions } = monitorOptions;
+  const { inspect, retryPolicy, deferredLaneOccupancy, ...baseMonitorOptions } = monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
@@ -99,6 +100,7 @@ function createMonitor(
     drain: {
       adoptionStallTimeoutMs: 5_000,
       retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
+      ...(deferredLaneOccupancy ? { deferredLaneOccupancy } : {}),
       resolveNonRetryableFailure: (error) =>
         error instanceof PermanentIngressError
           ? { reason: "invalid-event", message: error.message }
@@ -462,6 +464,56 @@ describe("channel ingress monitor", () => {
         expect(delivered).toEqual(["event-first", "event-retry", "event-retry"]),
       );
       await monitor.waitForIdle();
+
+      await monitor.stop();
+    });
+  });
+
+  // Telegram and Slack release the ingress lane while a turn is deferred, so a
+  // newer same-lane event can be claimed and fail while the older one is still
+  // held. Cancelling that deferred owner reopens its row without consuming retry
+  // budget, leaving an eligible lane head behind its own newer sibling's backoff.
+  it("dispatches a reopened lane head while its newer sibling waits out backoff", async () => {
+    await withQueue(async (queue) => {
+      const delivered: string[] = [];
+      let cancelHead: (() => Promise<void>) | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (raw, lifecycle) => {
+          delivered.push(raw.id);
+          if (raw.id !== "event-head") {
+            return { kind: "failed-retryable", error: new Error("tail delivery failed") };
+          }
+          if (cancelHead) {
+            return { kind: "completed" };
+          }
+          cancelHead = async () => await lifecycle.onCancelled?.();
+          return { kind: "deferred" };
+        },
+        {
+          deferredLaneOccupancy: "release",
+          retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-head", lane: "a", text: "head" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head"]));
+      await monitor.admit({ id: "event-tail", lane: "a", text: "tail" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head", "event-tail"]));
+      // The failed tail is pending inside its backoff; the head is still claimed.
+      await vi.waitFor(async () =>
+        expect(
+          (await queue.listPending({ limit: "all", orderBy: "received" })).map((event) => event.id),
+        ).toEqual(["event-tail"]),
+      );
+
+      expect(cancelHead).toBeDefined();
+      await cancelHead?.();
+
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head", "event-tail", "event-head"]));
+      await monitor.waitForIdle();
+      // The tail still never starts early: it stays parked for its own backoff.
+      expect(delivered).toEqual(["event-head", "event-tail", "event-head"]);
 
       await monitor.stop();
     });

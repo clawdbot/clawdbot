@@ -1,4 +1,4 @@
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   ClickClackHttpError,
@@ -215,7 +215,7 @@ export async function openClickClackDiscussionBinding(
   }
 
   const config = runtime.config.current() as CoreConfig;
-  const agentId = resolveSessionAgentId({ config, sessionKey });
+  const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
   const fallback = fallbackDiscussionLabel(sessionKey, agentId);
   const label = resolveDiscussionLabel(entry, sessionKey, agentId);
   const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);

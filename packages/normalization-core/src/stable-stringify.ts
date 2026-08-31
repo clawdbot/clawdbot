@@ -82,6 +82,15 @@ function stringifyObjectValue(
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
+  if (normalizeString === preserveString) {
+    const fields: string[] = [];
+    for (const key of Object.keys(record).toSorted()) {
+      fields.push(
+        `${JSON.stringify(key)}:${stringifyStableValue(record[key], stack, normalizeString)}`,
+      );
+    }
+    return `{${fields.join(",")}}`;
+  }
   const entries = Object.keys(record)
     .map((key) => ({ key, normalizedKey: normalizeString(key) }))
     .toSorted((left, right) => {

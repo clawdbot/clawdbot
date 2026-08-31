@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { useConfigCliIntegrationHarness } from "./config-cli.integration.test-harness.js";
 
 const cronOwnerRefusal = await import("../config/io.cron-owner-refusal.js");
@@ -15,6 +15,49 @@ const {
 } = useConfigCliIntegrationHarness();
 
 describe("config cli roster integration", () => {
+  it("validates a surviving SecretRef after its agent is renamed within the batch", async () => {
+    const raw = JSON.stringify({
+      agents: { entries: { main: {} } },
+      secrets: { providers: { default: { source: "env" } } },
+    });
+    await withConfigFileHarness(
+      "openclaw-config-cli-roster-renamed-ref-",
+      raw,
+      async ({ configPath }) => {
+        const envSnapshot = captureEnv(["MISSING_TEST_SECRET"]);
+        try {
+          deleteTestEnvValue("MISSING_TEST_SECRET");
+          await expect(
+            runRegisteredConfigCommand([
+              "config",
+              "set",
+              "--batch-json",
+              JSON.stringify([
+                {
+                  path: "agents.list[0].memory.search.remote.apiKey",
+                  ref: { source: "env", provider: "default", id: "MISSING_TEST_SECRET" },
+                },
+                { path: "agents.list[0].id", value: "work" },
+                { path: "agents.entries.main", value: {} },
+              ]),
+              "--dry-run",
+              "--json",
+            ]),
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+          expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
+            ok: false,
+            refsChecked: 1,
+            errors: [{ kind: "resolvability", ref: "env:default:MISSING_TEST_SECRET" }],
+          });
+        } finally {
+          envSnapshot.restore();
+        }
+      },
+    );
+  });
+
   const originalEntries = {
     main: { name: "original-main" },
     worker: { name: "original-worker" },
@@ -328,7 +371,7 @@ describe("config cli roster integration", () => {
               modelPath,
               "missing-roster-provider/missing-model",
             ]),
-          ).rejects.toThrow("__exit__:1");
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
           expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
           expect(registeredRuntimeErrors.join("\n")).toContain(
             'Cannot set model reference "<configured model reference>" at agents.entries.main.model',
@@ -361,7 +404,7 @@ describe("config cli roster integration", () => {
             "--replace",
             "--strict-json",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
         expect(registeredRuntimeErrors.join("\n")).toContain(error);
         expect(registeredRuntimeLogs.join("\n")).not.toContain("Updated");

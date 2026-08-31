@@ -1,8 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { defaultRuntime } from "../runtime.js";
-import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./one-shot-exit.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import {
+  exitCliAfterOutput,
+  requestExitAfterOneShotOutput,
+  runCliWithExitFinalization,
+} from "./one-shot-exit.js";
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
@@ -25,6 +29,58 @@ function spyOnExit(onExit?: (code: number) => void) {
 describe("one-shot CLI exit", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each(["default", "injected"])(
+    "unwinds the %s runtime synchronously with the requested exit code",
+    (kind) => {
+      const exit = vi.fn();
+      const runtime = kind === "default" ? defaultRuntime : { ...defaultRuntime, exit };
+      const defaultExit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+      let thrown: unknown;
+      try {
+        exitCliAfterOutput(runtime, 7);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(ExitError);
+      expect(thrown).toMatchObject({ code: 7 });
+      expect(defaultExit).not.toHaveBeenCalled();
+      if (kind === "injected") {
+        expect(exit).toHaveBeenCalledExactlyOnceWith(7);
+      }
+    },
+  );
+
+  it("preserves errors thrown by an injected runtime exit", () => {
+    const failure = new Error("embedded runtime stopped");
+    const exit = vi.fn(() => {
+      throw failure;
+    });
+    const runtime = { ...defaultRuntime, exit };
+
+    expect(() => exitCliAfterOutput(runtime, 7)).toThrow(failure);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("leaves a deferred exit owned by the injected runtime without reporting it again", async () => {
+    const failure = new ExitError(7);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const onError = vi.fn();
+
+    await expect(
+      runCliWithExitFinalization({
+        run: async () => {
+          throw failure;
+        },
+        onError,
+        runtime,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -357,43 +413,51 @@ describe("one-shot CLI exit", () => {
     }
   });
 
-  it("drains large piped stdout before a requested nonzero exit", () => {
-    const env = { ...process.env };
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
-    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
-    const payloadBytes = 1024 * 1024;
-    const script = `
+  it.each(["requested nonzero exit", "deferred ExitError"])(
+    "drains large piped JSON before a %s without reporting another error",
+    (exitMode) => {
+      const env = { ...process.env };
+      delete env.VITEST;
+      delete env.VITEST_POOL_ID;
+      delete env.VITEST_WORKER_ID;
+      const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+      const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+      const payloadBytes = 1024 * 1024;
+      const script = `
       import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
-      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      import { defaultRuntime, ExitError } from ${JSON.stringify(runtimeUrl)};
       await runCliWithExitFinalization({
         run: async () => {
-          process.stdout.write("x".repeat(${payloadBytes}));
-          requestExitAfterOneShotOutput(defaultRuntime, 7);
+          defaultRuntime.writeJson({ ok: false, payload: "x".repeat(${payloadBytes}) });
+          ${exitMode === "deferred ExitError" ? "throw new ExitError(7);" : "requestExitAfterOneShotOutput(defaultRuntime, 7);"}
         },
-        onError: (error) => { throw error; },
+        onError: (error) => {
+          process.stderr.write("unexpected error: " + String(error));
+          process.exitCode = 1;
+        },
       });
     `;
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      {
-        encoding: "utf8",
-        env,
-        maxBuffer: 2 * payloadBytes,
-        timeout: 30_000,
-      },
-    );
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", script],
+        {
+          encoding: "utf8",
+          env,
+          maxBuffer: 2 * payloadBytes,
+          timeout: 30_000,
+        },
+      );
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(7);
-    expect(result.signal).toBeNull();
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toHaveLength(payloadBytes);
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(7);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(
+        `${JSON.stringify({ ok: false, payload: "x".repeat(payloadBytes) }, null, 2)}\n`,
+      );
+    },
+  );
 
   it.each([
     {

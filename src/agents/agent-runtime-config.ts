@@ -11,6 +11,7 @@ import { isSecretRef } from "../config/types.secrets.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { listAgentEntries } from "./agent-scope.js";
 import { measureAgentStartup } from "./startup-timing.js";
@@ -22,12 +23,7 @@ export async function resolveAgentRuntimeConfig(
     runtimeTargetsChannelSecrets?: boolean;
     runtimeChannelSecretScope?: { channel: string; accountId?: string };
   },
-): Promise<{
-  loadedRaw: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  cfg: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-}> {
+): Promise<OpenClawConfig> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
   const channelSecretScope = params?.runtimeChannelSecretScope;
@@ -36,15 +32,10 @@ export async function resolveAgentRuntimeConfig(
     includeChannelTargets,
     channel: channelSecretScope?.channel,
   });
-  const secretsRuntime = await measureAgentStartup(
-    "secrets-runtime-import",
-    () => import("../secrets/runtime.js"),
-    { config: loadedRaw },
-  );
-  const activeSecretsRuntimeSnapshot = secretsRuntime.getActiveSecretsRuntimeSnapshot();
+  const activeSecretsConfig = getActiveSecretsRuntimeConfigSnapshot();
   let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const sourceConfig = activeSecretsRuntimeSnapshot
-    ? activeSecretsRuntimeSnapshot.sourceConfig
+  const sourceConfig = activeSecretsConfig
+    ? activeSecretsConfig.sourceConfig
     : await measureAgentStartup(
         "config-source",
         async () => {
@@ -87,13 +78,18 @@ export async function resolveAgentRuntimeConfig(
         ).resolvedConfig;
       })()
     : loadedRaw;
-  if (activeSecretsRuntimeSnapshot && cfg !== loadedRaw) {
+  if (activeSecretsConfig && cfg !== loadedRaw) {
     // Gateway activation already published loadedRaw with this source config. Republishing the
     // same object here would advance its lifecycle revision and evict revision-keyed hot caches.
     setRuntimeConfigSnapshot(cfg, sourceConfig);
-  } else if (!activeSecretsRuntimeSnapshot) {
+  } else if (!activeSecretsConfig) {
     // Standalone local agent commands have no Gateway-owned snapshot. Materialize
     // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
+    const secretsRuntime = await measureAgentStartup(
+      "secrets-runtime-import",
+      () => import("../secrets/runtime.js"),
+      { config: cfg },
+    );
     const snapshot = await measureAgentStartup(
       "secrets-snapshot",
       () =>
@@ -107,12 +103,7 @@ export async function resolveAgentRuntimeConfig(
     );
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
   }
-  return {
-    loadedRaw,
-    sourceConfig,
-    cfg,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-  };
+  return cfg;
 }
 
 function hasNestedSecretRef(value: unknown): boolean {
@@ -191,6 +182,7 @@ function resolveAgentRuntimeSecretTargets(params: {
   optionalActivePaths: Set<string>;
 } {
   const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
+    config: params.config,
     includeChannelTargets: params.includeChannelTargets,
   });
   const optionalActivePaths = getAgentRuntimeOptionalCommandSecretPaths(params.config);

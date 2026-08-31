@@ -51,9 +51,10 @@ that explicit trust by adding the selected plugin to an existing restrictive
 `plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
 must be removed before enabling the plugin.
 
-Installing or removing plugin code requires a Gateway restart. Enablement
-changes can be applied without a restart when the installed plugin and current
-Gateway runtime support it; otherwise the UI tells you a restart is required.
+Installing, updating, or removing plugin code requires a Gateway restart.
+Enablement changes for plugins in the startup inventory can be applied without
+a restart when the plugin and current Gateway runtime support it; otherwise
+the UI tells you a restart is required.
 OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
 from the CLI after they are added.
 
@@ -233,6 +234,17 @@ runtime surfaces:
 openclaw gateway restart
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
+
+The Gateway keeps the plugin inventory it discovered at startup. Management
+commands can inspect a newly installed package before restart, but that does
+not make its code or metadata available to the running Gateway. Manifest edits
+and plugins added to an agent workspace also require a restart. Ordinary config,
+enablement, and account changes can still hot-apply against the existing
+inventory.
+
+For API clients, `plugins.refresh` reports `restartRequired: true` and requests
+a restart through config reload. With `gateway.reload.mode: "off"`, restart
+manually; refresh does not rescan or replace the running inventory.
 
 `inspect --runtime` loads the plugin module and proves it registered runtime
 surfaces (tools, hooks, services, Gateway methods, HTTP routes, plugin-owned

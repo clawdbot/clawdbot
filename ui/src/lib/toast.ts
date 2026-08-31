@@ -47,8 +47,13 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitReason: ToastDismissReason | null = null;
 
+  private syncPlacement() {
+    this.dataset.toastPlacement = this.parentElement?.matches(".shell") ? "shell" : "overlay";
+  }
+
   override connectedCallback() {
     super.connectedCallback();
+    this.syncPlacement();
     const pending = queuedToast;
     queuedToast = null;
     if (pending) {
@@ -66,8 +71,10 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  /** Keep the active outcome intact while moveBefore() crosses top-layer owners. */
-  connectedMoveCallback() {}
+  /** Keep the outcome intact and refresh ancestor-owned placement across moveBefore() handoffs. */
+  connectedMoveCallback() {
+    this.syncPlacement();
+  }
 
   show(options: ToastOptions) {
     this.finishDismiss(this.exitReason ?? "replaced");

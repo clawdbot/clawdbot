@@ -3,7 +3,6 @@ import { vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { testing as subagentAnnounceTesting } from "./subagents/announce/subagent-announce.js";
-import { testing as subagentControlTesting } from "./subagents/registry/subagent-control.test-support.js";
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 
@@ -34,10 +33,6 @@ export function resetSubagentsConfigOverride() {
 }
 
 function applySharedSubagentTestDeps() {
-  // Keep control and announce modules on the same mocked gateway.
-  subagentControlTesting.setDepsForTest({
-    callGateway: callGatewayForTest,
-  });
   subagentAnnounceTesting.setDepsForTest({
     callGateway: callGatewayForTest,
     getRuntimeConfig: () => configOverride,

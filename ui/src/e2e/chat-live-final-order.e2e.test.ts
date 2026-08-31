@@ -10,6 +10,102 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const runId = "multi-reply-run";
+    const replies = ["First part of the current answer.", "Second part of the current answer."];
+    const previous = "Previous durable conversation.";
+    const prompt = "Please give me both parts.";
+    try {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "chat.startup": {
+            deltaCursor: "before-multi-reply",
+            messages: [],
+            sessionId: "session:agent:main:main",
+            sessionInfo: {
+              activeRunIds: [],
+              hasActiveRun: false,
+              key: "main",
+              kind: "direct",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      for (const [index, text] of replies.entries()) {
+        await gateway.emitGatewayEvent("chat", {
+          runId,
+          seq: index + 1,
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
+        });
+        await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
+      }
+      for (const [id, seq, role, text, idempotencyKey] of [
+        ["previous", 10, "user", previous, "previous-run:user"],
+        ["current-prompt", 11, "user", prompt, `${runId}:user`],
+      ] as const) {
+        await gateway.emitGatewayEvent("session.message", {
+          message: {
+            role,
+            content: [{ type: "text", text }],
+            __openclaw: { id, seq, idempotencyKey },
+            timestamp: Date.now(),
+          },
+          messageId: id,
+          messageSeq: seq,
+          sessionKey: "main",
+          session: {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: "main",
+            kind: "direct",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        });
+        await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
+      }
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "multi-reply-order.png"),
+          fullPage: true,
+        });
+      }
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+            },
+            [previous, prompt, ...replies],
+          ),
+        )
+        .toEqual([0, 1, 2, 3]);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps durable turns ordered when a live final arrives before transcript events", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -82,7 +178,7 @@ suite.define(() => {
           "chat.startup": {
             deltaCursor: "before-final",
             messages: [],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             sessionInfo: {
               activeRunIds: [],
               hasActiveRun: false,

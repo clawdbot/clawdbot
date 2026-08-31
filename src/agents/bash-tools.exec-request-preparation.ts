@@ -38,7 +38,6 @@ export type ExecToolArgs = Record<string, unknown> & {
   pty?: boolean;
   elevated?: boolean;
   host?: string;
-  security?: string;
   ask?: string;
   node?: string;
 };
@@ -66,14 +65,7 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
-  "command",
-  "workdir",
-  "host",
-  "security",
-  "ask",
-  "node",
-] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
 export function assertSupportedExecParams(args: unknown): void {
   if (isRecord(args) && Object.hasOwn(args, "timeout")) {

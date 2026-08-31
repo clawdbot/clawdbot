@@ -20,6 +20,7 @@ import {
 } from "./delivery-queue-sqlite-bound.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
+  hasLiveDeliveryQueueClaim,
   inferDeliveryQueueFailureRetention,
   parseDeliveryQueueCompletionRetention,
   projectDeliveryQueueTerminalEntry,
@@ -315,8 +316,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
       }
       if (
         params.expectedPlatformSendAttemptId &&
-        current.platformSendAttemptId !== params.expectedPlatformSendAttemptId &&
-        current.producerClaimId !== params.expectedPlatformSendAttemptId
+        !hasLiveDeliveryQueueClaim(current, params.expectedPlatformSendAttemptId, Date.now())
       ) {
         throw new Error(`Delivery platform claim was lost: ${params.id}`);
       }

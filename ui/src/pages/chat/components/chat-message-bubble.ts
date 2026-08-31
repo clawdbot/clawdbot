@@ -29,8 +29,7 @@ import {
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -38,9 +37,7 @@ import { renderMessageImages, resolveRenderableMessageImages } from "./chat-mess
 import {
   detectJson,
   jsonSummaryLabel,
-  renderAssistantMessageMarkdown,
-  renderMarkdownText,
-  renderUserMessageMarkdown,
+  renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
@@ -50,22 +47,24 @@ import {
   extractStructuredSvgAttachments,
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
-  type AttachmentItem,
+  type AssistantAttachmentItem,
   type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
-  renderExpandedToolCardContent,
-  renderRawOutputToggle,
   renderToolApprovalReviews,
   renderToolCard,
-  renderToolOutcome,
   renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
+import {
+  renderExpandedToolCardContent,
+  renderRawOutputToggle,
+  renderToolOutcome,
+} from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 
 function renderChatIcon(name: string) {
@@ -74,19 +73,10 @@ function renderChatIcon(name: string) {
 
 function renderInlineToolCards(
   toolCards: ToolCard[],
-  opts: {
+  opts: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
     messageKey: string;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-    runActive?: boolean;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    showApprovalReviews?: boolean;
   },
 ) {
   return html`
@@ -95,19 +85,11 @@ function renderInlineToolCards(
         const disclosureId = `${opts.messageKey}:toolcard:${index}`;
         const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
         return renderToolCard(card, {
+          ...opts,
           expanded,
-          runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
             : () => undefined,
-          sessionKey: opts.sessionKey,
-          agentId: opts.agentId,
-          onOpenSidebar: opts.onOpenSidebar,
-          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-          showApprovalReviews: opts.showApprovalReviews,
         });
       })}
     </div>
@@ -283,14 +265,19 @@ export function renderGroupedMessage(
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   const actionText = opts.actionMarkdown ?? displayMarkdown;
   const assistantAttachments = normalizedMessage.content.filter(
-    (item): item is AttachmentItem => item.type === "attachment",
+    (item): item is AssistantAttachmentItem =>
+      item.type === "attachment" || item.type === "attachment_error",
   );
   const attachmentUrls = new Set<string>();
   const visibleAttachments = [
     ...assistantAttachments,
     ...extractStructuredSvgAttachments(message),
     ...extractTranscriptAttachments(message),
-  ].filter(({ attachment }) => {
+  ].filter((item) => {
+    if (item.type === "attachment_error") {
+      return true;
+    }
+    const { attachment } = item;
     if (attachmentUrls.has(attachment.url)) {
       return false;
     }
@@ -303,7 +290,8 @@ export function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = displayMarkdown ? displayMarkdown : null;
+  const markdown =
+    (normalizedRole === "user" ? opts.actionMarkdown : undefined) ?? (displayMarkdown || null);
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -320,6 +308,7 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    hasImages ? "chat-bubble--with-images" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
@@ -328,10 +317,9 @@ export function renderGroupedMessage(
     .join(" ");
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
   if (
     !markdown &&
-    !visibleToolCards &&
+    !hasToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
     visibleAttachments.length === 0 &&
@@ -394,7 +382,6 @@ export function renderGroupedMessage(
       ? html`${assistantViewBlocks.map(
           (block) => html`<div class="chat-tool-card__widget-host">
             ${renderToolPreview(block.preview, "chat_message", {
-              onOpenSidebar,
               rawText: block.rawText ?? null,
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               boardProvider: opts.boardProvider,
@@ -431,51 +418,61 @@ export function renderGroupedMessage(
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
 
-  if (onlyToolCards) {
-    return html`
-      <div
-        class="${bubbleClasses}"
-        data-message-id=${messageKey}
-        data-entry-id=${opts.entryId || nothing}
-        data-message-text=${actionText || nothing}
-      >
-        ${renderReplyPreview(
-          normalizedMessage.replyTarget,
-          normalizedMessage.replyTarget?.kind === "id"
-            ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-                normalizedMessage.replyPreview)
-            : undefined,
-          opts.onOpenReply,
-          opts.onResolveReply,
-          normalizedMessage.replyTarget?.kind === "id" &&
-            opts.replyNavigationId === normalizedMessage.replyTarget.id,
-        )}
-        ${renderInlineToolCards(toolCards, {
-          messageKey,
-          sessionKey: opts.sessionKey,
-          agentId: opts.agentId,
-          onOpenSidebar,
-          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-          isToolExpanded: opts.isToolExpanded,
-          onToggleToolExpanded: opts.onToggleToolExpanded,
-          runActive: opts.runActive,
-          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-        })}
-        ${duplicateCount > 1
-          ? html`<div
-              class="chat-duplicate-count"
-              aria-label=${t("chat.messages.duplicatesCollapsed", {
-                count: String(duplicateCount),
-              })}
-            >
-              ×${duplicateCount}
-            </div>`
-          : nothing}
-      </div>
-    `;
-  }
+  const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
+  // Collapsed tool results must not load attachments or render hidden markdown.
+  const renderBody = () => html`
+    ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
+    ${renderMessageImages(images, imageRenderOptions)}
+    ${renderAssistantAttachments(
+      visibleAttachments,
+      imageRenderOptions,
+      onOpenSidebar,
+      opts.onAssistantAttachmentLoaded,
+      normalizedRole === "assistant",
+    )}
+    ${isStandaloneToolMessage ? assistantViewContent : nothing}
+    ${reasoningMarkdown
+      ? html`<div class="chat-thinking">
+          ${unsafeHTML(
+            toSanitizedMarkdownHtml(reasoningMarkdown, {
+              codeBlockInteraction: "interactive",
+            }),
+          )}
+        </div>`
+      : nothing}
+    ${isStandaloneToolMessage ? nothing : assistantViewContent}
+    ${jsonResult
+      ? html`<details
+          class="chat-json-collapse"
+          ?open=${isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls)}
+        >
+          <summary class="chat-json-summary">
+            <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
+            <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+          </summary>
+          <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
+        </details>`
+      : bodyMarkdown
+        ? renderMessageMarkdown(
+            bodyMarkdown,
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
+            duplicateSuffix,
+          )
+        : nothing}
+    ${hasToolCards
+      ? isStandaloneToolMessage && expandsSingleToolCard && singleToolCard
+        ? renderExpandedToolCardContent(singleToolCard, toolRenderOptions)
+        : renderInlineToolCards(toolCards, {
+            ...toolRenderOptions,
+            showApprovalReviews: isStandaloneToolMessage ? false : undefined,
+          })
+      : nothing}
+    ${isStandaloneToolMessage && failedToolCard
+      ? renderToolOutcome("failed", failedToolCard.exitCode)
+      : nothing}
+  `;
 
   return html`
     <div
@@ -495,185 +492,50 @@ export function renderGroupedMessage(
         normalizedMessage.replyTarget?.kind === "id" &&
           opts.replyNavigationId === normalizedMessage.replyTarget.id,
       )}
-      ${isStandaloneToolMessage
-        ? html`
-            <div
-              class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
-                ? "is-open"
-                : ""}"
-            >
-              <button
-                class="chat-inline-disclosure chat-tool-msg-summary"
-                type="button"
-                aria-expanded=${String(toolMessageExpanded)}
-                @pointerenter=${syncToolDisclosureOverflow}
-                @focus=${syncToolDisclosureOverflow}
-                @click=${(event: MouseEvent) => {
-                  if (shouldToggleSelectableDisclosure(event)) {
-                    opts.onToggleToolMessageExpanded?.(
-                      toolMessageDisclosureId,
-                      toolMessageExpanded,
-                    );
-                  }
-                }}
+      ${onlyToolCards
+        ? renderInlineToolCards(toolCards, toolRenderOptions)
+        : isStandaloneToolMessage
+          ? html`
+              <div
+                class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
+                  ? "is-open"
+                  : ""}"
               >
-                <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
-                <span class="chat-tool-disclosure__content">
-                  <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
-                  ${toolSummaryLabel
-                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                    : toolPreview
-                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                      : nothing}
-                </span>
-                <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-              </button>
-              ${toolMessageExpanded
-                ? html`
-                    <div class="chat-tool-msg-body">
-                      ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
-                      ${renderMessageImages(images, imageRenderOptions)}
-                      ${renderAssistantAttachments(
-                        visibleAttachments,
-                        imageRenderOptions,
-                        onOpenSidebar,
-                        opts.onAssistantAttachmentLoaded,
-                      )}
-                      ${assistantViewContent}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
-                            ${unsafeHTML(
-                              toSanitizedMarkdownHtml(reasoningMarkdown, {
-                                codeBlockInteraction: "interactive",
-                              }),
-                            )}
-                          </div>`
+                <button
+                  class="chat-inline-disclosure chat-tool-msg-summary"
+                  type="button"
+                  aria-expanded=${String(toolMessageExpanded)}
+                  @pointerenter=${syncToolDisclosureOverflow}
+                  @focus=${syncToolDisclosureOverflow}
+                  @click=${(event: MouseEvent) => {
+                    if (shouldToggleSelectableDisclosure(event)) {
+                      opts.onToggleToolMessageExpanded?.(
+                        toolMessageDisclosureId,
+                        toolMessageExpanded,
+                      );
+                    }
+                  }}
+                >
+                  <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
+                  <span class="chat-tool-disclosure__content">
+                    <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
+                    ${toolSummaryLabel
+                      ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                      : toolPreview
+                        ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                         : nothing}
-                      ${jsonResult
-                        ? html`<details
-                            class="chat-json-collapse"
-                            ?open=${Boolean(opts.autoExpandToolCalls)}
-                          >
-                            <summary class="chat-json-summary">
-                              <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-                              <span class="chat-json-label"
-                                >${jsonSummaryLabel(jsonResult.parsed)}</span
-                              >
-                            </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
-                          </details>`
-                        : bodyMarkdown
-                          ? renderMarkdownText(
-                              bodyMarkdown,
-                              opts.isStreaming,
-                              markdownRenderOptions,
-                              duplicateSuffix,
-                            )
-                          : nothing}
-                      ${hasToolCards
-                        ? expandsSingleToolCard && singleToolCard
-                          ? renderExpandedToolCardContent(
-                              singleToolCard,
-                              opts.sessionKey,
-                              onOpenSidebar,
-                              opts.canvasPluginSurfaceUrl,
-                              opts.embedSandboxMode ?? "scripts",
-                              opts.allowExternalEmbedUrls ?? false,
-                              opts.runActive,
-                              opts.onOpenWorkspaceFile,
-                            )
-                          : renderInlineToolCards(toolCards, {
-                              messageKey,
-                              sessionKey: opts.sessionKey,
-                              agentId: opts.agentId,
-                              onOpenSidebar,
-                              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-                              isToolExpanded: opts.isToolExpanded,
-                              onToggleToolExpanded: opts.onToggleToolExpanded,
-                              runActive: opts.runActive,
-                              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                              allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                              showApprovalReviews: false,
-                            })
-                        : nothing}
-                      ${failedToolCard
-                        ? renderToolOutcome("failed", failedToolCard.exitCode)
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
-              ${toolCards.map((card) => renderToolApprovalReviews(card))}
-            </div>
-          `
-        : html`
-            ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
-            ${renderMessageImages(images, imageRenderOptions)}
-            ${renderAssistantAttachments(
-              visibleAttachments,
-              imageRenderOptions,
-              onOpenSidebar,
-              opts.onAssistantAttachmentLoaded,
-            )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
-                  ${unsafeHTML(
-                    toSanitizedMarkdownHtml(reasoningMarkdown, {
-                      codeBlockInteraction: "interactive",
-                    }),
-                  )}
-                </div>`
-              : nothing}
-            ${assistantViewContent}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
-                  <summary class="chat-json-summary">
-                    <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                  </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
-                </details>`
-              : bodyMarkdown
-                ? normalizedRole === "user"
-                  ? renderUserMessageMarkdown(
-                      bodyMarkdown,
-                      messageKey,
-                      opts,
-                      markdownRenderOptions,
-                      duplicateSuffix,
-                    )
-                  : normalizedRole === "assistant"
-                    ? renderAssistantMessageMarkdown(
-                        bodyMarkdown,
-                        opts.isStreaming,
-                        opts.assistantMessageDisclosure,
-                        markdownRenderOptions,
-                        duplicateSuffix,
-                        opts.isStreaming ? messageKey : undefined,
-                      )
-                    : renderMarkdownText(
-                        bodyMarkdown,
-                        opts.isStreaming,
-                        markdownRenderOptions,
-                        duplicateSuffix,
-                      )
-                : nothing}
-            ${hasToolCards
-              ? renderInlineToolCards(toolCards, {
-                  messageKey,
-                  sessionKey: opts.sessionKey,
-                  agentId: opts.agentId,
-                  onOpenSidebar,
-                  onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-                  isToolExpanded: opts.isToolExpanded,
-                  onToggleToolExpanded: opts.onToggleToolExpanded,
-                  runActive: opts.runActive,
-                  canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                  embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                  allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                })
-              : nothing}
-          `}
+                  </span>
+                  <span class="chat-tool-row__chevron" aria-hidden="true"
+                    >${icons.chevronRight}</span
+                  >
+                </button>
+                ${toolMessageExpanded
+                  ? html`<div class="chat-tool-msg-body">${renderBody()}</div>`
+                  : nothing}
+                ${toolCards.map((card) => renderToolApprovalReviews(card))}
+              </div>
+            `
+          : renderBody()}
       ${duplicateCount > 1 && (!markdown || jsonResult)
         ? html`<div
             class="chat-duplicate-count"

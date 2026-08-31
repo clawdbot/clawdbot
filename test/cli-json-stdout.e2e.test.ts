@@ -597,47 +597,102 @@ describe("cli json stdout contract", () => {
     );
   });
 
-  it.each([
-    { name: "piped stdout", tty: false },
-    { name: "dual TTYs", tty: true },
-  ])("writes successful telemetry show JSON to clean $name", async ({ tty }) => {
-    await withTempHome(
-      async (tempHome) => {
-        const ttyPreload = Buffer.from(
-          [
-            'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
-            'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-          ].join("\n"),
-        ).toString("base64");
-        const result = runBuiltCli(tempHome, ["telemetry", "show", "--json"], {
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          ...(tty
-            ? {
-                NODE_OPTIONS: `--import=data:text/javascript;base64,${ttyPreload}`,
-                FORCE_COLOR: "1",
-              }
-            : {}),
-        });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
-        const payload = JSON.parse(result.stdout);
-        expect(payload).toEqual({
-          featureStatsEnabled: false,
-          reason: "never-asked",
-          endpoint: "https://telemetry.openclaw.ai/api/latest-version",
-          lastPingAt: null,
-          request: {
-            method: "GET",
-            userAgent: expect.stringMatching(/^openclaw\/[^ ]+ \(.+; gateway\)$/u),
-          },
-        });
-        expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
-        expect(result.stderr).not.toContain('"featureStatsEnabled"');
+  describe.each([
+    { context: "ordinary fresh home", env: {}, reason: "never-asked" },
+    { context: "automated fresh home", env: { CI: "1" }, reason: "automated-environment" },
+    {
+      context: "automation with an explicit endpoint",
+      env: {
+        CI: "1",
+        OPENCLAW_TELEMETRY_ENDPOINT: "https://telemetry.example.invalid/api/latest-version",
       },
-      { prefix: "openclaw-telemetry-json-success-e2e-" },
-    );
+      reason: "never-asked",
+    },
+  ])("telemetry inspection in $context", ({ env, reason }) => {
+    it.each([
+      { name: "piped stdout", tty: false, format: "JSON" },
+      { name: "stubbed dual TTYs", tty: true, format: "JSON" },
+      { name: "piped stdout", tty: false, format: "text" },
+      { name: "stubbed dual TTYs", tty: true, format: "text" },
+    ])("writes successful telemetry show $format to $name", async ({ tty, format }) => {
+      await withTempHome(
+        async (tempHome) => {
+          const preload = Buffer.from(
+            [
+              'import net from "node:net";',
+              'const denyNetwork = () => { throw new Error("TELEMETRY_NETWORK_FORBIDDEN"); };',
+              "net.Socket.prototype.connect = denyNetwork;",
+              "globalThis.fetch = async () => denyNetwork();",
+              ...(tty
+                ? [
+                    'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                    'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                  ]
+                : []),
+            ].join("\n"),
+          ).toString("base64");
+          // CI and the endpoint are named inputs, independent of the test runner's environment.
+          const result = runBuiltCli(
+            tempHome,
+            ["telemetry", "show", ...(format === "JSON" ? ["--json"] : [])],
+            {
+              ...env,
+              NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+              OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              ...(tty ? { FORCE_COLOR: "1" } : {}),
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const endpoint =
+            env.OPENCLAW_TELEMETRY_ENDPOINT ?? "https://telemetry.openclaw.ai/api/latest-version";
+          if (format === "JSON") {
+            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            const payload = JSON.parse(result.stdout);
+            expect(payload).toEqual({
+              featureStatsEnabled: false,
+              reason,
+              endpoint,
+              lastPingAt: null,
+              request:
+                reason === "automated-environment"
+                  ? null
+                  : {
+                      method: "GET",
+                      userAgent: expect.stringMatching(/^openclaw\/[^ ]+ \(.+; gateway\)$/u),
+                    },
+            });
+            expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
+          } else {
+            // Human TTY output includes the startup banner before the inspection report.
+            const report = result.stdout.slice(result.stdout.indexOf("Feature stats:"));
+            const lines = report.trimEnd().split("\n");
+            expect(lines).toEqual([
+              "Feature stats: disabled",
+              `Reason: ${reason === "automated-environment" ? "disabled in an automated environment (CI is set)" : "consent has not been requested"}`,
+              `Endpoint: ${endpoint}`,
+              "Last ping: never",
+              ...(reason === "automated-environment"
+                ? ["Request: none (disabled in an automated environment (CI is set))"]
+                : [
+                    `Request: GET ${endpoint}`,
+                    expect.stringMatching(/^User-Agent: openclaw\/[^ ]+ \(.+; gateway\)$/u),
+                  ]),
+            ]);
+          }
+          if (tty && format === "text") {
+            expect(result.stdout).toContain("OpenClaw");
+            expect(result.stderr).toContain("\u001B[?25h");
+            expect(result.stderr).not.toContain("TELEMETRY_NETWORK_FORBIDDEN");
+          } else {
+            expect(result.stderr).toBe("");
+          }
+        },
+        { prefix: "openclaw-telemetry-json-success-e2e-" },
+      );
+    });
   });
 
   it.each([

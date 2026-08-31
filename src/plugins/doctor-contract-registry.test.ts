@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -14,6 +15,10 @@ import {
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
+const retainedConfigDoctorMock = vi.hoisted(() => vi.fn());
+vi.mock("./public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: retainedConfigDoctorMock,
+}));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
@@ -74,6 +79,7 @@ describe("doctor-contract-registry module loader", () => {
     resetRegistryJitiMocks();
     mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
     doctorContractWarnMock.mockReset();
+    retainedConfigDoctorMock.mockReset().mockReturnValue(null);
     // Loaded once in beforeAll; afterEach guards the same binding optionally because it
     // can fire when that import never completed. Fail loudly here instead of silently
     // running a case against the real module loader.
@@ -101,13 +107,17 @@ describe("doctor-contract-registry module loader", () => {
       fs.writeFileSync(filePath, "export {};\n", "utf-8");
     }
 
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorTypeScript);
+    const originalOwner = createPluginCache();
+    const resolvePath = () => resolvePluginDoctorContractArtifactPath(pluginRoot);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
     fs.rmSync(rootDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(distDoctorTypeScript);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(distDoctorTypeScript);
     fs.rmSync(distDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorJavaScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootDoctorJavaScript);
     fs.rmSync(rootDoctorJavaScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootContractTypeScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootContractTypeScript);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
   });
 
   it.each([
@@ -813,10 +823,12 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["gemini", "openai", "xai"]);
   });
 
-  it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
+  it("loads a plugin doctor contract when scoped by a contributed provider alias", () => {
     const pluginRoot = makeTempDir();
+    const unrelatedRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => ({
+    fs.writeFileSync(path.join(unrelatedRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
       normalizeCompatibilityConfig: ({
         cfg,
       }: {
@@ -835,7 +847,11 @@ describe("doctor-contract-registry module loader", () => {
             },
           },
         },
-        changes: ["normalized ollama cloud provider endpoint"],
+        changes: [
+          modulePath.startsWith(unrelatedRoot)
+            ? "wrong unrelated provider contract"
+            : "normalized ollama cloud provider endpoint",
+        ],
       }),
     }));
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -844,7 +860,15 @@ describe("doctor-contract-registry module loader", () => {
           id: "ollama",
           rootDir: pluginRoot,
           channels: [],
-          providers: ["ollama", "ollama-cloud"],
+          providers: ["OlLaMa"],
+          providerAuthAliases: { "Ollama-Cloud": "OLLAMA" },
+        },
+        {
+          id: "unrelated",
+          rootDir: unrelatedRoot,
+          channels: [],
+          providers: ["unrelated"],
+          providerAuthAliases: { "ollama-cloud": "missing" },
         },
       ],
       diagnostics: [],
@@ -871,6 +895,7 @@ describe("doctor-contract-registry module loader", () => {
       baseUrl: "https://ollama.com",
       models: [],
     });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
   it("loads a provider doctor contract when a media preference is its only activation", () => {

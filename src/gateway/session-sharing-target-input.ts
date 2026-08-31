@@ -1,38 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  listSessionGroups,
+  normalizeGroupNames,
+  resolveSessionGroupMutationTargetsByName,
+} from "./session-groups.js";
+import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
-export function resolveSessionGroupMutationTargetsByName(
-  cfg: OpenClawConfig,
-): Map<string, SessionMutationTarget[]> {
-  const targetsByName = new Map<string, SessionMutationTarget[]>();
-  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    })) {
-      const groupName = normalizeOptionalString(entry.category);
-      if (!groupName) {
-        continue;
-      }
-      const targets = targetsByName.get(groupName) ?? [];
-      targets.push({ sessionKey, agentId: storeTarget.agentId });
-      targetsByName.set(groupName, targets);
-    }
-  }
-  return targetsByName;
-}
-
-export type SessionMutationTarget = {
-  sessionKey: string;
-  agentId?: string;
-};
+export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
 
@@ -68,6 +48,8 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.github.publish", ["sessionKey"]],
   ["sessions.fork", ["sessionKey"]],
   ["sessions.patch", ["key"]],
+  ["sessions.goal.update", ["sessionKey"]],
+  ["sessions.goal.clear", ["sessionKey"]],
   ["sessions.pluginPatch", ["key"]],
   ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
   ["sessions.recover", ["key"]],
@@ -122,6 +104,8 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.groups.update",
   "sessions.github.publish",
   "sessions.patch",
+  "sessions.goal.update",
+  "sessions.goal.clear",
   "sessions.pluginPatch",
   "sessions.reclaim",
   "sessions.recover",
@@ -239,6 +223,28 @@ function resolveSessionGroupMutationTargets(params: {
     : undefined;
 }
 
+function resolveSessionGroupsPutMutationTargets(
+  getCfg: () => OpenClawConfig,
+  requestParams: unknown,
+): SessionMutationTarget[] | undefined {
+  const names =
+    requestParams && typeof requestParams === "object" && "names" in requestParams
+      ? requestParams.names
+      : undefined;
+  if (!Array.isArray(names)) {
+    return undefined;
+  }
+  const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
+  const dropped = listSessionGroups()
+    .map((group) => group.name)
+    .filter((name) => !requested.has(name));
+  if (dropped.length === 0) {
+    return [];
+  }
+  const byName = resolveSessionGroupMutationTargetsByName(getCfg());
+  return dropped.flatMap((name) => byName.get(name) ?? []);
+}
+
 function resolveApprovalSessionTarget(
   method: string,
   params: unknown,
@@ -299,6 +305,9 @@ export function resolveSessionMutationTargets(params: {
       getCfg: params.getCfg,
       requestParams: params.requestParams,
     });
+  }
+  if (params.method === "sessions.groups.put") {
+    return resolveSessionGroupsPutMutationTargets(params.getCfg, params.requestParams);
   }
   if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(

@@ -33,10 +33,7 @@ import {
 } from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import {
-  materializeSubagentAttachments,
-  type SubagentAttachmentReceiptFile,
-} from "./subagent-attachments.js";
+import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
@@ -98,6 +95,8 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const assertActive = ctx.assertActive;
+  const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
@@ -183,6 +182,7 @@ export async function spawnSubagentDirect(
       cfg,
       targetAgentId,
       childSessionKey,
+      label: label || undefined,
       incognito,
       requesterInternalKey,
       creationPolicy,
@@ -205,7 +205,7 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
-    const provisionalSessionIdentity = {
+    let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
     };
@@ -231,6 +231,15 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
+    if (childEntry) {
+      // Only preparation's committed entry can advance cleanup ownership. A reread
+      // of the key could capture a reset/rebound successor that this spawn does not own.
+      provisionalSessionIdentity = {
+        expectedSessionId: childEntry.sessionId,
+        expectedLifecycleRevision: childEntry.lifecycleRevision,
+      };
+    }
     if (resolvedModel) {
       const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
         cfg,
@@ -254,7 +263,7 @@ export async function spawnSubagentDirect(
         agentId: targetAgentId,
         label: label || undefined,
         mode: spawnMode,
-        requesterSessionKey: ownership.threadBindingRequesterSessionKey,
+        requesterSessionKey: ownership.controllerSessionKey,
         requester: {
           channel: childSessionOrigin?.channel,
           accountId: childSessionOrigin?.accountId,
@@ -282,7 +291,6 @@ export async function spawnSubagentDirect(
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
-      task,
       acpEnabled: isAcpRuntimeSpawnAvailable({
         config: cfg,
         sandboxed: childRuntimeSandboxed,
@@ -298,14 +306,7 @@ export async function spawnSubagentDirect(
     }
 
     let retainOnSessionKeep = false;
-    let attachmentsReceipt:
-      | {
-          count: number;
-          totalBytes: number;
-          files: SubagentAttachmentReceiptFile[];
-          relDir: string;
-        }
-      | undefined;
+    let attachmentsReceipt: SpawnSubagentResult["attachments"];
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
 
@@ -351,7 +352,6 @@ export async function spawnSubagentDirect(
         childSystemPrompt,
         thinkingOverride,
         runTimeoutSeconds,
-        label: label || undefined,
         lightContext: params.lightContext === true,
         expectsCompletionMessage,
         requesterOrigin,
@@ -362,11 +362,11 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (initialSession.entry) {
+    if (childEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: initialSession.entry,
+        entry: childEntry,
       });
     }
     recordSubagentSpawned({
@@ -401,6 +401,7 @@ export async function spawnSubagentDirect(
           },
         ),
         childLaunch.authorization,
+        gatewayContextResolver,
       );
 
     const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({
@@ -447,6 +448,9 @@ export async function spawnSubagentDirect(
         return { contextEnginePreparation: result.preparation };
       },
       async dispatchTurn() {
+        // Initialize returned its rollback handle. Refusal here follows dispatch
+        // cleanup instead of losing that handle through initialize failure.
+        assertActive?.();
         if (params.collect) {
           return { runId: childIdem };
         }
@@ -454,10 +458,10 @@ export async function spawnSubagentDirect(
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
         recordSessionParticipantBestEffort({
-          actor: { type: "agent", id: requesterAgentId },
+          promptedAt,
+          identity: { type: "agent", id: requesterAgentId },
           agentId: targetAgentId,
           sessionKey: childSessionKey,
-          source: "agent",
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         });
         return { runId: acceptedChildRunId };
@@ -524,6 +528,7 @@ export async function spawnSubagentDirect(
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
+        assertActive?.();
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {
@@ -602,10 +607,10 @@ export async function spawnSubagentDirect(
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
             recordSessionParticipantBestEffort({
-              actor: { type: "agent", id: requesterAgentId },
+              promptedAt,
+              identity: { type: "agent", id: requesterAgentId },
               agentId: targetAgentId,
               sessionKey: childSessionKey,
-              source: "agent",
               storePath: resolveSessionStorePathCore(cfg.session?.store, {
                 agentId: targetAgentId,
               }),
@@ -694,6 +699,7 @@ export async function spawnSubagentDirect(
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
+      context: preparedSpawnContext.mode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote
         ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`

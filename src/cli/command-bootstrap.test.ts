@@ -139,7 +139,7 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("limits sandbox runtime commands to configured backend owner plugins", async () => {
+  it("loads configured and persisted backend owners for sandbox management", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
       commandPath: ["sandbox", "list"],
@@ -147,7 +147,7 @@ describe("ensureCliCommandBootstrap", () => {
     });
 
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "sandbox-backends",
+      scope: "sandbox-management",
       routeLogsToStderr: undefined,
     });
   });

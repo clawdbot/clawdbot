@@ -16,7 +16,6 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -711,9 +710,7 @@ export class SqliteBoardStore implements BoardStore {
       ),
     );
     for (const agentId of agentIds) {
-      const canonicalPath =
-        this.resolve(`agent:${agentId}:main`).path ??
-        resolveOpenClawAgentSqlitePath({ agentId, env: this.options.env });
+      const resolved = this.resolve(`agent:${agentId}:main`);
       const result = withOpenClawAgentDatabaseReadOnly(
         (database) => {
           if (!boardTablesPresent(database)) {
@@ -725,7 +722,7 @@ export class SqliteBoardStore implements BoardStore {
             db.selectFrom("board_tabs").select("session_key").distinct(),
           ).rows;
         },
-        { agentId, path: canonicalPath, env: this.options.env },
+        { ...resolved, env: this.options.env },
       );
       if (result.found) {
         for (const row of result.value) {

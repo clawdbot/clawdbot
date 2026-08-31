@@ -2,8 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
-import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -14,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -207,6 +204,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
 
   let patched: SessionEntry | null = null;
   if (shouldFork) {
+    const { forkSessionEntryFromParent } = await import("../auto-reply/reply/session-fork.js");
     const forked = await forkSessionEntryFromParent({
       storePath: params.storePath,
       parentSessionKey: requesterSessionKey,
@@ -304,6 +302,11 @@ export async function consultRealtimeVoiceAgent(params: {
     timeoutMs: number;
   }) => RealtimeVoiceAgentConsultRunRegistration | void;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
+  const [{ beginSessionWorkAdmission }, { resolveSessionWorkStartError }] = await Promise.all([
+    import("../sessions/session-lifecycle-admission.js"),
+    import("../config/sessions/lifecycle.js"),
+  ]);
   params.abortSignal?.throwIfAborted();
   const agentId =
     params.agentId ??

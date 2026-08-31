@@ -1,6 +1,7 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -78,7 +79,7 @@ type StartThreadContext = CodexThreadRequestContext & {
 };
 
 export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.params.config,
     sessionKey: params.params.sessionKey,
     agentId: params.agentId ?? params.params.agentId,

@@ -40,8 +40,6 @@ import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
-export { shouldReuseExistingTranslation } from "./lib/control-ui-i18n-sync-plan.ts";
-
 type RunProcessParentSignalState = {
   done: boolean;
   signal: NodeJS.Signals | null;

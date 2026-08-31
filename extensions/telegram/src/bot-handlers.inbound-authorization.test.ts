@@ -4,7 +4,7 @@ import {
   consumeChannelAdmissionEvidence,
   createHostChannelInboundEventContextBuilder,
   readChannelContextAdmissionEvidence,
-  registerChannelAdmissionEvidenceOwner,
+  registerChannelIngressHostOwner,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -78,7 +78,7 @@ describe("Telegram inbound admission authorization", () => {
 
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     const owner = { channelId: "telegram", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
+    const clearOwner = registerChannelIngressHostOwner(owner);
     try {
       const sessionKey = "agent:main:telegram:group:forum:topic:99";
       const ingress = await gate.resolveChannelIngress({

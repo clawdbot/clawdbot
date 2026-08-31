@@ -216,7 +216,9 @@ export async function runTrustedToolPolicies(
     config?: OpenClawConfig;
     deriveEvent?: (
       params: Record<string, unknown>,
-    ) => Pick<PluginHookBeforeToolCallEvent, "derivedPaths">;
+    ) =>
+      | Pick<PluginHookBeforeToolCallEvent, "derivedPaths">
+      | Promise<Pick<PluginHookBeforeToolCallEvent, "derivedPaths">>;
     normalizeEvent?: (
       event: PluginHookBeforeToolCallEvent,
       ctx: PluginHookToolContext,
@@ -285,6 +287,7 @@ export async function runTrustedToolPolicies(
                   cfg: config,
                   pluginId,
                   sessionKey: ctx.sessionKey,
+                  agentId: ctx.agentId,
                 })
               : undefined,
           );
@@ -357,12 +360,15 @@ export async function runTrustedToolPolicies(
           currentContextToolIdentity = normalizeToolIdentity(normalized.event);
         }
         hasAdjustedParams = true;
-        currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
+        currentDerivedEvent = normalizeDerivedEventFields(
+          await options?.deriveEvent?.(adjustedParams),
+        );
       }
       if ("requireApproval" in decision && decision.requireApproval && !approval) {
         approval = decision.requireApproval;
       }
     } catch {
+      ctx.abortSignal?.throwIfAborted();
       return trustedPolicyFailureResult(registration, "policy decision is unreadable");
     }
   }

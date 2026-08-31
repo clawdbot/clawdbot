@@ -337,7 +337,6 @@ describe("managed plugin installation", () => {
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
       .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
-      .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
 

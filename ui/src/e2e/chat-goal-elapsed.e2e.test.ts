@@ -68,14 +68,16 @@ suite.define(() => {
         if (captureProof) {
           await page.screenshot({ path: path.join(artifactDir, "paused-goal.png") });
         }
-        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
+        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
         await goal.getByRole("button", { name: "Show goal details" }).click();
-        expect(await goal.locator(".agent-chat__goal-detail-meta").textContent()).toContain("1m");
+        expect(await goal.locator(".agent-chat__goal-detail-meta").textContent()).toContain(
+          "1m 00s",
+        );
         await goal.getByRole("button", { name: "Hide goal details" }).click();
-        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
+        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
         await page.reload();
         await goal.getByText("Goal paused", { exact: true }).waitFor();
-        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
+        expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
       },
     );
   });

@@ -372,10 +372,10 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
-Sandbox CLI commands activate the configured backend's owning plugin before
-looking up runtime status or deleting a sandbox. Unrelated plugins are not
-loaded for these operations, and browser-only commands remain independent of
-the OpenShell backend.
+Sandbox list and recreate commands activate the configured backend's owning
+plugin plus the owner of each recorded runtime before inspecting or deleting
+it. Unrelated plugins are not loaded for these operations, and browser-only
+commands remain independent of the OpenShell backend.
 
 OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
 upgrade so its remote workspace remains addressable. Recreating that scope

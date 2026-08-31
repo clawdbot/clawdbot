@@ -34,46 +34,6 @@ export function createSessionManagementE2eSuite(source = false) {
   });
 }
 
-export function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: {
-    archived?: boolean;
-    sessionId?: string;
-    category?: string;
-    pinned?: boolean;
-    pinnedAt?: number;
-    hasActiveRun?: boolean;
-    unread?: boolean;
-    markedUnreadAt?: number;
-    status?: string;
-    spawnedBy?: string;
-    startedAt?: number;
-    endedAt?: number;
-    childSessions?: string[];
-    execNode?: string;
-    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
-  } = {},
-) {
-  return {
-    contextTokens: null,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    kind: "direct",
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-  };
-}
-
 export function sessionsListResponse(
   sessions: unknown[],
   options: {

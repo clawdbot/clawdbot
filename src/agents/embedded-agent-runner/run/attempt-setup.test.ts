@@ -4,11 +4,14 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
-const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContext = vi.hoisted(() =>
+  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
@@ -53,6 +56,56 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(setup.sessionAgentId).toBe("marketing");
   });
 
+  it.each([undefined, "global", "agent:main:policy"])(
+    "prepares a global workspace with its selected sandbox policy (%s)",
+    async (sandboxSessionKey) => {
+      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-global-attempt-"));
+      try {
+        const setup = await resolveAttemptWorkspaceSandbox({
+          agentId: "marketing",
+          config: {
+            agents: {
+              ownership: "explicit",
+              defaults: { sandbox: { mode: "off" } },
+              list: [{ id: "main" }, { id: "marketing" }],
+            },
+          },
+          sessionId: "global-attempt",
+          sessionKey: "global",
+          sandboxSessionKey,
+          workspaceDir,
+        });
+        expect(setup.sessionAgentId).toBe("marketing");
+        expect(setup.sandbox).toBeNull();
+        expect(setup.effectiveWorkspace).toBe(workspaceDir);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
+    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-attempt-"));
+    try {
+      await expect(
+        resolveAttemptWorkspaceSandbox({
+          agentId: "marketing",
+          config: {
+            agents: { ownership: "explicit", list: [{ id: "main" }, { id: "marketing" }] },
+          },
+          sessionId: "policy-attempt",
+          sessionKey: "agent:marketing:main",
+          sandboxSessionKey: "global",
+          workspaceDir,
+        }),
+      ).rejects.toThrow("Pass an agentId");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("hydrates recent history media from the prepared session agent workspace", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-history-"));
     const imagePath = path.join(workspaceDir, "photo.png");
@@ -79,6 +132,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPrePromptMessageCount: () => 0,
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
+      getCompactionReplayEnabled: () => false,
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,

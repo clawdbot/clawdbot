@@ -1114,7 +1114,7 @@ describe("scripts/test-group-report child process guard", () => {
       `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
-    const run = startProcessWatchdogFixture(() =>
+    const releaseAndWait = startProcessWatchdogFixture(() =>
       spawnText(process.execPath, ["--eval", parentScript], {
         cwd: process.cwd(),
         env: process.env,
@@ -1126,8 +1126,7 @@ describe("scripts/test-group-report child process guard", () => {
     try {
       childPid = await waitForPidFile(childPidPath, 2_000);
       const startedAt = Date.now();
-      run.releaseTimeout();
-      const result = await run.runPromise;
+      const result = await releaseAndWait();
 
       expect(result).toMatchObject({
         status: 1,
@@ -1138,9 +1137,8 @@ describe("scripts/test-group-report child process guard", () => {
       expect(Date.now() - startedAt).toBeLessThan(900);
       await waitForDead(childPid, 2_000);
     } finally {
-      run.releaseTimeout();
       try {
-        await run.runPromise;
+        await releaseAndWait();
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
@@ -1337,8 +1335,8 @@ describe("scripts/test-group-report run plans", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+      path.join("/repo", ".cache", "vitest", "0-a.ts"),
+      path.join("/repo", ".cache", "vitest", "1-b.ts"),
     ]);
     expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
   });

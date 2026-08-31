@@ -332,13 +332,10 @@ describe("LabsPage", () => {
     );
   });
 
-  it("shows default provenance without reset actions", async () => {
+  it("shows default provenance", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
     expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
-    expect(inherited.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      0,
-    );
     inherited.provider.remove();
 
     const overridden = await mountPage({
@@ -349,9 +346,6 @@ describe("LabsPage", () => {
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
-    expect(overridden.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      0,
-    );
   });
 
   it.each([{ model: "ollama/qwen3:8b" }, { model: { primary: "ollama/qwen3:8b", fallbacks: [] } }])(
@@ -369,7 +363,6 @@ describe("LabsPage", () => {
       const row = labRow(page, "Lean tools for local models");
 
       expect(row.textContent).toContain("Using default: Enabled");
-      expect(row.querySelector("button[aria-label='Reset to default']")).toBeNull();
     },
   );
 
@@ -425,15 +418,15 @@ describe("LabsPage", () => {
 });
 
 describe("LabsPage code mode enablement", () => {
-  // Mirrors resolveCodeModeConfig: absent or empty config is off, while an
-  // options object preserves the prior auto tier and explicit values win.
+  // Mirrors resolveCodeModeConfig: omitted `enabled` is off for every object
+  // shape, while explicit `true` and `"auto"` remain opt-ins.
   it.each([
     { label: "unset", config: {}, expected: false },
     { label: "empty object", config: { tools: { codeMode: {} } }, expected: false },
     {
       label: "object with options",
       config: { tools: { codeMode: { timeoutMs: 5000 } } },
-      expected: true,
+      expected: false,
     },
     { label: "explicit true", config: { tools: { codeMode: { enabled: true } } }, expected: true },
     {
@@ -464,7 +457,7 @@ describe("LabsPage code mode enablement", () => {
     });
   });
 
-  it("restores the options object's inherited auto tier when re-enabled", async () => {
+  it("writes the auto tier when re-enabling an option-bearing object", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: false, timeoutMs: 5000 } },
     });
@@ -475,7 +468,7 @@ describe("LabsPage code mode enablement", () => {
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: null } } },
+      raw: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     });
   });

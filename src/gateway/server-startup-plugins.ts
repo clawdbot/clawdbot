@@ -170,11 +170,12 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  // Minimal gateway tests reuse an already-active registry when present. Production publishes
-  // an empty pre-bind registry; every startup plugin runtime attaches after the listener binds.
-  const pluginRegistry = params.minimalTestGateway
-    ? (getActivePluginRegistry() ?? emptyPluginRegistry)
-    : emptyPluginRegistry;
+  // Minimal tests may reuse an active registry only while plugins are enabled. Production
+  // publishes an empty pre-bind registry; startup plugin runtimes attach after the listener binds.
+  const pluginRegistry =
+    params.minimalTestGateway && !pluginsGloballyDisabled
+      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+      : emptyPluginRegistry;
   setActivePluginRegistry(pluginRegistry);
 
   return {

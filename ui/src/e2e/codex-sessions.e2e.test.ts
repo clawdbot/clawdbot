@@ -4,7 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Codex native session catalog",
@@ -363,7 +363,12 @@ suite.define(() => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-ada",
+                        identity: { type: "profile", id: "profile-ada" },
+                        label: "Ada",
+                      },
                     },
                     {
                       threadId: "thread-worktree",
@@ -373,7 +378,12 @@ suite.define(() => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-zoe", label: "Zoe" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-zoe",
+                        identity: { type: "profile", id: "profile-zoe" },
+                        label: "Zoe",
+                      },
                     },
                     {
                       threadId: "thread-other",
@@ -597,13 +607,13 @@ suite.define(() => {
       ).toEqual(["listitem", "listitem", "listitem"]);
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-ada"]')
+          .locator('[data-session-catalog-project="person:profile:profile-ada"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Ada");
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-zoe"]')
+          .locator('[data-session-catalog-project="person:profile:profile-zoe"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Zoe");
@@ -771,12 +781,10 @@ suite.define(() => {
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
       await warning.waitFor({ state: "visible" });
-      await expect.poll(() => warning.getAttribute("title")).toContain("[NODE_LIST_FAILED]");
+      await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
+      await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
       await expect
-        .poll(() => warning.getAttribute("title"))
-        .toContain("pairing database is locked");
-      await expect
-        .poll(() => warning.getAttribute("title"))
+        .poll(() => tooltipTitleText(warning))
         .toContain("Settings > Automation > Plugins");
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 

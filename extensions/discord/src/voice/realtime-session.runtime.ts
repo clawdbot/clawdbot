@@ -54,12 +54,6 @@ const DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS = new Set([
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
-type DiscordRealtimeLifecycle =
-  | { status: "inactive"; generation: number }
-  | { status: "starting"; generation: number; instance: DiscordRealtimeVoiceSession }
-  | { status: "active"; generation: number; instance: DiscordRealtimeVoiceSession }
-  | { status: "stopped"; generation: number; reason: string };
-
 function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
   const detail = event.detail ? ` ${event.detail}` : "";
   if (event.direction === "client") {
@@ -117,8 +111,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
   private readonly turns: DiscordRealtimeTurns;
   private readonly consults: DiscordRealtimeConsults;
-  private lifecycle: DiscordRealtimeLifecycle = { status: "inactive", generation: 0 };
-  private nextLifecycleGeneration = 0;
+  private lifecycle: {
+    status: "inactive" | "starting" | "active" | "stopped";
+    generation: number;
+  } = { status: "inactive", generation: 0 };
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
   private consultPolicy: "auto" | "always" = "auto";
@@ -180,8 +176,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTerminalError: this.params.onTerminalError,
       providerId: () => this.realtimeProviderId,
       realtimeConfig: () => this.realtimeConfig,
-      stopTerminally: (reason) => {
-        this.stopLifecycle(reason);
+      stopTerminally: () => {
+        this.lifecycle.status = "stopped";
         this.consults.close();
       },
       stopped: () => this.isStopped(),
@@ -223,11 +219,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   async connect(): Promise<void> {
-    const lifecycleGeneration = ++this.nextLifecycleGeneration;
+    const lifecycleGeneration = this.lifecycle.generation + 1;
     this.lifecycle = {
       status: "starting",
       generation: lifecycleGeneration,
-      instance: this,
     };
     const configuredProviderId = this.realtimeConfig?.provider?.trim();
     if (configuredProviderId) {
@@ -398,7 +393,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onClose: (reason) => {
         // Reconnects stay provider-owned. A close is terminal unless local teardown started it.
         if (!this.isStopped()) {
-          this.stopLifecycle(`provider closed: ${reason}`);
+          this.lifecycle.status = "stopped";
           this.params.onTerminalError(
             new Error(`Realtime provider closed unexpectedly: ${reason}`),
           );
@@ -431,7 +426,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   close(): void {
-    this.stopLifecycle("session close");
+    this.lifecycle.status = "stopped";
     this.providerContinuityEpoch += 1;
     this.flushSuppressedRealtimeErrors();
     this.consults.close();
@@ -477,13 +472,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     ) {
       return false;
     }
-    this.lifecycle = { status: "active", generation, instance: this };
+    this.lifecycle.status = "active";
     return true;
-  }
-
-  private stopLifecycle(reason: string): void {
-    const generation = this.lifecycle.generation;
-    this.lifecycle = { status: "stopped", generation, reason };
   }
 
   private humanParticipantCount(): number {
@@ -528,11 +518,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
     this.providerGenerationObserved = false;
     if (this.lifecycle.status === "active") {
-      this.lifecycle = {
-        status: "starting",
-        generation: this.lifecycle.generation,
-        instance: this,
-      };
+      this.lifecycle.status = "starting";
     }
     this.providerContinuityEpoch += 1;
     this.consults.resetProviderContinuity();

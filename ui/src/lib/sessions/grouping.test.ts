@@ -13,6 +13,78 @@ import {
 } from "./grouping.ts";
 
 describe("groupSidebarSessionRows", () => {
+  it.each([
+    ["person", [["former", "current"], ["remote"], ["agent"]]],
+    ["project", [["remote", "agent", "former", "current"]]],
+    ["none", [["remote", "agent", "former", "current"]]],
+  ] as const)("groups owners with a shared checkout by %s", (grouping, expectedRows) => {
+    const workContext = { name: "shared", path: "/repos/shared" };
+    const sections = groupSidebarSessionRows(
+      [
+        row({
+          key: "remote",
+          workContext,
+          owner: {
+            actor: {
+              type: "human",
+              id: "current",
+              label: "Ada",
+              identity: {
+                type: "remote",
+                pluginId: "chat",
+                domain: "users",
+                idKind: "user",
+                id: "current",
+              },
+            },
+          },
+        }),
+        row({
+          key: "agent",
+          workContext,
+          owner: {
+            actor: {
+              type: "agent",
+              id: "current",
+              label: "Aaron",
+              identity: { type: "agent", id: "current" },
+            },
+          },
+        }),
+        row({
+          key: "former",
+          workContext,
+          owner: {
+            actor: {
+              type: "human",
+              id: "former",
+              label: "Zoe",
+              identity: { type: "profile", id: "current" },
+            },
+          },
+        }),
+        row({
+          key: "current",
+          workContext,
+          owner: {
+            actor: { type: "human", id: "current", identity: { type: "profile", id: "current" } },
+          },
+        }),
+      ],
+      { grouping, selfOwnerId: "current" },
+    ).filter((section) => section.rows.length > 0);
+    expect(sections.map((section) => section.rows.map((item) => item.key))).toEqual(expectedRows);
+    if (grouping === "person") {
+      expect(sections[0]).toMatchObject({
+        id: "person:profile:current",
+        personOwner: { id: "current", identity: { type: "profile", id: "current" } },
+      });
+      expect(new Set(sections.map((section) => section.id)).size).toBe(3);
+    } else {
+      expect(sections[0]?.id).toBe(grouping === "project" ? "project:/repos/shared" : "ungrouped");
+    }
+  });
+
   it("orders pinned, categories, threads, groups, then coding while preserving row order", () => {
     const rows = [
       row({ key: "z-1", category: "Zulu" }),
@@ -145,29 +217,67 @@ describe("groupSidebarSessionRows", () => {
   it("orders owner sections before stored zones and leaves ownerless rows in their smart zones", () => {
     const sections = groupSidebarSessionRows(
       [
-        row({ key: "agent", owner: { actor: { type: "agent", id: "agent-z", label: "Zed" } } }),
+        row({
+          key: "agent",
+          owner: {
+            actor: {
+              type: "agent",
+              id: "agent-z",
+              identity: { type: "agent", id: "agent-z" },
+              label: "Zed",
+            },
+          },
+        }),
         row({
           key: "owned-group",
           kind: "group",
           category: "Ignored",
-          owner: { actor: { type: "human", id: "profile-b", label: "Bea" } },
+          owner: {
+            actor: {
+              type: "human",
+              id: "profile-b",
+              identity: { type: "profile", id: "profile-b" },
+              label: "Bea",
+            },
+          },
         }),
         row({ key: "thread" }),
         row({ key: "group", kind: "group" }),
         row({ key: "work", workSession: true }),
-        row({ key: "human-a", owner: { actor: { type: "human", id: "profile-a", label: "Ada" } } }),
+        row({
+          key: "human-a",
+          owner: {
+            actor: {
+              type: "human",
+              id: "profile-a",
+              identity: { type: "profile", id: "profile-a" },
+              label: "Ada",
+            },
+          },
+        }),
         row({
           key: "self",
           owner: {
             actor: {
               type: "human",
               id: "profile-self",
+              identity: { type: "profile", id: "profile-self" },
               label: "Zoe",
               avatarUrl: "/avatars/self",
             },
           },
         }),
-        row({ key: "agent-a", owner: { actor: { type: "agent", id: "agent-a", label: "Alpha" } } }),
+        row({
+          key: "agent-a",
+          owner: {
+            actor: {
+              type: "agent",
+              id: "agent-a",
+              identity: { type: "agent", id: "agent-a" },
+              label: "Alpha",
+            },
+          },
+        }),
         row({ key: "blank-owner", owner: { actor: { type: "human", id: "   " } } }),
         row({ key: "pinned", pinned: true, owner: { actor: { type: "human", id: "profile-a" } } }),
       ],
@@ -176,17 +286,23 @@ describe("groupSidebarSessionRows", () => {
         selfOwnerId: "profile-self",
         knownGroups: ["Ignored"],
         catalogIds: ["catalog"],
-        sectionOrder: ["work", "person:profile-b", "groups", "ungrouped", "catalog:catalog"],
+        sectionOrder: [
+          "work",
+          "person:profile:profile-b",
+          "groups",
+          "ungrouped",
+          "catalog:catalog",
+        ],
       },
     );
 
     expect(sections.map((section) => section.id)).toEqual([
       "pinned",
-      "person:profile-self",
-      "person:profile-a",
-      "person:profile-b",
-      "person:agent-a",
-      "person:agent-z",
+      "person:profile:profile-self",
+      "person:profile:profile-a",
+      "person:profile:profile-b",
+      "person:agent:agent-a",
+      "person:agent:agent-z",
       "work",
       "groups",
       "ungrouped",
@@ -195,6 +311,7 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[1]?.personOwner).toEqual({
       type: "human",
       id: "profile-self",
+      identity: { type: "profile", id: "profile-self" },
       label: "Zoe",
       avatarUrl: "/avatars/self",
     });
@@ -538,15 +655,39 @@ describe("groupSessionRows", () => {
   it("groups sessions by their durable owner identity and leaves ownerless sessions last", () => {
     const groups = groupSessionRows({
       rows: [
-        row({ key: "bob", owner: { actor: { type: "human", id: "profile-b", label: "Bob" } } }),
+        row({
+          key: "bob",
+          owner: {
+            actor: {
+              type: "human",
+              id: "profile-b",
+              identity: { type: "profile", id: "profile-b" },
+              label: "Bob",
+            },
+          },
+        }),
         row({ key: "ownerless" }),
-        row({ key: "ada", owner: { actor: { type: "human", id: " profile-a ", label: "Ada" } } }),
+        row({
+          key: "ada",
+          owner: {
+            actor: {
+              type: "human",
+              id: " profile-a ",
+              identity: { type: "profile", id: "profile-a" },
+              label: "Ada",
+            },
+          },
+        }),
         row({ key: "blank", owner: { actor: { type: "human", id: " " } } }),
       ],
       mode: "person",
     });
 
-    expect(groups.map((group) => group.id)).toEqual(["profile-a", "profile-b", UNGROUPED_ID]);
+    expect(groups.map((group) => group.id)).toEqual([
+      "profile:profile-a",
+      "profile:profile-b",
+      UNGROUPED_ID,
+    ]);
     expect(groups[2]?.rows.map((item) => item.key)).toEqual(["ownerless", "blank"]);
   });
 

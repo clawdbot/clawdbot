@@ -171,11 +171,34 @@ suite.define(() => {
           expiresInMs: 60_000,
           pollAfterMs: 1_000,
         });
-        await page.getByText("ABCD-1234", { exact: true }).waitFor();
+        const deviceCode = page.getByText("ABCD-1234", { exact: true });
+        await deviceCode.waitFor();
+        await capture(page, "01-code.png");
+        const authorizationHint = page.getByText(
+          "GitHub CLI account and Git author for local agent tools and the Codex harness.",
+          { exact: true },
+        );
+        await authorizationHint.dblclick();
+        expect(await page.evaluate(() => globalThis.getSelection()?.toString())).not.toBe("");
+        await deviceCode.click();
+        expect(await page.evaluate(() => globalThis.getSelection()?.toString())).toBe("ABCD-1234");
+        const copyCode = page.getByRole("button", { name: "Copy code", exact: true });
+        const codeBox = await deviceCode.boundingBox();
+        const copyBox = await copyCode.boundingBox();
+        if (!codeBox || !copyBox) {
+          throw new Error("Device code and copy button must be visible");
+        }
+        expect(
+          Math.abs(codeBox.y + codeBox.height / 2 - copyBox.y - copyBox.height / 2),
+        ).toBeLessThan(4);
+        await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+        await copyCode.click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("ABCD-1234");
+        await page.getByRole("button", { name: "Copied!", exact: true }).waitFor();
         const openGitHub = page.getByRole("link", { name: "Open github.com/login/device" });
         expect(await openGitHub.getAttribute("href")).toBe("https://github.com/login/device");
         expect(await page.locator(".settings-secret input").count()).toBe(0);
-        await capture(page, "01-code.png");
+        await capture(page, "01b-code-copied.png");
 
         await gateway.deferNext("tools.github.authorize.poll");
         await gateway.waitForRequest("tools.github.authorize.poll");

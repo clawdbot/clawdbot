@@ -73,7 +73,8 @@ function armSessionDeliveryId(id: string, delayMs: number, generation: number): 
   if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  const dueAt = Date.now() + delayMs;
+  // Native timers measure elapsed time, so preemption deadlines must ignore wall-clock jumps.
+  const dueAt = performance.now() + delayMs;
   const existing = scheduledEntries.get(id);
   if (existing && existing.dueAt <= dueAt) {
     return;

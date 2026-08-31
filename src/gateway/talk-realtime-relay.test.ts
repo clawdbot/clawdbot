@@ -17,6 +17,13 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  authorizeClientVoiceConfirmation,
+  bindAuthorizedClientVoiceConfirmation,
+  checkClientVoiceToolConfirmationPolicy,
+  noteClientVoiceConfirmationUtterance,
+} from "../talk/client-voice-confirmation.js";
+import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceBridge,
@@ -214,6 +221,7 @@ describe("talk realtime gateway relay", () => {
       [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
     );
     vi.useRealTimers();
+    resetClientVoiceConfirmationStateForTest();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });
 
@@ -225,6 +233,67 @@ describe("talk realtime gateway relay", () => {
       createBridge: () => makeRelayTransport(),
     };
   }
+
+  it("settles relay-owned registrations after refusal invalidates a detached grant", async () => {
+    const provider = createIdleRelayProvider();
+    const fixture = createAbortableRelayRunFixture(provider, { register: false });
+    const voiceSessionId = fixture.session.relaySessionId;
+    const now = Date.now();
+    const challenge = checkClientVoiceToolConfirmationPolicy({
+      agentId: "main",
+      voiceSessionId,
+      runId: "run-1",
+      toolName: "message",
+      toolParams: { action: "send", message: "cancelled action" },
+      now,
+    });
+    if (challenge.allowed) {
+      throw new Error("expected voice confirmation challenge");
+    }
+    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
+    if (!confirmationId) {
+      throw new Error("missing voice confirmation id");
+    }
+    noteClientVoiceConfirmationUtterance({
+      agentId: "main",
+      voiceSessionId,
+      text: "yes",
+      timestamp: now + 1,
+    });
+    const grant = authorizeClientVoiceConfirmation({
+      agentId: "main",
+      voiceSessionId,
+      confirmationId,
+      now: now + 2,
+    });
+    noteClientVoiceConfirmationUtterance({
+      agentId: "main",
+      voiceSessionId,
+      text: "no",
+      timestamp: now + 3,
+    });
+
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId: "call-1",
+    });
+    expect(bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-1" })).toBe(false);
+    const relay = relaySessions.get(fixture.session.relaySessionId);
+    expect(relay?.activeAgentRuns.size).toBe(1);
+    expect(relay?.activeAgentToolCalls.size).toBe(1);
+
+    await submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { blocked: true },
+    });
+    expect(relay?.activeAgentRuns.size).toBe(0);
+    expect(relay?.activeAgentToolCalls.size).toBe(0);
+  });
 
   it("closes only realtime relays owned by the disconnected connection", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);

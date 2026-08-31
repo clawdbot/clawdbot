@@ -18,6 +18,7 @@ export type DispatchCronDeliveryParams = {
   agentId: string;
   agentSessionKey: string;
   sourceSessionKey?: string;
+  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;

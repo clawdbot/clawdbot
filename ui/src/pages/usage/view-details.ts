@@ -21,6 +21,7 @@ import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
+  UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
 import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
@@ -79,7 +80,7 @@ function renderUsageRefreshStatus(
   status: PanelRefreshStatus,
   onRetry: () => void,
   detailKey: string,
-  kind: "timeline" | "conversation",
+  kind: "timeline" | "conversation" | "context",
 ) {
   return renderPanelRefreshStatus({
     status,
@@ -276,6 +277,8 @@ function renderSessionDetailPanel(
   onLogFilterHasToolsChange: (next: boolean) => void,
   onLogFilterQueryChange: (next: string) => void,
   onLogFilterClear: () => void,
+  context: UsageContextDetail,
+  onRetryContextWeight: () => void,
   contextExpanded: boolean,
   onToggleContextExpanded: () => void,
   onClose: () => void,
@@ -385,7 +388,8 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorEnd : null,
           )}
           ${renderContextPanel(
-            session.contextWeight,
+            context,
+            onRetryContextWeight,
             usage,
             contextExpanded,
             onToggleContextExpanded,
@@ -797,15 +801,27 @@ function renderTimeSeriesCompact(
 }
 
 function renderContextPanel(
-  contextWeight: UsageSessionEntry["contextWeight"],
+  { weight: contextWeight, loading, status }: UsageContextDetail,
+  onRetry: () => void,
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
 ) {
+  const refreshStatus = renderUsageRefreshStatus(
+    status,
+    onRetry,
+    "usage.details.systemPromptBreakdown",
+    "context",
+  );
   if (!contextWeight) {
     return html`
       <div class="context-details-panel">
-        <div class="usage-empty-block">${t("usage.details.noContextData")}</div>
+        ${refreshStatus}
+        ${status.error
+          ? nothing
+          : html`<div class="usage-empty-block">
+              ${t(loading ? "usage.loading.badge" : "usage.details.noContextData")}
+            </div>`}
       </div>
     `;
   }
@@ -873,6 +889,7 @@ function renderContextPanel(
 
   return html`
     <div class="context-details-panel">
+      ${refreshStatus}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">
           ${t("usage.details.systemPromptBreakdown")}

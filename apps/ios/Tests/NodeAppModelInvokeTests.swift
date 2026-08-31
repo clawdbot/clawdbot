@@ -4423,6 +4423,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
+        let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
+            of: OpenClawWatchExecApprovalSnapshotMessage.self)
+        defer { snapshotEventContinuation.finish() }
+        watchService.syncExecApprovalSnapshotHandler = { message in
+            snapshotEventContinuation.yield(message)
+            return watchService.nextSendResult
+        }
+        var snapshots = snapshotEvents.makeAsyncIterator()
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -4435,29 +4443,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "approval-watch-snapshot",
             commandText: "echo from watch",
             agentID: nil))
-        let initialSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.contains { snapshot in
-                snapshot.requestId == nil &&
-                    snapshot.approvals.map(\.id) == ["approval-watch-snapshot"]
-            }
-        }
-        try #require(initialSnapshotPublished)
+        let initialSnapshot = try #require(await snapshots.next())
+        #expect(initialSnapshot.requestId == nil)
+        #expect(initialSnapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
 
         appModel.setScenePhase(.background)
-        let snapshotCount = watchService.sentExecApprovalSnapshots.count
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-1", sentAt: 111))
-        let correlatedSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCount).contains { snapshot in
-                snapshot.requestId == "snapshot-1" &&
-                    snapshot.requestGatewayStableID == "test-gateway"
-            }
-        }
-        try #require(correlatedSnapshotPublished)
-
-        let snapshot = try #require(watchService.sentExecApprovalSnapshots
-            .dropFirst(snapshotCount)
-            .first { $0.requestId == "snapshot-1" })
+        let snapshot = try #require(await snapshots.next())
         #expect(snapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
         #expect(snapshot.requestId == "snapshot-1")
         #expect(snapshot.requestGatewayStableID == "test-gateway")

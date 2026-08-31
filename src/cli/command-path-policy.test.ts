@@ -310,11 +310,7 @@ describe("command-path-policy", () => {
     expectLoadPluginsResolver(sandboxPolicy);
     expect(sandboxPolicy.pluginRegistry).toEqual({ scope: "sandbox-backends" });
 
-    for (const commandPath of [
-      ["sandbox", "list"],
-      ["sandbox", "recreate"],
-      ["sandbox", "explain"],
-    ]) {
+    for (const commandPath of [["sandbox", "explain"]]) {
       expect(resolveCliCommandPathPolicy(commandPath).pluginRegistry).toEqual({
         scope: "sandbox-backends",
       });
@@ -325,6 +321,15 @@ describe("command-path-policy", () => {
           jsonOutputMode: false,
         }),
       ).toBe(true);
+    }
+
+    for (const commandPath of [
+      ["sandbox", "list"],
+      ["sandbox", "recreate"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath).pluginRegistry).toEqual({
+        scope: "sandbox-management",
+      });
     }
   });
 
@@ -448,6 +453,17 @@ describe("command-path-policy", () => {
     ]) {
       expectResolvedPolicy(commandPath, {
         loadPlugins: "never",
+      });
+    }
+    // Authoring commands operate on a target package, not operator config, so
+    // a host config the running CLI predates must not abort them.
+    for (const commandPath of [
+      ["plugins", "build"],
+      ["plugins", "validate"],
+      ["plugins", "init"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
       });
     }
     expectResolvedPolicy(["cron", "list"], {

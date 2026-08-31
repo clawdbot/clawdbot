@@ -16,6 +16,8 @@ Scope:
 
 The lists below are generated from the source target registry and checked against `docs/reference/secretref-user-supplied-credentials-matrix.json` in CI; do not hand-edit entries.
 
+Source generation fails if a present channel secret-contract artifact cannot load, rather than publishing an incomplete list. A plugin without that optional artifact contributes no channel targets. This generation check does not change runtime SecretRef owner-isolation behavior.
+
 ## Supported credentials
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
@@ -46,6 +48,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
+- `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
@@ -87,6 +90,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.sms.accounts.*.authToken`
 - `channels.buzz.authTag`
 - `channels.buzz.privateKey`
+- `channels.buzz.accounts.*.authTag`
+- `channels.buzz.accounts.*.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`

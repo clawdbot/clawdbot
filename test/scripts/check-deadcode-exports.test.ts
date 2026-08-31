@@ -170,6 +170,12 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
   });
 
+  it("tracks the workflow-invoked producer verifier as an executable root", () => {
+    expect(knipConfig.workspaces["."].entry).toContain(
+      "scripts/verify-full-release-producer-job.mjs!",
+    );
+  });
+
   it("runs exhaustive dead-code hygiene against production and full-tree configs", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),

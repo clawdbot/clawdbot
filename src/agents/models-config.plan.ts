@@ -3,16 +3,20 @@
  * this module to merge implicit provider discovery, explicit config, and
  * preserved secrets before touching models.json.
  */
+import { mergeModelCost } from "../config/model-cost.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { modelKey, createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
+  normalizeProviderMapKeys,
   type ExistingProviderConfig,
+  type SourceModelFields,
 } from "./models-config.merge.js";
 import {
   enforceSourceManagedProviderSecrets,
@@ -54,6 +58,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   authStore?: AuthProfileStore;
   config: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  sourceConfigForSecrets?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
@@ -62,6 +67,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  sourceModelFields?: SourceModelFields;
 }) => Promise<Record<string, ProviderConfig>>;
 
 /**
@@ -118,6 +124,29 @@ function buildPluginCatalogWrites(
   );
 }
 
+function buildSourceModelFields(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+  manifestPlugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] | undefined,
+): SourceModelFields {
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
+  const fields = new Map<
+    string,
+    { inputOmitted: boolean; cost: ReturnType<typeof mergeModelCost> }
+  >();
+  for (const [providerId, provider] of Object.entries(normalizeProviderMapKeys(sourceProviders))) {
+    for (const model of provider.models ?? []) {
+      const key = modelKey(providerId, normalizeModelId(providerId, model.id));
+      const existing = fields.get(key);
+      fields.set(key, {
+        inputOmitted: existing?.inputOmitted || !Object.hasOwn(model, "input"),
+        // Duplicate source rows keep the same first-authored priority as publication.
+        cost: mergeModelCost(model.cost, existing?.cost),
+      });
+    }
+  }
+  return fields;
+}
+
 /** Resolves providers for models.json with injectable implicit-provider discovery. */
 async function resolveProvidersForModelsJsonWithDeps(
   params: {
@@ -134,6 +163,8 @@ async function resolveProvidersForModelsJsonWithDeps(
   const cfg = context.cfg.models?.providers
     ? { ...context.cfg, models: { ...context.cfg.models, providers: explicitProviders } }
     : context.cfg;
+  const manifestPlugins = context.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const sourceModelFields = buildSourceModelFields(context.cfg.models?.providers, manifestPlugins);
   // When models.mode is "replace" the user opts out of provider discovery, so
   // skip the (potentially slow) implicit-provider resolver entirely and return
   // only the explicit providers. See openclaw#66957.
@@ -146,9 +177,11 @@ async function resolveProvidersForModelsJsonWithDeps(
     ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     discoveryAuthConfig: context.discoveryAuthConfig,
+    sourceConfigForSecrets: context.sourceConfigForSecrets,
     env,
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
+    sourceModelFields,
     ...(context.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: context.pluginMetadataSnapshot }
       : {}),
@@ -171,6 +204,8 @@ async function resolveProvidersForModelsJsonWithDeps(
   return mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
+    sourceModelFields,
+    manifestPlugins,
   });
 }
 
@@ -277,8 +312,7 @@ async function planOpenClawModelsJsonWithDeps(
       agentDir,
       env,
       secretDefaults: cfg.secrets?.defaults,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
       manifestPlugins,
       ...(providerPolicyManifestRegistry
@@ -298,8 +332,7 @@ async function planOpenClawModelsJsonWithDeps(
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = filterWritableProviders(secretEnforcedProviders);

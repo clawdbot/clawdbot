@@ -3,24 +3,31 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromeMcpSessions } from "../src/browser/chrome-mcp-state.js";
 import {
   chromeProductRoots,
   generateChromeExtensionIdForPath,
   stableChromeExtensionDir,
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
+import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
+import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
+import { proveLabeledRefScreenshot } from "./labeled-screenshot.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
+import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
 import { relayTestKey } from "./relay-key.test-support.js";
+import { assertRelayTabCreation } from "./tab-creation.test-support.js";
 
 declare const chrome: {
   runtime: { sendMessage: (message: unknown) => Promise<Record<string, unknown>> };
@@ -31,6 +38,7 @@ const runE2E =
   (process.platform === "linux" || process.platform === "darwin");
 const cleanups: Array<() => Promise<void>> = [];
 const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
+const nativeHostFixture = useNativeHostLaunchFixture();
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -146,6 +154,11 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
   it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+    const diagnostic = createBootstrapDiagnostic();
+    cleanups.push(async () => {
+      diagnostic.dispose();
+      diagnostic.flush();
+    });
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-e2e-")),
     );
@@ -188,11 +201,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
       },
       async () => {
         const extensionSource = path.dirname(fileURLToPath(import.meta.url));
-        const nativeHostPath = await fs.realpath(
-          path.resolve("extensions/browser/native-host-entry.ts"),
+        // Match installation: Chrome launches the built host, not a fresh tsx
+        // compilation of the source graph inside each bounded native request.
+        const launchFixture = await nativeHostFixture(
+          root,
+          path.resolve("dist/extensions/browser/native-host-entry.js"),
         );
-        const tsxPath = await fs.realpath(path.resolve("node_modules/.bin/tsx"));
-        const tsxTsconfigPath = path.resolve("tsconfig.json");
         const deps = {
           platform: process.platform,
           homeDir,
@@ -204,19 +218,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             OPENCLAW_CONFIG_PATH: configPath,
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
-          nodePath: tsxPath,
-          nativeHostPath,
+          ...launchFixture,
         };
         const gatewayServer = http.createServer((req, res) => {
           if (req.url === "/browser-owner-proof") {
+            diagnostic.mark("http.request", true);
+            res.once("finish", () => diagnostic.mark("http.finish", res.statusCode));
             res.writeHead(200, { "content-type": "text/html" });
-            res.end("<title>OpenClaw selected tab</title>");
+            res.end("<title>OpenClaw selected tab</title><h1>OpenClaw created destination</h1>");
             return;
           }
           res.writeHead(426);
           res.end();
         });
+        let extensionTransport: Duplex | undefined;
+        let extensionConnections = 0;
         gatewayServer.on("upgrade", (req, socket, head) => {
+          extensionTransport = socket;
+          extensionConnections += 1;
           void handleGatewayExtensionUpgrade(req, socket, head);
         });
         await new Promise<void>((resolve) => {
@@ -225,20 +244,41 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         cleanups.push(
           async () =>
             await new Promise<void>((resolve) => {
-              gatewayServer.close(() => resolve());
+              gatewayServer.close(() => {
+                diagnostic.mark("http.closed", !gatewayServer.listening);
+                resolve();
+              });
             }),
         );
-        cleanups.push(stopBrowserControlService);
+        cleanups.push(async () => {
+          const currentRelay = getBrowserControlState()?.extensionRelays?.get("e2e");
+          const bridge = currentRelay?.ownership === "owned" ? currentRelay.bridge : undefined;
+          const sessions = [...chromeMcpSessions.values()].slice(0, 8);
+          try {
+            await stopBrowserControlService();
+          } finally {
+            diagnostic.mark(
+              "relay.closed",
+              Boolean(bridge && !bridge.extensionConnected && bridge.cdpClientCount === 0),
+            );
+            for (const session of sessions) {
+              diagnostic.mark(
+                "mcp.closed",
+                session.transport.pid === null && session.processCleanup?.status === "closed",
+              );
+            }
+          }
+        });
+        // Real Chrome/native children must not inherit Vitest's source overrides
+        // or fast-test flags; the launcher owns the installation selectors.
         const browserEnv: NodeJS.ProcessEnv = {
-          ...process.env,
+          PATH: process.env.PATH,
+          TMPDIR: process.env.TMPDIR,
+          // Chromium's macOS singleton sockets use this instead of TMPDIR.
+          MAC_CHROMIUM_TMPDIR: process.env.TMPDIR,
           HOME: homeDir,
           ...chromeRootEnv,
-          TSX_TSCONFIG_PATH: tsxTsconfigPath,
         };
-        delete browserEnv.OPENCLAW_STATE_DIR;
-        delete browserEnv.OPENCLAW_CONFIG_PATH;
-        delete browserEnv.VITEST;
-        delete browserEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
         const launchChromium = async () =>
           await chromium.launchPersistentContext(userDataDir, {
@@ -272,14 +312,35 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           waitMs: 15_000,
           deps,
         });
-        await expect
-          .poll(
-            async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-            {
-              timeout: 15_000,
-            },
-          )
-          .toBe(true);
+        try {
+          await expect
+            .poll(
+              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
+              {
+                timeout: 15_000,
+              },
+            )
+            .toBe(true);
+        } catch (error) {
+          const status = await installPromise;
+          const modes = await Promise.all(
+            Object.entries(launchFixture).map(async ([kind, target]) => [
+              kind,
+              ((await fs.stat(target)).mode & 0o777).toString(8),
+            ]),
+          );
+          const issues = status.issues.map((issue) =>
+            issue
+              .replaceAll(launchFixture.nativeHostPath, "<native-host>")
+              .replaceAll(launchFixture.nodePath, "<node>")
+              .replaceAll(root, "<fixture>")
+              .replaceAll(extensionSource, "<bundled-extension>"),
+          );
+          throw new Error(
+            `Native host pre-registration failed: ${JSON.stringify({ modes: Object.fromEntries(modes), issues })}`,
+            { cause: error },
+          );
+        }
         process.stderr.write("[browser-extension-e2e] deterministic native host pre-registered\n");
         await loadUnpackedExtension(context, installed);
         const extensionId = await waitForExtensionId(context, installed);
@@ -335,8 +396,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         try {
           await expect
             .poll(
-              () =>
-                getBrowserControlState()?.extensionRelays?.get("e2e")?.bridge.extensionConnected,
+              () => {
+                const currentRelay = getBrowserControlState()?.extensionRelays?.get("e2e");
+                return (
+                  currentRelay?.ownership === "owned" && currentRelay.bridge.extensionConnected
+                );
+              },
               { timeout: 15_000 },
             )
             .toBe(true);
@@ -349,9 +414,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           });
         }
         const relay = getBrowserControlState()?.extensionRelays?.get("e2e");
-        if (!relay || relay.port !== relayPort) {
+        if (!relay || relay.ownership !== "owned" || relay.port !== relayPort) {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
+        diagnostic.watchRelay(relay.bridge);
         const browserState = getBrowserControlState();
         const extensionProfile = browserState?.resolved.profiles.e2e;
         if (!browserState || !extensionProfile) {
@@ -388,6 +454,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           refreshConfigFromDisk: false,
         });
         const dispatcher = createBrowserRouteDispatcher(routeContext);
+        const playwrightTabsResponse = await dispatcher.dispatch({
+          method: "GET",
+          path: "/tabs",
+          query: { profile: "e2e" },
+        });
+        expect(playwrightTabsResponse.status, JSON.stringify(playwrightTabsResponse.body)).toBe(
+          200,
+        );
+        expect(playwrightTabsResponse.body).toMatchObject({ running: true });
         const matchingDoctor = await dispatcher.dispatch({
           method: "GET",
           path: "/doctor",
@@ -417,86 +492,110 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         if (!controlledTab?.targetId) {
           throw new Error(`Existing-session E2E tab missing: ${JSON.stringify(tabsResponse.body)}`);
         }
-        const snapshotResponse = await dispatcher.dispatch({
-          method: "GET",
-          path: "/snapshot",
-          query: {
-            profile: existingSessionProfile,
-            targetId: controlledTab.targetId,
-            format: "ai",
-          },
+        await proveLabeledRefScreenshot({
+          dispatcher,
+          controlled,
+          profile: existingSessionProfile,
+          targetId: controlledTab.targetId,
+          proofName: "existing-session-offscreen-labeled-ref.png",
         });
-        const refs = (snapshotResponse.body as { refs?: Record<string, { name?: string }> }).refs;
-        const targetRef = Object.entries(refs ?? {}).find(
-          ([, info]) => info.name === "Offscreen target",
-        )?.[0];
-        if (!targetRef) {
-          throw new Error(`Offscreen target ref missing: ${JSON.stringify(snapshotResponse.body)}`);
+
+        const earlyPlaywrightTarget = (
+          playwrightTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
+        if (!earlyPlaywrightTarget) {
+          throw new Error("Initial Playwright inventory did not contain the controlled target");
         }
-        await controlled.evaluate(() => window.scrollTo(0, 0));
-        const screenshotResponse = await dispatcher.dispatch({
-          method: "POST",
-          path: "/screenshot",
-          query: { profile: existingSessionProfile },
-          body: {
-            targetId: controlledTab.targetId,
-            ref: targetRef,
-            labels: true,
-            type: "png",
-          },
-        });
-        const screenshot = screenshotResponse.body as {
-          path?: string;
-          labelsCount?: number;
-        };
-        expect(screenshotResponse.status, JSON.stringify(screenshotResponse.body)).toBe(200);
-        expect(screenshot.labelsCount).toBe(1);
-        if (!screenshot.path) {
-          throw new Error("Labeled ref screenshot did not return a path");
-        }
-        const proofPath = path.resolve(
-          ".artifacts/browser-lifecycle/existing-session-offscreen-labeled-ref.png",
-        );
-        await fs.mkdir(path.dirname(proofPath), { recursive: true });
-        await fs.copyFile(screenshot.path, proofPath);
-        const screenshotDataUrl = `data:image/png;base64,${(
-          await fs.readFile(screenshot.path)
-        ).toString("base64")}`;
-        const orangePixels = await controlled.evaluate(async (imageUrl) => {
-          const image = new Image();
-          image.src = imageUrl;
-          await image.decode();
-          const canvas = document.createElement("canvas");
-          canvas.width = image.naturalWidth;
-          canvas.height = image.naturalHeight;
-          const canvasContext = canvas.getContext("2d");
-          if (!canvasContext) {
-            return 0;
-          }
-          canvasContext.drawImage(image, 0, 0);
-          const pixels = canvasContext.getImageData(0, 0, canvas.width, canvas.height).data;
-          let matches = 0;
-          for (let index = 0; index < pixels.length; index += 4) {
-            if (
-              (pixels[index] ?? 0) > 220 &&
-              (pixels[index + 1] ?? 255) >= 40 &&
-              (pixels[index + 1] ?? 255) <= 120 &&
-              (pixels[index + 2] ?? 255) < 80 &&
-              (pixels[index + 3] ?? 0) > 200
-            ) {
-              matches += 1;
+        // Capture the existing context before the socket fault; target detachment keeps it alive.
+        const connectOverCdp = vi.spyOn(chromium, "connectOverCDP");
+        let relayPlaywrightContext: BrowserContext;
+        try {
+          const relayPage = await getPageForTargetId({
+            cdpUrl: routeContext.forProfile("e2e").profile.cdpUrl,
+            targetId: earlyPlaywrightTarget,
+          });
+          relayPlaywrightContext = relayPage.context();
+          expect(connectOverCdp).not.toHaveBeenCalled();
+          const bindingSession = await relayPlaywrightContext.newCDPSession(relayPage);
+          const observerSession = await relayPlaywrightContext.newCDPSession(relayPage);
+          const bindingName = "__openclawRelayBindingProof";
+          const bindingPayloads: string[] = [];
+          const observerPayloads: string[] = [];
+          observerSession.on("Runtime.bindingCalled", (event) => {
+            if (event.name === bindingName) {
+              observerPayloads.push(event.payload);
             }
+          });
+          bindingSession.on("Runtime.bindingCalled", (event) => {
+            if (event.name === bindingName) {
+              bindingPayloads.push(event.payload);
+            }
+          });
+          try {
+            await observerSession.send("Runtime.enable");
+            await bindingSession.send("Runtime.addBinding", { name: bindingName });
+            await bindingSession.send("Runtime.evaluate", {
+              expression: "globalThis.__openclawRelayBindingProof('before-enable')",
+            });
+            await expect.poll(() => bindingPayloads).toEqual(["before-enable"]);
+            await bindingSession.send("Runtime.enable");
+            await bindingSession.send("Runtime.disable");
+            await bindingSession.send("Runtime.evaluate", {
+              expression: "globalThis.__openclawRelayBindingProof('after-disable')",
+            });
+            await expect.poll(() => bindingPayloads).toEqual(["before-enable", "after-disable"]);
+            expect(observerPayloads).toEqual([]);
+          } finally {
+            await bindingSession
+              .send("Runtime.removeBinding", { name: bindingName })
+              .catch(() => {});
+            await bindingSession.detach().catch(() => {});
+            await observerSession.detach().catch(() => {});
           }
-          return matches;
-        }, screenshotDataUrl);
-        expect(orangePixels).toBeGreaterThan(20);
-        process.stderr.write(`[browser-extension-e2e] screenshot proof ${proofPath}\n`);
+        } finally {
+          connectOverCdp.mockRestore();
+        }
+
+        expect(relay.bridge.cdpClientCount).toBeGreaterThanOrEqual(2);
+        const previousConnections = extensionConnections;
+        if (!extensionTransport) {
+          throw new Error("Test-owned extension transport missing");
+        }
+        extensionTransport.destroy();
+        await expect
+          .poll(() => extensionConnections, { timeout: 15_000 })
+          .toBeGreaterThan(previousConnections);
+        await expect.poll(() => relay.bridge.extensionConnected).toBe(true);
+        const reconnectedTabsResponse = await dispatcher.dispatch({
+          method: "GET",
+          path: "/tabs",
+          query: { profile: existingSessionProfile },
+        });
+        const reconnectedTarget = (
+          reconnectedTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
+        if (!reconnectedTarget) {
+          throw new Error(
+            `Reconnected target missing: ${JSON.stringify(reconnectedTabsResponse.body)}`,
+          );
+        }
+        await proveLabeledRefScreenshot({
+          dispatcher,
+          controlled,
+          profile: existingSessionProfile,
+          targetId: reconnectedTarget,
+          proofName: "existing-session-reconnected-offscreen-labeled-ref.png",
+        });
+        expect(relay.bridge.cdpClientCount).toBeGreaterThanOrEqual(2);
+        process.stderr.write(
+          "[browser-extension-e2e] same-browser transport-reconnect labeled-ref screenshot passed\n",
+        );
 
         const distractingPage = await context.newPage();
         const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
         await distractingPage.goto(distractingUrl);
         await expect
-          .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
+          .poll(() => relayPlaywrightContext.pages().some((page) => page.url() === distractingUrl))
           .toBe(true);
         const liveTabsResponse = await dispatcher.dispatch({
           method: "GET",
@@ -509,20 +608,40 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
         const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
         if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
-          throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
+          throw new Error(
+            `Extension navigation proof tabs missing: ${JSON.stringify(liveTabsResponse)}`,
+          );
         }
         expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
         const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
         browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
         const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
+        const proofUrl = `http://127.0.0.1:${gatewayPort}/browser-owner-proof`;
+        diagnostic.arm(selectedTab.targetId, unrelatedTab.targetId);
+        diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+        for (const session of [...chromeMcpSessions.values()].slice(0, 8)) {
+          diagnostic.peer(session.client.getServerVersion());
+        }
+        const stopPageObservation = diagnostic.watchPage(controlled, proofUrl);
+        const selectedOwner = relay.bridge.captureOperationTarget(selectedTab.targetId);
+        const unrelatedOwner = relay.bridge.captureOperationTarget(unrelatedTab.targetId);
         const actedPage = await getPageForTargetId({
           cdpUrl: extensionCdpUrl,
           targetId: selectedTab.targetId,
           ssrfPolicy: browserState.resolved.ssrfPolicy,
         });
-        const detachedNavigation = vi
-          .spyOn(actedPage, "goto")
-          .mockRejectedValueOnce(new Error("page.goto: Frame has been detached"));
+        const detachedNavigation = vi.spyOn(actedPage, "goto").mockImplementationOnce(() => {
+          diagnostic.mark("injection.used", true);
+          return Promise.reject(new Error("page.goto: Frame has been detached"));
+        });
+        const worker = context
+          .serviceWorkers()
+          .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
+        if (!worker) {
+          throw new Error("Extension service worker missing");
+        }
+        const finishNavigationProbe = await holdNavigationAccessCheck(worker, proofUrl);
+        let probe: Awaited<ReturnType<typeof finishNavigationProbe>>;
         try {
           const navigationResponse = await dispatcher.dispatch({
             method: "POST",
@@ -533,6 +652,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
               url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
             },
           });
+          diagnostic.mark("navigate.status", navigationResponse.status);
           expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
           expect(navigationResponse.body).toMatchObject({
             ok: true,
@@ -545,14 +665,59 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             targetId: selectedTab.targetId,
             ssrfPolicy: browserState.resolved.ssrfPolicy,
           });
+          diagnostic.mark("adapter.fresh", recoveredPage !== actedPage);
           expect(recoveredPage).not.toBe(actedPage);
           expect(distractingPage.url()).toBe(distractingUrl);
           process.stderr.write(
             "[browser-extension-e2e] injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n",
           );
         } finally {
+          diagnostic.mark("injection.calls", detachedNavigation.mock.calls.length);
+          diagnostic.mark("owner.selected", selectedOwner?.() === selectedTab.targetId);
+          diagnostic.mark("owner.unrelated", unrelatedOwner?.() === unrelatedTab.targetId);
+          diagnostic.mark("direct.url", controlled.url() === proofUrl);
+          diagnostic.mark("unrelated.url", distractingPage.url() === distractingUrl);
+          diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+          stopPageObservation();
+          diagnostic.flush();
           detachedNavigation.mockRestore();
           browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+          probe = await finishNavigationProbe();
+        }
+        expect(probe.heldReads).toBeGreaterThan(0);
+        expect(probe.sawLoad).toBe(true);
+
+        const creationPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        };
+        try {
+          for (const accessMode of ["all", "selected"] as const) {
+            expect(
+              await extensionPage.evaluate(
+                async (mode) =>
+                  await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: mode }),
+                accessMode,
+              ),
+            ).toMatchObject({ ok: true });
+            await assertRelayTabCreation({
+              context,
+              extensionPage,
+              dispatcher,
+              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+              accessMode,
+            });
+          }
+        } finally {
+          await extensionPage.evaluate(
+            async () =>
+              await chrome.runtime.sendMessage({
+                type: "setAccessMode",
+                accessMode: "all",
+              }),
+          );
+          browserState.resolved.ssrfPolicy = creationPolicy;
         }
 
         const registration = status.registrations.find(

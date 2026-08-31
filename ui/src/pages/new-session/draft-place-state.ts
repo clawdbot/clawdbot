@@ -19,7 +19,6 @@ import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { newSessionSearch } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { isKnownWorkspacePath } from "./path.ts";
 import { resolveNewSessionWhere, type NewSessionWhere } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
@@ -48,7 +47,6 @@ export class DraftPlaceState {
   private agentsHydratedValue = false;
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
-  private folderGatewayApproved = false;
   private preferredWhereRestore: NewSessionWhere | null = null;
   private preferredProjectRestore = "";
   private whereSelectedByUser = false;
@@ -246,20 +244,9 @@ export class DraftPlaceState {
     if (this.browser.projectId || this.browser.remoteProject) {
       return !this.browser.remoteProject && !this.browser.selectedProject();
     }
-    if (this.restoredFolderValidation !== "none") {
-      return true;
-    }
-    if (
-      !this.usesCustomFolder() ||
-      this.isAdmin() ||
-      this.folderGatewayApproved ||
-      isKnownWorkspacePath(this.knownWorkspaceRoots(), this.folderValue)
-    ) {
-      return false;
-    }
     // Free-typed paths still reach sessions.create so the Gateway can return
     // the authoritative missing-scope error instead of the UI dead-ending.
-    return false;
+    return this.restoredFolderValidation !== "none";
   }
 
   adoptAgentDefaults(
@@ -295,14 +282,8 @@ export class DraftPlaceState {
         : storedFolderUsable
           ? storedFolder
           : workspace;
-      this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
       this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
-      if (groupTarget) {
-        // Group defaults own the initial local/worktree choice. Repository
-        // discovery still rejects worktrees when the selected folder is not Git.
-        this.repositoryState.forceWorktree(groupWorktree);
-      }
       const preferredWhere = groupTarget
         ? { kind: "local" as const }
         : (preference?.where ?? { kind: "local" as const });
@@ -348,7 +329,6 @@ export class DraftPlaceState {
     this.browser.clearProjectSelection();
     this.browser.resetProjectSearch();
     this.folderSelectedByUser = false;
-    this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
     this.cancelRestoredFolderValidation();
     this.preferredWhereRestore = null;
@@ -371,7 +351,6 @@ export class DraftPlaceState {
     this.browser.close();
     this.cancelRestoredFolderValidation();
     this.gatewayApprovedWorkspaceRoots = [];
-    this.folderGatewayApproved = false;
     this.browser.resetProjectSearch();
     if (!resetHostSelection) {
       this.callbacks.requestUpdate();
@@ -402,7 +381,6 @@ export class DraftPlaceState {
     this.cloudMachines.applyPending(params.profileId, params.machineClass);
     this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
-    this.folderGatewayApproved = false;
     this.callbacks.requestUpdate();
   }
 
@@ -413,6 +391,9 @@ export class DraftPlaceState {
   }
 
   clearProjectSelection() {
+    if (this.browser.projectId || this.browser.remoteProject) {
+      this.repositoryState.clearDetails(true);
+    }
     this.browser.clearProjectSelection();
     this.repositoryState.load();
     this.callbacks.requestUpdate();
@@ -436,7 +417,6 @@ export class DraftPlaceState {
     this.callbacks.onError(null);
     this.agentSelectedByUser = true;
     this.folderSelectedByUser = false;
-    this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
     this.browser.clearProjectSelection();
     this.preferredWhereRestore = null;
@@ -451,7 +431,7 @@ export class DraftPlaceState {
     this.adoptAgentDefaults({ preserveSelectedAgent: true });
   }
 
-  applyFolder(folder: string, gatewayApproved = false) {
+  applyFolder(folder: string) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
@@ -460,7 +440,6 @@ export class DraftPlaceState {
     this.cancelRestoredFolderValidation();
     this.callbacks.onError(null);
     this.folderValue = folder.trim();
-    this.folderGatewayApproved = gatewayApproved && !this.isAdmin();
     this.folderSelectedByUser = true;
     this.projectSelectedByUser = true;
     this.preferredProjectRestore = "";
@@ -545,9 +524,11 @@ export class DraftPlaceState {
     this.whereSelectedByUser = true;
     this.preferredWhereRestore = null;
     if ((deviceId || autoDevice) && !this.worktreeAvailable()) {
+      if (this.folderValue !== this.workspacePath() || this.browser.projectId) {
+        this.repositoryState.clearDetails(true);
+      }
       this.folderValue = this.workspacePath();
       this.folderSelectedByUser = false;
-      this.folderGatewayApproved = false;
       this.browser.clearProjectSelection();
       this.projectSelectedByUser = true;
     }
@@ -648,30 +629,38 @@ export class DraftPlaceState {
         (profile) => profile.id === preferredWhere.id,
       );
       const profileAvailable = Boolean(
-        preferredProfile && !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile),
+        this.isAdmin() &&
+        preferredProfile &&
+        !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile),
       );
-      const projectReady = !preferredProject || this.browser.projectId === preferredProject;
-      if (this.isAdmin() && profileAvailable && projectReady && this.worktreeAvailable()) {
+      const repositoryReady =
+        (!preferredProject || this.browser.projectId === preferredProject) &&
+        this.repositoryState.matchesCurrentRepo() &&
+        this.repository.kind !== "checking";
+      if (profileAvailable && repositoryReady && this.worktreeAvailable()) {
         this.deviceIdValue = "";
         this.autoDeviceValue = false;
         this.cloudProfileIdValue = preferredWhere.id;
         this.repositoryState.forceWorktree(true);
         this.preferredWhereRestore = null;
         changed = true;
-      } else if (!profileAvailable) {
-        if (this.cloudProfileIdValue !== preferredWhere.id) {
-          this.cloudProfileIdValue = "";
-          changed = true;
-        }
+      } else if (!profileAvailable || repositoryReady) {
+        this.cloudProfileIdValue = "";
+        changed = true;
         this.preferredWhereRestore = null;
-        this.persistPreference({ where: { kind: "local" } });
+        // A failed Git probe drops this draft's restore, not the saved destination.
+        if (!profileAvailable || this.repository.kind === "direct") {
+          this.persistPreference({ where: { kind: "local" } });
+        }
       }
     }
 
     if (!changed) {
       return;
     }
-    this.repositoryState.load();
+    if (!this.repositoryState.matchesCurrentRepo()) {
+      this.repositoryState.load();
+    }
     this.callbacks.requestUpdate();
   }
 
@@ -681,14 +670,6 @@ export class DraftPlaceState {
 
   worktreeAvailable(): boolean {
     return this.repositoryState.available();
-  }
-
-  private usesCustomFolder(): boolean {
-    if (this.browser.projectId || this.browser.remoteProject) {
-      return false;
-    }
-    const folder = this.folderValue.trim();
-    return Boolean(folder) && folder !== this.workspacePath();
   }
 
   private persistPreference(patch: Parameters<DraftGatewayState["persistPreference"]>[2]) {
@@ -702,7 +683,6 @@ export class DraftPlaceState {
 
   private restoreWorkspaceFolder() {
     this.restoredFolderValidation = "none";
-    this.folderGatewayApproved = false;
     this.callbacks.onClearError(t("newSession.browserLoadFailed"));
     this.folderValue = this.workspacePath();
     this.repositoryState.rejectPreferredWorktree();
@@ -730,7 +710,6 @@ export class DraftPlaceState {
           return;
         }
         this.recordGatewayApprovedListing(result);
-        this.folderGatewayApproved = !this.isAdmin();
         this.restoredFolderValidation = "none";
         this.callbacks.onClearError(t("newSession.browserLoadFailed"));
         this.repositoryState.load();

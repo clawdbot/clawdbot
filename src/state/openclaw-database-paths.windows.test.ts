@@ -153,7 +153,7 @@ describe("OpenClaw database paths on Windows", () => {
         skipped: false,
       });
       expect(
-        compactDoctorSessionSqliteTarget(
+        await compactDoctorSessionSqliteTarget(
           {
             agentId: AGENT_ID,
             storePath: path.join(

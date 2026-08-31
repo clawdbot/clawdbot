@@ -1,4 +1,3 @@
-// Chat-owned model, reasoning, and fast-mode picker orchestration.
 import { html, nothing } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -10,12 +9,12 @@ import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
+  type ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
 import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type {
   ChatModelPickerOption,
@@ -47,9 +46,10 @@ type ChatModelControlsProps = {
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
-  showFastMode?: boolean;
+  fastModeTarget?: ChatFastModeTarget;
   sending: boolean;
   sessionKey: string;
+  selectedSession: SessionsListResult["sessions"][number] | undefined;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
   contextWindowTarget?: ChatContextWindowTarget;
@@ -189,6 +189,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelOverrideSource,
     options: selectOptions,
   } = resolveChatModelSelectState({
+    activeSession: props.selectedSession,
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
@@ -207,10 +208,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalog: props.modelCatalog,
     connected: props.connected,
     currentModelOverride: currentOverride,
+    fastModeTarget: props.fastModeTarget ?? props.selectedSession,
     gatewayAvailable: props.gatewayAvailable,
     loading: props.loading,
     sending: props.sending,
-    sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
     stream: props.stream,
   });
@@ -219,9 +220,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const fastMode = props.modelSwitching
     ? { ...resolvedFastMode, disabled: true }
     : resolvedFastMode;
-  const activeSession = props.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
+  const activeSession = props.selectedSession;
   const currentProviderHint = activeSession?.modelProvider ?? "";
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
   const defaultCatalogEntry = resolveChatModelCatalogEntry(defaultModel, props.modelCatalog);
@@ -274,6 +273,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     if (option.disabled) {
       pickerOption.disabled = true;
+      pickerOption.unavailableReason = option.unavailableReason;
     }
     return pickerOption;
   });
@@ -291,7 +291,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ...(typeof currentCatalogEntry?.supportsTools === "boolean"
         ? { supportsTools: currentCatalogEntry.supportsTools }
         : {}),
-      ...(currentCatalogEntry?.available === false ? { disabled: true } : {}),
+      ...(currentCatalogEntry?.available === false
+        ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
+        : {}),
       isDefault: false,
       value: currentOverride,
       label: currentCatalogEntry?.name.trim() || currentOverride,
@@ -382,7 +384,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     effortMutationDisabled ||
     !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
-  const showFastMode = props.showFastMode !== false;
   // One owner supplies the whole tuple: mixing an override session's fields with
   // the defaults row can render the default model's options for a session whose
   // model declares none, then patch an invalid option id.
@@ -395,7 +396,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+    (thinking.options.length === 0 && fastMode.disabled);
   // Floating UI deliberately tracks a live anchor. Keep the eventual effort
   // control in layout while catalog state is transient (and until an open model
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
@@ -450,7 +451,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
               disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
             },
             sessionKey: props.sessionKey,
-            showFastMode,
             thinkingDisabled,
             thinking,
             onFastModeSelect: async (next, targetSessionKey) =>

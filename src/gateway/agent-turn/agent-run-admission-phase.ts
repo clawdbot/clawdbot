@@ -30,9 +30,11 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { ChatImageContent, OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -47,6 +49,7 @@ import {
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
 } from "../server-methods/cron-creator-authority-admission.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
@@ -90,6 +93,7 @@ export type PreparedAgentRunDispatch = {
 };
 
 export async function prepareAgentRunDispatch(params: {
+  promptedAt: number;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -281,7 +285,7 @@ export async function prepareAgentRunDispatch(params: {
   }
   const activeRunAbort = params.getAdmittedRunAbort();
   if (!activeRunAbort || !operationalRunInstance) {
-    activeRunAbort?.cleanup({ force: true });
+    activeRunAbort?.cleanup();
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,
@@ -340,7 +344,7 @@ export async function prepareAgentRunDispatch(params: {
   const cleanupPreaccept = (admissionReleased = false) => {
     preparedModelRuntimeLease?.release();
     preparedModelRuntimeLease = undefined;
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     if (!admissionReleased) {
       activeGatewayWorkAdmission.release();
     }
@@ -392,6 +396,13 @@ export async function prepareAgentRunDispatch(params: {
         agentDir: replyDispatchRuntime.agentDir,
         allowGatewaySubagentBinding: true,
         workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
+        runtimePluginSelections: [
+          {
+            provider: resolvedRuntime.provider,
+            modelId: resolvedRuntime.model,
+            runtime: resolvedRuntime.harness,
+          },
+        ],
       },
       {
         catalogMode: "static",
@@ -402,6 +413,10 @@ export async function prepareAgentRunDispatch(params: {
     if (!revalidateAdmission()) {
       return undefined;
     }
+    replyDispatchRuntime = Object.freeze({
+      ...replyDispatchRuntime,
+      pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+    });
   } catch (err) {
     if (!revalidateAdmission()) {
       return undefined;
@@ -540,6 +555,19 @@ export async function prepareAgentRunDispatch(params: {
   let userTurn: PreparedAgentRunUserTurn;
   try {
     userTurn = await prepareAgentRunUserTurn({
+      assertCurrent: () => {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        activeRunAbort.controller.signal.throwIfAborted();
+        const entry = params.context.chatAbortControllers.get(params.runId);
+        if (
+          !entry ||
+          entry !== activeRunAbort.entry ||
+          entry.operationalRunInstance !== operationalRunInstance ||
+          entry.registrationCleanupRequested
+        ) {
+          throw new Error("agent input admission no longer owns this run");
+        }
+      },
       request: params.request,
       cfg: params.cfg,
       cfgForAgent: params.cfgForAgent,
@@ -564,8 +592,8 @@ export async function prepareAgentRunDispatch(params: {
       context: params.context,
     });
     if (userTurn.recorder) {
-      // The recorder already persisted the media references, so later admission
-      // rejection must preserve the files now owned by durable history.
+      // Accepted input owns these media references before it enters the transcript.
+      // Later admission rejection must preserve the files retained by that custody.
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
@@ -600,6 +628,25 @@ export async function prepareAgentRunDispatch(params: {
     },
   });
   params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
+  const participant = resolveGatewayInputParticipant(params.client, params.inputProvenance);
+  if (
+    participant &&
+    params.resolvedSessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    !userTurn.suppressPromptPersistence
+  ) {
+    recordSessionParticipantBestEffort({
+      identity: participant,
+      promptedAt: params.promptedAt,
+      agentId: params.activeSessionAgentId,
+      sessionKey: params.resolvedSessionKey,
+      storePath: lifecycleStorePath,
+      onError: (error) =>
+        params.context.logGateway.warn(
+          `agent participant persistence failed: ${formatForLog(error)}`,
+        ),
+    });
+  }
   const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,

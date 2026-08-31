@@ -112,6 +112,7 @@ suite.define(() => {
           : {}),
       });
       const page = await context.newPage();
+      await page.clock.install();
       await installDeniedClipboard(page);
       const text = "Deployment update is ready for review.";
       const gateway = await installMockGateway(page, {
@@ -202,6 +203,7 @@ suite.define(() => {
         } else {
           await expect.poll(() => hasAccessibleName("Copied!")).toBe(true);
           expect(await button.isDisabled()).toBe(false);
+          await page.clock.fastForward(1_500);
           await expect
             .poll(() => hasAccessibleName(surface === "agent-id" ? "Copy ID" : "Copy"))
             .toBe(true);
@@ -418,6 +420,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     await installDeniedClipboard(page);
     const code = "const answer = 42;";
     const gateway = await installMockGateway(page, {
@@ -460,6 +463,7 @@ suite.define(() => {
         });
       }
 
+      await page.clock.fastForward(2_000);
       await expect.poll(() => button.getAttribute("aria-label")).toBe("Copy code");
       await expect.poll(() => button.getAttribute("class")).not.toContain("copy-failed");
     } finally {
@@ -476,6 +480,7 @@ suite.define(() => {
         viewport: { height: 900, width },
       });
       const page = await context.newPage();
+      await page.clock.install();
       await installDeniedClipboard(page);
       await installMockGateway(page, {
         historyMessages: [
@@ -509,6 +514,7 @@ suite.define(() => {
           legacyAttempts: 1,
           value: "Copy this complete message.",
         });
+        await page.clock.fastForward(2_000);
         await feedback.waitFor({ state: "hidden" });
         await expect.poll(() => copy.getAttribute("aria-label")).toBe("Copy as markdown");
       } finally {

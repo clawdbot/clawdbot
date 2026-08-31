@@ -14,28 +14,25 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
-import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorSessionStoreAgentIds,
-  listPluginDoctorStateMigrationEntries,
-  type PluginDoctorStateMigration,
-  type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
-import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import {
+  EMPTY_LEGACY_SESSION_SURFACES,
+  type PreparedLegacySessionSurfaces,
+} from "../plugins/legacy-session-surfaces.types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
@@ -43,7 +40,6 @@ import {
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
@@ -100,9 +96,9 @@ import {
   migrateLegacyNodeHostConfig,
 } from "./state-migrations.node-host.js";
 import {
-  createPluginDoctorStateMigrationContext,
-  type PluginDoctorRepairAuthority,
-} from "./state-migrations.plugin-doctor-context.js";
+  collectPluginDoctorStateMigrationPlans,
+  runPluginDoctorStateMigrationPlans,
+} from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
@@ -142,7 +138,6 @@ import {
 import {
   autoMigrateLegacyStateDir,
   migrateLegacyProfileWorkspace,
-  resetAutoMigrateLegacyTaskStateSidecarsForTest,
 } from "./state-migrations.state-dir.js";
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
@@ -167,7 +162,6 @@ import {
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 import type {
-  DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
@@ -202,6 +196,10 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "singleton state tables → shared configuration state";
     case "state-consolidation-v13":
       return "cron jobs and subagent runs → canonical JSON storage";
+    case "creator-namespace-v14":
+      return "historical cron creators → unknown source attribution";
+    case "conversation-binding-targets-v15":
+      return "conversation bindings → exact target keys without agent/session projections";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -214,67 +212,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
 
 const autoMigrateChecked = new Set<string>();
 
-const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
-const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const DEFERRED_LEGACY_OWNER_MESSAGE =
   "Deferred legacy agent/session migration: select an agent owner";
-
-export function resetAutoMigrateLegacyStateForTest(): void {
-  autoMigrateChecked.clear();
-  resetAutoMigrateLegacyTaskStateSidecarsForTest();
-}
-
-async function collectPluginDoctorStateMigrationPlans(params: {
-  cfg: OpenClawConfig;
-  pluginDoctorConfig?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-  includeDoctorOnly?: boolean;
-  phase?: PluginDoctorStateMigration["phase"];
-  repairAuthority?: PluginDoctorRepairAuthority;
-  warnings?: string[];
-}): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
-  const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
-  const config = params.pluginDoctorConfig ?? params.cfg;
-  for (const entry of listPluginDoctorStateMigrationEntries({
-    config,
-    env: params.env,
-  })) {
-    if (
-      entry.migration.phase !== params.phase ||
-      (entry.migration.doctorOnly === true && params.includeDoctorOnly !== true)
-    ) {
-      continue;
-    }
-    let detected: PluginDoctorStateMigrationDetection | null;
-    try {
-      detected = await entry.migration.detectLegacyState({
-        config,
-        env: params.env,
-        stateDir: params.stateDir,
-        oauthDir: params.oauthDir,
-        context: createPluginDoctorStateMigrationContext({
-          pluginId: entry.pluginId,
-          env: params.env,
-          config,
-          repairAuthority: params.repairAuthority,
-        }),
-      });
-    } catch (err) {
-      params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
-      continue;
-    }
-    if (detected?.preview.length) {
-      plans.push({
-        pluginId: entry.pluginId,
-        migration: entry.migration,
-        preview: detected.preview,
-      });
-    }
-  }
-  return plans;
-}
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
   const agentId = tryResolveAmbientOwnerAgentId(cfg);
@@ -351,6 +290,8 @@ async function detectManagedWorktreeStateMigration(params: {
 
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
+  /** Legacy session file inspection belongs to Doctor, including its read-only preview. */
+  mode?: "automatic" | "doctor";
   pluginDoctorConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -364,6 +305,7 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
+  const detectSessionFiles = params.mode !== "automatic";
   const migrationAgentId = tryResolveDoctorStateMigrationAgentId(params.cfg);
   const sessionMigrationAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
   const targetAgentId = migrationAgentId ?? sessionMigrationAgentId ?? LEGACY_IMPLICIT_AGENT_ID;
@@ -386,23 +328,24 @@ export async function detectLegacyStateMigrations(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
     });
-  const currentSessionStoreOwnership = sessionMigrationAgentId
-    ? resolveSessionStoreOwnership({
-        cfg: params.cfg,
-        env,
-        stateDir,
-        targetAgentId: sessionMigrationAgentId,
-        pluginSessionStoreAgentIds,
-      })
-    : {
-        preserveAmbiguousKeys: true,
-        preserveForeignMainAliases: true,
-        targetStoreAliases: {
-          hasDistinctAliases: false,
-          hasFinalSymlink: false,
-          hasUnresolvedIdentity: false,
-        },
-      };
+  const currentSessionStoreOwnership =
+    detectSessionFiles && sessionMigrationAgentId
+      ? resolveSessionStoreOwnership({
+          cfg: params.cfg,
+          env,
+          stateDir,
+          targetAgentId: sessionMigrationAgentId,
+          pluginSessionStoreAgentIds,
+        })
+      : {
+          preserveAmbiguousKeys: true,
+          preserveForeignMainAliases: true,
+          targetStoreAliases: {
+            hasDistinctAliases: false,
+            hasFinalSymlink: false,
+            hasUnresolvedIdentity: false,
+          },
+        };
   const sessionStoreOwnership: SessionStoreOwnership = {
     preserveAmbiguousKeys:
       params.sessionStoreOwnership?.preserveAmbiguousKeys === true ||
@@ -416,15 +359,18 @@ export async function detectLegacyStateMigrations(params: {
     ),
   };
   const { preserveForeignMainAliases } = sessionStoreOwnership;
-  const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
-    migrationFileExists(sessionsLegacyStorePath) ||
-    legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
+    detectSessionFiles &&
+    (migrationFileExists(sessionsLegacyStorePath) ||
+      safeReadDir(sessionsLegacyDir).some((e) => e.isFile() && e.name.endsWith(".jsonl")));
 
-  const targetSessionParsed = migrationFileExists(sessionsTargetStorePath)
-    ? readSessionStoreJson5(sessionsTargetStorePath)
-    : { store: {}, ok: true };
-  const legacySessionSurfaces = params.legacySessionSurfaces;
+  const targetSessionParsed =
+    detectSessionFiles && migrationFileExists(sessionsTargetStorePath)
+      ? readSessionStoreJson5(sessionsTargetStorePath)
+      : { store: {}, ok: true };
+  const legacySessionSurfaces = detectSessionFiles
+    ? params.legacySessionSurfaces
+    : EMPTY_LEGACY_SESSION_SURFACES;
   const legacyKeys =
     targetSessionParsed.ok && legacySessionSurfaces.failures.length === 0
       ? listLegacySessionKeys({
@@ -648,15 +594,13 @@ export async function detectLegacyStateMigrations(params: {
   const pluginPlans =
     stateSchemaMigrations.length > 0
       ? []
-      : await collectPluginDoctorStateMigrationPlans({
-          cfg: params.cfg,
-          pluginDoctorConfig: params.pluginDoctorConfig,
-          env,
-          stateDir,
-          oauthDir,
-          includeDoctorOnly: params.doctorOnlyStateMigrations === true,
-          warnings: pluginPlanWarnings,
-        });
+      : await collectPluginDoctorStateMigrationPlans(
+          { config: pluginConfig, env, stateDir, oauthDir },
+          {
+            includeDoctorOnly: params.doctorOnlyStateMigrations === true,
+            warnings: pluginPlanWarnings,
+          },
+        );
 
   const sessionsHaveLegacy =
     Boolean(sessionMigrationAgentId) &&
@@ -899,264 +843,6 @@ export async function detectLegacyStateMigrations(params: {
   };
 }
 
-async function runPluginDoctorStateMigrationPlans(params: {
-  detected: LegacyStateDetection;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): Promise<MigrationMessages> {
-  const warnings: string[] = [];
-  const refreshedPlans = await collectPluginDoctorStateMigrationPlans({
-    cfg: params.config,
-    env: params.env,
-    stateDir: params.detected.stateDir,
-    oauthDir: params.detected.oauthDir,
-    includeDoctorOnly: params.detected.doctorOnlyStateMigrations,
-    warnings,
-  });
-  const hasDetectorFailure = warnings.length > 0;
-  // Previously detected plans are only safe when refresh found no current work.
-  // If any detector failed, skip stale plans instead of migrating on old assumptions.
-  const plans =
-    refreshedPlans.length > 0 || hasDetectorFailure
-      ? refreshedPlans
-      : (params.detected.pluginPlans?.plans ?? []);
-  const migrated = await migratePluginDoctorStatePlans({
-    plans,
-    config: params.config,
-    env: params.env,
-    stateDir: params.detected.stateDir,
-    oauthDir: params.detected.oauthDir,
-  });
-  return { ...migrated, warnings: [...warnings, ...migrated.warnings] };
-}
-
-async function migratePluginDoctorStatePlans(params: {
-  plans: readonly DetectedPluginDoctorStateMigrationPlan[];
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-  repairAuthority?: PluginDoctorRepairAuthority;
-}): Promise<MigrationMessages> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  if (params.plans.length === 0) {
-    return { changes, warnings };
-  }
-
-  const migrate = async () => {
-    for (const plan of params.plans) {
-      try {
-        params.repairAuthority?.assertCurrent();
-        const result = await plan.migration.migrateLegacyState({
-          config: params.config,
-          env: params.env,
-          stateDir: params.stateDir,
-          oauthDir: params.oauthDir,
-          context: createPluginDoctorStateMigrationContext({
-            pluginId: plan.pluginId,
-            env: params.env,
-            config: params.config,
-            repairAuthority: params.repairAuthority,
-          }),
-        });
-        params.repairAuthority?.assertCurrent();
-        changes.push(...result.changes);
-        warnings.push(...result.warnings);
-        notices.push(...(result.notices ?? []));
-      } catch (err) {
-        warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
-      }
-    }
-    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
-  };
-  // Session repair already holds the Gateway lock and cross-process database fences.
-  if (params.repairAuthority) {
-    return migrate();
-  }
-
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-      pollIntervalMs: PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    return {
-      changes,
-      warnings: [
-        `Skipped plugin doctor state migrations because exclusive state ownership is unavailable: ${String(error)}`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes,
-      warnings: [
-        "Skipped plugin doctor state migrations because exclusive state ownership is unavailable",
-      ],
-    };
-  }
-
-  try {
-    // Plugin migrations may claim retired files after verified import. Keep the
-    // predecessor Gateway excluded for the full read, import, and archive window.
-    return await migrate();
-  } finally {
-    await lock.release();
-  }
-}
-
-/** Detect after canonical inspection; destructive repair also requires offline maintenance ownership. */
-export async function runPostSessionPluginDoctorStateRepairs(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  maintenanceAuthority?: { assertCurrent(): void };
-}): Promise<MigrationMessages> {
-  const stateDir = resolveStateDir(params.env);
-  const options = {
-    config: params.config,
-    env: params.env,
-    stateDir,
-    oauthDir: resolveOAuthDir(params.env, stateDir),
-  };
-  const run = async (repairAuthority?: PluginDoctorRepairAuthority): Promise<MigrationMessages> => {
-    const warnings: string[] = [];
-    repairAuthority?.assertCurrent();
-    const plans = await collectPluginDoctorStateMigrationPlans({
-      ...options,
-      cfg: params.config,
-      includeDoctorOnly: true,
-      phase: "after-session-repair",
-      repairAuthority,
-      warnings,
-    });
-    if (!repairAuthority) {
-      return {
-        changes: [],
-        warnings: [
-          ...warnings,
-          ...plans.flatMap((plan) => plan.preview),
-          ...(plans.length
-            ? ['Run "openclaw doctor --fix" to repair plugin session ownership.']
-            : []),
-        ],
-      };
-    }
-    const result = await migratePluginDoctorStatePlans({ ...options, plans, repairAuthority });
-    return { ...result, warnings: [...warnings, ...result.warnings] };
-  };
-  const maintenance = params.maintenanceAuthority;
-  if (!maintenance) {
-    return run();
-  }
-  maintenance.assertCurrent();
-  try {
-    return await withAgentDatabaseMaintenanceLease({ env: params.env }, async (agentLease) =>
-      withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
-        let active = true;
-        const assertCurrent = () => {
-          if (!active) {
-            throw new Error("Plugin Doctor repair authority has expired.");
-          }
-          maintenance.assertCurrent();
-        };
-        const authority: PluginDoctorRepairAuthority = {
-          assertCurrent() {
-            assertCurrent();
-            agentLease.assertOwned();
-            pluginLease.assertOwned();
-          },
-          assertOwnedInTransaction(database) {
-            assertCurrent();
-            agentLease.assertOwnedInTransaction(database);
-            pluginLease.assertOwnedInTransaction(database);
-          },
-        };
-        try {
-          return await run(authority);
-        } finally {
-          active = false;
-        }
-      }),
-    );
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [
-        `Skipped plugin session repair: ${String(error)}. Stop active agents and run openclaw doctor --fix again.`,
-      ],
-    };
-  }
-}
-
-export async function autoMigrateLegacyPluginDoctorState(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  doctorOnlyStateMigrations?: boolean;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-}> {
-  const env = params.env ?? process.env;
-  const stateDirResult = await autoMigrateLegacyStateDir({
-    env,
-    homedir: params.homedir,
-    log: params.log,
-  });
-  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
-  const oauthDir = resolveOAuthDir(env, stateDir);
-  const stateSchema = repairOpenClawStateDatabaseSchemaIfNeeded({
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const changes = [...stateDirResult.changes, ...stateSchema.changes];
-  const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
-  const notices = [...(stateDirResult.notices ?? [])];
-  if (stateSchema.warnings.length > 0) {
-    return {
-      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
-  }
-  const plans = await collectPluginDoctorStateMigrationPlans({
-    cfg: params.config,
-    env,
-    stateDir,
-    oauthDir,
-    includeDoctorOnly: params.doctorOnlyStateMigrations === true,
-    warnings,
-  });
-  const migrated = await migratePluginDoctorStatePlans({
-    plans,
-    config: params.config,
-    env,
-    stateDir,
-    oauthDir,
-  });
-  changes.push(...migrated.changes);
-  warnings.push(...migrated.warnings);
-  notices.push(...(migrated.notices ?? []));
-  return {
-    migrated: stateDirResult.migrated || stateSchema.changes.length > 0 || plans.length > 0,
-    skipped: false,
-    changes,
-    warnings,
-    ...(notices.length > 0 ? { notices } : {}),
-  };
-}
-
 function migrateLegacyStateSchema(
   detected: LegacyStateDetection,
   env: NodeJS.ProcessEnv,
@@ -1197,6 +883,8 @@ function buildLegacyStateMigrationSteps(
   const stateDir = detected.stateDir;
   const now = params.now ?? (() => Date.now());
   const isDoctor = params.mode === "doctor";
+  const repairSessionFiles =
+    (isDoctor || params.doctorOnlyStateMigrations === true) && !params.skipAgentScopedMigrations;
   const sharedStep = (
     run: LegacyStateMigrationStep["run"],
     collectNotices = false,
@@ -1334,7 +1022,7 @@ function buildLegacyStateMigrationSteps(
     ),
   ];
 
-  if (!params.skipAgentScopedMigrations) {
+  if (repairSessionFiles) {
     finalSteps.push(
       finalStep(() =>
         migrateLegacySessions(detected, now, {
@@ -1358,24 +1046,24 @@ function buildLegacyStateMigrationSteps(
       kind: "legacy-main-session-keys",
     });
   }
-  if (!params.skipAgentScopedMigrations) {
+  if (repairSessionFiles) {
     // ACP metadata must run once after sessions are canonicalized; otherwise
     // existing rows and newly imported rows generate conflicting repeat warnings.
-    finalSteps.push(
-      {
-        ...finalStep(() =>
-          migrateLegacyAcpSessionMetadata({
-            cfg: params.sessionConfig ?? params.config,
-            env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
-            now,
-            ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
-            legacySessionSurfaces: params.legacySessionSurfaces,
-          }),
-        ),
-        kind: "acp-session-metadata",
-      },
-      finalStep(() => migrateLegacyAgentDir(detected, now)),
-    );
+    finalSteps.push({
+      ...finalStep(() =>
+        migrateLegacyAcpSessionMetadata({
+          cfg: params.sessionConfig ?? params.config,
+          env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
+          now,
+          ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
+          legacySessionSurfaces: params.legacySessionSurfaces,
+        }),
+      ),
+      kind: "acp-session-metadata",
+    });
+  }
+  if (!params.skipAgentScopedMigrations) {
+    finalSteps.push(finalStep(() => migrateLegacyAgentDir(detected, now)));
   }
 
   return [...managedWorktreePrelude, ...sharedSteps, ...doctorStateSteps, ...finalSteps];
@@ -1455,17 +1143,7 @@ export async function runLegacyStateMigrations(params: {
   };
 }
 
-/**
- * Canonicalize orphaned raw session keys in all known agent session stores.
- *
- * Keys written by resolveSessionKey() used DEFAULT_AGENT_ID="main" regardless
- * of the configured default agent; reads always use resolveSessionStoreKey()
- * which canonicalizes via canonicalizeMainSessionAlias. This migration renames
- * any orphaned raw keys to their canonical form in-place, merging with any
- * existing canonical entry by preferring the most recently updated.
- *
- * Safe to run multiple times (idempotent). See #29683.
- */
+/** Run canonical startup migrations and explicit Doctor-owned file repairs. */
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -1515,30 +1193,18 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
-  const configuredAgentDatabaseTargets = resolveSessionStoreTargets(
-    params.cfg,
-    { allAgents: true },
-    { env },
-  ).map((target) => ({
-    agentId: target.agentId,
-    path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
-      agentId: target.agentId,
-      defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
-        ? target.agentId
-        : resolveSessionStoreCompatibilityAgentId(params.cfg),
-      env,
-    }).path,
-  }));
-  const transcriptDirectives = migrateHistoricalTranscriptDirectives({
-    configuredAgentDatabaseTargets,
+  const agentMigrationOptions = {
+    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  };
+  // Media owns the historical cutover and stopped-writer lease before current consumers.
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
-      ? migrateLegacyMediaPersistence({
-          configuredAgentDatabaseTargets,
-          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-        })
+      ? await migrateLegacyMediaPersistence(agentMigrationOptions)
+      : { changes: [], warnings: [] };
+  const transcriptDirectives =
+    mediaPersistence.warnings.length === 0
+      ? migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {
@@ -1578,14 +1244,19 @@ export async function autoMigrateLegacyState(params: {
     pluginIds: collectRelevantDoctorPluginIds(pluginDoctorConfig),
   });
   const legacySessionSurfaces =
-    params.legacySessionSurfaces ??
-    (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
-      config: params.cfg,
-      env,
-    });
+    params.doctorOnlyStateMigrations === true
+      ? (params.legacySessionSurfaces ??
+        (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
+          config: params.cfg,
+          env,
+        }))
+      : EMPTY_LEGACY_SESSION_SURFACES;
   // Capture ownership before orphan-key rewrites. Atomic replacement can split
   // a configured filesystem alias from the standard target pathname.
-  const ownershipAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
+  const ownershipAgentId =
+    params.doctorOnlyStateMigrations === true
+      ? tryResolveDoctorSessionMigrationAgentId(params.cfg)
+      : undefined;
   const sessionStoreOwnership = ownershipAgentId
     ? resolveSessionStoreOwnership({
         cfg: params.cfg,
@@ -1595,15 +1266,15 @@ export async function autoMigrateLegacyState(params: {
         pluginSessionStoreAgentIds,
       })
     : undefined;
-  // Canonicalize orphaned session keys regardless of whether legacy migration
-  // is needed — the orphan-key bug (#29683) affects all installs with
-  // non-default agent IDs or mainKey configuration.
-  const orphanKeys = await migrateOrphanedSessionKeys({
-    cfg: params.cfg,
-    env,
-    additionalAgentIds: pluginSessionStoreAgentIds,
-    legacySessionSurfaces,
-  });
+  const orphanKeys =
+    params.doctorOnlyStateMigrations === true
+      ? await migrateOrphanedSessionKeys({
+          cfg: params.cfg,
+          env,
+          additionalAgentIds: pluginSessionStoreAgentIds,
+          legacySessionSurfaces,
+        })
+      : { changes: [], warnings: [] };
 
   const logMigrationResults = (changes: string[], warnings: string[], notices: string[]) => {
     const logger = params.log ?? createSubsystemLogger("state-migrations");
@@ -1626,6 +1297,7 @@ export async function autoMigrateLegacyState(params: {
 
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
+    mode: params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
     pluginDoctorConfig: params.pluginDoctorConfig,
     pluginSessionStoreAgentIds,
     sessionStoreOwnership,
@@ -1664,6 +1336,7 @@ export async function autoMigrateLegacyState(params: {
     pluginSessionStoreAgentIds,
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
     skipAgentScopedMigrations: Boolean(hasCustomAgentDir),
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
     legacySessionSurfaces,
   });
   const initialMigrationSources = [
@@ -1704,8 +1377,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
-    // SQLite-native session rows do not trip the older JSON/file detectors. Keep these keyed
-    // convergers in the empty-detection path so automatic preflight cannot skip their ledgers.
+    // SQLite key migration and Doctor's standalone ACP repair can have no file preview.
+    // Preserve their convergence even when the other detectors have no work.
     const alwaysRunSources: MigrationMessages[] = [];
     for (const step of migrationSteps) {
       if (step.kind === "legacy-main-session-keys" || step.kind === "acp-session-metadata") {

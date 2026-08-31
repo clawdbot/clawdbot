@@ -245,7 +245,7 @@ describe("secrets runtime fast path", () => {
     const { resolveRuntimeWebTools } = await import("./runtime-web-tools.js");
     const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
     const { setCurrentPluginMetadataSnapshot } =
-      await import("../plugins/current-plugin-metadata-snapshot.js");
+      await import("../plugins/current-plugin-metadata.test-support.js");
     const { listAgentWorkspaceDirs } = await import("../agents/workspace-dirs.js");
     const config = asConfig({
       ...explicitMainRoster(),

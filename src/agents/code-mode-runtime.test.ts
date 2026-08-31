@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { boundCodeModeResult } from "./code-mode-json.js";
 import {
-  boundOutputToLimit,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  CodeModeOutputState,
+} from "./code-mode-json.js";
+import {
   isCodeModeEngagedForModel,
   prepareSource,
   resolveCodeModeConfig,
@@ -10,18 +13,32 @@ import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
+function projectResult(params: {
+  output: unknown[];
+  value?: unknown;
+  error?: string;
+  maxOutputBytes: number;
+}) {
+  const state = new CodeModeOutputState(params.maxOutputBytes);
+  state.append(captureCodeModeOutput(params.output, params.maxOutputBytes));
+  return state.take({
+    ...(Object.hasOwn(params, "value")
+      ? { value: captureCodeModeValue(params.value, params.maxOutputBytes) }
+      : {}),
+    ...(params.error === undefined ? {} : { error: params.error }),
+  });
+}
+
 describe("Code Mode output bounding", () => {
   it("preserves Unicode output at its exact serialized byte limit", () => {
     const output = [{ type: "text", text: "😀 café".repeat(200) }];
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
 
-    expect(boundOutputToLimit(output, { ...config, maxOutputBytes })).toBe(false);
+    expect(projectResult({ output, maxOutputBytes }).output).toEqual(output);
     expect(output).toEqual([{ type: "text", text: "😀 café".repeat(200) }]);
 
-    expect(boundOutputToLimit(output, { ...config, maxOutputBytes: maxOutputBytes - 1 })).toBe(
-      true,
-    );
-    expect(JSON.stringify(output)).toContain("rerun with narrower args");
+    const bounded = projectResult({ output, maxOutputBytes: maxOutputBytes - 1 });
+    expect(JSON.stringify(bounded.output)).toContain("rerun with narrower args");
   });
 
   it("bounds output and the returned value under one serialized budget", () => {
@@ -31,18 +48,16 @@ describe("Code Mode output bounding", () => {
       Buffer.byteLength(JSON.stringify(output), "utf8") +
       Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(boundCodeModeResult({ output, value, maxOutputBytes })).toMatchObject({
+    expect(projectResult({ output, value, maxOutputBytes })).toMatchObject({
       output,
       value,
-      truncated: false,
     });
 
-    const bounded = boundCodeModeResult({
+    const bounded = projectResult({
       output,
       value,
       maxOutputBytes: maxOutputBytes - 1,
     });
-    expect(bounded.truncated).toBe(true);
     expect(
       Buffer.byteLength(JSON.stringify(bounded.output), "utf8") +
         Buffer.byteLength(JSON.stringify(bounded.value), "utf8"),
@@ -53,12 +68,88 @@ describe("Code Mode output bounding", () => {
     const value = "ok";
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(boundCodeModeResult({ output: [], value, maxOutputBytes })).toMatchObject({
+    expect(projectResult({ output: [], value, maxOutputBytes })).toMatchObject({
       output: [],
       value,
-      truncated: false,
     });
   });
+
+  it("preserves failure text and output at their exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "before failure" }];
+    const error = "Error: café 😀";
+    const maxOutputBytes =
+      Buffer.byteLength(JSON.stringify(output), "utf8") +
+      Buffer.byteLength(JSON.stringify(error), "utf8");
+
+    expect(projectResult({ output, error, maxOutputBytes })).toEqual({
+      output,
+      error,
+    });
+  });
+
+  it.each([
+    { name: "plain error", errorText: "failure ", output: [], returned: {} },
+    { name: "Unicode error", errorText: "😀 café ", output: [], returned: {} },
+    { name: "escaped error", errorText: '\\"\n\t', output: [], returned: {} },
+    {
+      name: "error and output",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: {},
+    },
+    {
+      name: "error, output, and value",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: { value: "value ".repeat(1_000) },
+    },
+  ])(
+    "bounds $name without losing the cause or splitting Unicode",
+    ({ errorText, output, returned }) => {
+      const maxOutputBytes = 1_024;
+      const bounded = projectResult({
+        output,
+        error: `Error: ${errorText.repeat(1_000)}`,
+        ...returned,
+        maxOutputBytes,
+      });
+
+      expect(bounded.error).toMatch(/^Error: .*\[error truncated\]$/s);
+      expect(bounded.error).not.toContain("�");
+      const serializedBytes =
+        Buffer.byteLength(JSON.stringify(bounded.error), "utf8") +
+        (bounded.output.length ? Buffer.byteLength(JSON.stringify(bounded.output), "utf8") : 0) +
+        (Object.hasOwn(returned, "value")
+          ? Buffer.byteLength(JSON.stringify(bounded.value), "utf8")
+          : 0);
+      expect(serializedBytes).toBeLessThanOrEqual(maxOutputBytes);
+    },
+  );
+});
+
+describe("Code Mode source retention", () => {
+  it.each([65536, 10 * 1024 * 1024])(
+    "retains at most %i source bytes per channel across repeated legs",
+    (cap) => {
+      const original = [{ type: "text", text: "🦞".repeat(Math.ceil(cap / 4)) }];
+      const state = new CodeModeOutputState(cap);
+      const leg = captureCodeModeOutput(original, cap);
+      const value = captureCodeModeValue(original[0], cap);
+      expect(Buffer.byteLength(leg.source.json)).toBeLessThanOrEqual(cap);
+      expect(Buffer.byteLength(value.json)).toBeLessThanOrEqual(cap);
+      for (let index = 1; index <= 8; index++) {
+        state.append(leg);
+        state.append(captureCodeModeOutput([], cap));
+        expect(state.source.count).toBe(index);
+        expect(Buffer.byteLength(state.source.source.json)).toBeLessThanOrEqual(cap);
+        expect(state.source.source).toMatchObject({
+          kind: "prefix",
+          originalBytes: index * (Buffer.byteLength(JSON.stringify(original)) - 1) + 1,
+        });
+      }
+      expect(state.source.source.json).toBe(leg.source.json);
+    },
+  );
 });
 
 describe("Code Mode master switch resolution", () => {
@@ -67,7 +158,7 @@ describe("Code Mode master switch resolution", () => {
     { name: "boolean shorthand false", codeMode: false, enabled: false },
     { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
-    { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: "auto" },
+    { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: false },
     { name: "empty object", codeMode: {}, enabled: false },
     { name: "omitted", codeMode: undefined, enabled: false },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {

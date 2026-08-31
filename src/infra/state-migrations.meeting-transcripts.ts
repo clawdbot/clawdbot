@@ -516,7 +516,6 @@ export async function migrateLegacyMeetingTranscripts(params: {
         }),
       );
     }
-    const plans: LegacyMeetingTranscriptSnapshot[] = [];
     for (const snapshot of snapshots) {
       const database = openOpenClawStateDatabase(databaseOptions);
       const existing = executeSqliteQueryTakeFirstSync(
@@ -532,7 +531,6 @@ export async function migrateLegacyMeetingTranscripts(params: {
           `legacy transcript conflicts with canonical SQLite state: ${snapshot.relativeDir}`,
         );
       }
-      plans.push(snapshot);
     }
     if (divergentExportDirs.length > 0) {
       const recoveryRoot = `${detected.sourceDir}.exports-recovered-${new Date(now)
@@ -554,7 +552,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         await store.materializeSessionArtifacts(session, "all");
       }
     }
-    if (plans.length === 0 && partialRelativeDirs.length > 0) {
+    if (snapshots.length === 0 && partialRelativeDirs.length > 0) {
       const recoveryRoot = `${detected.sourceDir}.partials-recovered-${new Date(now)
         .toISOString()
         .replace(/[:.]/g, "-")}`;
@@ -570,7 +568,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
     const expectedArchiveRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(
       detected.sourceDir,
     );
-    if (plans.length === 0) {
+    if (snapshots.length === 0) {
       return { changes: recoveryChanges, warnings: [] };
     }
 
@@ -581,7 +579,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
     });
     insertMeetingTranscriptSnapshots({
-      snapshots: plans,
+      snapshots,
       runId,
       now,
       archiveRoot,
@@ -594,12 +592,12 @@ export async function migrateLegacyMeetingTranscripts(params: {
       const database = openOpenClawStateDatabase(databaseOptions);
       await verifyImportedMeetingTranscriptSnapshots({
         store,
-        snapshots: plans,
+        snapshots,
         stageDatabase: stage,
         database: database.db,
       });
-      if (!(await rehashLegacyMeetingTranscriptSnapshots(plans))) {
-        rollbackImportedSnapshots({ snapshots: plans, runId, env, stateDir: params.stateDir });
+      if (!(await rehashLegacyMeetingTranscriptSnapshots(snapshots))) {
+        rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
         return {
           changes: recoveryChanges,
           warnings: [
@@ -608,7 +606,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         };
       }
     } catch (error) {
-      rollbackImportedSnapshots({ snapshots: plans, runId, env, stateDir: params.stateDir });
+      rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
       throw error;
     }
     params.testHooks?.afterImport?.();
@@ -616,7 +614,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
     try {
       archiveRootAfterMove = await archiveLegacyMeetingTranscriptSnapshots({
         sourceRoot: detected.sourceDir,
-        snapshots: plans,
+        snapshots,
         expectedRelativeDirs: expectedArchiveRelativeDirs,
         canonicalRelativeDirs,
         archiveRoot,
@@ -626,14 +624,14 @@ export async function migrateLegacyMeetingTranscripts(params: {
         return {
           changes: [
             ...recoveryChanges,
-            `Imported ${plans.length} meeting transcript session${plans.length === 1 ? "" : "s"} into shared SQLite state`,
+            `Imported ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} into shared SQLite state`,
           ],
           warnings: [
             `Meeting transcript archive needs Doctor resume after moving the source tree: ${String(error)}`,
           ],
         };
       }
-      rollbackImportedSnapshots({ snapshots: plans, runId, env, stateDir: params.stateDir });
+      rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
       return {
         changes: recoveryChanges,
         warnings: [
@@ -649,11 +647,14 @@ export async function migrateLegacyMeetingTranscripts(params: {
       env,
       stateDir: params.stateDir,
     });
-    const utteranceCount = plans.reduce((total, snapshot) => total + snapshot.utteranceCount, 0);
+    const utteranceCount = snapshots.reduce(
+      (total, snapshot) => total + snapshot.utteranceCount,
+      0,
+    );
     return {
       changes: [
         ...recoveryChanges,
-        `Migrated ${plans.length} meeting transcript session${plans.length === 1 ? "" : "s"} and ${utteranceCount} utterance${utteranceCount === 1 ? "" : "s"} to shared SQLite state`,
+        `Migrated ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} and ${utteranceCount} utterance${utteranceCount === 1 ? "" : "s"} to shared SQLite state`,
         `Archived legacy meeting transcript files → ${archiveRootAfterMove}`,
       ],
       warnings: [],

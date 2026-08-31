@@ -27,6 +27,7 @@ type ChatQueueProps = {
   onQueueEditCancel?: () => void;
   editingId?: string | null;
   editingText?: string;
+  editingSource?: ChatQueueItem;
   onQueueRemove: (id: string) => void;
 };
 
@@ -156,6 +157,15 @@ export function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter(
     (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
   );
+  // A peer can retire the source while this pane is away. Render its retained
+  // correction for recovery/cancel; this never recreates a row in the outbox.
+  if (
+    props.editingSource &&
+    props.editingId === props.editingSource.id &&
+    !visibleQueue.some((item) => item.id === props.editingId)
+  ) {
+    visibleQueue.push(props.editingSource);
+  }
   if (!visibleQueue.length) {
     return nothing;
   }
@@ -173,12 +183,15 @@ export function renderChatQueue(props: ChatQueueProps) {
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
-  // Applying settings belongs to the queue as a whole. Connection loss is the
-  // exceptional per-item delivery state operators need to see on every row.
+  // Attempted sends live in the transcript but still own their FIFO position.
+  // Keep their unresolved delivery visible beside the messages they block.
+  const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
-      ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-      : null;
+    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+      : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
+        ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+        : null;
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
@@ -263,6 +276,7 @@ function renderChatQueueItem(
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
+    !item.intent &&
     (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);

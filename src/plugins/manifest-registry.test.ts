@@ -1,7 +1,7 @@
 // Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
@@ -10,16 +10,12 @@ import type { PluginCandidate } from "./discovery.js";
 import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
-let manifestChangeCase: {
-  firstName: string | undefined;
-  secondName: string | undefined;
-};
-
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
     return;
@@ -39,6 +35,7 @@ function makeTempDir() {
 function makeOpenClawDevSourceRoot() {
   const root = makeTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
@@ -482,8 +479,8 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  beforeAll(() => {
-    const stateDir = makeTempDir();
+  it("keeps manifest facts stable until a fresh operation reads the changed file", () => {
+    const stateDir = fs.realpathSync(makeTempDir());
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
@@ -515,16 +512,22 @@ describe("loadPluginManifestRegistry", () => {
     const updatedAt = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
+    const open = vi.spyOn(fs, "openSync");
     const second = loadPluginManifestRegistryCore({ env });
-    manifestChangeCase = {
-      firstName: first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
-      secondName: second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
-    };
-  });
+    expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+    expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+    expect(open.mock.calls.filter(([file]) => file === manifestPath)).toEqual([]);
 
-  it("reflects plugin manifest changes on the next registry load", () => {
-    expect(manifestChangeCase.firstName).toBe("Before");
-    expect(manifestChangeCase.secondName).toBe("After");
+    const refreshed = withPluginCache(createPluginCache(), () =>
+      loadPluginManifestRegistryCore({ env }),
+    );
+    expect(refreshed.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+    expect(open.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(1);
+    expect(
+      loadPluginManifestRegistryCore({ env }).plugins.find(
+        (plugin) => plugin.id === "cached-manifest",
+      )?.name,
+    ).toBe("Before");
   });
 
   it("synthesizes an empty manifest for explicitly configured standalone files", () => {
@@ -846,40 +849,44 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
-  it("prefers dev source bundled plugins over installed globals with the same id", () => {
-    const devSourceRoot = makeOpenClawDevSourceRoot();
-    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
-    const globalDir = makeTempDir();
-    const manifest = { id: "codex", configSchema: { type: "object" } };
-    mkdirSafe(bundledDir);
-    writeManifest(bundledDir, manifest);
-    writeManifest(globalDir, manifest);
+  it.each(["extensions", "dist/extensions", "dist-runtime/extensions"])(
+    "prefers dev %s plugins over installed globals with the same id",
+    (tree) => {
+      const devSourceRoot = makeOpenClawDevSourceRoot();
+      const bundledDir = path.join(devSourceRoot, tree, "codex");
+      const globalDir = makeTempDir();
+      const manifest = { id: "codex", configSchema: { type: "object" } };
+      mkdirSafe(bundledDir);
+      writeManifest(bundledDir, manifest);
+      writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistryCore({
-      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
-      installRecords: {
-        codex: {
-          source: "npm",
-          installPath: globalDir,
+      const registry = loadPluginManifestRegistryCore({
+        env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+        installRecords: {
+          codex: {
+            source: "npm",
+            installPath: globalDir,
+          },
         },
-      },
-      candidates: [
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: bundledDir,
-          origin: "bundled",
-        }),
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-      ],
-    });
+        candidates: [
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: bundledDir,
+            origin: "bundled",
+          }),
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: globalDir,
+            origin: "global",
+            installOwner: "codex",
+          }),
+        ],
+      });
 
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("bundled");
-  });
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.origin).toBe("bundled");
+    },
+  );
 
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
