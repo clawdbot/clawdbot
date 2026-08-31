@@ -1194,7 +1194,8 @@ img.chat-avatar.chat-avatar--logo {
   min-width: 200px;
   max-width: calc(100vw - 48px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 100;
+  /* Above the still-connected .chat-reply-context-menu (9999). */
+  z-index: 10000;
   animation: scale-in 0.15s ease-out;
   transform-origin: top right;
 }
@@ -1252,21 +1253,20 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--media-foreground);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes,
-:root[data-theme="dash"] .chat-confirm-popover__yes,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes,
-:root[data-theme="tide"] .chat-confirm-popover__yes,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes,
-:root[data-theme="crt"] .chat-confirm-popover__yes,
-:root[data-theme="manuscript"] .chat-confirm-popover__yes,
-:root[data-theme="rose"] .chat-confirm-popover__yes,
-:root[data-theme="miami"] .chat-confirm-popover__yes,
-:root[data-theme="beacon"] .chat-confirm-popover__yes {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
@@ -1275,20 +1275,20 @@ img.chat-avatar.chat-avatar--logo {
   background: var(--danger-solid-hover);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
-  background: var(--destructive-hover);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
-:root[data-theme="dash"] .chat-confirm-popover__yes:hover,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes:hover,
-:root[data-theme="tide"] .chat-confirm-popover__yes:hover,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes:hover,
-:root[data-theme="crt"] .chat-confirm-popover__yes:hover,
-:root[data-theme="manuscript"] .chat-confirm-popover__yes:hover,
-:root[data-theme="rose"] .chat-confirm-popover__yes:hover,
-:root[data-theme="miami"] .chat-confirm-popover__yes:hover,
-:root[data-theme="beacon"] .chat-confirm-popover__yes:hover {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 
