@@ -192,7 +192,9 @@ describe("Tool Search", () => {
   it.each([
     { limit: undefined, valid: true },
     { limit: 1, valid: true },
-    { limit: 50, valid: true },
+    { limit: 20, valid: true },
+    { limit: 21, valid: false },
+    { limit: 50, valid: false },
     { limit: 5.5, valid: false },
     { limit: 0, valid: false },
     { limit: -1, valid: false },
@@ -227,7 +229,7 @@ describe("Tool Search", () => {
     expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
     expect(
       Value.Check(limitSearchTool.parameters, {
-        queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
+        queries: Array.from({ length: 3 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
       }),
     ).toBe(false);
     expect(
@@ -298,6 +300,19 @@ describe("Tool Search", () => {
       }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
       "batch budget search tool",
     );
+    expect(
+      Value.Check(searchTool.parameters, {
+        queries: [
+          { query: "calendar", limit: 25 },
+          { query: "Slack", limit: 25 },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(searchTool.parameters, {
+        queries: [{ query: "calendar", limit: 50 }],
+      }),
+    ).toBe(true);
 
     await expect(
       searchTool.execute("call-batch-budget", {
@@ -316,7 +331,7 @@ describe("Tool Search", () => {
     );
   });
 
-  it("preserves scalar query length compatibility while bounding batch query echo", async () => {
+  it("preserves scalar compatibility and bounds each batch query", async () => {
     const longScalarQuery = "q".repeat(4097);
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
@@ -331,15 +346,20 @@ describe("Tool Search", () => {
       searchTool.execute("call-long-query", { query: longScalarQuery }),
     ).resolves.toBeDefined();
     await expect(
-      limitSearchTool.execute("call-long-batch-query", {
+      searchTool.execute("call-long-batch-query", {
         queries: [{ query: "q".repeat(512) }, { query: "r" }],
       }),
-    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+    ).resolves.toBeDefined();
     await expect(
-      limitSearchTool.execute("call-multibyte-batch-query", {
+      searchTool.execute("call-multibyte-batch-query", {
         queries: [{ query: "😀".repeat(128) }],
       }),
-    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+    ).resolves.toBeDefined();
+    await expect(
+      limitSearchTool.execute("call-too-long-batch-query", {
+        queries: [{ query: "q".repeat(513) }],
+      }),
+    ).rejects.toThrow("queries[0].query must not exceed 512 characters");
   });
 
   it("preserves legacy scalar grapheme length semantics at runtime", async () => {

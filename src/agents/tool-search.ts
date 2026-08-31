@@ -35,7 +35,6 @@ import {
 } from "./tool-search-runtime.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
   MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
   MAX_TOOL_SEARCH_RESULTS,
@@ -257,6 +256,13 @@ export function addClientToolsToToolSearchCatalog(params: {
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
+  const modelBatchMaxQueries = Math.max(
+    1,
+    Math.min(
+      MAX_TOOL_SEARCH_BATCH_QUERIES,
+      Math.floor(MAX_TOOL_SEARCH_RESULTS / config.maxSearchLimit),
+    ),
+  );
   return [
     {
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -317,6 +323,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
                 limit: Type.Optional(
                   Type.Integer({
                     minimum: 1,
+                    maximum: config.maxSearchLimit,
                     description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
                   }),
                 ),
@@ -325,8 +332,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             ),
             {
               minItems: 1,
-              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
-              description: `Independent searches. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+              maxItems: modelBatchMaxQueries,
+              description: `Independent searches. Submit at most ${modelBatchMaxQueries} so their effective limits cannot exceed ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}.`,
             },
           ),
         },

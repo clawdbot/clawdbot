@@ -214,15 +214,9 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_describe`
 - `tool_call`
 
-`tool_search` accepts either the existing single-query shape or a batch of
-independent queries:
-
-```json
-{
-  "query": "today's calendar events",
-  "limit": 3
-}
-```
+`tool_search` exposes one model-facing request shape: a required `queries`
+array. Use a one-item array for one search and add items for independent
+searches:
 
 ```json
 {
@@ -233,8 +227,7 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
-Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
+Calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.
 Descriptions are compacted before output. If the complete batch would exceed
@@ -242,11 +235,14 @@ the 4,000-character response budget, lower-ranked candidates are removed and
 the response includes `truncated: true`. A result group that lost candidates
 also includes `truncated: true`, so an empty truncated group cannot be mistaken
 for a query that had no matches.
-Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
-batch may request at most 50 candidates in total. A batch accepts at most 16
-queries, with at most 512 characters per query and 512 UTF-8 bytes across the
-serialized query list. Invalid batches fail as one request, while a valid query
-with no matches returns an empty `candidates` array.
+Omitted per-query limits use `searchDefaultLimit`, and each explicit limit may
+not exceed `maxSearchLimit`. The model-facing schema advertises at most
+`min(16, floor(50 / maxSearchLimit))` queries, so every admitted request fits
+the 50-candidate shared budget. With the default `maxSearchLimit: 20`, that is
+two searches per call. Each query accepts at most 512 characters. Invalid
+batches fail as one request, while a valid query with no matches returns an
+empty `candidates` array. The runtime retains the legacy scalar parser for
+internal callers, but models receive only the closed batch-shaped contract.
 
 Directory mode exposes:
 

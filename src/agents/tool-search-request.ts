@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Guard } from "typebox/guard";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
   MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchConfig,
@@ -91,13 +90,6 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   if (requestedResults > MAX_TOOL_SEARCH_RESULTS) {
     throw new ToolInputError(
       `batch queries resolve to ${requestedResults} results, but may request at most ${MAX_TOOL_SEARCH_RESULTS} in total. An omitted limit counts as ${config.searchDefaultLimit}; set smaller per-query limits and retry.`,
-    );
-  }
-  const serializedQueries = JSON.stringify(searches.map((search) => search.query));
-  const serializedQueryBytes = new TextEncoder().encode(serializedQueries).byteLength;
-  if (serializedQueryBytes > MAX_TOOL_SEARCH_BATCH_QUERY_BYTES) {
-    throw new ToolInputError(
-      `serialized batch query text may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes.`,
     );
   }
   return { kind: "batch", searches };
