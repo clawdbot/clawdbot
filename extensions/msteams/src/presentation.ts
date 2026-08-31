@@ -7,6 +7,7 @@ import {
   resolveMessagePresentationButtonAction,
   type MessagePresentation,
   type MessagePresentationBlock,
+  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   asOptionalRecord,
@@ -30,6 +31,41 @@ export const MSTEAMS_PRESENTATION_CAPABILITIES = {
     },
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
+
+const hasMSTeamsCardAction = (presentation: MessagePresentation): boolean =>
+  presentation.blocks.some(
+    (block) =>
+      block.type === "buttons" && block.buttons.some((button) => resolveMSTeamsCardAction(button)),
+  );
+
+/**
+ * The Teams card action for a control, or undefined when Teams has none for it and the
+ * control can only reach the user as text. One owner for "what Teams renders natively",
+ * so the card builder and the streaming remainder cannot disagree about it.
+ */
+export function resolveMSTeamsCardAction(
+  button: Pick<
+    MessagePresentationButton,
+    "label" | "action" | "url" | "value" | "webApp" | "web_app"
+  >,
+): Record<string, unknown> | undefined {
+  const action = resolveMessagePresentationButtonAction(button);
+  if (action?.type === "url" || action?.type === "web-app") {
+    const url = normalizeOptionalString(action.url);
+    return url ? { type: "Action.OpenUrl", title: button.label, url } : undefined;
+  }
+  if (action?.type === "command") {
+    return { type: "Action.Submit", title: button.label, data: action.command };
+  }
+  if (action?.type === "callback") {
+    return {
+      type: "Action.Submit",
+      title: button.label,
+      data: { value: action.value, label: button.label },
+    };
+  }
+  return undefined;
+}
 
 export function buildMSTeamsPresentationCard(params: {
   presentation: MessagePresentation;
@@ -78,33 +114,9 @@ export function buildMSTeamsPresentationCard(params: {
     }
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        const action = resolveMessagePresentationButtonAction(button);
-        if (action?.type === "url" || action?.type === "web-app") {
-          const url = normalizeOptionalString(action.url);
-          if (!url) {
-            continue;
-          }
-          actions.push({
-            type: "Action.OpenUrl",
-            title: button.label,
-            url,
-          });
-          continue;
-        }
-        if (action?.type === "command") {
-          actions.push({
-            type: "Action.Submit",
-            title: button.label,
-            data: action.command,
-          });
-          continue;
-        }
-        if (action?.type === "callback") {
-          actions.push({
-            type: "Action.Submit",
-            title: button.label,
-            data: { value: action.value, label: button.label },
-          });
+        const action = resolveMSTeamsCardAction(button);
+        if (action) {
+          actions.push(action);
           continue;
         }
         unmappedLabels.push(button.label);
@@ -139,6 +151,12 @@ export function renderMSTeamsPresentationPayload(params: {
 }): ReplyPayload | null {
   const { payload, presentation } = params;
   if (payload.mediaUrl || payload.mediaUrls?.length) {
+    return null;
+  }
+  // With no text of its own and no action Teams can render, a card carries nothing the
+  // caller's text rendering does not - and it would replace the producer's prose with a
+  // flattened copy of itself under an instruction to tap buttons that are not there.
+  if (!normalizeOptionalString(payload.text) && !hasMSTeamsCardAction(presentation)) {
     return null;
   }
   const card = buildMSTeamsPresentationCard({ presentation, text: payload.text });

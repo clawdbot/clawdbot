@@ -169,8 +169,10 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
-  it("keeps a control's label as text when Teams cannot render its action", () => {
-    const [message] = renderReply({
+  it("sends prose instead of a card when Teams can render none of the controls", () => {
+    const messages = renderReply({
+      text: "Where should this deploy?\n\n1. Staging\n2. Production",
+      presentationTextMode: "fallback",
       presentation: {
         blocks: [
           {
@@ -186,10 +188,13 @@ describe("msteams reply presentation", () => {
       },
     });
 
-    // ask_user mints `question` actions, which Teams has no card action for. Skipping them
-    // silently left a card offering nothing; the label survives as text instead.
-    expect(message?.card?.actions).toBeUndefined();
-    expect(JSON.stringify(message?.card?.body)).toContain("Staging");
+    // ask_user mints `question` actions, which Teams has no card action for. A card here
+    // would repeat the option list, tell the user to tap buttons that are not there, and
+    // swallow the numbered prose that tells them how to answer.
+    expect(messages.every((message) => message.card === undefined)).toBe(true);
+    expect(messages.map((message) => message.text ?? "").join("")).toBe(
+      "Where should this deploy?\n\n1. Staging\n2. Production",
+    );
   });
 
   it("keeps the text path when a fallback reply mentions someone", () => {

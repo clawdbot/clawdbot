@@ -11,8 +11,8 @@ scenario:
     - A /status reply reaches the Teams direct conversation through the loopback Bot Framework Connector.
     - No activity in that reply carries an Adaptive Card attachment, because every structured block degraded to text.
     - The authored status body survives instead of being replaced by a generated card.
-    - A reply whose presentation Teams can carry reaches the connector as an Adaptive Card attachment instead of prose.
-    - Every control that reply offered is present in the delivered card.
+    - A reply whose controls Teams cannot render reaches the connector as the producer's own prose, with the instructions that tell the user how to answer.
+    - No activity in that reply carries a card that repeats the prose while offering nothing to tap.
   regressionRefs:
     - https://github.com/openclaw/openclaw/issues/133295
   docsRefs:
@@ -33,9 +33,9 @@ scenario:
       cardConversationId: msteams-reply-presentation-card
       command: /status
       cardPromptNeedle: Where should this deploy?
-      cardControlLabels:
-        - Staging (Recommended)
-        - Production 🚀
+      promptNeedles:
+        - Where should this deploy?
+        - Reply with the number
       cardPrompt: >-
         Structured question QA check. Call ask_user exactly once and then reply with the
         exact marker `MSTEAMS-CARD-OK`.
@@ -90,7 +90,7 @@ flow:
               expr: "`authored /status body did not survive: ${JSON.stringify(replyActivities.map((message) => message.text))}`"
       detailsExpr: "`activities=${replyActivities.length} cards=${cardActivities.length} first=${String(statusReply.text ?? '').split('\\n')[0]}`"
 
-    - name: delivers a renderable presentation as an Adaptive Card
+    - name: sends prose when Teams can render none of the reply's controls
       actions:
         - set: cardStartIndex
           value:
@@ -111,7 +111,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - call: waitForCondition
-          saveAs: cardActivity
+          saveAs: promptActivity
           args:
             - lambda:
                 expr: "state.getSnapshot().messages.slice(cardStartIndex).find((message) => message.direction === 'outbound' && message.conversation.id === config.cardConversationId)"
@@ -119,12 +119,9 @@ flow:
             - 250
         - call: sleep
           args: [2000]
-        - set: cardReplyActivities
+        - set: promptActivities
           value:
             expr: "state.getSnapshot().messages.slice(cardStartIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.cardConversationId)"
-        - set: deliveredCard
-          value:
-            expr: "(() => { const attachment = cardReplyActivities.flatMap((message) => message.attachments ?? []).find((entry) => entry.mimeType === config.adaptiveCardContentType); return attachment ? JSON.parse(Buffer.from(attachment.contentBase64, 'base64').toString('utf8')) : undefined; })()"
         # Resolve before asserting: an assertion that throws would otherwise leave the
         # question pending and the agent blocked for anything sharing this Gateway.
         - set: resolution
@@ -134,26 +131,16 @@ flow:
             expr: "resolution.status === 'answered'"
             message:
               expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
-        # This step drives ask_user, whose buttons carry `question` actions. Teams has no
-        # card action for those, so they arrive as the card's control labels rather than as
-        # `actions`; mapping that type needs a card-submit round trip and is a separate
-        # change. The four action types Teams does render are covered in
-        # presentation.reply.test.ts.
+        # ask_user's buttons carry `question` actions, which Teams has no card action for.
+        # A card here would restate the option list, tell the user to tap buttons that are
+        # not there, and swallow the numbered instructions - a card message carries its
+        # text as a delivery record, never as activity text.
         - assert:
-            expr: "deliveredCard?.type === 'AdaptiveCard'"
+            expr: "promptActivities.every((message) => (message.attachments ?? []).every((attachment) => attachment.mimeType !== config.adaptiveCardContentType))"
             message:
-              expr: "`the reply's presentation did not reach Teams as an Adaptive Card: ${JSON.stringify(cardReplyActivities.map((message) => ({ text: message.text, attachments: message.attachments })))}`"
+              expr: "`the reply became a card Teams cannot offer anything to tap in: ${JSON.stringify(promptActivities.map((message) => ({ text: message.text, attachments: message.attachments })))}`"
         - assert:
-            expr: "JSON.stringify(deliveredCard.body ?? []).includes(config.cardPromptNeedle)"
+            expr: "config.promptNeedles.every((needle) => promptActivities.some((message) => String(message.text ?? '').includes(needle)))"
             message:
-              expr: "`the delivered card lost the reply's content: ${JSON.stringify(deliveredCard)}`"
-        # The reply's own option list also names these labels, so this looks for the block
-        # the control degradation writes - without it the controls reach Teams as nothing.
-        - set: deliveredControls
-          value:
-            expr: "(deliveredCard.body ?? []).map((block) => String(block.text ?? '')).find((text) => text.startsWith('Actions:'))"
-        - assert:
-            expr: "Boolean(deliveredControls) && config.cardControlLabels.every((label) => deliveredControls.includes(label))"
-            message:
-              expr: "`the delivered card lost the controls the reply offered: ${JSON.stringify(deliveredCard)}`"
-      detailsExpr: "`card blocks=${(deliveredCard.body ?? []).length} actions=${(deliveredCard.actions ?? []).length}`"
+              expr: "`the reply lost the prose that tells the user how to answer: ${JSON.stringify(promptActivities.map((message) => message.text))}`"
+      detailsExpr: "`activities=${promptActivities.length} cards=0 first=${String(promptActivity.text ?? '').split('\\n')[0]}`"
