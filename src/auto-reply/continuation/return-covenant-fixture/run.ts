@@ -87,6 +87,10 @@ export class ReturnCovenantFixtureRun {
     return this.#finalizeRequested;
   }
 
+  readWakeCount(caseId: string, form: "typed-tool" | "bracket-token"): number {
+    return this.#states.get(returnCovenantExecutionKey(caseId, form))?.wakeCount ?? 0;
+  }
+
   async handle(
     request: ReturnCovenantPhaseRequest,
     attestation: ReturnCovenantDriverAttestation,

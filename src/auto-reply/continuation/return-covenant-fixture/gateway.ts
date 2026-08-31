@@ -184,9 +184,13 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     if (!command.isFile() || command.isSymbolicLink()) {
       throw new Error("planned return-covenant gateway command is not a regular file");
     }
+    const port = this.#port + this.#gateways.length;
+    if (port > 65_535) {
+      throw new Error("return-covenant gateway replacement port exceeds TCP range");
+    }
     const child = spawn(process.execPath, [this.#gatewayPath, ...this.#gatewayArgs], {
       cwd: this.#cwd,
-      env: process.env,
+      env: { ...process.env, OPENCLAW_GATEWAY_PORT: String(port) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (!child.pid) {
@@ -194,7 +198,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     }
     const managed: ManagedGateway = {
       child,
-      endpoint: `http://127.0.0.1:${this.#port}`,
+      endpoint: `http://127.0.0.1:${port}`,
       label,
       pid: child.pid,
       startFingerprint: "",
@@ -209,7 +213,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     this.#gateways.push(managed);
     try {
       managed.startFingerprint = await processStartFingerprint(managed.pid);
-      await waitForGatewayReady(managed, this.#port);
+      await waitForGatewayReady(managed, port);
       return managed;
     } catch (error) {
       await stopGateway(managed).catch(() => undefined);

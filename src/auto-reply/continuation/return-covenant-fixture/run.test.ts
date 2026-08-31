@@ -33,7 +33,9 @@ class TestClock {
   }
 
   wallNow(): number {
-    return this.#wall;
+    const now = this.#wall;
+    this.#wall += 1;
+    return now;
   }
 }
 
@@ -123,6 +125,7 @@ describe("product return-covenant fixture run", () => {
       });
       await gateway.start();
       let checkedNegativeControls = false;
+      const capturedGenerations: string[] = [];
       try {
         for (const casePlan of plan.cases) {
           for (const form of casePlan.forms) {
@@ -171,6 +174,7 @@ describe("product return-covenant fixture run", () => {
               receiptId: stringField(acceptance, "receiptId"),
               resultMarker: stringField(acceptance, "resultMarker"),
             };
+            capturedGenerations.push(acceptanceBinding.capturedAuthorityGeneration);
 
             if (!checkedNegativeControls) {
               await expect(run.handle(dispatchRequest, attestation)).rejects.toThrow(
@@ -239,7 +243,14 @@ describe("product return-covenant fixture run", () => {
               });
             }
             clock.advance(plan.settlementWindowMs);
-            await new Promise((resolve) => setTimeout(resolve, 300));
+            if (casePlan.expectedEffects[form].wakes === 1) {
+              await vi.waitFor(
+                () => {
+                  expect(run.readWakeCount(casePlan.id, form)).toBe(1);
+                },
+                { interval: 10, timeout: 1000 },
+              );
+            }
             const observed = await run.handle(
               createReturnCovenantTestRequest({
                 caseHandle,
@@ -325,6 +336,7 @@ describe("product return-covenant fixture run", () => {
           allCaseHandlesClosed: true,
           caseHandles: expect.arrayContaining([expect.stringMatching(/^case-[0-9a-f]{40}$/u)]),
         });
+        expect(new Set(capturedGenerations).size).toBe(24);
         expect(gateway.restarts).toBe(2);
       } finally {
         await gateway.stopAll();

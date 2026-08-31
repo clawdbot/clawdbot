@@ -403,8 +403,10 @@ export async function observeReturnCovenantCase(params: {
       : state.casePlan.id === "forbidden-explicit-revocation"
         ? "revoked"
         : "unauthorized";
-  const elapsedMonotonic = context.clock.monotonicNow() - (state.releasedAtMonotonic ?? 0);
-  const elapsedWall = context.clock.wallNow() - (state.releasedAtWall ?? context.clock.wallNow());
+  const observedAtWall = context.clock.wallNow();
+  const observedAtMonotonic = context.clock.monotonicNow();
+  const elapsedMonotonic = observedAtMonotonic - (state.releasedAtMonotonic ?? 0);
+  const elapsedWall = observedAtWall - (state.releasedAtWall ?? observedAtWall);
   return {
     schema: "openclaw.k6.return-covenant-observation.v1",
     rowId: context.plan.rowId,
@@ -418,7 +420,7 @@ export async function observeReturnCovenantCase(params: {
     runtimeConfigSha256: context.plan.target.runtimeConfigSha256,
     runtimeArtifactManifestSha256: context.plan.target.runtimeArtifactManifestSha256,
     startedAt: state.startedAt,
-    endedAt: new Date(context.clock.wallNow()).toISOString(),
+    endedAt: new Date(observedAtWall).toISOString(),
     returnMode: state.casePlan.returnMode,
     logicalSessionKey: state.casePlan.logicalSessionKey,
     caseHandle: state.caseHandle,
@@ -463,7 +465,7 @@ export async function observeReturnCovenantCase(params: {
       complete: true,
       windowMs: state.request.settlementWindowMs,
       releasedAt: new Date(state.releasedAtWall!).toISOString(),
-      scansCompletedAt: new Date(context.clock.wallNow()).toISOString(),
+      scansCompletedAt: new Date(observedAtWall).toISOString(),
       elapsedMs: elapsedWall,
       monotonicElapsedMs: elapsedMonotonic,
     },
@@ -521,6 +523,15 @@ export async function cleanupReturnCovenantCase(params: {
         storeKeys: [state.casePlan.logicalSessionKey],
       },
     });
+  } else if (state.casePlan.kind === "allowed") {
+    // Each form is an independent accepted dispatch. Rotate only after its
+    // observation and cleanup so the sibling form cannot reuse proof authority.
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        advanceSessionRecipientAuthorityInTransaction(database, state.casePlan.logicalSessionKey),
+      { agentId: "proof", env: context.env },
+      { operationLabel: "return-covenant.case-isolation" },
+    );
   }
   state.closed = true;
 }
