@@ -17,7 +17,7 @@ import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import type { RelayToolCallLedger } from "./talk-realtime-relay-tool-call-ledger.js";
-import type { PreparedTalkSessionTarget } from "./talk-session-target.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;

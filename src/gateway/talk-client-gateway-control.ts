@@ -44,7 +44,7 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
-import type { PreparedTalkSessionTarget } from "./talk-session-target.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type GatewayControlOwner = {
   adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;

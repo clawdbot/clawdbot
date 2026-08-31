@@ -4,7 +4,7 @@
  */
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { formatError } from "./server-utils.js";
-import type { PreparedTalkSessionTarget } from "./talk-session-target.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type TalkConnectionCleanupKind = "browser-control" | "realtime-relay" | "transcription-relay";
 

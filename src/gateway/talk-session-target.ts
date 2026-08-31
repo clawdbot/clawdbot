@@ -5,14 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
-
-export type PreparedTalkSessionTarget = Readonly<{
-  agentId: string;
-  /** Voice records and close/resume retain the client's exact key, not its storage alias. */
-  sessionKey: string;
-  canonicalKey: string;
-  storePath: string;
-}>;
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 export function requirePreparedTalkSessionTarget(
   target: PreparedTalkSessionTarget | undefined,

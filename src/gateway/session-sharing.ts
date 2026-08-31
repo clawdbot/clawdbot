@@ -54,11 +54,8 @@ import type {
   GatewaySessionStoreCache,
   GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
-import {
-  prepareTalkSessionTarget,
-  assertTalkSessionStorageTarget,
-  type PreparedTalkSessionTarget,
-} from "./talk-session-target.js";
+import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk-session-target.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   resolved: Omit<SessionSharingTarget, "entry" | "storeKeys"> | null;

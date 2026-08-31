@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import type { PreparedTalkSessionTarget } from "../talk-session-target.js";
+import type { PreparedTalkSessionTarget } from "../talk-session-target.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function resolveOwnedActiveTalkRunTarget(params: {
