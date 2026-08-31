@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 @testable import OpenClaw
 import Testing
@@ -77,6 +78,32 @@ struct ApplicationRelocatorTests {
         )
 
         #expect(recommendation == .offerInstall(destination: destination, replacing: false))
+    }
+
+    @Test
+    func `installed app quarantine is removed recursively without following symlinks`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ApplicationRelocatorQuarantineTests-\(UUID().uuidString)")
+        let bundleURL = root.appendingPathComponent("OpenClaw.app", isDirectory: true)
+        let nestedURL = bundleURL.appendingPathComponent("Contents/MacOS/OpenClaw")
+        let outsideURL = root.appendingPathComponent("outside")
+        let linkURL = bundleURL.appendingPathComponent("Contents/outside-link")
+        try FileManager.default.createDirectory(
+            at: nestedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: nestedURL)
+        try Data().write(to: outsideURL)
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: outsideURL)
+        try setQuarantineAttribute(at: bundleURL)
+        try setQuarantineAttribute(at: nestedURL)
+        try setQuarantineAttribute(at: outsideURL)
+
+        try ApplicationRelocator.releaseQuarantine(at: bundleURL)
+
+        #expect(!hasQuarantineAttribute(at: bundleURL))
+        #expect(!hasQuarantineAttribute(at: nestedURL))
+        #expect(hasQuarantineAttribute(at: outsideURL))
     }
 
     @Test
@@ -546,5 +573,31 @@ struct ApplicationRelocatorTests {
             options: 0
         )
         try data.write(to: url, options: .atomic)
+    }
+
+    private func setQuarantineAttribute(at url: URL) throws {
+        let value = Array("0083;00000000;OpenClawTests;".utf8)
+        let result = value.withUnsafeBytes { bytes in
+            url.withUnsafeFileSystemRepresentation { path in
+                guard let path else { return -1 }
+                return setxattr(
+                    path,
+                    "com.apple.quarantine",
+                    bytes.baseAddress,
+                    bytes.count,
+                    0,
+                    XATTR_NOFOLLOW)
+            }
+        }
+        guard result == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    private func hasQuarantineAttribute(at url: URL) -> Bool {
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return false }
+            return getxattr(path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) >= 0
+        }
     }
 }

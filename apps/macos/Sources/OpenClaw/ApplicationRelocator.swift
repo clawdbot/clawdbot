@@ -152,6 +152,11 @@ enum ApplicationRelocator {
         let launchCodeDirectoryHash: Data?
     }
 
+    private struct SpawnedReplacement: Sendable {
+        let processIdentifier: pid_t
+        let readyDescriptor: Int32
+    }
+
     private enum ReplacementScheduleResult {
         case scheduled
         case failed(supervisor: KeepAliveSupervisor?)
@@ -183,6 +188,7 @@ enum ApplicationRelocator {
         "OPENCLAW_REPLACEMENT_SUPERVISOR_LABEL"
     private nonisolated static let replacementSupervisorPlistEnvironmentKey =
         "OPENCLAW_REPLACEMENT_SUPERVISOR_PLIST"
+    private nonisolated static let quarantineAttribute = "com.apple.quarantine"
 
     static func recommendation(for environment: Environment) -> Recommendation {
         guard !environment.isDebugOrTesting,
@@ -266,7 +272,11 @@ enum ApplicationRelocator {
             }
             return .continueLaunch(startUpdater: true)
         case let .handOff(destination):
-            return relaunchAndTerminate(at: destination)
+            return relaunchAndTerminate(
+                at: destination,
+                bundle: bundle,
+                fileManager: fileManager,
+                processInfo: processInfo)
         case let .offerInstall(destination, replacing):
             guard confirmInstall(replacing: replacing) else {
                 return .continueLaunch(startUpdater: false)
@@ -277,7 +287,11 @@ enum ApplicationRelocator {
                     destination: destination,
                     replacing: replacing,
                     fileManager: fileManager)
-                return relaunchAndTerminate(at: destination)
+                return relaunchAndTerminate(
+                    at: destination,
+                    bundle: bundle,
+                    fileManager: fileManager,
+                    processInfo: processInfo)
             } catch {
                 self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
                 showFailure(
@@ -1000,28 +1014,129 @@ extension ApplicationRelocator {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private static func relaunchAndTerminate(at destination: URL) -> LaunchDisposition {
-        let helper = Process()
-        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let processInfo = ProcessInfo.processInfo
-        helper.arguments = [
-            "-c",
-            "while /bin/kill -0 \"$2\" 2>/dev/null; do /bin/sleep 0.1; done; exec /usr/bin/open -n \"$1\"",
-            "openclaw-relocation",
-            destination.path,
-            String(processInfo.processIdentifier),
-        ]
-        do {
-            try helper.run()
-            TerminationSignalWatcher.scheduleExitFailsafe()
-            AppDelegate.requestTermination()
-            return .terminating
-        } catch {
-            self.logger.error("Could not schedule relaunch: \(error.localizedDescription, privacy: .public)")
-            self.showFailure(
-                "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.")
-            return .continueLaunch(startUpdater: false)
+    private static func relaunchAndTerminate(
+        at destination: URL,
+        bundle: Bundle,
+        fileManager: FileManager,
+        processInfo: ProcessInfo) -> LaunchDisposition
+    {
+        // Removing quarantine is safe only after the running Developer ID requirement
+        // binds the destination to this app's bundle and signing team.
+        guard let bundleIdentifier = bundle.bundleIdentifier,
+              let runningIdentity = runningCodeIdentity(bundleIdentifier: bundleIdentifier),
+              let installedApp = applicationOnDisk(at: destination),
+              installedApp.bundleIdentifier == bundleIdentifier,
+              let launchReference = bundleFileReference(
+                  bundleURL: destination,
+                  executableURL: installedApp.executableURL),
+              let installedCodeDirectoryHash = trustedCodeDirectoryHash(
+                  at: destination,
+                  executableURL: installedApp.executableURL,
+                  matching: runningIdentity.requirementData)
+        else {
+            return self.relaunchFailure(
+                "OpenClaw is installed in Applications, but its signature could not be verified. " +
+                    "Open that copy manually.")
         }
+
+        do {
+            try releaseQuarantine(at: destination, fileManager: fileManager)
+        } catch {
+            self.logger.error("Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
+            return self.relaunchFailure(
+                "OpenClaw is installed in Applications, but macOS could not prepare it to reopen. " +
+                    "Move a fresh copy there with Finder, then open it.")
+        }
+
+        // Quarantine metadata is outside the sealed code signature. Revalidate
+        // the same filesystem object before granting the child handoff authority.
+        guard bundleFileReference(
+            bundleURL: destination,
+            executableURL: installedApp.executableURL) == launchReference,
+            trustedCodeDirectoryHash(
+                at: destination,
+                executableURL: installedApp.executableURL,
+                matching: runningIdentity.requirementData) == installedCodeDirectoryHash,
+            let spawned = spawnReplacement(
+                launchReference: launchReference,
+                sourceBundleURL: destination,
+                codeDirectoryHash: installedCodeDirectoryHash,
+                supervisor: nil,
+                bootoutTarget: nil,
+                forwardedArguments: Array(processInfo.arguments.dropFirst()))
+        else {
+            return self.relaunchFailure(
+                "OpenClaw is installed in Applications, but couldn’t reopen automatically. " +
+                    "Open that copy manually.")
+        }
+
+        let timeoutMilliseconds = self.replacementHandoffPolicy.timeoutMilliseconds(
+            loadAverage: self.currentSystemLoadAverage(),
+            activeProcessorCount: processInfo.activeProcessorCount)
+        let handoffReady = self.awaitReplacementHandoff(
+            from: spawned,
+            timeoutMilliseconds: timeoutMilliseconds)
+        guard handoffReady else {
+            self.logger.error("Installed app handoff failed after \(timeoutMilliseconds) ms")
+            return self.relaunchFailure(
+                "OpenClaw is installed in Applications, but couldn’t reopen automatically. " +
+                    "Open that copy manually.")
+        }
+
+        TerminationSignalWatcher.scheduleExitFailsafe()
+        AppDelegate.requestTermination()
+        return .terminating
+    }
+
+    static func releaseQuarantine(
+        at rootURL: URL,
+        fileManager: FileManager = .default) throws
+    {
+        try self.removeQuarantineAttribute(at: rootURL)
+        var enumerationError: Error?
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: nil,
+            options: [],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            })
+        else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        while let url = enumerator.nextObject() as? URL {
+            try self.removeQuarantineAttribute(at: url)
+        }
+        if let enumerationError {
+            throw enumerationError
+        }
+    }
+
+    private nonisolated static func removeQuarantineAttribute(at url: URL) throws {
+        var attributeErrno = 0
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                attributeErrno = EINVAL
+                return -1
+            }
+            return self.quarantineAttribute.withCString { attribute in
+                let result = removexattr(path, attribute, XATTR_NOFOLLOW)
+                attributeErrno = errno
+                return result
+            }
+        }
+        guard result == 0 || attributeErrno == ENOATTR else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(attributeErrno),
+                userInfo: [NSFilePathErrorKey: url.path])
+        }
+    }
+
+    private static func relaunchFailure(_ message: String) -> LaunchDisposition {
+        self.showFailure(message, title: "OpenClaw couldn’t relaunch")
+        return .continueLaunch(startUpdater: false)
     }
 
     private static func startSupervisorRestorationWatcher(_ supervisor: KeepAliveSupervisor) -> Bool {
@@ -1091,17 +1206,12 @@ extension ApplicationRelocator {
             loadAverage: self.currentSystemLoadAverage(),
             activeProcessorCount: processInfo.activeProcessorCount)
         Task { @MainActor in
-            let handoffStatus = await Task.detached(priority: .utility) {
+            let handoffReady = await Task.detached(priority: .utility) {
                 self.awaitReplacementHandoff(
-                    on: spawned.readyDescriptor,
+                    from: spawned,
                     timeoutMilliseconds: timeoutMilliseconds)
             }.value
-            Darwin.close(spawned.readyDescriptor)
-            guard handoffStatus == "READY" else {
-                Darwin.kill(spawned.processIdentifier, SIGKILL)
-                await Task.detached(priority: .utility) {
-                    self.reapProcess(spawned.processIdentifier)
-                }.value
+            guard handoffReady else {
                 await self.handleReplacementHandoffFailure(
                     attempt: attempt,
                     targetCodeDirectoryHash: codeDirectoryHash,
@@ -1219,7 +1329,7 @@ extension ApplicationRelocator {
         codeDirectoryHash: Data,
         supervisor: KeepAliveSupervisor?,
         bootoutTarget: String?,
-        forwardedArguments: [String]) -> (processIdentifier: pid_t, readyDescriptor: Int32)?
+        forwardedArguments: [String]) -> SpawnedReplacement?
     {
         let childReadyDescriptor: Int32 = 19
         var descriptors = [Int32](repeating: -1, count: 2)
@@ -1319,7 +1429,9 @@ extension ApplicationRelocator {
             Darwin.close(readDescriptor)
             return nil
         }
-        return (processIdentifier, readDescriptor)
+        return SpawnedReplacement(
+            processIdentifier: processIdentifier,
+            readyDescriptor: readDescriptor)
     }
 
     private nonisolated static func currentSystemLoadAverage() -> Double? {
@@ -1328,17 +1440,27 @@ extension ApplicationRelocator {
     }
 
     private nonisolated static func awaitReplacementHandoff(
-        on descriptor: Int32,
-        timeoutMilliseconds: Int32) -> String?
+        from replacement: SpawnedReplacement,
+        timeoutMilliseconds: Int32) -> Bool
     {
-        var event = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
-        guard poll(&event, 1, timeoutMilliseconds) > 0 else { return nil }
-        var bytes = [UInt8](repeating: 0, count: 16)
-        let count = bytes.withUnsafeMutableBytes { buffer in
-            Darwin.read(descriptor, buffer.baseAddress, buffer.count)
+        defer { Darwin.close(replacement.readyDescriptor) }
+        var event = pollfd(
+            fd: replacement.readyDescriptor,
+            events: Int16(POLLIN | POLLHUP),
+            revents: 0)
+        var handoffReady = false
+        if poll(&event, 1, timeoutMilliseconds) > 0 {
+            var bytes = [UInt8](repeating: 0, count: 16)
+            let count = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(replacement.readyDescriptor, buffer.baseAddress, buffer.count)
+            }
+            handoffReady = count > 0 && String(bytes: bytes.prefix(count), encoding: .utf8) == "READY"
         }
-        guard count > 0 else { return nil }
-        return String(bytes: bytes.prefix(count), encoding: .utf8)
+        if !handoffReady {
+            Darwin.kill(replacement.processIdentifier, SIGKILL)
+            self.reapProcess(replacement.processIdentifier)
+        }
+        return handoffReady
     }
 
     private nonisolated static func reapProcess(_ processIdentifier: pid_t) {
@@ -1346,9 +1468,12 @@ extension ApplicationRelocator {
         while waitpid(processIdentifier, &processStatus, 0) == -1, errno == EINTR {}
     }
 
-    private static func showFailure(_ message: String) {
+    private static func showFailure(
+        _ message: String,
+        title: String = "Move OpenClaw to Applications")
+    {
         let alert = NSAlert()
-        alert.messageText = "Move OpenClaw to Applications"
+        alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
