@@ -76,7 +76,7 @@
 
   /* The manuscript reads as a document: the serif is the body voice, not a
      chat garnish. Same opt-in character decision as Phosphor's all-mono. */
-  --font-body: "Lora", Georgia, "Times New Roman", serif;
+  --font-body: "Lora", "Noto Sans", Georgia, "Times New Roman", serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }
@@ -154,7 +154,7 @@
 
   --grid-line: rgba(240, 230, 205, 0.04);
 
-  --font-body: "Lora", Georgia, "Times New Roman", serif;
+  --font-body: "Lora", "Noto Sans", Georgia, "Times New Roman", serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }

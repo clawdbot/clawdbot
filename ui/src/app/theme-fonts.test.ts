@@ -42,11 +42,14 @@ describe("typeface presentation", () => {
     syncTypefaceStylesheets(faces);
     // The mono face is always declared: base.css --mono promises JetBrains
     // Mono for code spans on every theme; its woff2 still downloads lazily.
-    expect(hrefs()).toEqual(
-      [...new Set([ui, chat, "jetbrains-mono"])]
-        .filter((face) => face !== "system")
-        .map((face) => `/fonts/${face}.css`),
-    );
+    const expectedFaces = [...new Set([ui, chat])].filter((face) => face !== "system");
+    expect(hrefs()).toEqual([
+      ...new Set([
+        ...expectedFaces.map((face) => `/fonts/${face}.css`),
+        ...(expectedFaces.length > 0 ? ["/fonts/noto-sans-vietnamese.css"] : []),
+        "/fonts/jetbrains-mono.css",
+      ]),
+    ]);
   });
 
   it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
@@ -55,7 +58,12 @@ describe("typeface presentation", () => {
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
-    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
+    expect(hrefs()).toEqual([
+      "/fonts/jetbrains-mono.css",
+      "/fonts/geist.css",
+      "/fonts/lora.css",
+      "/fonts/noto-sans-vietnamese.css",
+    ]);
     expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
     const loaded = fontLinks();
     for (const next of [
@@ -76,11 +84,21 @@ describe("typeface presentation", () => {
     loadTypefaceSpecimens();
     const specimens = fontLinks();
     expect(specimens).toEqual(expect.arrayContaining(active));
-    expect(specimens).toHaveLength(9);
-    expect(new Set(hrefs()).size).toBe(9);
+    expect(specimens).toHaveLength(10);
+    expect(new Set(hrefs()).size).toBe(10);
     loadTypefaceSpecimens();
     syncTypefaceStylesheets(resolveTypefaces("knot", "lora"));
     expect(fontLinks()).toEqual(specimens);
+  });
+
+  it("adds the bundled Vietnamese fallback only to bundled typeface stacks", () => {
+    for (const [id, typeface] of Object.entries(TYPEFACES)) {
+      if (id === "system") {
+        expect(typeface.stack).not.toContain("Noto Sans");
+      } else {
+        expect(typeface.stack).toContain('"Noto Sans"');
+      }
+    }
   });
 
   it("removes inline overrides to return ownership to theme CSS without changing code", () => {

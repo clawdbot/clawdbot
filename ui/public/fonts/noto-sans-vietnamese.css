@@ -1,0 +1,29 @@
+/*
+ * Self-hosted Vietnamese fallback for bundled Control UI typefaces.
+ * Noto Sans, SIL Open Font License 1.1; subset from the official Google Fonts sources.
+ * The narrow range keeps supported glyphs in the selected theme face.
+ */
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: italic;
+  font-weight: 100 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("noto-sans-vietnamese-italic.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0,
+    U+0300-0306, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("noto-sans-vietnamese.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0,
+    U+0300-0306, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}

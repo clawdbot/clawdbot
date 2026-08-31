@@ -72,7 +72,8 @@
 
   --grid-line: rgba(220, 213, 242, 0.04);
 
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "Space Grotesk", "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }
@@ -150,7 +151,8 @@
 
   --grid-line: rgba(60, 30, 60, 0.04);
 
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "Space Grotesk", "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }
