@@ -24,7 +24,6 @@ import {
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import { resolvePackageUpdateRecovery } from "../../infra/update-runner-command.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
@@ -190,7 +189,6 @@ export async function runPackageInstallUpdate(params: {
     },
   });
 
-  const recovery = resolvePackageUpdateRecovery(packageUpdate.failedStep);
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: installTarget.manager,
@@ -199,8 +197,7 @@ export async function runPackageInstallUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
-    packageReplacementVerified: packageUpdate.packageReplacementVerified,
-    ...(recovery ? { recovery } : {}),
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,
   };
 }

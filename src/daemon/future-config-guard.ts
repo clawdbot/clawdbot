@@ -5,8 +5,8 @@ import {
   type FutureConfigActionBlock,
 } from "../config/future-version-guard.js";
 
-/** Resolves whether the running config was last written by a newer OpenClaw. */
-export async function readFutureConfigActionBlock(
+// Blocks daemon mutations when config was written by a newer OpenClaw.
+async function readFutureConfigActionBlock(
   action: string,
 ): Promise<FutureConfigActionBlock | null> {
   const { readConfigFileSnapshot } = await import("../config/io.runtime.js");

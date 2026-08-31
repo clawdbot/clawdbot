@@ -34,43 +34,9 @@ import {
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
-
-/**
- * True when the package-update producer has already installed a replacement
- * tree. Used by failed-update recovery to decide whether the future-config
- * start exception is allowed — Git rollbacks and pre-swap failures must not
- * infer that fact from config metadata alone.
- *
- * Module-private: producers call it when building UpdateRunResult; exporting
- * it trips the unused-exports deadcode gate.
- *
- * Live-mutation boundaries:
- * - staged npm installs: only a successful `global install swap` (staged
- *   `global update` writes a temp prefix; a failed swap restores the old tree)
- * - in-place installs: a successful `global update` / omit-optional already
- *   mutated the live tree before lifecycle scripts/doctor
- */
-function didCompletePackageReplacement(
-  steps: ReadonlyArray<{ name: string; exitCode: number | null }>,
-  stagedInstall: boolean,
-): boolean {
-  if (steps.some((step) => step.name === "global install swap" && step.exitCode === 0)) {
-    return true;
-  }
-  // Staged path: a successful stage install or a failed swap must not count.
-  if (stagedInstall || steps.some((step) => step.name === "global install swap")) {
-    return false;
-  }
-  // In-place mutation boundary. A later postinstall/doctor failure still means
-  // a replacement is on disk and recovery may start the installed unit.
-  return steps.some(
-    (step) =>
-      (step.name === "global update" || step.name === "global update (omit optional)") &&
-      step.exitCode === 0,
-  );
-}
 
 /**
  * Captures one package-manager or filesystem step from the global update flow.
@@ -110,23 +76,8 @@ type PackageUpdateStepsResult = {
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
-  packageReplacementVerified: boolean;
+  recovery?: UpdateRunResult["recovery"];
 };
-
-function packageUpdateFailure(
-  failedStep: PackageUpdateStepResult,
-  verifiedPackageRoot: string | null,
-  steps = [failedStep],
-  stagedInstall = false,
-): PackageUpdateStepsResult {
-  return {
-    steps,
-    verifiedPackageRoot,
-    afterVersion: null,
-    failedStep,
-    packageReplacementVerified: didCompletePackageReplacement(steps, stagedInstall),
-  };
-}
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 const PACKAGE_INSTALL_GUARD_PATH = path.join("dist", "openclaw-install-guard");
@@ -908,6 +859,23 @@ export async function runGlobalPackageUpdateSteps(params: {
 }): Promise<PackageUpdateStepsResult> {
   let stagedInstall: StagedNpmInstall | null = null;
   let packedInstallDir: string | null = null;
+  let serviceRestartSafe = true;
+  let verifiedPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
+  let afterVersion: string | null = null;
+  const steps: PackageUpdateStepResult[] = [];
+  const packageUpdateFailure = (
+    failedStep: PackageUpdateStepResult,
+    packageRoot: string | null,
+    completedSteps = [failedStep],
+  ): PackageUpdateStepsResult => ({
+    steps: completedSteps,
+    verifiedPackageRoot: packageRoot,
+    afterVersion,
+    failedStep,
+    ...(serviceRestartSafe
+      ? {}
+      : { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }),
+  });
 
   try {
     const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
@@ -986,15 +954,11 @@ export async function runGlobalPackageUpdateSteps(params: {
     const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
-      return packageUpdateFailure(
+      return packageUpdateFailure(preparedInstall.failedStep, params.packageRoot ?? null, [
         preparedInstall.failedStep,
-        params.packageRoot ?? null,
-        [preparedInstall.failedStep],
-        Boolean(stagedInstall),
-      );
+      ]);
     }
 
-    const steps: PackageUpdateStepResult[] = [];
     const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
@@ -1008,12 +972,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     packedInstallDir = preparedSpec.packDir;
     steps.push(...preparedSpec.steps);
     if (preparedSpec.failedStep) {
-      return packageUpdateFailure(
-        preparedSpec.failedStep,
-        params.packageRoot ?? null,
-        steps,
-        Boolean(stagedInstall),
-      );
+      return packageUpdateFailure(preparedSpec.failedStep, params.packageRoot ?? null, steps);
     }
 
     // pnpm selects its version from cwd. Keep every pnpm mutation beside its
@@ -1029,6 +988,9 @@ export async function runGlobalPackageUpdateSteps(params: {
             preparedSpec.installCwd ?? process.cwd(),
           )
         : preparedSpec.installSpec;
+    // In-place commands may mutate the live tree even when they reject or exit
+    // unsuccessfully. Only a complete verification pipeline proves it runnable.
+    serviceRestartSafe = stagedInstall !== null;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
@@ -1060,7 +1022,6 @@ export async function runGlobalPackageUpdateSteps(params: {
           preparedFallbackInstall.failedStep,
           params.packageRoot ?? null,
           steps,
-          Boolean(stagedInstall),
         );
       }
 
@@ -1133,12 +1094,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         stderrTail: "could not identify a unique active pnpm replacement package",
       };
       steps.push(replacementStep);
-      return packageUpdateFailure(
-        replacementStep,
-        params.packageRoot ?? null,
-        steps,
-        Boolean(stagedInstall),
-      );
+      return packageUpdateFailure(replacementStep, params.packageRoot ?? null, steps);
     }
     const livePackageRoot =
       refreshedPnpmPackageRoot ??
@@ -1154,7 +1110,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       ).packageRoot ??
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
-    let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
+    verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
     if (finalInstallStep.exitCode === 0 && !verificationPackageRoot && params.expectedGitCheckout) {
       const failedStep: PackageUpdateStepResult = {
         name: "global install verify",
@@ -1197,12 +1153,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               stderrTail: formatErrorMessage(error),
             };
             steps.push(markerStep);
-            return packageUpdateFailure(
-              markerStep,
-              verifiedPackageRoot,
-              steps,
-              Boolean(stagedInstall),
-            );
+            return packageUpdateFailure(markerStep, verifiedPackageRoot, steps);
           }
         }
 
@@ -1222,12 +1173,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           });
           steps.push(lifecycleStep);
           if (lifecycleStep.exitCode !== 0) {
-            return packageUpdateFailure(
-              lifecycleStep,
-              verifiedPackageRoot,
-              steps,
-              Boolean(stagedInstall),
-            );
+            return packageUpdateFailure(lifecycleStep, verifiedPackageRoot, steps);
           }
         }
 
@@ -1243,17 +1189,11 @@ export async function runGlobalPackageUpdateSteps(params: {
             stderrTail: formatErrorMessage(error),
           };
           steps.push(finalizeStep);
-          return packageUpdateFailure(
-            finalizeStep,
-            verifiedPackageRoot,
-            steps,
-            Boolean(stagedInstall),
-          );
+          return packageUpdateFailure(finalizeStep, verifiedPackageRoot, steps);
         }
       }
     }
 
-    let afterVersion: string | null = null;
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
       const candidateVersion = await readPackageVersion(verificationPackageRoot);
       if (!stagedInstall) {
@@ -1281,6 +1221,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
+        serviceRestartSafe = false;
         const swapStep = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
@@ -1315,13 +1256,23 @@ export async function runGlobalPackageUpdateSteps(params: {
       ? finalInstallStep
       : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
-    return {
-      steps,
-      verifiedPackageRoot,
-      afterVersion,
-      failedStep,
-      packageReplacementVerified: didCompletePackageReplacement(steps, Boolean(stagedInstall)),
+    return failedStep
+      ? packageUpdateFailure(failedStep, verifiedPackageRoot, steps)
+      : { steps, verifiedPackageRoot, afterVersion, failedStep };
+  } catch (error) {
+    if (serviceRestartSafe) {
+      throw error;
+    }
+    const failedStep: PackageUpdateStepResult = {
+      name: "package update",
+      command: "update installed package",
+      cwd: verifiedPackageRoot ?? params.installCwd ?? process.cwd(),
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: formatErrorMessage(error),
     };
+    steps.push(failedStep);
+    return packageUpdateFailure(failedStep, verifiedPackageRoot, steps);
   } finally {
     await cleanupStagedNpmInstall(stagedInstall);
     if (packedInstallDir) {

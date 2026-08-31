@@ -79,6 +79,16 @@ See [Release channels](/install/development-channels) for channel semantics.
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
+If a CLI update fails after installing a usable replacement, recovery uses the
+newly installed CLI to restart the Gateway it stopped, preserving the managed
+service definition. A blocking package lifecycle, package verification, or
+Doctor failure leaves that Gateway stopped because the replacement is not
+known to be runnable. Repair the reported failure, rerun `openclaw update`, and
+check `openclaw gateway status --deep`.
+If an older target does not support preserving the service definition, automatic
+recovery stops and reports the error; inspect the service before restarting it
+manually.
+
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.

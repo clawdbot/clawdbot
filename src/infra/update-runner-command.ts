@@ -5,7 +5,6 @@ import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
-  UpdateStepAdvisory,
   UpdateStepInfo,
   UpdateStepResult,
 } from "./update-runner-types.js";
@@ -82,43 +81,6 @@ export function normalizeFallbackFailureReason(
     default:
       return "unexpected-error";
   }
-}
-
-function isUnsafePackageUpdateFailure(stepName: string): boolean {
-  // CLI names this `$cliName doctor`; the shared runner uses `openclaw doctor`.
-  if (
-    stepName === "global install verify" ||
-    stepName === "openclaw doctor" ||
-    stepName.endsWith(" doctor")
-  ) {
-    return true;
-  }
-  switch (stepName) {
-    case "pnpm package lifecycle marker":
-    case "pnpm package preinstall":
-    case "pnpm package postinstall":
-    case "pnpm package lifecycle finalize":
-      return true;
-    default:
-      return false;
-  }
-}
-
-/**
- * Blocking post-install Doctor, packaged-install verification, or unfinished
- * pnpm lifecycle work is runtime rejection, not package-swap provenance.
- * Without this, failed-update recovery can start a still-unusable candidate.
- */
-export function resolvePackageUpdateRecovery(
-  failedStep: { name: string; advisory?: UpdateStepAdvisory } | null | undefined,
-): UpdateRunResult["recovery"] | undefined {
-  if (!failedStep || failedStep.advisory !== undefined) {
-    return undefined;
-  }
-  if (!isUnsafePackageUpdateFailure(failedStep.name)) {
-    return undefined;
-  }
-  return { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 }
 
 export async function buildUpdateCommandRunner(

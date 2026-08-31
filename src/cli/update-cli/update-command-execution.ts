@@ -68,6 +68,14 @@ export async function executeMutableUpdate(params: {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   let schemaRefusalAfterStop = false;
+  const recoverStoppedService = () =>
+    maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
+      jsonMode: Boolean(params.opts.json),
+      nodeRunner: params.packageUpdateNodeRunner,
+      timeoutMs: params.updateStepTimeoutMs,
+      invocationCwd: params.invocationCwd,
+    });
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -130,10 +138,7 @@ export async function executeMutableUpdate(params: {
     } catch (err) {
       params.stop();
       defaultRuntime.error(`Failed to capture managed gateway update state: ${String(err)}`);
-      await maybeRestartServiceAfterFailedMutableUpdate({
-        preManagedServiceStop,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await recoverStoppedService();
       defaultRuntime.exit(1);
       throw new UpdateCommandAbort();
     }
@@ -254,12 +259,7 @@ export async function executeMutableUpdate(params: {
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop).catch(
             () => undefined,
           );
-          await maybeRestartServiceAfterFailedMutableUpdate({
-            preManagedServiceStop,
-            jsonMode: Boolean(params.opts.json),
-            // Schema refusal aborts before any package replacement.
-            packageReplacementVerified: false,
-          });
+          await recoverStoppedService();
         }
         defaultRuntime.exit(1);
       }
@@ -276,13 +276,7 @@ export async function executeMutableUpdate(params: {
         err,
       );
     }
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-      // Thrown failures never carry a producer-verified package replacement.
-      // Git rollbacks and pre-swap aborts stay on the guarded restart only.
-      packageReplacementVerified: false,
-    });
+    await recoverStoppedService();
     throw err;
   }
 

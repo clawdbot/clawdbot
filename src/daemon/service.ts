@@ -2,9 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sha256Hex } from "../infra/crypto-digest.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -176,7 +174,7 @@ function collectGatewayServiceStartRepairIssues(
 /** Reads the installed service and reports definition drift that must be repaired before launch. */
 export async function inspectGatewayServiceStartRepair(
   service: GatewayService,
-  args: ReadGatewayServiceStateArgs,
+  args: GatewayServiceEnvArgs,
   expectedPort?: number,
 ): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
   const state = await readGatewayServiceState(service, args);
@@ -242,16 +240,10 @@ export async function startGatewayService(
   service: GatewayService,
   args: GatewayServiceControlArgs,
   expectedPort?: number,
-  expectedCommandFingerprint?: string,
 ): Promise<GatewayServiceStartResult> {
-  // Fingerprinted recovery is the future-config exception. The last
-  // inspection before start or already-running must be manager-effective:
-  // a local-unit fallback can match the pin while the platform start still
-  // applies a changed drop-in.
-  const requireEffective = expectedCommandFingerprint !== undefined;
   const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
     service,
-    { env: args.env, requireEffective },
+    { env: args.env },
     expectedPort,
   );
   if (state.loadState.status === "unknown") {
@@ -262,15 +254,6 @@ export async function startGatewayService(
       outcome: "missing-install",
       state,
     };
-  }
-
-  if (
-    expectedCommandFingerprint !== undefined &&
-    (!state.command || sha256Hex(stableStringify(state.command)) !== expectedCommandFingerprint)
-  ) {
-    throw new Error(
-      "effective service definition no longer matches the stopped-service pin; inspect it before starting manually.",
-    );
   }
 
   if (state.loadState.status === "loaded" && state.running) {
@@ -307,38 +290,22 @@ export async function startGatewayService(
   if (nextState.loadState.status === "unknown") {
     throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
   }
-  assertGatewayServiceStarted(state, nextState, "start");
-
-  return {
-    outcome: "started",
-    state: nextState,
-  };
-}
-
-/**
- * Validates that a gateway service actually started after a raw platform start.
- * Rejects if the service manager reports a failed state or a new non-zero exit
- * code, which indicates the binary started but immediately crashed.
- *
- * Kept module-private: startGatewayService is the only caller, and exporting
- * it trips the unused-exports deadcode gate.
- */
-function assertGatewayServiceStarted(
-  preState: GatewayServiceState,
-  postState: GatewayServiceState,
-  context: string,
-): void {
-  const runtime = postState.runtime;
+  const runtime = nextState.runtime;
   const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
   const newFailedExit =
     runtime?.status === "stopped" &&
     typeof runtime.lastExitStatus === "number" &&
     runtime.lastExitStatus !== 0 &&
-    runtime.lastExitStatus !== preState.runtime?.lastExitStatus;
+    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
   if (failedState || newFailedExit) {
     const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
-    throw new Error(`Service failed to ${context} (${failure}). Check the service logs and retry.`);
+    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
   }
+
+  return {
+    outcome: "started",
+    state: nextState,
+  };
 }
 
 export function describeGatewayServiceRestart(
@@ -485,44 +452,4 @@ export function resolveGatewayService(): GatewayService {
     return withGatewayServiceMutationGuards(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   return createUnsupportedGatewayService();
-}
-
-/**
- * Restores a managed service after a package swap installs a newer OpenClaw.
- *
- * Uses the raw platform adapter so the future-config version guard is skipped:
- * the swap already installed the newer binary the unit runs. Ownership and the
- * canonical start preflight still apply — a missing or temporary program must
- * return repair-required, not launch.
- */
-export async function startGatewayServiceAfterFailedUpdate(
-  args: GatewayServiceControlArgs & { expectedCommandFingerprint: string },
-): Promise<void> {
-  const { expectedCommandFingerprint, ...controlArgs } = args;
-  // Ownership only — do not go through withGatewayServiceMutationGuards, which
-  // also applies the future-config version block this recovery must survive.
-  // Call Allowed directly so a merge with main (which inlined/removed the local
-  // OwnedByOpenClaw helper) cannot leave a dangling name at this call site.
-  assertGatewayServiceMutationAllowed("start the gateway service", process.env);
-  if (controlArgs.env && controlArgs.env !== process.env) {
-    assertGatewayServiceMutationAllowed("start the gateway service", controlArgs.env);
-  }
-  const service = isSupportedGatewayServicePlatform(process.platform)
-    ? GATEWAY_SERVICE_REGISTRY[process.platform]
-    : createUnsupportedGatewayService();
-
-  const result = await startGatewayService(
-    service,
-    controlArgs,
-    undefined,
-    expectedCommandFingerprint,
-  );
-  if (result.outcome === "missing-install") {
-    throw new Error("no managed service is installed.");
-  }
-  if (result.outcome === "repair-required") {
-    throw new Error(
-      `service definition requires repair: ${formatGatewayServiceStartRepairIssues(result.issues)}`,
-    );
-  }
 }

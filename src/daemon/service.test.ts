@@ -2,10 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { sha256Hex } from "../infra/crypto-digest.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -15,7 +13,6 @@ import {
   readGatewayServiceState,
   resolveGatewayService,
   startGatewayService,
-  startGatewayServiceAfterFailedUpdate,
 } from "./service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
 
@@ -97,19 +94,6 @@ describe("resolveGatewayService", () => {
       await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
         "Refusing to restart the gateway service",
       );
-
-      // Failed-update recovery must survive this guard: the swap already
-      // installed the newer binary the unit runs, so refusing here only strands
-      // a gateway this process stopped. Reaching the platform adapter (which
-      // rejects for the unsupported platform) proves the guard was not applied.
-      setPlatform("aix");
-      await expect(
-        startGatewayServiceAfterFailedUpdate({
-          env: process.env,
-          stdout: process.stdout,
-          expectedCommandFingerprint: "stopped-service-pin",
-        }),
-      ).rejects.toThrow("Gateway service install not supported on aix");
     } finally {
       envSnapshot.restore();
       clearConfigCache();
@@ -141,15 +125,6 @@ describe("resolveGatewayService", () => {
         "gateway lifecycle is managed by an external supervisor",
       );
     }
-
-    // Failed-update recovery skips the version guard but not ownership.
-    await expect(
-      startGatewayServiceAfterFailedUpdate({
-        env,
-        stdout: process.stdout,
-        expectedCommandFingerprint: "stopped-service-pin",
-      }),
-    ).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
   });
 
   it("describes scheduled restart handoffs consistently", () => {
@@ -600,69 +575,6 @@ describe("startGatewayService", () => {
       expect(result.issues).toEqual([]);
     }
     expect(service.start).not.toHaveBeenCalled();
-  });
-
-  describe("fingerprinted recovery start", () => {
-    const pinnedCommand = { programArguments: ["openclaw", "gateway", "run"] };
-    const pin = sha256Hex(stableStringify(pinnedCommand));
-
-    it("rejects an already-running service whose command no longer matches the pin", async () => {
-      const service = createService({
-        readCommand: vi.fn(async () => ({
-          programArguments: ["openclaw", "gateway", "run", "--port", "9"],
-        })),
-        isLoaded: vi.fn(async () => true),
-        readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
-      });
-
-      await expect(
-        startGatewayService(service, { env: {}, stdout: process.stdout }, undefined, pin),
-      ).rejects.toThrow("no longer matches the stopped-service pin");
-      expect(service.start).not.toHaveBeenCalled();
-    });
-
-    it("returns already-running when the running command still matches the pin", async () => {
-      const service = createService({
-        readCommand: vi.fn(async () => pinnedCommand),
-        isLoaded: vi.fn(async () => true),
-        readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
-      });
-
-      const result = await startGatewayService(
-        service,
-        { env: {}, stdout: process.stdout },
-        undefined,
-        pin,
-      );
-
-      expect(result.outcome).toBe("already-running");
-      expect(service.start).not.toHaveBeenCalled();
-    });
-
-    it("fails closed when only a non-effective command read is available", async () => {
-      const readCommand = vi.fn(async (_env, opts) => {
-        if (opts?.requireEffective) {
-          throw new Error("manager-effective-secret-canary");
-        }
-        return pinnedCommand;
-      });
-      const service = createService({
-        readCommand,
-        isLoaded: vi.fn(async () => true),
-        readRuntime: vi.fn(async () => ({ status: "stopped" })),
-      });
-
-      await expect(
-        startGatewayService(service, { env: {}, stdout: process.stdout }),
-      ).resolves.toMatchObject({ outcome: "started" });
-      expect(service.start).toHaveBeenCalledTimes(1);
-
-      vi.mocked(service.start).mockClear();
-      await expect(
-        startGatewayService(service, { env: {}, stdout: process.stdout }, undefined, pin),
-      ).rejects.toThrow("manager-effective-secret-canary");
-      expect(service.start).not.toHaveBeenCalled();
-    });
   });
 
   it("starts a stopped service despite legacy version metadata", async () => {

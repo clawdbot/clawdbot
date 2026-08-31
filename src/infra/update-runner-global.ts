@@ -15,11 +15,7 @@ import {
   resolveGlobalInstallTarget,
   type GlobalInstallManager,
 } from "./update-global.js";
-import {
-  normalizeFallbackFailureReason,
-  resolvePackageUpdateRecovery,
-  runStep,
-} from "./update-runner-command.js";
+import { normalizeFallbackFailureReason, runStep } from "./update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
@@ -156,7 +152,6 @@ export async function runGlobalUpdate(params: {
     },
   });
 
-  const recovery = resolvePackageUpdateRecovery(packageUpdate.failedStep);
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: globalManager,
@@ -167,8 +162,7 @@ export async function runGlobalUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
-    packageReplacementVerified: packageUpdate.packageReplacementVerified,
-    ...(recovery ? { recovery } : {}),
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - startedAt,
   };
 }

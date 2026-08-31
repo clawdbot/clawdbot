@@ -3028,7 +3028,6 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-failed");
-    expect(result.packageReplacementVerified).toBe(true);
     expect(result.recovery).toEqual({
       serviceRestartSafe: false,
       reason: "runtime-verification-failed",
