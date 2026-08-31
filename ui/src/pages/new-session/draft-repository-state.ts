@@ -89,11 +89,24 @@ export class DraftRepositoryController {
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
-    this.preferredWorktreeRestore = preference?.worktree === true;
+    if (!this.worktreeSelectedByUser) {
+      this.worktreeValue = false;
+      this.preferredWorktreeRestore = preference?.worktree === true;
+    }
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
-    this.worktreeSelectedByUser = false;
     this.detailsSelectedByUser = false;
+    if (
+      this.matchesCurrentRepo() &&
+      this.repositoryValue.kind !== "checking" &&
+      this.repositoryValue.kind !== "idle"
+    ) {
+      this.adoptResolvedRepository(this.repositoryValue, {
+        worktree: this.preferredWorktreeRestore,
+        baseRef: this.preferredBaseRefRestore,
+        baseRefEditGeneration: this.baseRefEditGeneration,
+      });
+    }
   }
 
   reset() {
@@ -177,18 +190,9 @@ export class DraftRepositoryController {
   }
 
   available(): boolean {
-    const snapshot = this.read();
-    if (snapshot.selectedProject?.repoRoot) {
-      return true;
-    }
     const state = this.repositoryValue;
-    return (
-      state.kind === "git" ||
-      state.kind === "pending-clone" ||
-      (state.kind === "unavailable" &&
-        state.repoRoot === snapshot.workspace &&
-        snapshot.workspaceGit)
-    );
+    // A saved path or .git marker cannot prove that Git has a usable HEAD.
+    return state.kind === "git" || state.kind === "pending-clone";
   }
 
   matchesCurrentRepo(): boolean {
