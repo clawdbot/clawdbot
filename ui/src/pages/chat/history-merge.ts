@@ -2,6 +2,7 @@ import {
   createSessionProjection,
   readSessionMessageIdentity,
   reduceSessionProjection,
+  type SessionMessageIdentity,
   type SessionProjectionEvent,
   type SessionMessageEnvelope,
   type SessionProjectionEntry,
@@ -13,7 +14,10 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
+import type {
+  ApplicationChatSubmissions,
+  RetainedChatSubmission,
+} from "../../app/chat-submissions.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { chatOutboxDeliveryKey, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
@@ -52,14 +56,71 @@ type ChatSessionProjectionScopeOptions = Omit<SessionProjectionScope, "sessionId
 };
 
 function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: SessionProjectionScope) {
-  return owner.chatSubmissions?.forSession(
-    owner,
-    scope,
-    chatOutboxDeliveryKey(owner, {
-      sessionKey: scope.sessionKey ?? owner.sessionKey,
-      agentId: scope.agentId ?? resolveUiSelectedSessionAgentId(owner),
-    }),
-  );
+  const submissions = owner.chatSubmissions;
+  if (!submissions) {
+    return undefined;
+  }
+  const sessionKey = scope.sessionKey ?? owner.sessionKey;
+  const client = owner.client;
+  const handoff = submissions.readInitial(sessionKey, client ?? null);
+  // The pane captures one client and delivery key for the synchronous receipt batch.
+  const key = chatOutboxDeliveryKey(owner, {
+    sessionKey,
+    agentId: scope.agentId ?? resolveUiSelectedSessionAgentId(owner),
+  });
+  const retire = (runId: string) => {
+    const entry = submissions.readDelivered(key + runId, client ?? owner);
+    if (
+      entry?.kind === "delivered" &&
+      (!entry.sessionId || !scope.sessionId || entry.sessionId === scope.sessionId)
+    ) {
+      entry.pending = false;
+    }
+  };
+  return {
+    initial: handoff,
+    accept: (runIds: ReadonlySet<string>) => {
+      runIds.forEach(retire);
+      if (handoff && runIds.has(handoff.pendingRunId)) {
+        handoff.pending = false;
+      }
+    },
+    receive: (
+      message: unknown,
+      identity: SessionMessageIdentity | null,
+      persisted = false,
+      acceptedRunId?: string,
+    ) => {
+      const runId = acceptedRunId ?? identity?.idempotencyKey?.replace(/:user$/u, "");
+      if (identity?.role !== "user" || !runId) {
+        return message;
+      }
+      const receipt = persisted || identity.id !== null || identity.sequence !== null;
+      if (receipt) {
+        retire(runId);
+      }
+      if (!handoff || identity.isImported || runId !== handoff.pendingRunId) {
+        return message;
+      }
+      // Cached bytes for this retained submission are not a receipt. Omit
+      // that snapshot copy; the pane admits the recorded local owner through
+      // sendPending, preserving provenance even with sender/reply metadata.
+      if (!receipt && !acceptedRunId) {
+        return undefined;
+      }
+      handoff.pending = false;
+      const authoritative = asNullableRecord(message) ?? {};
+      // Initial inline bytes replace managed media, never duplicate it. The
+      // received object and its authoritative sender attribution stay intact.
+      const { media: _media, ...metadata } = asNullableRecord(authoritative["__openclaw"]) ?? {};
+      return {
+        ...handoff.message,
+        ...authoritative,
+        content: handoff.message.content,
+        __openclaw: metadata,
+      };
+    },
+  };
 }
 
 /** Every live, pending, terminal, and history path must identify the same pane and branch. */
@@ -318,6 +379,17 @@ export function reconcileChatInputCustody(
   };
 }
 
+export function shouldDisplayChatSubmission(
+  submission: RetainedChatSubmission,
+  receipt: SessionMessageIdentity | null,
+): boolean {
+  // A local copy suppresses display; only a durable receipt retires ownership.
+  if (receipt && (receipt.id !== null || receipt.sequence !== null)) {
+    submission.pending = false;
+  }
+  return submission.pending && !receipt;
+}
+
 /** A retained submission has display ownership only until its own user receipt or custody. */
 export function admitChatSubmission(
   owner: ChatSessionProjectionOwner,
@@ -326,10 +398,11 @@ export function admitChatSubmission(
   if (
     !submission?.pending ||
     (submission.kind === "delivered" &&
-      !owner.chatSubmissions?.shouldDisplay(
-        submission,
-        findChatSubmissionMessage(owner.chatMessages, submission.pendingRunId, true),
-      ))
+      (!owner.chatSubmissions ||
+        !shouldDisplayChatSubmission(
+          submission,
+          findChatSubmissionMessage(owner.chatMessages, submission.pendingRunId, true),
+        )))
   ) {
     return false;
   }
