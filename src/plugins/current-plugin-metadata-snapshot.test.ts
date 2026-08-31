@@ -7,6 +7,7 @@ import {
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
@@ -601,6 +602,48 @@ describe("current plugin metadata snapshot", () => {
         expect(rootProbes).not.toHaveBeenCalled();
       } finally {
         rootProbes.mockRestore();
+      }
+    },
+  );
+
+  it.each(["supplied", "ambient"] as const)(
+    "rejects configless default-discovery reuse when %s bundled-directory trust changes",
+    (trustSource) => {
+      const overrideRoot = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-metadata-bundled-trust-")),
+      );
+      const originalTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      const env: NodeJS.ProcessEnv = {
+        VITEST: "true",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: overrideRoot,
+      };
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+      try {
+        const snapshot = createSnapshot();
+        const originalRoot = resolveBundledPluginsDir(env);
+        expect(originalRoot).toBeDefined();
+        expect(originalRoot).not.toBe(overrideRoot);
+        setCurrentPluginMetadataSnapshot(snapshot, { env });
+        const request = { env, requireDefaultDiscoveryContext: true };
+        expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
+
+        withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+          const trustEnv = trustSource === "supplied" ? env : process.env;
+          trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+          expect(resolveBundledPluginsDir(env)).toBe(overrideRoot);
+          expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
+        });
+
+        expect(getCurrentPluginMetadataSnapshot(request)).toBeUndefined();
+      } finally {
+        clearCurrentPluginMetadataSnapshot();
+        if (originalTrust === undefined) {
+          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+        } else {
+          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrust;
+        }
+        fs.rmSync(overrideRoot, { recursive: true, force: true });
       }
     },
   );

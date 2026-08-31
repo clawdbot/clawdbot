@@ -1,4 +1,5 @@
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { shouldTrustTestBundledPluginsDirOverride } from "./bundled-dir.js";
 import {
   hasActivePluginInstallRoots,
   resolveActivePluginInstallRoots,
@@ -33,6 +34,7 @@ export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv = pro
       }),
     ),
     installRoots: hasActivePluginInstallRoots() ? resolveActivePluginInstallRoots() : undefined,
+    trustBundledPluginsDirOverride: shouldTrustTestBundledPluginsDirOverride(env),
     cwd: tryProcessCwd(),
   });
 }
