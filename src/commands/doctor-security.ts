@@ -11,9 +11,11 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { countObsoleteGeneratedExecApprovals } from "../infra/exec-approvals-generated-migration.js";
+import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
+  type ExecApprovalsFile,
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
@@ -92,9 +94,11 @@ function execAskRank(value: ExecAsk): number {
   throw new Error("Unsupported exec ask value");
 }
 
-function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecPolicyConflictWarnings(
+  cfg: OpenClawConfig,
+  approvals: ExecApprovalsFile,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const approvals = loadExecApprovalsReadOnly();
   const defaultRequestedSecuritySource = "OpenClaw default (full)";
   const defaultRequestedAskSource = "OpenClaw default (off)";
 
@@ -194,9 +198,12 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFi
   return findings;
 }
 
-function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectDurableExecApprovalWarnings(
+  cfg: OpenClawConfig,
+  approvals: ExecApprovalsFile,
+): SecurityAuditFinding[] {
   void cfg;
-  const count = countObsoleteGeneratedExecApprovals(loadExecApprovalsReadOnly());
+  const count = countObsoleteGeneratedExecApprovals(approvals);
   if (count === 0) {
     return [];
   }
@@ -303,10 +310,32 @@ export async function collectSecurityWarnings(
   }
 
   findings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
-  findings.push(...collectExecPolicyConflictWarnings(cfg));
+  let approvals: ExecApprovalsFile | undefined;
+  try {
+    approvals = loadExecApprovalsReadOnly();
+  } catch (error) {
+    if (!(error instanceof ExecApprovalsMigrationRequiredError)) {
+      throw error;
+    }
+    // Doctor owns this migration later in the same repair flow. Security
+    // diagnostics must not invoke the runtime gate first and make
+    // `doctor --fix` abort with an instruction to run itself.
+    findings.push({
+      checkId: "doctor.exec_approvals_migration_pending",
+      severity: "warn",
+      title: "Exec approvals migration pending",
+      detail: error.message,
+      remediation: "Continue this Doctor repair to migrate the retired approvals store.",
+    });
+  }
+  if (approvals) {
+    findings.push(...collectExecPolicyConflictWarnings(cfg, approvals));
+  }
   findings.push(...collectExecFilesystemPolicyWarnings(cfg));
   findings.push(...collectPlaintextConfigSecretWarnings(cfg));
-  findings.push(...collectDurableExecApprovalWarnings(cfg));
+  if (approvals) {
+    findings.push(...collectDurableExecApprovalWarnings(cfg, approvals));
+  }
 
   // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
