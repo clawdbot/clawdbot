@@ -503,6 +503,7 @@ jobs:
       - name: Generate dependency release evidence
         id: dependency_evidence
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
@@ -804,6 +805,7 @@ jobs:
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts "${verify_args[@]}"
 
       - name: Upload dependency release evidence
+        if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
