@@ -227,7 +227,9 @@ export async function sendSubagentAnnounceDirectly(params: {
     }
     const tryTextCompletionDirectDelivery = (
       agentResult?: { payloads?: unknown },
-      contentKind: "completed_result" | "failed_notice" = "completed_result",
+      contentKind: "completed_result" | "failed_notice" = hasFailedTrustedSubagentCompletion
+        ? "failed_notice"
+        : "completed_result",
     ) =>
       deliverCompletionDirect({
         cfg,

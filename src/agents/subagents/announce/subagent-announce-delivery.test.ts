@@ -2056,6 +2056,45 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
+  it("does not expose synthesis media for a failed trusted child", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-media-child";
+    const privateMedia = "/tmp/private-failed-child.png";
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: `Private failure details\nMEDIA:${privateMedia}`,
+            mediaUrls: [privateMedia],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "failed-media-child-session-id",
+        status: "error",
+        statusLabel: "failed: private provider rejection",
+        result: `Private child output\nMEDIA:${privateMedia}`,
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    const directPayload = mockCallArg(sendMessage, 0, 0);
+    expect(directPayload.content).toBe(
+      "A delegated task failed before it could report a result. Please retry the task.",
+    );
+    expect(directPayload).not.toHaveProperty("mediaUrls");
+    expect(directPayload.content).not.toContain(privateMedia);
+  });
+
   it.each(["cancelled", "source owner changed"] as const)(
     "stops a failed-child notice when %s at platform dispatch",
     async (blockedBy) => {
