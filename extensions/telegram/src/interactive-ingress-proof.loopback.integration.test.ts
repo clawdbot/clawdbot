@@ -13,13 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import { registerPluginInteractiveHandler } from "../../src/plugins/interactive.js";
-import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
+import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  createEmptyPluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../src/plugins/runtime.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
 import { createTelegramCallbackRouter } from "./bot-handlers.callback-router.js";
@@ -65,8 +65,9 @@ describe("Telegram interactive handler ingress metadata loopback proof", () => {
     const registration = registerPluginInteractiveHandler("proof-plugin", {
       channel: "telegram",
       namespace: "proof",
-      handler: async (ctx: { updateId: unknown; messageDate: unknown }) => {
-        received.push({ updateId: ctx.updateId, messageDate: ctx.messageDate });
+      handler: async (ctx: unknown) => {
+        const ingress = ctx as { updateId: unknown; messageDate: unknown };
+        received.push({ updateId: ingress.updateId, messageDate: ingress.messageDate });
         return { handled: true };
       },
     });
@@ -196,8 +197,8 @@ describe("Telegram interactive handler ingress metadata loopback proof", () => {
 
       // The temporary handler must have received the verbatim values.
       expect(received).toHaveLength(1);
-      expect(received[0].updateId).toBe(EXPECTED_UPDATE_ID);
-      expect(received[0].messageDate).toBe(EXPECTED_MESSAGE_DATE);
+      expect(received[0]?.updateId).toBe(EXPECTED_UPDATE_ID);
+      expect(received[0]?.messageDate).toBe(EXPECTED_MESSAGE_DATE);
     } finally {
       server.close();
       await rm(stateDir, { recursive: true, force: true });
