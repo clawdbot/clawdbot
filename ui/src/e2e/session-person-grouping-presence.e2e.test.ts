@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
@@ -8,7 +9,6 @@ import {
   captureUiProofEnabled,
   openSidebarSortMenu,
   routeAvatarFixtures,
-  sessionOwnerProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -75,7 +75,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: sessionOwnerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "session-owner-stack"),
               size: { height: 800, width: 1200 },
             },
           }
@@ -138,7 +138,7 @@ suite.define(() => {
         adaSection.locator(".session-owner-chip:not(.session-owner-chip--away)"),
       ).toHaveCount(1);
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
-      await captureSessionOwnerProof(page, "person-grouping-live-presence.png");
+      await captureSessionOwnerProof(suite, page, "person-grouping-live-presence.png");
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
     } finally {
       await context.close();

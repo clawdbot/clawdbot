@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -12,8 +12,6 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -34,14 +32,16 @@ const remoteSearchResult = {
 
 suite.define(() => {
   it("offers a worktree for a GitHub result before its checkout exists", async () => {
-    await prepareProjectUiProof();
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
         ...(captureUiProofEnabled
           ? {
-              recordVideo: { dir: projectProofArtifactDir, size: { height: 900, width: 1280 } },
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "project-registry"),
+                size: { height: 900, width: 1280 },
+              },
               viewport: { height: 900, width: 1280 },
             }
           : {}),
@@ -73,7 +73,7 @@ suite.define(() => {
           .fill("openclaw");
         await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
 
-        await captureProjectUiProof(page, "github-worktree-direct.png");
+        await captureProjectUiProof(suite, page, "github-worktree-direct.png");
         const detail = page.locator("#new-session-detail-trigger");
         await expect.poll(() => detail.isVisible()).toBe(true);
         await pollLocatorText(detail).toContain("Runs directly");
@@ -85,7 +85,7 @@ suite.define(() => {
         expect(await baseRef.getAttribute("placeholder")).toBe("Base branch");
         expect(await baseRef.inputValue()).toBe("");
         expect(await branches.locator("datalist option").count()).toBe(0);
-        await captureProjectUiProof(page, "github-worktree-selected.png");
+        await captureProjectUiProof(suite, page, "github-worktree-selected.png");
         await page.locator(".new-session-page__message").fill("inspect the worktree");
         await page.getByRole("button", { name: "Start session" }).click();
 
@@ -117,27 +117,17 @@ suite.define(() => {
       worktree: true,
     },
   ])("keeps GitHub selection inert and $name", async ({ failure, worktree }) => {
-    await prepareProjectUiProof();
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? path.join(artifactRoot, worktree ? "worktree" : "project", failure ? "failed" : "prepared")
+    // Both capture gates share this attempt's screenshots, custody report, and video.
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? path.join(suite.artifactDir, "project-registry")
       : undefined;
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
-      ...(artifactDir
-        ? {
-            recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
       locale: "en-US",
       serviceWorkers: "block",
-      ...(captureUiProofEnabled
+      ...(captureUiProofEnabled || artifactDir
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -403,6 +393,7 @@ suite.define(() => {
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureProjectUiProof(
+        suite,
         page,
         worktree ? "worktree-preparing.png" : "project-cloning.png",
       );
@@ -424,7 +415,7 @@ suite.define(() => {
           await pollLocatorText(working).toContain(label);
           expect(await page.locator(".chat-group.user").count()).toBe(1);
         }
-        await captureProjectUiProof(page, "worktree-running-setup.png");
+        await captureProjectUiProof(suite, page, "worktree-running-setup.png");
       }
 
       if (!failure) {
@@ -493,6 +484,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await captureProjectUiProof(
+        suite,
         page,
         worktree ? "worktree-setup-failed.png" : "project-cloning-failed.png",
       );

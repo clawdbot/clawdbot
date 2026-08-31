@@ -1,4 +1,5 @@
 // Plugin synchronization and convergence after the core update.
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -450,24 +451,36 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  const status =
+    convergenceErrored ||
+    pluginUpdateOutcomes.some(
+      (outcome) =>
+        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    )
+      ? "error"
+      : warnings.length > 0
+        ? "warning"
+        : "ok";
+  const result: PostCorePluginUpdateResult = {
+    status,
+    changed: pluginsChanged,
+    warnings,
+    sync: {
+      changed: syncResult.changed,
+      switchedToBundled: syncResult.summary.switchedToBundled,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      warnings: syncResult.summary.warnings,
+      errors: syncResult.summary.errors,
+    },
+    npm: {
+      changed: npmPluginsChanged,
+      outcomes: pluginUpdateOutcomes,
+    },
+    integrityDrifts,
+  };
+
   if (params.opts.json) {
-    return {
-      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
-      changed: pluginsChanged,
-      warnings,
-      sync: {
-        changed: syncResult.changed,
-        switchedToBundled: syncResult.summary.switchedToBundled,
-        switchedToNpm: syncResult.summary.switchedToNpm,
-        warnings: syncResult.summary.warnings,
-        errors: syncResult.summary.errors,
-      },
-      npm: {
-        changed: npmPluginsChanged,
-        outcomes: pluginUpdateOutcomes,
-      },
-      integrityDrifts,
-    };
+    return result;
   }
 
   const summarizeList = (list: string[]) => {
@@ -527,21 +540,5 @@ export async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.warn(outcome.message));
   }
 
-  return {
-    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
-    changed: pluginsChanged,
-    warnings,
-    sync: {
-      changed: syncResult.changed,
-      switchedToBundled: syncResult.summary.switchedToBundled,
-      switchedToNpm: syncResult.summary.switchedToNpm,
-      warnings: syncResult.summary.warnings,
-      errors: syncResult.summary.errors,
-    },
-    npm: {
-      changed: npmPluginsChanged,
-      outcomes: pluginUpdateOutcomes,
-    },
-    integrityDrifts,
-  };
+  return result;
 }

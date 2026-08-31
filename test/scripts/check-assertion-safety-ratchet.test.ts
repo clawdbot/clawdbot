@@ -40,7 +40,11 @@ function git(cwd: string, args: string[]) {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+    cwd,
+    env,
+    stdio: "ignore",
+  });
 }
 
 afterEach(() => {
@@ -102,13 +106,7 @@ describe("check-assertion-safety-ratchet", () => {
     const sourcePath = path.join(root, "src/example.ts");
     fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
     fs.writeFileSync(sourcePath, "export const first = value as string;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
       git(root, args);
     }
 
@@ -167,8 +165,6 @@ describe("check-assertion-safety-ratchet", () => {
     );
     for (const args of [
       ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
       ["add", "."],
       ["commit", "-m", "base with stale assertion baseline"],
     ]) {
@@ -195,14 +191,7 @@ describe("check-assertion-safety-ratchet", () => {
     );
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = value as string;\n");
     fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = value as string;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-      ["branch", "release"],
-    ]) {
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"], ["branch", "release"]]) {
       git(root, args);
     }
 

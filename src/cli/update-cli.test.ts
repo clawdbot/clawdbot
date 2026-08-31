@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -3507,6 +3508,44 @@ describe("update-cli", () => {
       }),
     ).resolves.toBe(false);
     expect(getLogOutput()).toContain("Plugin update aborted");
+  });
+
+  it("blocks restart when a plugin update awaits capability consent", async () => {
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation();
+    serviceLoaded.mockResolvedValue(true);
+    mockNpmPluginOutcomes([
+      {
+        pluginId: "consent-fixture",
+        status: "error",
+        code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+        message: "Operator review token changed.",
+      },
+    ]);
+
+    await updateCommand({ yes: true, json: true });
+
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(jsonOutput?.status).toBe("error");
+    expect(jsonOutput?.reason).toBe("post-update-plugins");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+    expect(lastWriteJsonCall()).toMatchObject({
+      postUpdate: {
+        plugins: {
+          npm: {
+            outcomes: [
+              {
+                pluginId: "consent-fixture",
+                status: "error",
+                code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectNoSideEffects(serviceRestart, runRestartScript, runDaemonRestart);
   });
 
   it("keeps json update output successful when post-core plugin updates warn", async () => {

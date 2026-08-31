@@ -6606,10 +6606,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const [workflowPath, jobName, count] of cases) {
       const job = workflowJob(workflowPath, jobName);
+      const initialSteps = [
+        "Checkout harness ref",
+        ...(jobName === "run_web_ui_chat" ? ["Allocate invocation evidence directory"] : []),
+        "Prepare Git owner",
+        "Setup Node environment",
+      ];
       expect(
-        job.steps?.slice(0, 3).map(({ name }) => name),
+        job.steps?.slice(0, initialSteps.length).map(({ name }) => name),
         workflowPath,
-      ).toEqual(["Checkout harness ref", "Prepare Git owner", "Setup Node environment"]);
+      ).toEqual(initialSteps);
       expect(job.steps?.filter(({ name }) => name === "Prepare Git owner")).toEqual([
         {
           name: "Prepare Git owner",

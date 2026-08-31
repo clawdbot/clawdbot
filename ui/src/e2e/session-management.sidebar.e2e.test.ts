@@ -18,7 +18,6 @@ import {
   requireRecord,
   sessionsListResponse,
   trimmedTextContents,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -103,7 +102,7 @@ suite.define(() => {
       await expect
         .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
         .toBe("Active run");
-      await captureUiProof(page, "child-sessions-collapsed.png");
+      await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
@@ -139,8 +138,8 @@ suite.define(() => {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
       }
-      await captureUiProof(page, "child-sessions-expanded.png");
-      await captureUiProof(page, "child-sessions-run-state-precedence.png");
+      await captureUiProof(suite, page, "child-sessions-expanded.png");
+      await captureUiProof(suite, page, "child-sessions-run-state-precedence.png");
 
       const completedChild = childRows.nth(1);
       const childMenuButton = completedChild.getByRole("button", {
@@ -162,7 +161,7 @@ suite.define(() => {
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
       expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
-      await captureUiProof(page, "child-session-menu.png");
+      await captureUiProof(suite, page, "child-session-menu.png");
       await page.keyboard.press("Escape");
       await childMenu.waitFor({ state: "detached" });
 
@@ -467,7 +466,7 @@ suite.define(() => {
           .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
           .waitFor({ state: "visible" });
       }
-      await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
+      await captureUiProof(suite, page, "sidebar-sessions-during-reconnect.png");
 
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
@@ -479,7 +478,7 @@ suite.define(() => {
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
       await retryConnection.click();
       await expect.poll(() => pinnedEntry.count()).toBe(1);
-      await captureUiProof(page, "sidebar-sessions-during-client-replacement.png");
+      await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
 
       await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
@@ -597,7 +596,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
         initialObserverCount + 1,
       );
-      await captureUiProof(page, "sidebar-selected-session-route-reconnect.png");
+      await captureUiProof(suite, page, "sidebar-selected-session-route-reconnect.png");
     } finally {
       await context.close();
     }
@@ -674,7 +673,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -715,7 +714,7 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
-      await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      await captureUiProof(suite, page, "sidebar-session-before-pinned-drop.png");
       const pinnedBox = await pinnedEntry.boundingBox();
       if (!pinnedBox) {
         throw new Error("expected the pinned row to be laid out");
@@ -752,11 +751,11 @@ suite.define(() => {
       await pinnedCandidate.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
-      await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
+      await captureUiProof(suite, page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-pinned-drop.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-pinned-drop.webm"));
       }
     }
   });
@@ -911,7 +910,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
         .toBe(rows.length);
-      await captureUiProof(page, "short-window-session-sections.png");
+      await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.
       const overlaps = await page.evaluate(() => {

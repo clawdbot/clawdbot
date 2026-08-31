@@ -2487,14 +2487,14 @@ src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
-src/commands/doctor-session-sqlite-migration-run.ts	8
+src/commands/doctor-session-sqlite-migration-run.ts	6
 src/commands/doctor-session-sqlite-readers.ts	5
 src/commands/doctor-session-sqlite-recover-report.ts	3
-src/commands/doctor-session-sqlite.ts	3
+src/commands/doctor-session-sqlite.ts	2
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	5
 src/commands/doctor-session-transcript-labels.ts	4
-src/commands/doctor-session-transcripts.ts	5
+src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skill-workshop-sqlite.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	3

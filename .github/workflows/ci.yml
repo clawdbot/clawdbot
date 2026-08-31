@@ -4048,7 +4048,6 @@ jobs:
     timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
-      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -4254,17 +4253,21 @@ jobs:
           swift build "${swift_test_args[@]}" --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
           swift_test_args+=(--skip-build)
-          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
-            swift_test_args+=(--parallel)
-          else
-            swift_test_args+=(--no-parallel)
-          fi
           if [[ -f scripts/test-macos-native.mts ]]; then
+            logical_cpu="$(sysctl -n hw.logicalcpu)"
+            if [[ ! "$logical_cpu" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Invalid macOS logical CPU count: $logical_cpu" >&2
+              exit 1
+            fi
+            swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
+            echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
+            swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
             node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
             node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
+            swift_test_args+=(--no-parallel)
             swift test "${swift_test_args[@]}"
           else
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2

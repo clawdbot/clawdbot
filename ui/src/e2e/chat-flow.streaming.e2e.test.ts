@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -22,7 +22,10 @@ suite.define(() => {
     { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
     { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
   ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       hasTouch: mobile,
       isMobile: mobile,
@@ -55,7 +58,6 @@ suite.define(() => {
             : { opacity: "1", pointerEvents: "auto" },
         );
       if (artifactDir && !mobile) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "before-user-follow-up-actions-visible.png"),
@@ -152,7 +154,10 @@ suite.define(() => {
   });
 
   it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -194,7 +199,6 @@ suite.define(() => {
         ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       }
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "composer-resize-pinned.png"),
@@ -354,7 +358,10 @@ suite.define(() => {
   ])(
     "keeps streamed text visible when a chat error terminates the turn on $label",
     async ({ label, viewport }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -434,7 +441,6 @@ suite.define(() => {
           await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
         ).toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
         const alert = page.locator(".chat-error");

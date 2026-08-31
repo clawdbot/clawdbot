@@ -13,6 +13,10 @@ For Docker, Podman, and Kubernetes image replacements, see
 gateway runs startup-safe upgrade work before readiness and exits if mounted
 state needs manual repair.
 
+Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
+Automatic config copies and migration recovery originals are not a full-state
+backup.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
@@ -76,6 +80,29 @@ core update can still succeed while a plugin falls back to its recorded
 default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
+
+## Retire update recovery data
+
+Once you have verified the update and your conversations, preview retained
+migration originals:
+
+```bash
+openclaw update cleanup --dry-run
+```
+
+Use the same profile and state/config overrides as the update, and check the
+state directory printed in the report. The metadata-only preview can run while
+the Gateway is active. To apply, stop that Gateway yourself, wait for other
+SQLite maintenance to finish, then run `openclaw update cleanup`. Cleanup never
+stops or restarts the Gateway. Confirmation defaults to **No**; automation must
+explicitly pass `--yes`, including when using `--json`.
+
+Cleanup permanently gives up rollback to eligible originals, including repaired
+branches and old provider metadata. Current SQLite history, operator backups,
+and protected or unknown artifacts remain. It is not a substitute for a
+[pre-update backup](#before-updating-create-a-verified-backup). See
+[Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
+resuming interrupted deletion.
 
 ## Switch between npm and git installs
 
@@ -473,7 +500,16 @@ omitted files.
 
 For a byte-for-byte recovery point that includes volatile artifacts omitted by
 the portable archive, stop the Gateway and use a filesystem, volume, or VM
-snapshot provided by your platform.
+snapshot provided by your platform. This matters for older file-backed installs:
+the portable archive omits matching JSONL transcripts and logs even when they
+are no longer being written.
+
+When migrating large legacy histories, leave room for the original files, a
+temporary SQLite spool, and the destination database/WAL simultaneously. SQLite
+can be larger than the original JSONL; streaming import does not imply a fixed
+RAM requirement or migration time. Check free space on both the system temporary
+volume and the state volume. See [Session SQLite migration](/cli/doctor#session-sqlite-migration)
+for staging and memory details.
 
 ### Roll back a package install
 
