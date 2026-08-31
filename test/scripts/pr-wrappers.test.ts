@@ -24,7 +24,7 @@ const anchorSubstitutionNotice = (repo: string) =>
   `scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): ${repo}`;
 const itPosix = process.platform === "win32" ? it.skip : it;
 
-function makeMismatchedWrapperRepo() {
+function makeMismatchedWrapperRepo(dispatchBody = 'echo "canonical wrapper executed";') {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "openclaw-pr-dev-wrapper-")));
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -99,12 +99,26 @@ function makeMismatchedWrapperRepo() {
   );
   cpSync("scripts/lib/plain-gh.mjs", join(canonical, "scripts", "lib", "plain-gh.mjs"));
   cpSync("scripts/lib/direct-run.mjs", join(canonical, "scripts", "lib", "direct-run.mjs"));
+  for (const file of ["record-shared.mjs", "arg-utils.mts", "arg-utils.runtime.mjs"]) {
+    cpSync(`scripts/lib/${file}`, join(canonical, "scripts", "lib", file));
+  }
+  for (const extension of ["mjs", "mts"]) {
+    const file = `check-changelog-attributions.${extension}`;
+    cpSync(`scripts/${file}`, join(canonical, "scripts", file));
+  }
   cpSync("scripts/lib/tsx-cli-shim.mjs", join(canonical, "scripts", "lib", "tsx-cli-shim.mjs"));
   cpSync(
     "scripts/lib/local-check-runtime.mts",
     join(canonical, "scripts", "lib", "local-check-runtime.mts"),
   );
   cpSync("scripts/tsx.mjs", join(canonical, "scripts", "tsx.mjs"));
+  const normalizationRoot = join(canonical, "packages", "normalization-core");
+  mkdirSync(join(normalizationRoot, "src"), { recursive: true });
+  cpSync("packages/normalization-core/package.json", join(normalizationRoot, "package.json"));
+  cpSync(
+    "packages/normalization-core/src/record-coerce.ts",
+    join(normalizationRoot, "src", "record-coerce.ts"),
+  );
   writeFileSync(
     join(canonical, "scripts", "lib", "plain-gh.sh"),
     "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
@@ -113,7 +127,7 @@ function makeMismatchedWrapperRepo() {
   // an anchor-substituted canonical run apart from a local wrapper run.
   writeFileSync(
     join(canonical, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "canonical wrapper executed"; }\n',
+    `ci_dispatch() { ${dispatchBody} }\n`,
   );
   chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
@@ -122,7 +136,7 @@ function makeMismatchedWrapperRepo() {
   git(canonical, ["config", "commit.gpgSign", "false"]);
   git(canonical, ["config", "core.hooksPath", "/dev/null"]);
   git(canonical, ["remote", "add", "origin", origin]);
-  git(canonical, ["add", "scripts", ".github"]);
+  git(canonical, ["add", "scripts", ".github", "packages"]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
@@ -517,6 +531,158 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  it("initializes stamped review artifacts through the materialized anchor", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      const reviewRoot = join(fixture.canonical, ".worktrees", "pr-123");
+      fixture.git(fixture.canonical, [
+        "worktree",
+        "add",
+        "--detach",
+        reviewRoot,
+        fixture.localRevision,
+      ]);
+      mkdirSync(join(reviewRoot, ".local"));
+      writeFileSync(join(reviewRoot, ".local", "pr-meta.env"), "PR_NUMBER=123\n");
+      writeFileSync(
+        join(reviewRoot, ".local", "pr-meta.json"),
+        JSON.stringify({ number: 123, headRefOid: fixture.localRevision, files: [] }),
+      );
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(
+        join(fixture.linked, "scripts", "pr"),
+        ["review-artifacts-init", "123"],
+        {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        },
+      );
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.stderr).toContain("running wrapper code materialized from");
+      expect(JSON.parse(readScript(join(reviewRoot, ".local", "review.json"))).pr).toEqual({
+        number: 123,
+        headSha: fixture.localRevision,
+      });
+      expect(readScript(join(reviewRoot, ".local", "review.md")).split("\n")[0]).toBe(
+        `Review artifact for PR #123 at ${fixture.localRevision}`,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      script: "verify-pr-hosted-gates.mjs",
+      args: "--anchor-proof",
+      status: 1,
+      output: "Unknown option: --anchor-proof",
+      dependency: "minimatch",
+      binding: "minimatch",
+    },
+    {
+      script: "watch-pr-ci.mjs",
+      args: "--help",
+      status: 2,
+      output: "Usage:",
+      dependency: "zod",
+      binding: "z",
+    },
+    {
+      script: "check-changelog-attributions.mjs",
+      args: "--is-forbidden-handle codex",
+      status: 0,
+      output: "",
+      dependency: undefined,
+      binding: undefined,
+    },
+  ])(
+    "loads $script from the materialized anchor without caller-owned aliases",
+    ({ script, args, status, output, dependency, binding }) => {
+      const fixture = makeMismatchedWrapperRepo(`node "$script_parent_dir/${script}" ${args};`);
+      try {
+        if (dependency) {
+          symlinkSync(
+            realpathSync("node_modules"),
+            join(fixture.canonical, "node_modules"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+          writeFileSync(
+            join(fixture.linked, "caller-dependency.mts"),
+            `export const ${binding} = null;\nthrow new Error("caller workspace dependency executed");\n`,
+          );
+          writeFileSync(
+            join(fixture.linked, "tsconfig.json"),
+            JSON.stringify({
+              compilerOptions: {
+                paths: {
+                  [dependency]: ["./caller-dependency.mts"],
+                  "@openclaw/normalization-core/record-coerce": [
+                    "./packages/normalization-core/src/record-coerce.ts",
+                  ],
+                },
+              },
+            }),
+          );
+          fixture.git(fixture.linked, ["add", "caller-dependency.mts", "tsconfig.json"]);
+          fixture.git(fixture.linked, ["commit", "-m", "test: caller-owned dependency aliases"]);
+        }
+        if (script === "verify-pr-hosted-gates.mjs") {
+          const recordPath = "packages/normalization-core/src/record-coerce.ts";
+          writeFileSync(
+            join(fixture.linked, recordPath),
+            `throw new Error("caller workspace normalization executed");\n${readScript(recordPath)}`,
+          );
+          fixture.git(fixture.linked, ["add", recordPath]);
+          fixture.git(fixture.linked, ["commit", "-m", "test: caller-owned normalization"]);
+        }
+        parkCanonicalOffAnchor(fixture);
+        const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        });
+        expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(status);
+        expect(result.stderr).toContain("running wrapper code materialized from");
+        if (output) {
+          expect(`${result.stdout}${result.stderr}`).toContain(output);
+        }
+        expect(`${result.stdout}${result.stderr}`).not.toContain("Cannot find module");
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { script: "watch-pr-ci.mjs", dependency: "zod" },
+    { script: "verify-pr-hosted-gates.mjs", dependency: "minimatch" },
+  ])(
+    "reports the missing $dependency toolchain without installing dependencies",
+    ({ script, dependency }) => {
+      const fixture = makeMismatchedWrapperRepo(`node "$script_parent_dir/${script}" --help;`);
+      try {
+        writeFileSync(
+          join(fixture.bin, "pnpm"),
+          `#!/bin/sh\ntouch "${join(fixture.root, "installed")}"\nexit 1\n`,
+        );
+        parkCanonicalOffAnchor(fixture);
+        const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: fixture.root },
+        });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`Cannot find package '${dependency}'`);
+        expect(existsSync(join(fixture.root, "installed"))).toBe(false);
+        expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
   it("keeps the refusal when the anchor wrapper predates the handoff contract", () => {
     const fixture = makeMismatchedWrapperRepo();
     try {
@@ -606,6 +772,15 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
+    for (const file of ["record-shared.mjs", "arg-utils.mts", "arg-utils.runtime.mjs"]) {
+      writeFileSync(join(repo, "scripts", "lib", file), "// canonical\n");
+    }
+    for (const extension of ["mjs", "mts"]) {
+      writeFileSync(
+        join(repo, "scripts", `check-changelog-attributions.${extension}`),
+        "// canonical\n",
+      );
+    }
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "local-check-runtime.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "tsx.mjs"), "// canonical\n");
@@ -614,6 +789,12 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
+    mkdirSync(join(repo, "packages", "normalization-core", "src"), { recursive: true });
+    writeFileSync(join(repo, "packages", "normalization-core", "package.json"), "{}\n");
+    writeFileSync(
+      join(repo, "packages", "normalization-core", "src", "record-coerce.ts"),
+      "// canonical\n",
+    );
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 
     const git = (cwd: string, args: string[]) =>
@@ -621,7 +802,7 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github", "packages"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
@@ -702,6 +883,15 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
+    for (const file of ["record-shared.mjs", "arg-utils.mts", "arg-utils.runtime.mjs"]) {
+      writeFileSync(join(repo, "scripts", "lib", file), "// canonical\n");
+    }
+    for (const extension of ["mjs", "mts"]) {
+      writeFileSync(
+        join(repo, "scripts", `check-changelog-attributions.${extension}`),
+        "// canonical\n",
+      );
+    }
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "local-check-runtime.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "tsx.mjs"), "// canonical\n");
@@ -710,6 +900,12 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
+    mkdirSync(join(repo, "packages", "normalization-core", "src"), { recursive: true });
+    writeFileSync(join(repo, "packages", "normalization-core", "package.json"), "{}\n");
+    writeFileSync(
+      join(repo, "packages", "normalization-core", "src", "record-coerce.ts"),
+      "// canonical\n",
+    );
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 
     const git = (cwd: string, args: string[]) =>
@@ -717,7 +913,7 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github", "packages"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     // The linked worktree keeps main's wrapper; origin/main anchors trust.
     expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);

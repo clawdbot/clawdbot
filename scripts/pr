@@ -50,6 +50,9 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.sh
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
+  scripts/lib/record-shared.mjs
+  scripts/lib/arg-utils.mts
+  scripts/lib/arg-utils.runtime.mjs
   scripts/lib/tsx-cli-shim.mjs
   scripts/lib/local-check-runtime.mts
   scripts/tsx.mjs
@@ -59,6 +62,10 @@ pr_wrapper_components=(
   scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
+  scripts/check-changelog-attributions.mjs
+  scripts/check-changelog-attributions.mts
+  packages/normalization-core/package.json
+  packages/normalization-core/src/record-coerce.ts
   .github/workflows/pr-crabbox-gate-publisher.yml
 )
 # Anchor-exec handoff: this process was exec'd from wrapper bytes materialized
@@ -172,6 +179,15 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
           fi
           if [ "$anchor_extraction_valid" = "1" ] &&
             grep -q "OPENCLAW_PR_ANCHOR_REPO_ROOT" "$anchor_exec_dir/scripts/pr" 2>/dev/null; then
+            # Copied helpers retain the canonical checkout's installed toolchain.
+            # The shared owner creates a Windows junction instead of Git Bash's ln copy.
+            (
+              cd "$anchor_exec_dir"
+              node --input-type=module - "$canonical_repo_root/node_modules" <<'EOF_NODE'
+import { ensureRepoNodeModulesLink } from "./scripts/lib/local-check-runtime.mts";
+ensureRepoNodeModulesLink(process.argv[2]);
+EOF_NODE
+            )
             # Not cleaned by trap: exec replaces this shell, and bash re-reads
             # the script file during execution, so the copy must outlive the
             # whole supervised run. OS tmp reaping owns the ~200 KiB dir.
