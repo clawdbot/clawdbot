@@ -50,11 +50,18 @@ export function writeFixturePlugin(params: {
   spinMs: number;
   pluginVersion?: string;
   builtPluginVersion?: string;
+  nativeCatalog?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   let pluginFile = path.join(pluginDir, "index.cjs");
   const syntheticAuthProbePath = path.join(params.root, "synthetic-auth-probes.txt");
+  const catalogRoute = params.nativeCatalog
+    ? `nativeRuntime: ${JSON.stringify(HARNESS_ID)},`
+    : 'api: "openai-completions",\n          baseUrl: "https://worker-catalog.invalid/v1",';
+  const readinessReader = params.nativeCatalog
+    ? 'readModelCatalogReadiness: () => nativeCatalogObserved ? { accountType: "chatgpt" } : undefined,'
+    : "";
   writeSyntheticAuthDiscoveryFixture({
     root: params.root,
     pluginDir,
@@ -68,26 +75,31 @@ export function writeFixturePlugin(params: {
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
+    let nativeCatalogObserved = false;
     api.registerAgentHarness({
       id: ${JSON.stringify(HARNESS_ID)},
       label: "Worker catalog fixture harness",
+      authBootstrap: "harness",
       supports: () => ({ supported: true }),
       runAttempt: async () => ({ ok: false, error: "unused" }),
-      loadModelCatalog: async () => [{
-        provider: ${JSON.stringify(PROVIDER_ID)},
-        id: "account-scoped-model",
-        name: "Account scoped model",
-        api: "openai-completions",
-        baseUrl: "https://worker-catalog.invalid/v1",
-      }, {
-        provider: ${JSON.stringify(DISCOVERED_HARNESS_ID)},
-        id: "discovered-native-model",
-        name: "Discovered native model",
-      }, {
-        provider: ${JSON.stringify(MISSING_AUTH_HARNESS_ID)},
-        id: "missing-auth-native-model",
-        name: "Missing auth native model",
-      }],
+      loadModelCatalog: async () => {
+        nativeCatalogObserved = true;
+        return [{
+          provider: ${JSON.stringify(PROVIDER_ID)},
+          id: "account-scoped-model",
+          name: "Account scoped model",
+          ${catalogRoute}
+        }, {
+          provider: ${JSON.stringify(DISCOVERED_HARNESS_ID)},
+          id: "discovered-native-model",
+          name: "Discovered native model",
+        }, {
+          provider: ${JSON.stringify(MISSING_AUTH_HARNESS_ID)},
+          id: "missing-auth-native-model",
+          name: "Missing auth native model",
+        }];
+      },
+      ${readinessReader}
     });
     for (const [id, authenticated] of [
       [${JSON.stringify(DISCOVERED_HARNESS_ID)}, true],

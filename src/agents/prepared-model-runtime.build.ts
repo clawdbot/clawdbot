@@ -8,12 +8,15 @@ import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinkin
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createPreparedModelCatalogWorker,
   createPreparedModelCatalogWorkerInput,
 } from "./prepared-model-catalog-worker.js";
 import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
@@ -32,7 +35,10 @@ import {
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
-import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
+import {
+  markPreparedModelCatalogFull,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.full-catalog.js";
 import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
@@ -214,7 +220,22 @@ function createFullModelCatalogAccess(params: {
               // Full inventory belongs to explicit control-plane reads. The generation queue
               // prevents a stale plan from overlapping or following a replacement build.
               assertCurrent();
-              const catalog = await worker.loadCatalog();
+              const workerCatalog = await worker.loadCatalog();
+              assertCurrent();
+              // Native harness readiness is process-local. The worker can serialize discovered
+              // rows, but it cannot transfer the parent Gateway's harness observation. Reobserve
+              // through the generation-owned parent registry before publishing the full catalog.
+              const catalog = markPreparedModelCatalogFull(
+                await augmentPreparedModelCatalogWithAgentHarness({
+                  input: params.agentFacts.input,
+                  snapshot: workerCatalog,
+                  pluginRegistry: params.pluginGeneration.pluginRegistry,
+                }),
+              );
+              const auth = getPreparedModelFullCatalogAuth(workerCatalog);
+              if (auth) {
+                setPreparedModelFullCatalogAuth(catalog, auth);
+              }
               assertCurrent();
               return catalog;
             }),
