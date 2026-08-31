@@ -161,12 +161,11 @@ async function repairMissingPluginInstalls(params: {
       result = await repairMissingPluginInstallsWithLease(
         params,
         pendingInstallTransactions,
-        async (records, options) => {
-          await writePersistedInstalledPluginIndexInstallRecordsWithLease(records, {
+        (records, options) =>
+          writePersistedInstalledPluginIndexInstallRecordsWithLease(records, {
             ...options,
             lease,
-          });
-        },
+          }),
       );
     } catch (error) {
       await rollbackPluginInstallTransactionsAfterFailure({
@@ -193,7 +192,7 @@ async function repairMissingPluginInstallsWithLease(
   writeInstallRecords: (
     records: Record<string, PluginInstallRecord>,
     options: { config: OpenClawConfig; env: NodeJS.ProcessEnv },
-  ) => Promise<void>,
+  ) => Promise<unknown>,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
