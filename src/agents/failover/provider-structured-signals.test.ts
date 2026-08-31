@@ -6,26 +6,21 @@ import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyFailoverSignal } from "./classify.js";
 
-const providerRuntimeMocks = vi.hoisted(() => {
-  const runtime = { classifyProviderFailoverSignalWithPlugin: vi.fn() };
-  return { ...runtime, requireProviderRuntime: vi.fn(() => runtime) };
-});
-
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => providerRuntimeMocks.requireProviderRuntime,
+const providerRuntimeMocks = vi.hoisted(() => ({
+  classifyProviderFailoverSignalWithPlugin: vi.fn(),
 }));
+
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 describe("provider failover hook structured signals", () => {
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
-    providerRuntimeMocks.requireProviderRuntime.mockClear();
   });
 
   it("does not resolve provider runtime for a generic non-ambiguous error", () => {
     expect(
       classifyFailoverSignal({ provider: "demo-provider", message: "503 service unavailable" }),
     ).toEqual({ kind: "reason", reason: "overloaded" });
-    expect(providerRuntimeMocks.requireProviderRuntime).not.toHaveBeenCalled();
     expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
@@ -40,9 +35,33 @@ describe("provider failover hook structured signals", () => {
         message: "input exceeds the maximum context window",
       }),
     ).toEqual({ kind: "context_overflow" });
-    expect(providerRuntimeMocks.requireProviderRuntime).toHaveBeenCalledTimes(1);
     expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "uses a prepared provider without registry dispatch (overflow=%s)",
+    (overflow) => {
+      const classifyFailoverReason = vi.fn(() => "billing" as const);
+      const matchesContextOverflowError = vi.fn(() => overflow);
+      expect(
+        classifyFailoverSignal(
+          { provider: "custom-route", status: 403, message: "fixture refusal" },
+          {
+            providerPlugin: {
+              id: "prepared-owner",
+              matchesContextOverflowError,
+              classifyFailoverReason,
+            },
+          },
+        ),
+      ).toEqual(overflow ? { kind: "context_overflow" } : { kind: "reason", reason: "billing" });
+      expect(matchesContextOverflowError).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "prepared-owner", status: 403 }),
+      );
+      expect(classifyFailoverReason).toHaveBeenCalledTimes(overflow ? 0 : 1);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
     // HTTP 403 is ambiguous; provider-owned stable codes can refine it to

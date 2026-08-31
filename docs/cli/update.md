@@ -63,6 +63,15 @@ are labeled explicitly. The final total includes plugin updates and requested
 Gateway restart checks. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+`--yes` also skips the optional shell-completion setup prompt. Existing
+completion profiles and caches are still repaired when needed; installing
+completion in a new shell profile remains an interactive choice.
+
+For source checkouts, `--dry-run` previews the update flow without fetching Git
+refs or checking working-tree changes. The real update checks for uncommitted
+changes before modifying the checkout. Use `openclaw update status` to inspect
+the current branch, version, and update availability.
+
 <Note>
 In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` and `openclaw update --dry-run` remain read-only.
 </Note>
@@ -148,6 +157,10 @@ Interactive flow to pick an update channel and confirm whether to restart the
 Gateway afterward (defaults to restart). Selecting `dev` without a git
 checkout offers to create one.
 
+The channel picker reads the local install identity without checking Git
+freshness or dependencies. Those checks run when you apply the update; use
+`openclaw update status` to inspect availability first.
+
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
 | `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
@@ -193,6 +206,8 @@ package-manager and git-checkout updates stop the running service before
 replacing the package tree or mutating the checkout/build output. The updater
 then refreshes service metadata, restarts the service, and verifies the
 restarted Gateway before reporting `Gateway: restarted and verified.`.
+Doctor repair and plugin validation run before restart; a verified restart
+does not run another Doctor from the old updater process.
 Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
@@ -214,11 +229,11 @@ Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
 
-If service inspection is unavailable, the code update continues with a warning
-and leaves service control and definition files untouched; it does not assume
-that no service exists. Run `openclaw gateway status --deep`, then restart manually
-when access is restored. Services owned by another install remain untouched.
-`--no-restart` still skips service restart.
+If service inspection is unavailable, a restart-enabled code update refuses to
+mutate the checkout or package tree; it does not assume that no service exists.
+Run `openclaw gateway status --deep` and retry when access is restored. Use
+`--no-restart` only after manually stopping the Gateway, then restart it
+manually after the update. Services owned by another install remain untouched.
 
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current

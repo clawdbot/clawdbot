@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
+import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
@@ -881,6 +882,17 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each(["scripts/write-plugin-sdk-entry-dts.ts", "scripts/lib/local-check-runtime.mts"])(
+    "selects SDK publication regressions for %s",
+    (source) => {
+      const plan = resolveChangedTestTargetPlan([source]);
+      expect(plan.targets).toContain("test/scripts/write-plugin-sdk-entry-dts.test.ts");
+      if (source === "scripts/lib/local-check-runtime.mts") {
+        expect(plan.targets).toContain("test/scripts/local-check-runtime.test.ts");
+      }
+    },
+  );
+
   it("does not scan direct references for semantic non-YAML tooling", () => {
     withTinyGitRepo(
       {
@@ -1460,11 +1472,11 @@ describe("scripts/test-projects changed-target routing", () => {
     withTinyGitRepo(
       {
         "src/value.ts": 'export * from "./left/bridge.js";\n',
-        "src/left/bridge.ts": 'export * from "../value.js";\n',
+        "src/left/bridge.ts": 'export\n * from\n "../value.js";\n',
         "src/right/bridge.ts": 'export * from "../value.js";\n',
         "src/other/bridge.ts": "export const unrelated = 1;\n",
         "src/combined.consumer.test.ts":
-          'import "./left/bridge.js";\nimport("./right/bridge.js");\n',
+          'import\u00a0"./left/bridge.js";\nimport(\n"./right/bridge.js"\n);\n',
         "src/right.consumer.test.ts": 'import "./right/bridge.js";\n',
         "src/other.consumer.test.ts": 'import "./other/bridge.js";\n',
         "src/after-test.consumer.test.ts": 'import "./combined.consumer.test.js";\n',
@@ -1477,6 +1489,39 @@ describe("scripts/test-projects changed-target routing", () => {
         ]);
       },
     );
+  });
+
+  it("completes broad-name fallback without synchronous source opens", () => {
+    const files: Record<string, string> = {
+      "src/owner/value.ts": "export const value = 1;\n",
+      "src/owner/barrel.ts": 'export\n { value } from\n "./value.js";\n',
+      "src/owner/directory/index.ts": 'export * from "../barrel.js";\n',
+      "src/owner/consumer.test.ts": 'import(\n "./directory"\n);\n',
+      "src/owner/type.consumer.test.ts": 'import type {\n Value\n } from "./value.js";\n',
+      "src/owner/deleted.test.ts": 'import "./value.js";\n',
+      "src/owner/value.live.test.ts": 'import "./value.js";\n',
+    };
+    // Only the broad basename appears in these files; the 800-candidate cap
+    // must fall back to a complete graph, not silently drop the real consumers.
+    for (let index = 0; index < 801; index += 1) {
+      files[`src/padding/${index}.ts`] = "// value\n";
+    }
+    withTinyGitRepo(files, (cwd) => {
+      fs.unlinkSync(path.join(cwd, "src/owner/deleted.test.ts"));
+      fs.writeFileSync(path.join(cwd, "src/owner/untracked.test.ts"), 'import "./value.js";\n');
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        expect(resolveChangedTestTargetPlan(["src/owner/value.ts"], { cwd }).targets).toEqual([
+          "src/owner/consumer.test.ts",
+          "src/owner/type.consumer.test.ts",
+        ]);
+        expect(
+          reads.mock.calls.filter(([file]) => typeof file === "string" && file.startsWith(cwd)),
+        ).toEqual([]);
+      } finally {
+        reads.mockRestore();
+      }
+    });
   });
 
   it("keeps tooling imports direct while preserving literal file references", () => {
@@ -3573,6 +3618,94 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+});
+
+describe("test selector native source facts", () => {
+  it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
+    withTinyFileTree(
+      {
+        "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";`,
+      },
+      (cwd) => {
+        const files = [
+          { file: "large.mts", parseImports: true },
+          { file: "deleted.ts", parseImports: true },
+        ];
+        const expectedFacts = {
+          imports: ["./barrel.js", "./dynamic.mjs"],
+          reexports: ["./barrel.js"],
+          matches: ["scripts/tool.mts", "scripts/tool"],
+          references: ["scripts/tool.mts"],
+        };
+        const scanner = path.join(fs.realpathSync(cwd), "test-selector-source-facts.mts");
+        fs.copyFileSync(path.resolve("scripts/lib/test-selector-source-facts.mts"), scanner);
+        const native = spawnSync(process.execPath, [scanner], {
+          cwd,
+          input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),
+          encoding: "utf8",
+        });
+        expect(native.error).toBeUndefined();
+        expect(native.status, native.stderr).toBe(0);
+        expect(JSON.parse(native.stdout)).toEqual([expectedFacts, null]);
+        vi.stubEnv(
+          "NODE_OPTIONS",
+          "--import=data:text/javascript,throw%20Error('inherited-loader')",
+        );
+        try {
+          expect(
+            readTestSelectorSourceFacts(
+              cwd,
+              files,
+              ["scripts/tool.mts", "scripts/tool"],
+              16 * 1024 * 1024,
+            ),
+          ).toEqual([{ file: "large.mts", ...expectedFacts }]);
+          expect(
+            readTestSelectorSourceFacts(
+              cwd,
+              [{ file: "large.mts", parseImports: false }],
+              ["scripts/tool.mts"],
+              16 * 1024 * 1024,
+            ),
+          ).toEqual([
+            {
+              file: "large.mts",
+              imports: [],
+              reexports: [],
+              matches: ["scripts/tool.mts"],
+              references: ["scripts/tool.mts"],
+            },
+          ]);
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      },
+    );
+  });
+
+  it("fails loudly on child launch, output overflow, and invalid native requests", () => {
+    withTinyFileTree({ "value.ts": 'import "./dependency.js";' }, (cwd) => {
+      const files = [{ file: "value.ts", parseImports: true }];
+      expect(() => readTestSelectorSourceFacts(path.join(cwd, "missing"), files, [], 1024)).toThrow(
+        "Test selector source scan failed",
+      );
+      expect(() => readTestSelectorSourceFacts(cwd, files, [], 1)).toThrow(
+        "Test selector source scan failed",
+      );
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve("scripts/lib/test-selector-source-facts.mts")],
+        {
+          cwd,
+          input: '{"files":false}',
+          encoding: "utf8",
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("[test-selector-source-facts] FAILED (exit 1)");
+    });
   });
 });
 

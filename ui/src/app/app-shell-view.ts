@@ -209,24 +209,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const canHoldUpdate =
     canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
-  const outboxStoreRuntime = host.outboxStoreRuntime;
-  const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
-  const outboxAttentionCountForSession = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
-        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
-      }
-    : () => 0;
-  const hasSessionDraft = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.draftScopes.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ===
-          true
-        );
-      }
-    : EMPTY_SESSION_HAS_DRAFT;
+  const storedOutboxes = host.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost);
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   // The install keeps running after `update.run` answers, so the reconciliation
@@ -349,8 +332,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       restartPending: gatewaySnapshot.restartPending === true,
       queuedOutboxCount: storedOutboxes?.total ?? 0,
       lastError: gatewaySnapshot.lastError,
-      outboxAttentionCountForSession,
-      hasSessionDraft,
+      outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
+      hasSessionDraft: storedOutboxes?.hasSessionDraft ?? EMPTY_SESSION_HAS_DRAFT,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),

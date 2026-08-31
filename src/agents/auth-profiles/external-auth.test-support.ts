@@ -1,7 +1,7 @@
 import "./external-auth.js";
 
 type ResolveExternalAuthProfiles =
-  typeof import("../../plugins/provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
+  typeof import("../../plugins/provider-external-auth.js").resolveExternalAuthProfilesWithPlugins;
 
 type ExternalAuthTestApi = {
   resetResolveExternalAuthProfilesForTest(): void;

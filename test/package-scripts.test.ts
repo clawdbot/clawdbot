@@ -266,6 +266,12 @@ describe("package scripts", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
   });
 
+  it("runs compiled worker path, IPC, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toContain(
+      "test/scripts/vitest-worker-artifacts.test.ts",
+    );
+  });
+
   it("runs Docker package process-tree coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain(
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",

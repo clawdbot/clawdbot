@@ -261,8 +261,16 @@ function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
-  const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
-  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
+  // Scoped aliases can become global, so validate both the requested and fixed-store owners.
+  const requestedAgentId = scope.agentId
+    ? resolveSessionStoreAgentId(scope.cfg, requestedKey, scope.agentId)
+    : undefined;
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: scope.cfg,
+    sessionKey: requestedKey,
+    storeAgentId: requestedAgentId,
+  });
+  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey, requestedAgentId);
   const scanTargets = buildLogicalSessionEntryCandidateKeys({
     agentId,
     canonicalKey,
@@ -349,7 +357,7 @@ export async function updateResolvedSessionEntry<T>(
   }
   let updateResult: T | undefined;
   const updated = await patchSessionEntryCore(
-    { sessionKey: target.storeKey, storePath: target.storePath },
+    { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
     async (entry) => {
       const context: ResolvedSessionEntryUpdateContext = {
         agentId: target.agentId,

@@ -81,10 +81,13 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => {
   return {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
-    resolveExternalAuthProfilesWithPlugins: () => [],
     resolveProviderDeprecatedAuthProfileIds: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };

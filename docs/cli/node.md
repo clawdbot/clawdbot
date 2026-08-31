@@ -97,6 +97,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 
 ## Gateway auth for node host
 
@@ -153,6 +155,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--force`: Reinstall/overwrite if already installed
 

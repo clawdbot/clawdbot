@@ -130,18 +130,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     this.transcriptScrollTop ??= root.scrollTop;
-    const threadIsScrollable = root.scrollHeight > root.clientHeight;
-    const bootstrap = !this.historyObserverArmed && !threadIsScrollable;
+    const bootstrap = !this.historyObserverArmed;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
-      return;
-    }
-    if (!this.historyObserverArmed && !bootstrap) {
-      this.clearHistoryObserver();
-      if (!threadIsScrollable) {
-        this.historyAutoLoadBlocked = true;
-        this.requestUpdate();
-      }
       return;
     }
     if (
@@ -154,11 +145,20 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.clearHistoryObserver();
     this.historyObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          this.historyObserverArmed = false;
-          void this.loadOlderMessages();
+      (entries, observer) => {
+        // Disconnecting does not cancel queued notifications. Only the current
+        // observer may consume this pane's history intent.
+        if (this.historyObserver !== observer || !entries.some((entry) => entry.isIntersecting)) {
+          return;
         }
+        this.clearHistoryObserver();
+        // Bootstrap geometry matters only at the visible history boundary.
+        // Measuring here avoids forcing layout during every pane update.
+        if (bootstrap && root.scrollHeight > root.clientHeight) {
+          return;
+        }
+        this.historyObserverArmed = false;
+        void this.loadOlderMessages();
       },
       // Fire well before the wall: a page fetch takes long enough that a short
       // margin guarantees the user hits the top before the prepend lands. The

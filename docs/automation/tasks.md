@@ -177,6 +177,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
 session. Session-queued notifications do not include this link.

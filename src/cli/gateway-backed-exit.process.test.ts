@@ -976,34 +976,34 @@ describe("gateway-backed CLI process exit", () => {
   it.each([
     { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
+    { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },
-  ])(
-    "validates a $label channels capabilities timeout before probing",
-    async ({ timeout, valid }) => {
-      const root = tempDirs.make("openclaw-capabilities-timeout-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const port = await getFreePort();
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
-        "utf8",
-      );
+  ])("validates a $label channels capabilities timeout", async ({ timeout, valid }) => {
+    const root = tempDirs.make("openclaw-capabilities-timeout-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local" } }));
 
-      const result = await runIsolatedGatewayCli({
-        args: ["channels", "capabilities", "--timeout", timeout, "--json"],
-        root,
-        stateDir,
-        configPath,
-      });
+    const result = await runIsolatedGatewayCli({
+      args: [
+        "channels",
+        "capabilities",
+        ...(timeout === undefined ? [] : ["--timeout", timeout]),
+        "--json",
+      ],
+      root,
+      stateDir,
+      configPath,
+    });
 
-      expect(result.code, result.stderr).toBe(valid ? 0 : 1);
-      if (!valid) {
-        expect(result.stderr).toContain("Invalid --timeout");
-      }
-    },
-  );
+    expect(result, result.stderr).toMatchObject({ code: valid ? 0 : 1, signal: null });
+    if (valid) {
+      expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
+    } else {
+      expect(result.stderr).toContain("Invalid --timeout");
+    }
+  });
 
   it("preserves pre-hello rate-limit details through the real health entry point", async () => {
     const root = tempDirs.make("openclaw-gateway-rate-limit-json-");

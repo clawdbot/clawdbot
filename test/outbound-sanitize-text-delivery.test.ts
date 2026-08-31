@@ -10,16 +10,27 @@ import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../src/test-utils/channel-plugins.js";
 
 const literalCode = '`<p class="literal">code</p>`';
-const payloads = [
-  { text: `before<p title="a>b">inside</p>after\n\n${literalCode}` },
-  { text: `before<div title='a>b'>inside</div>after\n\n${literalCode}` },
+const fixtures = [
+  {
+    text: `before<p title="a>b">inside</p>after\n\n${literalCode}`,
+    plainText: `before\ninside\nafter\n\n${literalCode}`,
+  },
+  {
+    text: `before<div title='a>b'>inside</div>after\n\n${literalCode}`,
+    plainText: `before\ninside\nafter\n\n${literalCode}`,
+  },
+  {
+    text: 'before<a href="`hidden`">click</a> then `visible`',
+    plainText: "beforeclick then `visible`",
+  },
 ];
+const payloads = fixtures.map(({ text }) => ({ text }));
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-describe("HTML block boundaries through outbound delivery", () => {
+describe("HTML sanitization through outbound delivery", () => {
   it.each(["default Telegram", "rich Telegram", "direct text/media"] as const)(
     "preserves the %s transport contract",
     async (mode) => {
@@ -55,9 +66,9 @@ describe("HTML block boundaries through outbound delivery", () => {
 
       expect(results).toHaveLength(payloads.length);
       expect(send.mock.calls.map(([to, text]) => ({ to, text }))).toEqual(
-        payloads.map(({ text }) => ({
+        fixtures.map(({ text, plainText }) => ({
           to: "12345",
-          text: mode === "rich Telegram" ? text : `before\ninside\nafter\n\n${literalCode}`,
+          text: mode === "rich Telegram" ? text : plainText,
         })),
       );
     },

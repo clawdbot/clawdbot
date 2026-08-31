@@ -12,7 +12,6 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
@@ -33,33 +32,6 @@ export function createSessionManagementE2eSuite(source = false) {
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
-}
-
-export function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: {
-    archived?: boolean;
-    archivedAt?: number;
-    sessionId?: string;
-    category?: string;
-    pinned?: boolean;
-    pinnedAt?: number;
-    hasActiveRun?: boolean;
-    unread?: boolean;
-    markedUnreadAt?: number;
-    status?: string;
-    spawnedBy?: string;
-    startedAt?: number;
-    endedAt?: number;
-    childSessions?: string[];
-    execNode?: string;
-    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
-  } = {},
-) {
-  return createControlUiSessionRow(key, label, updatedAt, options);
 }
 
 export function sessionsListResponse(

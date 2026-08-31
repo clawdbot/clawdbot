@@ -441,12 +441,9 @@ export class ExtensionRelayBridge {
           if (!client.autoAttach) {
             continue;
           }
-          void this.withAttachedTab(client, info.tabId, ({ targetId, sessionId }) => {
+          void this.withAttachedTab(client, info.tabId, (attached) => {
             if (client.autoAttach) {
-              this.announceAttachedTab(info.tabId, targetId, sessionId, {
-                onlyAutoAttach: false,
-                onlyClient: client,
-              });
+              this.announceAttachedTab(info.tabId, attached, [client]);
             }
           }).catch((err: unknown) =>
             log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
@@ -612,27 +609,21 @@ export class ExtensionRelayBridge {
 
   private announceAttachedTab(
     tabId: number,
-    targetId: string,
-    sessionId: string,
-    opts: { onlyAutoAttach: boolean; onlyClient?: CdpClientState },
+    attached: { targetId: string; sessionId: string },
+    recipients: readonly CdpClientState[],
   ): void {
     const tab = this.tabs.get(tabId);
+    const { targetId, sessionId } = attached;
     if (tab?.target?.sessionId !== sessionId) {
       return;
     }
-    const event = {
-      method: "Target.attachedToTarget",
-      params: {
-        sessionId,
-        targetInfo: this.targetInfoForTab(tab, targetId),
-        waitingForDebugger: false,
-      },
+    const params = {
+      sessionId,
+      targetInfo: this.targetInfoForTab(tab, targetId),
+      waitingForDebugger: false,
     };
-    const recipients = opts.onlyClient
-      ? [opts.onlyClient]
-      : [...this.clients].filter((client) => !opts.onlyAutoAttach || client.autoAttach);
     for (const client of recipients) {
-      this.sessions.announce(client, sessionId, sessionId, event.params);
+      this.sessions.announce(client, sessionId, sessionId, params);
     }
   }
 
@@ -843,13 +834,9 @@ export class ExtensionRelayBridge {
       client,
       tabId,
       (attached) => {
-        this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-          onlyAutoAttach: true,
-        });
-        this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-          onlyAutoAttach: false,
-          onlyClient: client,
-        });
+        const recipients = [...this.clients].filter((recipient) => recipient.autoAttach);
+        this.announceAttachedTab(tabId, attached, recipients);
+        this.announceAttachedTab(tabId, attached, [client]);
         this.respond(client, request, { targetId: attached.targetId });
       },
       typeof created.targetId === "string" ? created.targetId : undefined,
@@ -1063,12 +1050,9 @@ export class ExtensionRelayBridge {
         if (autoAttach) {
           const attachResults = await Promise.allSettled(
             [...this.tabs.keys()].map((tabId) =>
-              this.withAttachedTab(client, tabId, ({ targetId, sessionId }) => {
+              this.withAttachedTab(client, tabId, (attached) => {
                 if (client.autoAttach) {
-                  this.announceAttachedTab(tabId, targetId, sessionId, {
-                    onlyAutoAttach: false,
-                    onlyClient: client,
-                  });
+                  this.announceAttachedTab(tabId, attached, [client]);
                 }
               }),
             ),

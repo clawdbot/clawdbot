@@ -546,7 +546,7 @@
     },
     {
       "source": "/cron-vs-heartbeat",
-      "destination": "/automation"
+      "destination": "/automation#automations-vs-heartbeat"
     },
     {
       "source": "/dashboard",
@@ -602,7 +602,7 @@
     },
     {
       "source": "/gmail-pubsub",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#gmail-pubsub-integration"
     },
     {
       "source": "/grammy",
@@ -814,7 +814,7 @@
     },
     {
       "source": "/remote-gateway-readme",
-      "destination": "/gateway/remote-gateway-readme"
+      "destination": "/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent"
     },
     {
       "source": "/rpc",
@@ -958,7 +958,7 @@
     },
     {
       "source": "/webhook",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#webhooks"
     },
     {
       "source": "/whatsapp",
@@ -1074,19 +1074,55 @@
     },
     {
       "source": "/automation/troubleshooting",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#troubleshooting"
     },
     {
       "source": "/automation/cron-vs-heartbeat",
-      "destination": "/automation"
+      "destination": "/automation#automations-vs-heartbeat"
     },
     {
       "source": "/automation/webhook",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#webhooks"
     },
     {
       "source": "/automation/gmail-pubsub",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#gmail-pubsub-integration"
+    },
+    {
+      "source": "/cli/flows",
+      "destination": "/cli/tasks#flow"
+    },
+    {
+      "source": "/concepts/memory-qmd",
+      "destination": "/concepts/memory-builtin#migrating-from-qmd"
+    },
+    {
+      "source": "/gateway/network-model",
+      "destination": "/network#core-model"
+    },
+    {
+      "source": "/gateway/remote-gateway-readme",
+      "destination": "/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent"
+    },
+    {
+      "source": "/platforms/mac/child-process",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/plugins/sdk-channel-message",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plugins/sdk-channel-turn",
+      "destination": "/plugins/sdk-channel-inbound#migration"
+    },
+    {
+      "source": "/debug/node-issue",
+      "destination": "/help/debugging#node-and-tsx-startup-errors"
+    },
+    {
+      "source": "/gateway/bridge-protocol",
+      "destination": "/gateway/protocol"
     }
   ],
   "navigation": {
@@ -1772,7 +1808,6 @@
                       "gateway/protocol",
                       "gateway/clients",
                       "gateway/embedding",
-                      "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
@@ -1797,7 +1832,6 @@
                 "group": "Remote access",
                 "pages": [
                   "gateway/remote",
-                  "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
                   "gateway/cloudflare-access"
@@ -1922,7 +1956,6 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
-                      "cli/flows",
                       "cli/connect",
                       "cli/node",
                       "cli/nodes",
@@ -2144,8 +2177,7 @@
                 "group": "Diagnostics",
                 "pages": [
                   "help/environment",
-                  "diagnostics/flags",
-                  "debug/node-issue"
+                  "diagnostics/flags"
                 ]
               },
               {

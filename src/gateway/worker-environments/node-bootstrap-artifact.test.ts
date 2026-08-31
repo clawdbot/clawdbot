@@ -42,6 +42,7 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
   };
   await write(packageRoot, "package.json", sourcePackage);
   await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
+  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o755);
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
   await write(
     packageRoot,
@@ -146,11 +147,13 @@ describe("node bootstrap distribution", () => {
       const installed = path.join(root, "node");
       await fs.mkdir(installed);
       const entries: string[] = [];
+      const modes = new Map<string, number | undefined>();
       await tar.extract({
         file: artifact.tarballPath,
         cwd: installed,
         onReadEntry: (entry) => {
           entries.push(entry.path);
+          modes.set(entry.path, entry.mode);
         },
       });
       expect(
@@ -158,6 +161,10 @@ describe("node bootstrap distribution", () => {
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),
         ),
       ).toBe(false);
+      if (process.platform !== "win32") {
+        expect(modes.get("package/openclaw.mjs")).toBe(0o755 & ~process.umask());
+        expect(modes.get("package/dist/shared.js")).toBe(0o644 & ~process.umask());
+      }
       if (mode === "external-plugin") {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
       }
@@ -284,5 +291,29 @@ describe("node bootstrap distribution", () => {
     const [left, right] = await Promise.all([first.provider.prepare(), second.provider.prepare()]);
     expect(left.openclawVersion).toBe(right.openclawVersion);
     expect(left.tarballSha256).not.toBe(right.tarballSha256);
+  });
+
+  it("rejects staged bytes substituted after copying the running build", async () => {
+    const { provider } = await fixture();
+    const writeFile = fs.writeFile.bind(fs);
+    let substituted = false;
+    const writer = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      if (
+        typeof args[0] === "string" &&
+        args[0].endsWith(path.join("package", "dist", "shared.js"))
+      ) {
+        await writeFile(args[0], 'export const answer = "cloud-wrong";');
+        substituted = true;
+      }
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow(
+        "Node bootstrap archive does not match the staged distribution",
+      );
+      expect(substituted).toBe(true);
+    } finally {
+      writer.mockRestore();
+    }
   });
 });

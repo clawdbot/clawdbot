@@ -1881,6 +1881,18 @@ export const en: TranslationMap = {
         label: "CRT",
         description: "Console mono",
       },
+      manuscript: {
+        label: "Manuscript",
+        description: "Ink on paper",
+      },
+      rose: {
+        label: "Rosé",
+        description: "Plum & rose",
+      },
+      miami: {
+        label: "Miami",
+        description: "Magenta & cyan",
+      },
     },
     textSizes: {
       small: "Small",
