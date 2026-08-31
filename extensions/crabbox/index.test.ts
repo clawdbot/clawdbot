@@ -166,7 +166,6 @@ describe("Crabbox plugin generation lifecycle", () => {
           "inspect",
           "run",
           "inspect",
-          "inspect",
           "stop",
         ]);
         expect(calls.flat()).not.toContain("--class");

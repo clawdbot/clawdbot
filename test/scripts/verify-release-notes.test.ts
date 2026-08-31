@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -957,6 +957,152 @@ describe("release-note verification", () => {
       ledgerChecks({ source }, [entry], new Map([[262624, { __typename: "PullRequest" }]]), []),
     ).toEqual(expected);
   });
+
+  it.each([0, 1, 2])(
+    "accounts for merged side ancestry with %i reversals without duplicating shipped PRs",
+    (reversals) => {
+      const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-ancestry-"));
+      try {
+        git(cwd, ["init", "-q", "-b", "main"]);
+        const changelog = [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+          "",
+        ].join("\n");
+        writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+        const commit = (subject: string, file: string) => {
+          writeFileSync(join(cwd, file), subject);
+          git(cwd, ["add", file]);
+          git(cwd, ["commit", "-qm", subject]);
+          return git(cwd, ["rev-parse", "HEAD"]);
+        };
+        git(cwd, ["add", "CHANGELOG.md"]);
+        const base = commit("chore: existing work (#9)", "base.txt");
+        git(cwd, ["checkout", "-qb", "side"]);
+        const first = commit("fix: side contribution", "first.txt");
+        git(cwd, ["checkout", "-qb", "nested-side"]);
+        const second = commit("fix: same contribution follow-up", "second.txt");
+        git(cwd, ["checkout", "-q", "side"]);
+        git(cwd, ["merge", "--no-ff", "-qm", "merge: nested side work", "nested-side"]);
+        const nestedMerge = git(cwd, ["rev-parse", "HEAD"]);
+        const withdrawn = commit("fix: withdrawable contribution", "withdrawn.txt");
+        const shipped = commit("fix: separately shipped contribution", "shipped.txt");
+        git(cwd, ["checkout", "-q", "main"]);
+        commit("chore: main work", "main.txt");
+        git(cwd, ["merge", "--no-ff", "-qm", "merge: side work", "side"]);
+        let reversed = withdrawn;
+        for (let index = 0; index < reversals; index += 1) {
+          git(cwd, ["revert", "--no-edit", reversed]);
+          reversed = git(cwd, ["rev-parse", "HEAD"]);
+        }
+        const target = git(cwd, ["rev-parse", "HEAD"]);
+
+        // A divergent stable tag already contains PR #12; its side commit is in
+        // this Git range, so subtraction must happen after complete discovery.
+        git(cwd, ["checkout", "-qb", "shipped-release", base]);
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          [
+            "## 2026.6.1",
+            "",
+            "### Complete contribution record",
+            "",
+            `This audited record covers the complete ${base}..${base} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
+            "",
+            "#### Pull requests",
+            "",
+            "- **PR #12** Thanks @contributor.",
+            "",
+          ].join("\n"),
+        );
+        git(cwd, ["add", "CHANGELOG.md"]);
+        git(cwd, ["commit", "-qm", "docs: shipped record"]);
+        git(cwd, ["tag", "v2026.6.1"]);
+        git(cwd, ["checkout", "-q", "main"]);
+
+        // Exercise the real CLI and Git DAG. Only GitHub's external boundary is
+        // replaced; associations have no PR suffix for the collector to guess.
+        const associations = {
+          [first]: 10,
+          [second]: 10,
+          [withdrawn]: 11,
+          [shipped]: 12,
+          [nestedMerge]: 13,
+        };
+        const gh = join(cwd, "gh");
+        writeFileSync(
+          gh,
+          `#!${process.execPath}\n
+const associations = ${JSON.stringify(associations)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+  const number = associations[hash];
+  data[alias] = { object: {
+    associatedPullRequests: { nodes: number ? [{ number, mergedAt: "2026-01-01T00:00:00Z", mergeCommit: { oid: hash } }] : [], pageInfo: { hasNextPage: false, endCursor: null } },
+    author: { user: { login: "steipete" } },
+  } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+  data[alias] = { issueOrPullRequest: { __typename: "PullRequest", number: Number(rawNumber), title: "fix: contribution", baseRefName: "main", mergedAt: "2026-01-01T00:00:00Z", author: { __typename: "User", login: "contributor" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+        );
+        chmodSync(gh, 0o755);
+        const manifestPath = join(cwd, "manifest.json");
+        const result = spawnSync(
+          process.execPath,
+          [
+            verifier,
+            "--base",
+            base,
+            "--target",
+            target,
+            "--main-ref",
+            target,
+            "--version",
+            "2026.7.1",
+            "--shipped-ref",
+            "v2026.6.1",
+            "--manifest",
+            manifestPath,
+            "--write-ledger",
+            "--json",
+          ],
+          { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
+        );
+        expect(result.stderr).toBe("");
+        expect(result.status, result.stdout).toBe(0);
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        expect(
+          manifest.pullRequests.map((entry: { number: number }) => entry.number).sort(),
+        ).toEqual(reversals === 1 ? [10, 13] : [10, 11, 13]);
+        expect(manifest.pullRequests[0].thanks).toEqual(["contributor"]);
+        expect(manifest.shippedBaselines).toEqual([
+          { ref: "v2026.6.1", count: 1, pullRequests: [12] },
+        ]);
+        expect(
+          readFileSync(join(cwd, "CHANGELOG.md"), "utf8").match(/\*\*PR #10\*\*/g),
+        ).toHaveLength(1);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("records a canonical target SHA when --target is symbolic", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));

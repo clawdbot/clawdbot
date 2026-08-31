@@ -1045,8 +1045,10 @@ struct OnboardingAISetupTests {
         #expect(requests.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 1)
     }
 
-    @Test(arguments: [true, false])
-    func `activation cancel follows current wizard request ownership`(terminalReply: Bool) async throws {
+    @Test(arguments: ["terminal-reply", "nonterminal-reply", "confirmed-cancel"])
+    func `activation cancel follows current wizard request ownership`(outcome: String) async throws {
+        let terminalReply = outcome == "terminal-reply"
+        let confirmedCancellation = outcome == "confirmed-cancel"
         let recorder = AISetupRequestRecorder()
         let frames = AISetupSocketGeneration()
         let terminal = AISetupRequestGate()
@@ -1077,6 +1079,11 @@ struct OnboardingAISetupTests {
                         "type": "res", "id": request.id, "ok": true, "payload": payload,
                     ])))
                 case "wizard.cancel":
+                    if confirmedCancellation {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#.utf8)))
+                        return
+                    }
                     if !terminalReply { await cancellation.wait() }
                     try task.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res",
@@ -1108,8 +1115,16 @@ struct OnboardingAISetupTests {
         model.cancelProviderAuth()
         _ = await waitForAISetupRequests(recorder, count: 5)
         await settleQueuedAISetupTasks()
+        if confirmedCancellation {
+            for _ in 0..<400 where model.activeAuthOption != nil {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try #require(model.activeAuthOption == nil)
+            await activation.value
+        }
+        // A running step captured before cancellation can arrive after its acknowledgement.
         await terminal.release()
-        if !terminalReply {
+        if !terminalReply, !confirmedCancellation {
             for _ in 0..<400 where model.authStep?.id != "review-again" {
                 try await Task.sleep(nanoseconds: 5_000_000)
             }
@@ -1121,9 +1136,14 @@ struct OnboardingAISetupTests {
         }
         try #require(model.activeAuthOption == nil)
         await activation.value
+        await settleQueuedAISetupTasks()
 
         #expect(model.connected == terminalReply)
-        #expect(model.pendingActivationVerification == !terminalReply)
+        #expect(model.pendingActivationVerification == (!terminalReply && !confirmedCancellation))
+        if confirmedCancellation {
+            #expect(model.authStep == nil)
+            #expect(pendingState(defaults) == .none)
+        }
         if terminalReply { #expect(pendingState(defaults) == .completed) }
         #expect(await recorder.snapshot().methods == [
             "openclaw.setup.detect",
@@ -1400,6 +1420,83 @@ struct OnboardingAISetupTests {
         model.cancelProviderAuth()
         #expect(model.activeAuthOption == nil)
         #expect(model.authError == nil)
+    }
+
+    @Test func `provider auth callback reacquires its route after a pre-dispatch disconnect`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthReconnectTests"))
+        let detections = AISetupSocketGeneration()
+        let answeredSessions = LockIsolated<[String]>([])
+        let cancelledSessions = LockIsolated<[String]>([])
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                return detections.claim() == 0
+                    ? detectedSetupResponse(id: request.id)
+                    : persistedDetectedSetupResponse(id: request.id)
+            case "openclaw.setup.auth.start":
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                return Data(
+                    """
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "sessionId":"\(sessionID)","done":false,"status":"running",
+                      "step":{"id":"login","type":"text","executor":"client",
+                        "message":"Enter the sign-in response"}}}
+                    """.utf8)
+            case "wizard.next":
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                let answer = try #require(request.params["answer"] as? [String: Any])
+                #expect(answer["stepId"] as? String == "login")
+                #expect(answer["value"] as? String == "callback-value")
+                answeredSessions.withValue { $0.append(sessionID) }
+                return wizardDoneResponse(id: request.id, sessionID: sessionID)
+            case "wizard.cancel":
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                cancelledSessions.withValue { $0.append(sessionID) }
+                return Data(
+                    #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#.utf8)
+            default:
+                Issue.record("Unexpected setup request: \(request.method)")
+                return successfulEmptyResponse(id: request.id)
+            }
+        }
+        let model = harness.model(defaults: defaults)
+        let option = OnboardingAISetupModel.AuthOption(
+            id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
+            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
+
+        await model.detectAndAutoConnect()
+        model.startProviderAuth(option)
+        for _ in 0..<200 where model.authStep == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let sessionID = try #require(model._test_authSessionID)
+        let staleLease = try #require(await harness.gateway.captureServerLease())
+        let firstSocket = try #require(harness.session.latestTask())
+
+        firstSocket.emitReceiveFailure()
+        for _ in 0..<200 {
+            guard await harness.gateway.isCurrentServerLease(staleLease) else { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await !harness.gateway.isCurrentServerLease(staleLease))
+        model.authText = "callback-value"
+        model.continueProviderAuth()
+        for _ in 0..<400 where !model.connected && model.authError == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(answeredSessions.value == [sessionID])
+        #expect(cancelledSessions.value.isEmpty)
+        #expect(harness.session.snapshotMakeCount() == 2)
+        #expect(model.authError == nil)
+        #expect(model.connected)
+
+        let requestCount = await (harness.recorder.snapshot()).methods.count
+        model.continueProviderAuth()
+        await settleQueuedAISetupTasks()
+        #expect(await (harness.recorder.snapshot()).methods.count == requestCount)
+        await harness.gateway.shutdown()
     }
 
     @Test(arguments: ["timeout", "replacement-unavailable", "commit-locked", "commit-locked-after-completion"])

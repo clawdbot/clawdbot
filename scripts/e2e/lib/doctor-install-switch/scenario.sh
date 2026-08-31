@@ -46,6 +46,7 @@ fi
 
 npm_bin="/tmp/npm-prefix/bin/openclaw"
 npm_root="/tmp/npm-prefix/lib/node_modules/openclaw"
+export OPENCLAW_E2E_REDACTOR_MODULE="$npm_root/dist/plugin-sdk/logging-core.js"
 if [ -f "$npm_root/dist/index.mjs" ]; then
   npm_entry="$npm_root/dist/index.mjs"
 else

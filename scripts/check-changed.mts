@@ -457,6 +457,8 @@ export function createChangedCheckPlan(
   options: ChangedCheckPlanOptions = {},
 ) {
   const commands: ChangedCheckCommand[] = [];
+  const broadAudits = new Set<ChangedCheckCommand>();
+  const typechecks = new Set<ChangedCheckCommand>();
   const baseEnv: NodeJS.ProcessEnv = createChangedCheckChildEnv(options.env ?? process.env);
   const generatedExtensionAssetPaths = result.paths.some((changedPath) =>
     LINTABLE_EXTENSION_PATH_RE.test(changedPath),
@@ -464,21 +466,43 @@ export function createChangedCheckPlan(
     ? (cachedGeneratedExtensionAssetPaths ??= new Set(listGeneratedExtensionAssetSources()))
     : new Set<string>();
   const add = (name: string, args: string[], env?: NodeJS.ProcessEnv) => {
-    if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
-      commands.push({ name, args, ...(env ? { env } : {}) });
+    const existing = commands.find(
+      (command) => command.name === name && sameArgs(command.args, args),
+    );
+    if (existing) {
+      return existing;
     }
+    const command = { name, args, ...(env ? { env } : {}) };
+    commands.push(command);
+    return command;
   };
   const addCommand = (name: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) => {
-    if (
-      !commands.some(
-        (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
-      )
-    ) {
-      commands.push({ name, bin, args, ...(env ? { env } : {}) });
+    const existing = commands.find(
+      (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
+    );
+    if (existing) {
+      return existing;
     }
+    const command = { name, bin, args, ...(env ? { env } : {}) };
+    commands.push(command);
+    return command;
   };
   const addTypecheck = (name: string, args: string[]) =>
-    add(name, args, createSparseTsgoSkipEnv(baseEnv));
+    typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
+  const finishPlan = (summary: string) => {
+    const end = commands.findLastIndex((command) => typechecks.has(command)) + 1;
+    const prefix = commands.slice(0, end);
+    // These audits produce diagnostics, not compiler inputs. Defer them without
+    // moving compiler prerequisites or overlapping their resource-heavy processes.
+    return {
+      commands: [
+        ...prefix.filter((command) => !broadAudits.has(command)),
+        ...prefix.filter((command) => broadAudits.has(command)),
+        ...commands.slice(end),
+      ],
+      summary,
+    };
+  };
   const addLint = (name: string, args: string[]) => add(name, args, baseEnv);
   const addTargetedLint = (
     createCommand: (
@@ -583,7 +607,7 @@ export function createChangedCheckPlan(
     add("extension test core imports", ["lint:plugins:no-extension-test-core-imports"]);
   }
   add("duplicate scan target coverage", ["dup:check:coverage"]);
-  add("coercion helper declaration guard", ["check:coercion-helpers"]);
+  broadAudits.add(add("coercion helper declaration guard", ["check:coercion-helpers"]));
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
     add("format changed files", [
@@ -642,7 +666,7 @@ export function createChangedCheckPlan(
     add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
   }
   if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
-    add("deprecated API usage", ["check:deprecated-api-usage"]);
+    broadAudits.add(add("deprecated API usage", ["check:deprecated-api-usage"]));
     // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
     // until their scheduled deletion PRs land.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
@@ -662,19 +686,18 @@ export function createChangedCheckPlan(
     hasDeadcodeScannedSource(result.paths) &&
     !isOpenEndedTruthyValue(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
   ) {
-    addCommand(
-      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
-      "node",
-      ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      baseEnv,
+    broadAudits.add(
+      addCommand(
+        "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+        "node",
+        ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
+        baseEnv,
+      ),
     );
   }
 
   if (result.docsOnly) {
-    return {
-      commands,
-      summary: "docs-only",
-    };
+    return finishPlan("docs-only");
   }
 
   addTestTempCreationReport();
@@ -718,10 +741,7 @@ export function createChangedCheckPlan(
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
-    return {
-      commands,
-      summary: "release metadata",
-    };
+    return finishPlan("release metadata");
   }
 
   if (shouldRunAndroidVersionSync) {
@@ -735,10 +755,7 @@ export function createChangedCheckPlan(
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
-    return {
-      commands,
-      summary: "all",
-    };
+    return finishPlan("all");
   }
 
   if (shouldRunControlUiI18nVerify(result.paths)) {
@@ -905,13 +922,12 @@ export function createChangedCheckPlan(
     });
   }
 
-  return {
-    commands,
-    summary: Object.entries(lanes)
+  return finishPlan(
+    Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
       .join(", "),
-  };
+  );
 }
 
 export function createTargetedCoreLintCommand(

@@ -359,16 +359,16 @@ export async function finalizeCodexAttempt(
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
     (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-    ? await captureCodexSettledTurnFinalizationContext({
+    ? ((await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
         mirroredMessages: mirrorOutcome.mirroredMessages,
         settledMessages: result.messagesSnapshot,
         turnId: activeTurnId,
-      })
+      })) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
-  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
-    // The isolated child must not infer around a partial or drifting transcript.
-    // Omitting this field preserves the existing incomplete-turn failure.
+  if (settledTurnFinalizationContext?.source === "unavailable") {
+    // Unavailable evidence forbids native inference, but must not revoke this
+    // eligible turn's path to the existing host-owned fallback.
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
@@ -517,8 +517,8 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  const finalizedResult: EmbeddedRunAttemptResult = {
-    ...result,
+  // Preserve the exact result identity carrying host-issued TTS delivery provenance.
+  const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),
@@ -540,7 +540,7 @@ export async function finalizeCodexAttempt(
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
-  };
+  });
   if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
     resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
   }

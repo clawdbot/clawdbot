@@ -7,30 +7,29 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
-import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
 import { runRestartScript } from "./restart-helper.js";
-import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
 import {
-  resolveServiceRefreshEnv,
-  resolveUpdatedInstallCommandEnv,
-} from "./update-command-service-env.js";
+  DEFINITION_DENIAL,
+  runUpdatedInstallGatewayCommand,
+} from "./update-command-service-command.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -64,8 +63,6 @@ export {
 } from "./update-command-service-maintenance.js";
 
 const CLI_NAME = resolveCliName();
-const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
-const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
 
@@ -85,12 +82,6 @@ export function shouldPrepareUpdatedInstallRestart(params: {
         (params.updateMode !== "git" || params.serviceMatchesUpdateRoot === true);
 }
 
-function formatCommandFailure(stdout: string, stderr: string): string {
-  // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
-  const detail = `${stderr}\n${stdout}`.match(DEFINITION_DENIAL)?.[0] ?? (stderr || stdout).trim();
-  return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
-}
-
 export function resolvePostUpdateServiceStateReadEnv(params: {
   updateMode: UpdateRunResult["mode"];
   processEnv?: NodeJS.ProcessEnv;
@@ -100,57 +91,6 @@ export function resolvePostUpdateServiceStateReadEnv(params: {
   const usesServiceEnv =
     params.updateMode === "git" || isPackageManagerUpdateMode(params.updateMode);
   return usesServiceEnv ? (params.preManagedServiceEnv ?? fallbackEnv) : fallbackEnv;
-}
-
-// Use the candidate's version guards for both refresh and activation. The parsed
-// preservation option makes older targets reject before repair, without a retry.
-async function runUpdatedInstallGatewayCommand(
-  params: Parameters<typeof maybeRestartService>[0] & { invocationEnv: NodeJS.ProcessEnv },
-  action: "install" | "restart",
-  preserveDefinition = false,
-): Promise<boolean> {
-  const installing = action === "install";
-  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
-  if (!entrypoint) {
-    if (installing && !isPackageManagerUpdateMode(params.result.mode)) {
-      await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-      return true;
-    }
-    throw new Error(
-      `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
-    );
-  }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-  } else if (preserveDefinition) {
-    args.push("--preserve-definition");
-  }
-  if (params.opts.json) {
-    args.push("--json");
-  }
-  const res = await runCommandWithTimeout(
-    [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
-    {
-      cwd: params.result.root,
-      env: resolveUpdatedInstallCommandEnv({
-        processEnv: installing
-          ? (params.serviceInstallEnv ?? params.invocationEnv)
-          : params.invocationEnv,
-        serviceEnv: installing ? undefined : params.serviceEnv,
-        invocationCwd: params.invocationCwd,
-      }),
-      // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
-      timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
-    },
-  );
-  if (res.code === 0) {
-    return true;
-  }
-  const operation = installing ? "refresh" : "restart";
-  throw new Error(
-    `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-  );
 }
 
 export async function tryInstallShellCompletion(opts: {

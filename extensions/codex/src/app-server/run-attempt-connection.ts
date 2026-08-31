@@ -29,6 +29,7 @@ import {
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
+  type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
@@ -125,10 +126,19 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
+  const assertLocalTargetSupported = (unsupported: boolean) => {
+    if (preparedEnvironment?.localProcessEnv && unsupported) {
+      throw new Error(
+        "This runtime cannot target the diagnosed local installation. Use the saved prompt with a suggested external or manual handoff on this machine.",
+      );
+    }
+  };
+  assertLocalTargetSupported(sandbox?.enabled === true || remoteExec);
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
         ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+        ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
   const shellEnvironment =
@@ -139,12 +149,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
   const disableLoginShell =
     remoteExec ||
+    preparedEnvironment?.localProcessEnv !== undefined ||
     preparedEnvironment?.managedLocalIdentity === true ||
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
-  const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
-    appServer: T,
-  ) => {
+  const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
+    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
+    assertLocalTargetSupported(
+      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
+    );
     return shellEnvironment
       ? {
           ...appServer,

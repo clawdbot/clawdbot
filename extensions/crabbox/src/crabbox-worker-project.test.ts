@@ -62,66 +62,109 @@ function projectOptions(events: string[], controller = new AbortController()) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
-  it("captures the checked-out project and runtime before enrollment, then forks without another capture", async () => {
-    const events: string[] = [];
-    let current = projectOptions(events);
-    const { provider, calls } = createWarmProvider((call) => current.observe(call));
+  it.each(["runtime-install", "enrollment-install"])(
+    "completes internal %s without another provider readiness request",
+    async (phase) => {
+      const events: string[] = [];
+      const { options, observe } = projectOptions(events);
+      const { provider, calls } = createWarmProvider((call) => {
+        observe(call);
+        if ((call.argv[1] === "inspect" || call.argv[1] === "status") && events.at(-1) === phase) {
+          return commandResult({ termination: "timeout", code: null, killed: true });
+        }
+        return undefined;
+      });
 
-    await provider.provision(PROFILE, "project-first", current.options);
+      await expect(
+        provider.provision(PROFILE, `internal-${phase}`, options),
+      ).resolves.toMatchObject({
+        node: { deviceId: "project-node" },
+      });
+      expect(events).toContain(phase);
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+    },
+  );
 
-    expect(events).toEqual([
-      "project-prepared",
-      "runtime-granted",
-      "runtime-install",
-      "capture",
-      "enrollment-begun",
-      "enrollment-install",
-    ]);
-    expect(listCrabboxWarmImages()[0]).toMatchObject({
-      projectKey: PROJECT_KEY,
-      checkpointId: CHECKPOINT_ID,
-      allocations: {
-        [operationLeaseId("project-first")]: { phase: "enrolled", baseCommit: BASE_COMMIT },
-      },
-    });
-    // The first worker is still running: a new session can already use its clean image.
-    calls.length = 0;
-    events.length = 0;
-    current = projectOptions(events);
-    await provider.provision(PROFILE, "project-second", current.options);
-    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-    expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
-    expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
-    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
-    // Allocation and normal enrollment each inspect once; a cache hit causes no native restart.
-    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(2);
-  });
+  it.each(["aws", "daytona"])(
+    "captures the prepared %s project before enrollment and reuses it",
+    async (backend) => {
+      const profile = { ...PROFILE, provider: backend };
+      const events: string[] = [];
+      let current = projectOptions(events);
+      const { provider, calls } = createWarmProvider((call) => {
+        current.observe(call);
+        if (
+          backend === "daytona" &&
+          call.argv[2] === "create" &&
+          !call.argv.includes("--no-reboot=false")
+        ) {
+          return commandResult({
+            code: 2,
+            stderr:
+              "Daytona filesystem snapshots require a stopped source; rerun with --no-reboot=false",
+          });
+        }
+        return undefined;
+      });
+
+      await provider.provision(profile, "project-first", current.options);
+
+      expect(events).toEqual([
+        "project-prepared",
+        "runtime-granted",
+        "runtime-install",
+        "capture",
+        "enrollment-begun",
+        "enrollment-install",
+      ]);
+      expect(listCrabboxWarmImages()[0]).toMatchObject({
+        projectKey: PROJECT_KEY,
+        checkpointId: CHECKPOINT_ID,
+        allocations: {
+          [operationLeaseId("project-first")]: { phase: "enrolled", baseCommit: BASE_COMMIT },
+        },
+      });
+      // The first worker is still running: a new session can already use its clean image.
+      calls.length = 0;
+      events.length = 0;
+      current = projectOptions(events);
+      await provider.provision(profile, "project-second", current.options);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
+      // Pending images need verification before the fork; a successful fork already attests reuse.
+      expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(1);
+      expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
+      expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+      // A cache hit does not restart the machine; only allocation needs provider readiness.
+      expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
+    },
+  );
 
   it.each(["grant", "setup", "readiness"] as const)(
-    "preserves runtime %s failure ownership without starting capture or enrollment",
+    "preserves preparation %s failure ownership without enrollment",
     async (failure) => {
       const events: string[] = [];
       const { options, observe } = projectOptions(events);
       if (failure === "grant") {
         options.prepareNodeRuntime.mockRejectedValueOnce(new Error("runtime grant failed"));
       }
-      let installed = false;
+      let captured = false;
       const { provider, calls } = createWarmProvider((call) => {
         observe(call);
         if (call.argv[1] === "run" && call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
-          installed = true;
           if (failure === "setup") {
             return commandResult({ code: 7, stderr: "runtime setup failed" });
           }
         }
-        if (installed && failure === "readiness" && call.argv[1] === "inspect") {
+        captured ||= call.argv[2] === "create";
+        if (captured && failure === "readiness" && call.argv[1] === "inspect") {
           return commandResult({ termination: "timeout", code: null, killed: true });
         }
         return undefined;
       });
       await expect(provider.provision(PROFILE, `runtime-${failure}`, options)).rejects.toThrow();
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+      expect(calls.some(({ argv }) => argv[2] === "create")).toBe(failure === "readiness");
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
         failure === "readiness" ? 0 : 1,
       );
