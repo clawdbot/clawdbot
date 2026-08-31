@@ -225,6 +225,7 @@ const mocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntries: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
+  writePersistedInstalledPluginIndexInstallRecordsWithLease: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -318,6 +319,8 @@ vi.mock("../../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords:
     mocks.writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease:
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
 }));
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
@@ -742,6 +745,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockReset();
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
+      async (records: unknown, options: { lease: unknown } & Record<string, unknown>) => {
+        const storeOptions = { ...options };
+        delete storeOptions.lease;
+        return await mocks.writePersistedInstalledPluginIndexInstallRecords(records, storeOptions);
+      },
+    );
     prepareManagedPluginArtifactConsentHandler.mockResolvedValue({
       onBeforePluginArtifactCommit: async () => {},
       applyAcceptedSurface: (_pluginId, record) => record,
@@ -2906,7 +2917,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
     ]);
-    mocks.writePersistedInstalledPluginIndexInstallRecords.mockRejectedValueOnce(
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockRejectedValueOnce(
       new Error("persisted index write failed"),
     );
 
@@ -2927,9 +2938,103 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       }),
     ).rejects.toThrow("persisted index write failed");
 
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledOnce();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(
+      mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease, 0, 1),
+    ).toEqual(
+      expect.objectContaining({
+        lease: expect.objectContaining({
+          assertOwned: expect.any(Function),
+          assertOwnedInTransaction: expect.any(Function),
+        }),
+      }),
+    );
     expect(rollback).toHaveBeenCalledOnce();
     expect(commit).not.toHaveBeenCalled();
     expect(fs.existsSync(targetDir)).toBe(false);
+  });
+
+  it("does not settle a persisted direct runtime install after lifecycle ownership is lost", async () => {
+    const targetDir = tempDirs.make("openclaw-doctor-runtime-lease-loss-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: VERSION,
+      targetDir,
+    });
+    const commit = vi.fn(async () => {});
+    const rollback = vi.fn(async () => {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    });
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        expect(isPluginInstallCommitDeferred(callbacks)).toBe(true);
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir: targetDir,
+            mode: "install",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+    const leaseLost = new Error("plugin lifecycle lease ownership lost before cleanup");
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementationOnce(
+      async (
+        records: unknown,
+        options: {
+          lease: { assertOwned: () => void };
+        } & Record<string, unknown>,
+      ) => {
+        const storeOptions = { ...options };
+        delete storeOptions.lease;
+        await mocks.writePersistedInstalledPluginIndexInstallRecords(records, storeOptions);
+        options.lease.assertOwned = () => {
+          throw leaseLost;
+        };
+      },
+    );
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    await expect(
+      repairMissingPluginInstallsForIds({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        pluginIds: ["codex"],
+        env: {},
+      }),
+    ).rejects.toThrow(leaseLost.message);
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledOnce();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(fs.existsSync(targetDir)).toBe(true);
   });
 
   it("reports deferred cleanup failure without rolling back a persisted runtime install", async () => {
