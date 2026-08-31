@@ -49,7 +49,7 @@ describe("session log mention scanner", () => {
         }),
         JSON.stringify({
           role: "assistant",
-          content: 'API.read MCP.fixture fixture__lookup_note tools.search("lookup note")',
+          content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
         }),
         "raw transcript fallback API.read",
         "",
@@ -63,7 +63,7 @@ describe("session log mention scanner", () => {
           apiFileRead: "API.read",
           mcpNamespace: "MCP.fixture",
           mcpTool: "fixture__lookup_note",
-          toolSearchPollution: 'tools.search("lookup note"',
+          toolSearchPollution: 'catalog.search("lookup note"',
         },
       }),
     ).resolves.toEqual({
@@ -110,7 +110,7 @@ describe("session log mention scanner", () => {
         JSON.stringify({
           message: {
             role: "assistant",
-            content: 'API.read MCP.fixture fixture__lookup_note tools.search("lookup note")',
+            content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
           },
         }),
         2,
@@ -126,7 +126,7 @@ describe("session log mention scanner", () => {
           apiFileRead: "API.read",
           mcpNamespace: "MCP.fixture",
           mcpTool: "fixture__lookup_note",
-          toolSearchPollution: 'tools.search("lookup note"',
+          toolSearchPollution: 'catalog.search("lookup note"',
         },
       }),
     ).resolves.toEqual({

@@ -21,6 +21,7 @@ vi.mock("../../logging/subsystem.js", async () => {
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -61,6 +62,7 @@ describe("SQLite historical session disk budget", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "warn",
@@ -143,7 +145,16 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists(sessionId)).toBe(false);
   });
 
-  it("removes counted archives before evicting searchable history", async () => {
+  it.each([
+    {
+      archiveName: "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      kind: "deleted transcript archive",
+    },
+    {
+      archiveName: `legacy-compact.jsonl.bak.2026-01-01T00-00-00.000Z.${"a".repeat(32)}.zst`,
+      kind: "legacy compact backup",
+    },
+  ])("removes a $kind before evicting searchable history", async ({ archiveName }) => {
     await createHistoricalTranscript({
       content: "keep searchable history",
       nextSessionId: "archive-live",
@@ -152,10 +163,7 @@ describe("SQLite historical session disk budget", () => {
       updatedAt: 1,
     });
     database().walMaintenance.checkpoint();
-    const oldArchive = path.join(
-      tempDir,
-      "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
-    );
+    const oldArchive = path.join(tempDir, archiveName);
     fs.writeFileSync(oldArchive, Buffer.alloc(256 * 1024));
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
@@ -202,6 +210,14 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
+    const databasePath = database().path;
+    const rm = fs.promises.rm.bind(fs.promises);
+    const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
+      if (args[0] === archivePath) {
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+      }
+      return await rm(...args);
+    });
     const result = await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "enforce",
@@ -213,6 +229,7 @@ describe("SQLite historical session disk budget", () => {
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(archivePath ?? "")).toBe(false);
+    expect(removeArchive).toHaveBeenCalledWith(archivePath);
     expect(
       database()
         .db.prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
@@ -386,6 +403,36 @@ describe("SQLite historical session disk budget", () => {
         expect.objectContaining({ storePath }),
       );
     });
+  });
+
+  it("inspects history after the archive probe loses its cached handle", async () => {
+    await createHistoricalTranscript({
+      content: "inspect retained history",
+      nextSessionId: "inspect-live",
+      sessionId: "inspect-old",
+      sessionKey: "agent:main:inspect-history",
+      updatedAt: 1,
+    });
+    const databasePath = database().path;
+    const diskBudget = await import("./disk-budget.js");
+    const probe = diskBudget.hasRetainedSessionTranscriptArchives;
+    const probeSpy = vi
+      .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
+      .mockImplementation(async (pathname) => {
+        const retained = await probe(pathname);
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        return retained;
+      });
+
+    await expect(
+      inspectSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+      }),
+    ).resolves.toMatchObject({ wouldMutate: true });
+    expect(probeSpy).toHaveBeenCalledOnce();
+    expect(sessionExists("inspect-old")).toBe(true);
   });
 
   it("warn mode reports physical overage without extracting or deleting history", async () => {

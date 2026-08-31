@@ -2,7 +2,8 @@
 // prompter) and the gateway `wizard.start {flow:"channels"}` RPC (session
 // prompter driving the Control UI / native clients).
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
@@ -50,7 +51,7 @@ export async function resolveInitialWizardChannelTarget(
   const resolved = resolveChannelSetupEntries({
     cfg,
     installedPlugins: listActiveChannelSetupPlugins(),
-    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
   });
   const matchedEntry =
     resolved.entries.find(
@@ -90,7 +91,12 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     import("../agents.config.js"),
     loadOnboardChannels(),
   ]);
-  const postWriteHooks = onboardChannels.createChannelOnboardingPostWriteHookCollector();
+  const channelSetup = onboardChannels.createChannelSetupTransaction({
+    runtime,
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
+  });
   let selection: ChannelChoice[] = [];
   const accountIds: Partial<Record<ChannelChoice, string>> = {};
   const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
@@ -105,9 +111,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
     ...(params.deferDeviceLinkToClient ? { deferDeviceLinkToClient: true } : {}),
-    onPostWriteHook: (hook) => {
-      postWriteHooks.collect(hook);
-    },
+    onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     promptAccountIds: true,
     deferStatusUntilSelection: true,
     skipStatusNote: true,
@@ -122,28 +126,21 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    await params.beforePersistentEffect?.();
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: config,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        config: committed.config,
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
+    return await channelSetup.commit(config, async (configToCommit) => {
+      const committed = await commitConfigWithPendingPluginInstalls({
+        nextConfig: configToCommit,
+        ...(baseHash !== undefined ? { baseHash } : {}),
       });
-    }
-    await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
-      hooks: postWriteHooks.drain(),
-      cfg: committed.config,
-      runtime,
-      ...(params.beforePersistentEffect
-        ? { beforePersistentEffect: params.beforePersistentEffect }
-        : {}),
+      if (committed.movedInstallRecords) {
+        await refreshPluginRegistryAfterConfigMutation({
+          config: committed.config,
+          reason: "source-changed",
+          installRecords: committed.installRecords,
+          logger: { warn: (message) => runtime.log(message) },
+        });
+      }
+      return committed.config;
     });
-    return committed.config;
   };
   if (selection.length === 0) {
     if (nextConfig !== cfg) {
@@ -215,7 +212,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
               initialValue: true,
             });
     if (bindNow) {
-      const defaultAgentId = resolveDefaultAgentId(nextConfig);
+      const defaultAgentId = resolveAgentOperationAgentId(nextConfig);
       for (const target of bindTargets) {
         const targetAgentId = await prompter.select({
           message: `Send ${target.channel}/${target.accountId} messages to agent`,

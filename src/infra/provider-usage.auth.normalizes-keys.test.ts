@@ -122,6 +122,7 @@ vi.mock("../agents/auth-profiles.js", () => {
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
     ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) => readStore(agentDir),
     hasAnyAuthProfileStoreSource: (agentDir?: string) =>
       Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
     dedupeProfileIds,
@@ -287,6 +288,7 @@ vi.mock("../agents/cli-credentials.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   syncExternalCliCredentials: () => false,
 }));
 

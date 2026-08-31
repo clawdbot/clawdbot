@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
-// accumulate while the next shard loads. Hold one lock across the full sequence.
-import { spawn, type ChildProcess } from "node:child_process";
+// accumulate while the next shard loads.
 import path from "node:path";
 import {
-  acquireLocalHeavyCheckLockSync,
-  resolveLocalHeavyCheckEnv,
-} from "./lib/local-heavy-check-runtime.mts";
-import { signalExitCode } from "./lib/managed-child-process.mts";
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   selectTsgoCoreTestShards,
@@ -48,35 +48,26 @@ if (concurrencyFlagIndex >= 0) {
     process.exit(1);
   }
 }
-const env = resolveLocalHeavyCheckEnv(process.env);
-const releaseLock =
-  env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1"
-    ? () => {}
-    : acquireLocalHeavyCheckLockSync({
-        cwd: repoRoot,
-        env,
-        toolName: "tsgo:core:test",
-      });
+const env = resolveLocalCheckEnv(process.env);
 
 function runShard(config: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child: ChildProcess = spawn(
-      process.execPath,
-      [path.join(repoRoot, "scripts/run-tsgo.mjs"), "-b", config, "--builders", "1"],
-      {
-        cwd: repoRoot,
-        env: { ...env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-        stdio: "inherit",
-      },
-    );
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      resolve(signal ? signalExitCode(signal) : (code ?? 1));
-    });
+  return runManagedCommand({
+    bin: process.execPath,
+    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
+      "-b",
+      config,
+      "--builders",
+      "1",
+    ]),
+    cwd: repoRoot,
+    env,
+    requireProcessTreeExit: process.platform !== "win32",
   });
 }
 
-try {
+// The batch owns outputs once; its existing compiler concurrency stays intact
+// without children waiting to reacquire their parent's lock.
+await withDistArtifactOwnership(repoRoot, async () => {
   const queue = [...shards];
   let failureCode = 0;
   const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
@@ -86,16 +77,23 @@ try {
       if (!shard || failureCode !== 0) {
         return;
       }
-      const code = await runShard(shard.config);
+      const code = await runShard(shard.config).catch((error: unknown) => {
+        failureCode = 1;
+        throw error;
+      });
       if (code !== 0 && failureCode === 0) {
         failureCode = code;
       }
     }
   });
-  await Promise.all(workers);
+  const results = await Promise.allSettled(workers);
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "tsgo core test shards failed");
+  }
   if (failureCode !== 0) {
     process.exitCode = failureCode;
   }
-} finally {
-  releaseLock();
-}
+});

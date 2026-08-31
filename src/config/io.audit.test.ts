@@ -9,6 +9,7 @@ import {
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
+  readRecentConfigAuditRecords,
   resolveLegacyConfigAuditLogPath,
   sanitizeConfigAuditRecord,
   scrubConfigAuditLog,
@@ -241,6 +242,24 @@ describe("config io audit helpers", () => {
     expect(written.nextHash).toBe("next-hash");
   });
 
+  it("reads a bounded newest-first audit window for Doctor provenance", async () => {
+    const home = await suiteRootTracker.make("recent");
+    const first = createRenameAuditRecord(home);
+    const second = {
+      ...first,
+      ts: "2026-04-07T08:01:00.000Z",
+      previousHash: first.nextHash,
+      nextHash: "newest-hash",
+    };
+    await appendConfigAuditRecord({ env: {}, homedir: () => home, record: first });
+    await appendConfigAuditRecord({ env: {}, homedir: () => home, record: second });
+
+    const recent = readRecentConfigAuditRecords({ env: {}, homedir: () => home, limit: 1 });
+
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({ nextHash: "newest-hash" });
+  });
+
   it("redacts structured audit records before persistence", async () => {
     const home = await suiteRootTracker.make("append-redacted");
     const record = finalizeConfigWriteAuditRecord({
@@ -378,6 +397,11 @@ describe("config io audit helpers", () => {
       expected: ["openclaw", "--password", "***"],
     },
     {
+      name: "password alias covered by the secret suffix matcher",
+      argv: ["openclaw", "--passwd", "fake"],
+      expected: ["openclaw", "--passwd", "***"],
+    },
+    {
       name: "secret flag without a value",
       argv: ["openclaw", "--token"],
       expected: ["openclaw", "--token"],
@@ -474,6 +498,16 @@ describe("config io audit helpers", () => {
         '[{"path":"channels.slack.token","value":"secret-value"}]',
       ],
       expected: ["openclaw", "config", "set", "--batch-json", "***"],
+    },
+    {
+      name: "config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env", "KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env", "***"],
+    },
+    {
+      name: "inline config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env=KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env=***"],
     },
   ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);

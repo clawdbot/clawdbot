@@ -86,6 +86,7 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   backupDir: string;
   skillDirs: readonly string[];
   resultSkillDirs: readonly string[];
+  commit: () => void;
 }): Promise<void> {
   const rollbackDir = path.join(params.backupDir, `.restore-${randomUUID()}`);
   try {
@@ -104,6 +105,9 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   let discardSnapshot = false;
   try {
     await restoreSkillCollectionBackup(params);
+    // Ownership is the durable commit for this filesystem transition. Keep the
+    // snapshot until it succeeds so a failed commit can restore the retryable result.
+    params.commit();
     discardSnapshot = true;
   } catch (error) {
     try {

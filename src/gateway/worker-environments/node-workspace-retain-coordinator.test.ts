@@ -27,7 +27,7 @@ const node = {
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   workerHost: {
     enabled: true,
-    capacity: "available",
+    capacity: { total: 2, available: 2 },
     bundleRetention: 1,
     bundleStatus: 1,
   },
@@ -41,6 +41,8 @@ function environment(overrides: Record<string, unknown> = {}) {
     profileId: "device:node-1",
     profileSnapshot: { install: "bundle", settings: { device: "node-1" } },
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: "node-1",
     sharedHost: true,
     desktop: null,
     bootstrapReceipt: null,
@@ -92,6 +94,7 @@ function createHarness(
   params: {
     environments?: unknown[];
     placements?: unknown[];
+    pendingResults?: ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResults"]>;
     results?: Array<{
       applied: boolean;
       deleted: number;
@@ -128,6 +131,7 @@ function createHarness(
     },
   );
   const transport: NodeWorkerSupervisorTransport = {
+    hasCurrentRunner: () => false,
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
@@ -142,7 +146,8 @@ function createHarness(
     } as Pick<WorkerEnvironmentService, "list">,
     placements: {
       list: () => (params.placements ?? [placement()]) as never,
-    } as Pick<WorkerSessionPlacementStore, "list">,
+      listPendingWorkspaceResults: () => params.pendingResults ?? [],
+    } as Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">,
     warn,
   });
   coordinator.bindTransport(transport);
@@ -156,6 +161,7 @@ describe("node workspace retain coordinator", () => {
         environment(),
         environment({
           environmentId: "environment-other",
+          nodeDeviceId: "node-other",
           profileSnapshot: { settings: { device: "node-other" } },
         }),
         environment({ environmentId: "environment-terminal", state: "orphaned" }),
@@ -193,7 +199,7 @@ describe("node workspace retain coordinator", () => {
         ...node,
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundleRetention: 1,
         },
       },
@@ -413,7 +419,7 @@ describe("node workspace retain coordinator", () => {
     const { coordinator, invoke } = createHarness({
       node: {
         ...node,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       },
     });
 
@@ -551,6 +557,54 @@ describe("node workspace retain coordinator", () => {
     });
     await coordinator.stop();
   });
+
+  it.each(["claimed", "pending", "stale-pending"])(
+    "protects unsettled manifests for %s ownership",
+    async (state) => {
+      const { coordinator, invoke } = createHarness({
+        placements: [
+          placement({
+            turnClaim:
+              state === "claimed"
+                ? {
+                    owner: "worker",
+                    claimId: "claim-1",
+                    runId: "run-1",
+                    generation: 3,
+                    ownerEpoch: 7,
+                  }
+                : null,
+          }),
+        ],
+        pendingResults:
+          state === "claimed"
+            ? []
+            : [
+                {
+                  sessionId: "session-1",
+                  environmentId: "environment-1",
+                  ownerEpoch: state === "pending" ? 7 : 6,
+                  placementGeneration: 3,
+                  claimId: "claim-1",
+                  runId: "run-1",
+                  gatewayInstanceId: "previous-gateway",
+                  recoveryRequestedAtMs: null,
+                  workspaceAcceptedAtMs: null,
+                  stagedResultRef: null,
+                },
+              ],
+      });
+      await coordinator.start();
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        retain: [
+          expect.objectContaining({
+            manifestRefs: state === "stale-pending" ? [`sha256:${"a".repeat(64)}`] : null,
+          }),
+        ],
+      });
+      await coordinator.stop();
+    },
+  );
 
   it("acknowledges the node bundle generation on the next same-connection snapshot", async () => {
     const { coordinator, invoke } = createHarness({

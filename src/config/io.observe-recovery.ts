@@ -662,7 +662,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   return true;
 }
 
-export async function preserveConfigSnapshotAsClobberedCore(params: {
+async function preserveConfigSnapshotAsClobberedCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   observedAt?: string;

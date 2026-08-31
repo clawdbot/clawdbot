@@ -34,8 +34,10 @@ function mapTarVerboseTypeChar(typeChar: string): string {
       return "Socket";
     case "d":
       return "Directory";
-    default:
+    case "-":
       return "File";
+    default:
+      throw new Error(`unable to parse tar entry type: ${typeChar}`);
   }
 }
 

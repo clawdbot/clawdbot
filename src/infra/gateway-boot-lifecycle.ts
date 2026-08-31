@@ -1,6 +1,7 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
@@ -38,13 +39,12 @@ export function formatGatewayCrashLoopManualChannelStartHint(target?: {
   channelId: string;
   accountId?: string;
 }): string {
-  const params = target
-    ? JSON.stringify({
-        channel: target.channelId,
-        ...(target.accountId ? { accountId: target.accountId } : {}),
-      })
-    : `{"channel":"<id>"}`;
-  return `Start a channel manually with: openclaw gateway call channels.start --params '${params}'`;
+  const params = JSON.stringify({
+    channel: target?.channelId ?? "<id>",
+    ...(target?.accountId ? { accountId: target.accountId } : {}),
+  });
+  const command = formatCliCommand("openclaw gateway call channels.start");
+  return `Start a channel manually with: ${command} --params '${params}'`;
 }
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");

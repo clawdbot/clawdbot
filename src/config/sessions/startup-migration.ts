@@ -1,134 +1,118 @@
-import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
-import { migrateOrphanedSessionKeys } from "../../infra/state-migrations.session-store.js";
-import type { PreparedLegacySessionSurfaces } from "../../plugins/legacy-session-surfaces.types.js";
+import fs from "node:fs";
+import path from "node:path";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  isCanonicalSqliteSessionMainKeyCurrent,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
-type PrepareLegacySessionSurfaces = (params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}) => PreparedLegacySessionSurfaces;
-
-/** Runs best-effort session migration and orphan-temp cleanup before runtime reads. */
+/** Maintains existing SQLite stores and returns their physical owners for startup reconciliation. */
 export async function runSessionStartupMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   log: SessionStartupMigrationLogger;
   deps?: {
-    migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
     migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    prepareLegacySessionSurfaces?: PrepareLegacySessionSurfaces;
+    migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-    sweepOrphanSessionStoreTemps?: typeof sweepOrphanSessionStoreTemps;
   };
-}): Promise<boolean> {
+}): Promise<OpenClawAgentDatabaseOptions[]> {
   const env = params.env ?? process.env;
-  const migrate = params.deps?.migrateOrphanedSessionKeys ?? migrateOrphanedSessionKeys;
   const resolveTargets =
     params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
-  let targets: ReturnType<typeof resolveTargets> | undefined;
-  let hasLegacySessionDirectories = true;
-  try {
-    if (
-      !params.cfg.session?.store &&
-      (await resolveAgentSessionDirs(resolveStateDir(env))).length === 0
-    ) {
-      hasLegacySessionDirectories = false;
-    } else {
-      targets = resolveTargets(params.cfg, { env });
-    }
-  } catch (err) {
-    params.log.warn(
-      `session: stale session store temp cleanup failed during startup; continuing: ${String(err)}`,
+  let targets = resolveTargets(params.cfg, { env });
+  // Stable installations may still have file-backed history. Only Doctor imports it;
+  // do not serve an empty SQLite history or rewrite those files during startup.
+  const legacyStore = [
+    path.join(resolveStateDir(env), "sessions", "sessions.json"),
+    ...targets.map((target) => target.storePath),
+  ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
+  if (legacyStore) {
+    throw new Error(
+      `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }
-  if (hasLegacySessionDirectories) {
-    try {
-      const prepareSurfaces =
-        params.deps?.prepareLegacySessionSurfaces ??
-        (await import("../../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces;
-      const result = await migrate({
-        cfg: params.cfg,
-        env,
-        legacySessionSurfaces: prepareSurfaces({ config: params.cfg, env }),
-      });
-      if (result.changes.length > 0) {
-        params.log.info(
-          `session: canonicalized orphaned session keys:\n${result.changes.map((c) => `- ${c}`).join("\n")}`,
-        );
-      }
-      if (result.warnings.length > 0) {
-        params.log.warn(
-          `session: session key migration warnings:\n${result.warnings.map((w) => `- ${w}`).join("\n")}`,
-        );
-      }
-    } catch (err) {
-      params.log.warn(
-        `session: orphaned session key migration failed during startup; continuing: ${String(err)}`,
-      );
-    }
-  }
-  try {
-    const migrateLegacyMain =
-      params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
-    const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "automatic" });
-    if (result.changes.length > 0) {
-      params.log.info(
-        `session: migrated retired main-agent session keys:\n${result.changes.map((change) => `- ${change}`).join("\n")}`,
-      );
-    }
-    if (result.warnings.length > 0) {
-      params.log.warn(
-        `session: retired main-agent session migration warnings:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`,
-      );
-    }
-  } catch (err) {
-    params.log.warn(
-      `session: retired main-agent session migration failed during startup; continuing: ${String(err)}`,
+  const migrateLegacyMain =
+    params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
+  const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "automatic" });
+  if (result.changes.length > 0) {
+    params.log.info(
+      `session: migrated retired main-agent session keys:\n${result.changes.map((change) => `- ${change}`).join("\n")}`,
     );
   }
-  if (!hasLegacySessionDirectories) {
-    return false;
+  if (result.warnings.length > 0) {
+    params.log.warn(
+      `session: retired main-agent session migration warnings:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`,
+    );
   }
-  if (!targets) {
-    return true;
+  if (result.armed) {
+    // A partial move can create the destination before source cleanup succeeds.
+    targets = resolveTargets(params.cfg, { env });
   }
 
-  const sweepTemps = params.deps?.sweepOrphanSessionStoreTemps ?? sweepOrphanSessionStoreTemps;
-  try {
-    let removedFiles = 0;
-    for (const target of targets) {
-      const path = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-        agentId: target.agentId,
-        env: params.env,
-      }).path;
-      const alreadyOpen = isOpenClawAgentDatabaseOpen(path);
-      const database = openOpenClawAgentDatabase({ agentId: target.agentId, path });
-      setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
-      if (!alreadyOpen) {
-        closeOpenClawAgentDatabaseByPath(path);
+  const databases = new Map<string, OpenClawAgentDatabaseOptions>();
+  const migrateWorktreeSessions =
+    params.deps?.migrateManagedWorktreeCanonicalWorkspaces ??
+    migrateManagedWorktreeCanonicalWorkspaces;
+  const registeredDatabases = new Set(
+    listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
+  );
+  let migratedWorktreeSessions = 0;
+  for (const target of targets) {
+    const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    if (databases.has(databasePath) || !fs.existsSync(databasePath)) {
+      continue;
+    }
+    databases.set(databasePath, options);
+    const alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+    try {
+      if (
+        !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
+        !isCanonicalSqliteSessionMainKeyCurrent(options, params.cfg.session?.mainKey)
+      ) {
+        const database = openOpenClawAgentDatabase(options);
+        setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
       }
-      removedFiles += await sweepTemps({ storePath: target.storePath });
+      // Workspace metadata participates in claim matching. Preserve it during a
+      // partial move so the next attempt can finish removing the source claim.
+      if (!result.armed || result.complete) {
+        migratedWorktreeSessions += await migrateWorktreeSessions({
+          ...target,
+          cfg: params.cfg,
+          env,
+        });
+      }
+    } catch (error) {
+      params.log.warn(
+        `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
+      );
+    } finally {
+      if (!alreadyOpen && isOpenClawAgentDatabaseOpen(databasePath)) {
+        closeOpenClawAgentDatabaseByPath(databasePath);
+      }
     }
-    if (removedFiles > 0) {
-      params.log.info(`session: removed ${removedFiles} stale session store temp file(s)`);
-    }
-  } catch (err) {
-    params.log.warn(
-      `session: stale session store temp cleanup failed during startup; continuing: ${String(err)}`,
+  }
+  if (migratedWorktreeSessions > 0) {
+    params.log.info(
+      `session: recorded canonical workspaces for ${migratedWorktreeSessions} managed-worktree session(s)`,
     );
   }
-  return true;
+  return [...databases.values()];
 }

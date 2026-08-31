@@ -21,6 +21,7 @@ describe("initial user message handoff", () => {
         },
       ],
       createdAt: 123,
+      sender: { id: "profile-1", name: "Alice Example" },
     };
 
     prepareInitialUserMessageHandoff(handoff, sessionKey, item, client);
@@ -46,7 +47,12 @@ describe("initial user message handoff", () => {
           },
         ],
         timestamp: 123,
-        __openclaw: { idempotencyKey: "initial-image-run:user", seq: 1 },
+        __openclaw: {
+          idempotencyKey: "initial-image-run:user",
+          senderId: "profile-1",
+          senderName: "Alice Example",
+          seq: 1,
+        },
       },
     });
   });

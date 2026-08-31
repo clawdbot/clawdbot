@@ -1,7 +1,8 @@
 // Gateway HTTP test helpers build minimal request/response doubles and collect
 // client response bodies.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
 
@@ -23,9 +24,11 @@ export function makeMockHttpResponse(): {
     streamEnd();
   });
   const res = Object.assign(stream, {
+    req: new IncomingMessage(new Socket()),
     headersSent: false,
     statusCode: 200,
     setHeader,
+    removeHeader: vi.fn(),
     end,
   }) as unknown as ServerResponse;
   return { res, setHeader, end };

@@ -6,6 +6,7 @@ export type BoardWidgetAppViewState =
   | { status: "stale"; error: string };
 
 export type BoardViewCallbacks = {
+  appViewGeneration?: number;
   applyOps: (ops: BoardOp[]) => Promise<void>;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   selectTab: (tabId: string) => void;

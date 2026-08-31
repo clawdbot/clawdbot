@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
@@ -16,6 +16,8 @@ let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
 let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
+const tempDirs = createTempDirTracker();
+let sessionStorePath: string;
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
@@ -61,8 +63,8 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    resolveSessionStorePathCore: () => "/tmp/sessions.json",
-    resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),
+    resolveSessionStorePathCore: () => sessionStorePath,
+    resolveSessionFilePathCore: vi.fn(() => sessionStorePath),
     loadSessionStore: () => testStore,
     saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -70,7 +72,7 @@ async function loadFreshHealthModulesForTest() {
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
   vi.doMock("../config/sessions/paths.js", () => ({
-    resolveSessionStorePathCore: () => "/tmp/sessions.json",
+    resolveSessionStorePathCore: () => sessionStorePath,
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
     listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
@@ -473,6 +475,11 @@ describe("collectGatewayHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    // Session rows are mocked, but the collector still resolves their physical store.
+    sessionStorePath = path.join(
+      tempDirs.make("openclaw-health-snapshot-sessions-"),
+      "sessions.json",
+    );
     setActiveDegradedPlugins([]);
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
@@ -488,9 +495,10 @@ describe("collectGatewayHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    tempDirs.cleanup();
   });
 
-  it("clamps oversized probe timeouts", async () => {
+  it("does not let callers widen the gateway probe deadline", async () => {
     testConfig = {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
@@ -504,7 +512,9 @@ describe("collectGatewayHealthSnapshot", () => {
 
     await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
 
-    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeGreaterThan(0);
+    expect(timeouts[0]).toBeLessThanOrEqual(7_000);
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {
@@ -585,8 +595,8 @@ describe("collectGatewayHealthSnapshot", () => {
     testStore = {
       global: { updatedAt: Date.now() },
       unknown: { updatedAt: Date.now() },
-      main: { updatedAt: 1000 },
-      foo: { updatedAt: 2000 },
+      "agent:main:main": { updatedAt: 1000 },
+      "agent:main:foo": { updatedAt: 2000 },
     };
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -601,7 +611,7 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(telegram.configured).toBe(false);
     expect(telegram.probe).toBeUndefined();
     expect(snap.sessions.count).toBe(2);
-    expect(snap.sessions.recent[0]?.key).toBe("foo");
+    expect(snap.sessions.recent[0]?.key).toBe("agent:main:foo");
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {
@@ -1029,11 +1039,17 @@ describe("collectGatewayHealthSnapshot", () => {
     };
     testStore = {};
 
-    await getHealthSnapshot({ timeoutMs: 10, probe: false });
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
+    const storeDir = path.dirname(sessionStorePath);
+    expect(snap.sessions.path).toBe(path.join(storeDir, "openclaw-agent.sqlite"));
+    expect(snap.agents.map(({ agentId, sessions }) => ({ agentId, path: sessions.path }))).toEqual([
+      { agentId: "main", path: path.join(storeDir, "openclaw-agent.sqlite") },
+      { agentId: "ops", path: path.join(storeDir, "openclaw-agent.ops.sqlite") },
+    ]);
     expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", storePath: "/tmp/sessions.json" },
-      { agentId: "ops", storePath: "/tmp/sessions.json" },
+      { agentId: "main", clone: false, projection: "list", storePath: sessionStorePath },
+      { agentId: "ops", clone: false, projection: "list", storePath: sessionStorePath },
     ]);
   });
 });

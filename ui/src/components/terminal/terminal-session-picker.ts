@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 
 type TerminalSessionPickerProps = {
@@ -54,16 +55,19 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
               </button>
             </div>
             ${props.loading
-              ? html`<div class="tp-session-empty">${t("terminal.loadingSessions")}</div>`
+              ? renderPanelLoadingSkeleton("terminal", t("terminal.loadingSessions"), true)
               : props.sessions.length === 0
                 ? html`<div class="tp-session-empty">${t("terminal.noSessions")}</div>`
                 : props.sessions.map((session) => {
                     const current = props.currentSessionIds.has(session.sessionId);
-                    const state = current
-                      ? t("terminal.currentSession")
-                      : session.attached
-                        ? t("terminal.sessionAttached")
-                        : t("terminal.detached");
+                    const agentOwned = session.owner?.startsWith("agent:") === true;
+                    const state = `${agentOwned ? `${t("terminal.agentOwnedBadge")} · ` : ""}${
+                      current
+                        ? t("terminal.currentSession")
+                        : session.attached
+                          ? t("terminal.sessionAttached")
+                          : t("terminal.detached")
+                    }`;
                     return html`<button
                       class="tp-session"
                       type="button"

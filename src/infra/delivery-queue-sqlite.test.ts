@@ -12,6 +12,7 @@ import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-q
 import {
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
+  countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
@@ -91,7 +92,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       enqueueValid("valid-b");
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
-      expect(entries).toHaveLength(2);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 
@@ -109,6 +109,24 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
     });
+  });
+
+  it("counts pending rows across only the selected namespaces", () => {
+    enqueueValid("pending");
+    upsertDeliveryQueueEntry({
+      queueName: "other-q",
+      entry: { id: "other", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    upsertDeliveryQueueEntry({
+      queueName: "ignored-q",
+      entry: { id: "ignored", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    completeDeliveryQueueEntry(QUEUE, "pending", stateDir);
+
+    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
+    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
   });
 
   describe("updateDeliveryQueueEntry with corrupt row", () => {

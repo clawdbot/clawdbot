@@ -64,11 +64,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     acknowledged: boolean;
     outcome?: "success" | "failure";
   }> = [];
-  const streamedFailuresOwnedByDispatcher: Record<ReplyDispatchKind, number> = {
-    tool: 0,
-    block: 0,
-    final: 0,
-  };
   const refreshStreamedAcknowledgements = (session: SlackStreamSession) => {
     if (session.pendingText.length === 0) {
       for (const delivery of streamedDeliveries) {
@@ -284,9 +279,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): Promise<string | undefined> => {
-    if (params.payload.isReasoning === true) {
-      return undefined;
-    }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
@@ -347,9 +339,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
   }): Promise<boolean> => {
     const delivered = await deliverPendingStreamFallback(params.session, params.err);
     if (!delivered) {
-      // The reply dispatcher will charge the currently executing payload as
-      // failed; earlier buffered payloads need separate reconciliation below.
-      streamedFailuresOwnedByDispatcher[params.kind] += 1;
       return false;
     }
     replyPlan.markSent();
@@ -389,9 +378,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     appendSeparator?: boolean;
     taskDisplayMode?: "plan" | "timeline";
   }): Promise<void> => {
-    if (params.payload.isReasoning === true) {
-      return;
-    }
     const reply = resolveSendableOutboundReplyParts(params.payload);
     if (!isStreamingEligible(params.payload)) {
       await deliverNormally({
@@ -580,25 +566,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
   };
 
-  const reconcileCounts = (counts: Partial<Record<ReplyDispatchKind, number>>) => {
-    const next = { ...counts };
-    let changed = false;
-    for (const kind of ["tool", "block", "final"] as const) {
-      const failedStreamedCount = streamedDeliveries.filter(
-        (delivery) => delivery.kind === kind && delivery.outcome === "failure",
-      ).length;
-      const additionalFailedStreamed = Math.max(
-        0,
-        failedStreamedCount - streamedFailuresOwnedByDispatcher[kind],
-      );
-      if (additionalFailedStreamed > 0) {
-        next[kind] = Math.max(0, (next[kind] ?? 0) - additionalFailedStreamed);
-        changed = true;
-      }
-    }
-    return changed ? next : counts;
-  };
-
   return Object.assign(state, {
     acknowledgeStoppedStreamedDeliveries,
     deliverNormally,
@@ -610,7 +577,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     isStreamingEligible,
     markPreviewPayloadDelivered,
     rememberDeliveredThreadTs,
-    reconcileCounts,
     resetDeliveryTracker: () => {
       deliveryTracker = createSlackEventDeliveryTracker();
     },

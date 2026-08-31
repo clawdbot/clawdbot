@@ -16,4 +16,4 @@ Generate setup codes and approve device pairing requests.
 
 ## Surface
 
-commands: `/pair`
+slash commands: `/pair`

@@ -10,7 +10,7 @@ import type {
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
-import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { DmScope, GroupScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
@@ -62,6 +62,7 @@ export type AgentRouteBinding = {
   session?: {
     /** Optional session scoping override for conversations matched by this binding. */
     dmScope?: DmScope;
+    groupScope?: GroupScope;
   };
 };
 

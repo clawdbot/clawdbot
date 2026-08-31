@@ -55,6 +55,37 @@
   stroke-linejoin: round;
 }
 
+.board-fullscreen-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.board-fullscreen-button__icon {
+  display: inline-flex;
+}
+
+.board-fullscreen-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane-primary-column:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+/* Fullscreen detaches the pane from shell chrome even though the DOM ancestry
+   still matches titlebar inset selectors in split-view.css. */
+.chat-pane-primary-column:fullscreen > .chat-pane__header {
+  padding-left: 12px !important;
+}
+
 .board-session-surface {
   position: relative;
   display: flex;

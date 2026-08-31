@@ -484,11 +484,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
       meta: "run tests (workspace)",
       error: "fatal: missing fixture",
       mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
     });
   });
 

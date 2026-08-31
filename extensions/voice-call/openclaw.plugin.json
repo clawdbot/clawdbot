@@ -92,6 +92,11 @@
       "label": "Tailscale Mode",
       "advanced": true
     },
+    "tailscale.port": {
+      "label": "Tailscale HTTPS Port",
+      "help": "External HTTPS port. Funnel supports 443, 8443, or 10000; Serve accepts any valid port.",
+      "advanced": true
+    },
     "tailscale.path": {
       "label": "Tailscale Path",
       "advanced": true
@@ -427,6 +432,12 @@
           "mode": {
             "type": "string",
             "enum": ["off", "serve", "funnel"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 443
           },
           "path": {
             "type": "string"

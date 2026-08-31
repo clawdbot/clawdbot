@@ -15,17 +15,20 @@ import type {
   PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime-types.js";
 import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
-import { resolveApprovalRequestKind, type ChannelApprovalKind } from "./approval-types.js";
+import type {
+  ApprovalRequestInput,
+  ChannelApprovalKind,
+  NormalizedApprovalRequest,
+} from "./approval-types.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
-import type { ExecApprovalResolved, ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalResolved, PluginApprovalRequest } from "./plugin-approvals.js";
+import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ApprovalRequestInput;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
 export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
@@ -188,12 +191,7 @@ export function createChannelNativeApprovalRuntime<
   >,
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
-  const resolveApprovalKind =
-    adapter.resolveApprovalKind ??
-    ((request: TRequest): ChannelApprovalKind => resolveApprovalRequestKind(request));
-  const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
-    adapter.eventKinds ?? ["exec"],
-  );
+  const handledEventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
   const gatewayRuntime = getGatewayNativeApprovalRuntime();
   const createRouteReporter =
     gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;
@@ -202,7 +200,8 @@ export function createChannelNativeApprovalRuntime<
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
-    shouldHandle: (request) => adapter.shouldHandle(request as TRequest),
+    // SAFETY: the route coordinator receives only normalized requests from this runtime.
+    shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
       classifyApprovalRequestChannelRoute({
         cfg: adapter.cfg,
@@ -236,7 +235,7 @@ export function createChannelNativeApprovalRuntime<
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {
-      const approvalKind = resolveApprovalKind(request);
+      const approvalKind = adapter.resolveApprovalKind?.(request) ?? request.approvalKind;
       const selection = routeReporter.selectRequest({
         approvalKind,
         request,
@@ -281,7 +280,7 @@ export function createChannelNativeApprovalRuntime<
     },
     nowMs,
     deliverRequested: async (request) => {
-      const approvalKind = resolveApprovalKind(request);
+      const approvalKind = adapter.resolveApprovalKind?.(request) ?? request.approvalKind;
       let deliveryPlan: ChannelApprovalNativeDeliveryPlan = {
         targets: [],
         originTarget: null,

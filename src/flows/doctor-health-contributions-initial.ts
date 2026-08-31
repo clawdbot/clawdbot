@@ -94,6 +94,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:command-owner",
       label: "Command owner",
       healthCheckIds: ["core/doctor/command-owner"],

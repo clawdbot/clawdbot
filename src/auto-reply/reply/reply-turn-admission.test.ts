@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
@@ -47,10 +48,9 @@ vi.mock(
       ...actual,
       releaseMainSessionRecoveryOwner: async (
         lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
-        options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
       ) => {
         await recoveryOwnerReleaseMocks.beforeRelease();
-        return await actual.releaseMainSessionRecoveryOwner(lease, options);
+        return await actual.releaseMainSessionRecoveryOwner(lease);
       },
     };
   },
@@ -494,7 +494,7 @@ describe("reply turn admission", () => {
     },
   );
 
-  it("waits through deferred owner release retries beyond one settle slice", async () => {
+  it("keeps deferred owner release retries from retaining a successor", async () => {
     vi.useFakeTimers();
     try {
       const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
@@ -524,15 +524,15 @@ describe("reply turn admission", () => {
       }
       const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
       let failures = 0;
-      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation(
-        async (params) => {
-          if (failures < 15) {
+      const accessorSpy = vi
+        .spyOn(sessionAccessor, "applySessionEntryReplacements")
+        .mockImplementation(async (params) => {
+          if (failures < 3) {
             failures += 1;
-            throw new Error("transient session-store failure");
+            throw new Error("SQLite session entry changed before replacement");
           }
           return await applySessionEntryReplacements(params);
-        },
-      );
+        });
 
       owner.operation.complete();
       const successor = admitTestReplyTurn({
@@ -545,10 +545,9 @@ describe("reply turn admission", () => {
       void successor.then(() => {
         successorSettled = true;
       });
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS + 1);
-      expect(successorSettled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(successorSettled).toBe(true);
+      accessorSpy.mockRestore();
       const admitted = await successor;
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
@@ -663,17 +662,91 @@ describe("reply turn admission", () => {
         },
       });
 
-      await expect(
-        admitTestReplyTurn({
-          sessionKey,
-          sessionId,
-          expectedSessionId: sessionId,
-          storePath,
-          kind,
-        }),
-      ).rejects.toThrow(/changed while starting work/i);
+      const rejection = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind,
+      }).catch((error: unknown) => error);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).toMatchObject({ code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
+      expect((rejection as Error).message).toMatch(/ended during restart recovery/i);
     },
   );
+
+  it("admits an explicit reset without reopening its restart tombstone", async () => {
+    const sessionKey = "agent:main:matrix:channel:recovery-reset";
+    const sessionId = "tombstoned-session";
+    const archivedAt = Date.now() - 1_000;
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        archivedAt,
+        status: "failed",
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: {
+            reason: "automatic recovery exhausted",
+            recoveredSessionId: "dashboard-successor",
+            recoveredSessionKey: "agent:main:dashboard:successor",
+          },
+        },
+      },
+    });
+
+    const admission = await admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      resetTriggered: true,
+      allowRestartTombstoneReset: true,
+    });
+
+    expect(admission.status).toBe("owned");
+    expect(await readSessionEntry(storePath, sessionKey)).toMatchObject({
+      sessionId,
+      archivedAt,
+      mainRestartRecovery: {
+        tombstone: { recoveredSessionId: "dashboard-successor" },
+      },
+    });
+    if (admission.status === "owned") {
+      admission.operation.complete();
+    }
+  });
+
+  it("does not treat resetTriggered alone as restart-tombstone authority", async () => {
+    const sessionKey = "agent:main:matrix:channel:untrusted-reset-flag";
+    const sessionId = "tombstoned-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      },
+    });
+
+    await expect(
+      admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        resetTriggered: true,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+  });
 
   it("admits a visible turn after clearing orphaned restart-recovery fences", async () => {
     const sessionKey = "agent:main:telegram:topic:orphaned-recovery-fence";

@@ -39,11 +39,6 @@ import {
   type WorkboardTestClient,
 } from "./test/index-helpers.ts";
 
-function requestPatch(client: ReturnType<typeof createClient>, index: number) {
-  return (client.request.mock.calls[index]?.[1] as { patch?: Record<string, unknown> } | undefined)
-    ?.patch;
-}
-
 function requestCalls(client: WorkboardTestClient, method: string) {
   return client.request.mock.calls.filter(([calledMethod]) => calledMethod === method);
 }
@@ -98,25 +93,6 @@ function createSessionCard(overrides: Partial<WorkboardCard> = {}) {
   return createWorkboardCard({ sessionKey: sampleSession.key, ...overrides });
 }
 
-function createStaleSessionCard(
-  lastSessionUpdatedAt: number,
-  overrides: Partial<WorkboardCard> = {},
-) {
-  return createSessionCard({
-    status: "running",
-    ...overrides,
-    metadata: {
-      ...overrides.metadata,
-      stale: {
-        detectedAt: 1,
-        lastSessionUpdatedAt,
-        reason: "Linked session has not reported recent activity.",
-        ...overrides.metadata?.stale,
-      },
-    },
-  });
-}
-
 function createConfirmationCards(count: number) {
   return Array.from({ length: count }, (_, index) =>
     createWorkboardCard({
@@ -146,9 +122,10 @@ function createConfirmationClient(failTaskId?: string) {
 let host: object;
 let state: ReturnType<typeof getWorkboardState>;
 
-function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = "running") {
+function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = card.status) {
   state.draftOpen = true;
   state.editingCardId = card.id;
+  state.editingCardBase = card;
   state.draftTitle = card.title;
   state.draftNotes = card.notes ?? "";
   state.draftStatus = status;
@@ -197,10 +174,9 @@ function loadBoard(
 
 function syncLifecycle(
   client: WorkboardTestClient,
-  sessions: GatewaySessionRow[] = [],
-  options: Omit<Parameters<typeof syncWorkboardLifecycle>[0], "host" | "client" | "sessions"> = {},
+  options: Omit<Parameters<typeof syncWorkboardLifecycle>[0], "host" | "client"> = {},
 ) {
-  return syncWorkboardLifecycle({ host, client, sessions, ...options });
+  return syncWorkboardLifecycle({ host, client, ...options });
 }
 
 function refreshBoard(
@@ -316,6 +292,18 @@ describe("workboard controller", () => {
     ).toBe("claude-cli");
   });
 
+  it("filters malformed metadata children without discarding valid siblings", () => {
+    expect(
+      normalizeMetadata({
+        comments: [
+          { id: "comment-1", body: "kept", createdAt: 1 },
+          { id: "comment-2", body: 42, createdAt: 2 },
+          null,
+        ],
+      }),
+    ).toEqual({ comments: [{ id: "comment-1", body: "kept", createdAt: 1 }] });
+  });
+
   describe("runtime ownership", () => {
     it("keeps state pristine when lifecycle teardown happens before first access", () => {
       const pristineHost = {};
@@ -360,6 +348,7 @@ describe("workboard controller", () => {
             {
               id: "default",
               name: "Inbox",
+              automationJobId: "job-categorize-inbox",
               total: 1,
               active: 1,
               archived: 0,
@@ -391,6 +380,7 @@ describe("workboard controller", () => {
         {
           id: "default",
           name: "Inbox",
+          automationJobId: "job-categorize-inbox",
           total: 1,
           active: 1,
           archived: 0,
@@ -427,49 +417,6 @@ describe("workboard controller", () => {
 
       expect(requestCalls(client, "workboard.cards.list").length).toBe(2);
       expect(getWorkboardState(host).cards).toEqual([currentCard]);
-    });
-
-    it("tracks lifecycle writes until a same-host reload can proceed", async () => {
-      const linkedCard = makeCard({ sessionKey: sampleSession.key });
-      const updatedCard = makeCard({ ...linkedCard, status: "running" });
-      const lifecycleWrite = createDeferred<{ card: WorkboardCard }>();
-      state.loaded = true;
-      state.cards = [linkedCard];
-      state.lifecycleTasksPrepared = true;
-      state.lifecycleTasksPreparedAt = Date.now();
-      const client = createClient((method) => {
-        if (method === "workboard.cards.update") {
-          return lifecycleWrite.promise;
-        }
-        if (method === "workboard.cards.list") {
-          return listResult([updatedCard], ["todo", "running"]);
-        }
-        return {};
-      });
-
-      const syncing = syncLifecycle(client, [sampleSession]);
-      await waitForFast(() => {
-        expect(client.request).toHaveBeenCalledWith(
-          "workboard.cards.update",
-          expect.objectContaining({ id: linkedCard.id }),
-        );
-      });
-      stopWorkboardLifecycleRefresh(host);
-
-      const capture = captureSessionToWorkboard({
-        host,
-        client: client as never,
-        session: sampleSession,
-      });
-      await Promise.resolve();
-      expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
-
-      lifecycleWrite.resolve({ card: updatedCard });
-      await syncing;
-      await capture;
-
-      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-      expect(state.cards).toEqual([updatedCard]);
     });
   });
 
@@ -968,8 +915,8 @@ describe("workboard controller", () => {
     await loadBoard(client, { requestUpdate });
     vi.clearAllMocks();
 
-    await syncLifecycle(client, [], { requestUpdate });
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(requestUpdate).not.toHaveBeenCalled();
@@ -1494,9 +1441,9 @@ describe("workboard controller", () => {
   it("blocks dispatch while a card draft write is in flight", async () => {
     const update = createDeferred<unknown>();
     state.cards = [sampleCard];
+    openEditDraft(sampleCard);
     state.draftTitle = "Move out of ready";
     state.draftStatus = "backlog";
-    state.editingCardId = sampleCard.id;
     const client = createClient((method) => {
       if (method === "workboard.cards.update") {
         return update.promise;
@@ -1785,7 +1732,7 @@ describe("workboard controller", () => {
       return {};
     });
     state.cards = [sampleCard];
-    state.editingCardId = sampleCard.id;
+    openEditDraft(sampleCard);
     state.draftTitle = "Saved title";
 
     const refresh = loadBoard(client);
@@ -1964,8 +1911,7 @@ describe("workboard controller", () => {
       return {};
     });
     setLoadedCard(sampleCard);
-    state.draftOpen = true;
-    state.editingCardId = sampleCard.id;
+    openEditDraft(sampleCard);
     state.draftTitle = "Unsaved edit";
 
     const save = saveDraft(client);
@@ -2554,8 +2500,7 @@ describe("workboard controller", () => {
 
   it("updates cards from draft state when editing", async () => {
     state.cards = [sampleCard];
-    state.draftOpen = true;
-    state.editingCardId = sampleCard.id;
+    openEditDraft(sampleCard);
     state.draftTitle = "Updated board";
     state.draftNotes = "New notes";
     state.draftStatus = "review";
@@ -2577,6 +2522,7 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: sampleCard.updatedAt,
       patch: {
         title: "Updated board",
         notes: "New notes",
@@ -2590,6 +2536,86 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("rebases stale drafts onto authoritative concurrent card changes", async () => {
+    const current = makeMovedCard(sampleCard, {
+      position: 2000,
+      sessionKey: "agent:main:dashboard:concurrent",
+    });
+    const saved = { ...current, title: "Operator title", updatedAt: 3 } satisfies WorkboardCard;
+    state.cards = [sampleCard];
+    openEditDraft(sampleCard);
+    state.draftTitle = "Operator title";
+    const client = createSequencedClient({
+      "workboard.cards.update": [
+        new GatewayRequestError({
+          code: "workboard_conflict",
+          message: "Card changed while you were editing. Review the latest values and retry.",
+          details: { type: "workboard_card_conflict", card: current },
+        }),
+        { card: saved },
+      ],
+    });
+
+    await saveDraft(client);
+
+    expect(state.cards).toEqual([current]);
+    expect(state.draftOpen).toBe(true);
+    expect(state.draftTitle).toBe("Operator title");
+    expect(state.draftStatus).toBe("running");
+    expect(state.draftSessionKey).toBe("agent:main:dashboard:concurrent");
+    expect(state.editingCardBase).toEqual(current);
+    expect(state.error).toContain("unsaved edits remain");
+
+    await saveDraft(client);
+
+    expect(client.request).toHaveBeenLastCalledWith("workboard.cards.update", {
+      id: sampleCard.id,
+      expectedUpdatedAt: current.updatedAt,
+      patch: { title: "Operator title" },
+    });
+    expect(state.cards).toEqual([saved]);
+    expect(state.draftOpen).toBe(false);
+  });
+
+  it("rebases an open draft after commenting and saves once", async () => {
+    const commented = makeCommentedCard(sampleCard, "Keep this context", { updatedAt: 2 });
+    const saved = { ...commented, title: "Operator title", updatedAt: 3 } satisfies WorkboardCard;
+    state.cards = [sampleCard];
+    openEditDraft(sampleCard);
+    state.draftTitle = "Operator title";
+    state.draftCommentBody = "Keep this context";
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.comment") {
+        return { card: commented };
+      }
+      if (method === "workboard.cards.update") {
+        if ((params as { expectedUpdatedAt?: number }).expectedUpdatedAt !== commented.updatedAt) {
+          throw new GatewayRequestError({
+            code: "workboard_conflict",
+            message: "stale editor",
+            details: { type: "workboard_card_conflict", card: commented },
+          });
+        }
+        return { card: saved };
+      }
+      return {};
+    });
+
+    await commentCard(client, {});
+    expect(state.draftTitle).toBe("Operator title");
+    expect(state.editingCardBase).toEqual(commented);
+    await saveDraft(client);
+
+    expect(requestCalls(client, "workboard.cards.update")).toHaveLength(1);
+    expect(client.request).toHaveBeenLastCalledWith("workboard.cards.update", {
+      id: sampleCard.id,
+      expectedUpdatedAt: commented.updatedAt,
+      patch: { title: "Operator title" },
+    });
+    expect(state.cards).toEqual([saved]);
+    expect(state.draftOpen).toBe(false);
   });
 
   it("creates cards from draft state through the save action", async () => {
@@ -2671,49 +2697,13 @@ describe("workboard controller", () => {
     expect(state.draftTemplateId).toBe("");
   });
 
-  it("keeps edit-modal status saves from being rewritten by stale lifecycle sync", async () => {
-    const linked = createWorkboardCard({
-      sessionKey: sampleSession.key,
-      execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
-    });
-    setLoadedCard(linked);
-    openEditDraft(linked);
-    const saved = makeMovedCard(linked);
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return { card: saved };
-      }
-      return {};
-    });
-
-    await saveDraft(client);
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledTimes(3);
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({ status: "running" }),
-    });
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request.mock.calls[2]?.[1]).toMatchObject({
-      id: "card-1",
-      patch: { execution: expect.objectContaining({ status: "review" }) },
-    });
-    expect(requestPatch(client, 2)).not.toHaveProperty("status");
-    expect(state.cards[0]).toMatchObject({ status: "running" });
-  });
-
-  it("does not start lifecycle writes while dispatch is active", async () => {
+  it("does not refresh task links while dispatch is active", async () => {
     state.loaded = true;
     state.dispatching = true;
     state.cards = [makeCard({ sessionKey: sampleSession.key })];
-    const client = createClient({
-      "workboard.cards.update": { card: makeCard({ status: "running" }) },
-    });
+    const client = createClient({});
 
-    await syncLifecycle(client, [makeSession({ status: "running", hasActiveRun: true })]);
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalled();
   });
@@ -2729,69 +2719,14 @@ describe("workboard controller", () => {
     state.cards = [archived];
     const client = createClient({});
 
-    await syncLifecycle(client, [
-      makeSession({ status: "done", hasActiveRun: false, updatedAt: 20 }),
-    ]);
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalled();
     expect(state.cards).toEqual([archived]);
     expect(state.tasksByCardId.size).toBe(0);
   });
 
-  it("reconciles active session cards without rewriting an archived sibling", async () => {
-    state.loaded = true;
-    const archived = createWorkboardCard({
-      id: "archived-session-card",
-      status: "running",
-      sessionKey: sampleSession.key,
-      taskId: "archived-task",
-      metadata: { archivedAt: 10 },
-    });
-    const active = createWorkboardCard({
-      id: "active-session-card",
-      status: "todo",
-      sessionKey: sampleSession.key,
-    });
-    state.cards = [archived, active];
-    const updated = makeCard({ ...active, status: "review" });
-    const client = createClient((method) =>
-      method === "workboard.cards.update" ? { card: updated } : {},
-    );
-
-    await syncLifecycle(client, [
-      makeSession({ status: "done", hasActiveRun: false, updatedAt: 20 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.update",
-      expect.objectContaining({ id: active.id }),
-    );
-    expect(state.cards.find((card) => card.id === archived.id)).toEqual(archived);
-  });
-
-  it.each(["editing", "dragging"] as const)(
-    "does not start lifecycle writes while a card is %s",
-    async (interaction) => {
-      state.loaded = true;
-      state.cards = [makeCard({ sessionKey: sampleSession.key })];
-      if (interaction === "editing") {
-        state.draftOpen = true;
-        state.editingCardId = sampleCard.id;
-      } else {
-        state.draggedCardId = sampleCard.id;
-      }
-      const client = createClient({
-        "workboard.cards.update": { card: makeCard({ status: "running" }) },
-      });
-
-      await syncLifecycle(client, [makeSession({ status: "running", hasActiveRun: true })]);
-
-      expect(client.request).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not start lifecycle writes while a canonical refresh is loading", async () => {
+  it("does not refresh task links while a canonical refresh is loading", async () => {
     state.loaded = true;
     state.cards = [makeCard({ sessionKey: sampleSession.key })];
     const loadResponse = createDeferred<unknown>();
@@ -2799,15 +2734,12 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return loadResponse.promise;
       }
-      if (method === "workboard.cards.update") {
-        return { card: makeCard({ status: "running" }) };
-      }
       return {};
     });
 
     const loading = loadBoard(client);
     await Promise.resolve();
-    await syncLifecycle(client, [makeSession({ status: "running", hasActiveRun: true })]);
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledTimes(1);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
@@ -2815,13 +2747,14 @@ describe("workboard controller", () => {
     await loading;
   });
 
-  it("does not start lifecycle writes while edit-modal saves are in flight", async () => {
+  it("does not refresh task links while edit-modal saves are in flight", async () => {
     const linked = createWorkboardCard({
       sessionKey: sampleSession.key,
       execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
     });
     setLoadedCard(linked);
     openEditDraft(linked);
+    state.draftTitle = "Saved while lifecycle waits";
     const saved = makeMovedCard(linked);
     const saveResponse = createDeferred<{ card: WorkboardCard }>();
     const client = createClient((method) => {
@@ -2833,9 +2766,7 @@ describe("workboard controller", () => {
 
     const saving = saveDraft(client);
     await Promise.resolve();
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledOnce();
     saveResponse.resolve({ card: saved });
@@ -2888,7 +2819,7 @@ describe("workboard controller", () => {
           ],
         };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return { card: created };
       }
       return {};
@@ -2903,7 +2834,7 @@ describe("workboard controller", () => {
       limit: 40,
       maxChars: 6000,
     });
-    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.create", {
+    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.captureSession", {
       title: "Fix login",
       notes: [
         `Session: ${sampleSession.key}`,
@@ -2920,6 +2851,28 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
   });
 
+  it("captures queued sessions as todo instead of running", async () => {
+    state.loaded = true;
+    const session = makeSession({ status: "queued", hasActiveRun: true });
+    const created = createSessionCard({ status: "todo" });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.captureSession") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    await captureSession(client, session);
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.captureSession",
+      expect.objectContaining({ status: "todo" }),
+    );
+  });
+
   it("captures a session on the selected named board", async () => {
     state.loaded = true;
     state.boardFilter = "ops";
@@ -2933,7 +2886,7 @@ describe("workboard controller", () => {
       if (method === "chat.history") {
         return { messages: [] };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return { card: created };
       }
       return {};
@@ -2945,7 +2898,7 @@ describe("workboard controller", () => {
     });
 
     expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.create",
+      "workboard.cards.captureSession",
       expect.objectContaining({ boardId: "ops", sessionKey: sampleSession.key }),
     );
     expect(state.cards).toContainEqual(created);
@@ -3081,7 +3034,7 @@ describe("workboard controller", () => {
       if (method === "chat.history") {
         return { messages: [] };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return (params as { sessionKey: string }).sessionKey === firstSession.key
           ? firstCreate.promise
           : { card: secondCard };
@@ -3092,8 +3045,10 @@ describe("workboard controller", () => {
     const firstCapture = captureSession(client, firstSession);
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
-        "workboard.cards.create",
-        expect.objectContaining({ sessionKey: firstSession.key }),
+        "workboard.cards.captureSession",
+        expect.objectContaining({
+          sessionKey: firstSession.key,
+        }),
       );
     });
 
@@ -3122,7 +3077,7 @@ describe("workboard controller", () => {
       if (method === "chat.history") {
         return { messages: [] };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return create.promise;
       }
       return {};
@@ -3133,12 +3088,14 @@ describe("workboard controller", () => {
     list.resolve({ cards: [], statuses: ["todo"] });
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
-        "workboard.cards.create",
-        expect.objectContaining({ sessionKey: sampleSession.key }),
+        "workboard.cards.captureSession",
+        expect.objectContaining({
+          sessionKey: sampleSession.key,
+        }),
       );
     });
 
-    expect(requestCalls(client, "workboard.cards.create")).toHaveLength(1);
+    expect(requestCalls(client, "workboard.cards.captureSession")).toHaveLength(1);
     create.resolve({ card: created });
     const captures = await Promise.all([firstCapture, secondCapture]);
 
@@ -3182,7 +3139,7 @@ describe("workboard controller", () => {
       if (method === "chat.history") {
         return { messages: [] };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return { card: created };
       }
       return {};
@@ -3197,60 +3154,9 @@ describe("workboard controller", () => {
     await loading;
 
     await expect(captured).resolves.toMatchObject({ sessionKey: sampleSession.key });
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object));
-  });
-
-  it("waits for retained lifecycle writes before capturing after teardown", async () => {
-    const lifecycleCard = createSessionCard();
-    const capturedSession = makeSession({ key: "agent:main:dashboard:capture" });
-    const capturedCard = makeCard({
-      id: "captured-card",
-      sessionKey: capturedSession.key,
-    });
-    const lifecycleUpdate = createDeferred<unknown>();
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return lifecycleUpdate.promise;
-      }
-      if (method === "workboard.cards.list") {
-        return {
-          cards: [{ ...lifecycleCard, status: "running" }],
-          statuses: ["todo", "running", "done"],
-        };
-      }
-      if (method === "tasks.list") {
-        return { tasks: [] };
-      }
-      if (method === "chat.history") {
-        return { messages: [] };
-      }
-      if (method === "workboard.cards.create") {
-        return { card: capturedCard };
-      }
-      return {};
-    });
-    setLoadedCard(lifecycleCard);
-    state.lifecycleTasksPrepared = true;
-    state.lifecycleTasksPreparedAt = Date.now();
-
-    const syncing = syncLifecycle(client, [sampleSession]);
-    await waitForFast(() => {
-      expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-    });
-    stopWorkboardLifecycleRefresh(host);
-    const capture = captureSession(client, capturedSession);
-    await Promise.resolve();
-
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
-
-    lifecycleUpdate.resolve({ card: { ...lifecycleCard, status: "running" } });
-    await syncing;
-
-    await expect(capture).resolves.toEqual(capturedCard);
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.create",
-      expect.objectContaining({ sessionKey: capturedSession.key }),
+      "workboard.cards.captureSession",
+      expect.any(Object),
     );
   });
 
@@ -3266,7 +3172,7 @@ describe("workboard controller", () => {
           messages: [{ role: "user", content: [{ type: "text", text: `${textPrefix}😀tail` }] }],
         };
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return { card: makeCard({ title: `${titlePrefix}...` }) };
       }
       return {};
@@ -3276,7 +3182,7 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(
       3,
-      "workboard.cards.create",
+      "workboard.cards.captureSession",
       expect.objectContaining({
         title: `${titlePrefix}...`,
         notes: [`Session: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
@@ -3289,133 +3195,19 @@ describe("workboard controller", () => {
   it("starts a task run and links it back to the card", async () => {
     const running = createLinkedCard();
     const client = createClient({
-      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "workboard.cards.start": { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" },
       "tasks.list": { tasks: [sampleTask] },
-      "workboard.cards.update": { card: running },
     });
 
     const sessionKey = await startSampleCard(client);
 
     expect(sessionKey).toBe(sampleTaskSessionKey);
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "workboard.cards.update",
-      expect.objectContaining({
-        id: "card-1",
-        patch: { status: "running" },
-      }),
-    );
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({
-        sessionKey: sampleTaskSessionKey,
-        label: "Build board (card-1)",
-        message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
-        idempotencyKey: "workboard:default:card-1:1",
-      }),
-    );
-    expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("model");
-    expect(client.request).toHaveBeenNthCalledWith(3, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(
-      4,
-      "workboard.cards.update",
-      expect.objectContaining({
-        id: "card-1",
-        patch: expect.objectContaining({
-          status: "running",
-          runId: "run-1",
-          taskId: "task-1",
-        }),
-      }),
-    );
-    expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
-  });
-
-  it("keeps bounded task session labels on a UTF-16 boundary", async () => {
-    const title = `${"a".repeat(499)}🚀tail`;
-    const client = createClient({
-      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
-      "tasks.list": { tasks: [sampleTask] },
-      "workboard.cards.update": { card: makeCard({ title, status: "running" }) },
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.start", {
+      id: sampleCard.id,
     });
-
-    await startCard(client, {
-      card: makeCard({ title }),
-    });
-
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({
-        label: `${"a".repeat(499)}... (card-1)`,
-      }),
-    );
-  });
-
-  it("starts reassigned cards with the current task session key", async () => {
-    const expectedSessionKey = "agent:codex-main:subagent:workboard-default-card-1";
-    const staleLinked = makeCard({
-      agentId: "codex-main",
-      sessionKey: "agent:old-agent:dashboard:stale",
-    });
-    const running = {
-      ...staleLinked,
-      status: "running",
-      sessionKey: expectedSessionKey,
-      runId: "run-1",
-      taskId: "task-1",
-    };
-    const client = createClient({
-      agent: { sessionKey: expectedSessionKey, runId: "run-1" },
-      "tasks.list": {
-        tasks: [makeTask({ childSessionKey: expectedSessionKey })],
-      },
-      "workboard.cards.update": { card: running },
-    });
-
-    const sessionKey = await startCard(client, {
-      card: staleLinked,
-    });
-
-    expect(sessionKey).toBe(expectedSessionKey);
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({
-        agentId: "codex-main",
-        sessionKey: expectedSessionKey,
-      }),
-    );
-  });
-
-  // Cards persist whatever agent id they were created with, so the worker key
-  // canonicalizes it: "Codex-Main" and "codex-main" name one session, not two.
-  it("canonicalizes a card's agent id in the worker session key", async () => {
-    const expectedSessionKey = "agent:codex-main:subagent:workboard-default-card-1";
-    const mixedCase = makeCard({ agentId: "Codex-Main" });
-    const running = {
-      ...mixedCase,
-      status: "running",
-      sessionKey: expectedSessionKey,
-      runId: "run-1",
-    } satisfies WorkboardCard;
-    const client = createClient({
-      agent: { runId: "run-1" },
-      "tasks.list": { tasks: [] },
-      "workboard.cards.update": { card: running },
-    });
-
-    const sessionKey = await startCard(client, {
-      card: mixedCase,
-    });
-
-    expect(sessionKey).toBe(expectedSessionKey);
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({ sessionKey: expectedSessionKey }),
-    );
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.list", { limit: 500 });
+    expect(state.cards).toEqual([running]);
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
 
   it("waits briefly for task ledger registration after a started run", async () => {
@@ -3423,10 +3215,12 @@ describe("workboard controller", () => {
     const running = createLinkedCard();
     const client = createSequencedClient(
       {
-        agent: [{ sessionKey: sampleTaskSessionKey, runId: "run-1" }],
+        "workboard.cards.start": [
+          { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" },
+        ],
         "tasks.list": [{ tasks: [] }, { tasks: [] }, { tasks: [sampleTask] }],
       },
-      { card: running },
+      {},
     );
 
     const started = startSampleCard(client);
@@ -3435,12 +3229,7 @@ describe("workboard controller", () => {
 
     expect(sessionKey).toBe(sampleTaskSessionKey);
     expect(requestCalls(client, "tasks.list").length).toBe(3);
-    expect(client.request).toHaveBeenLastCalledWith(
-      "workboard.cards.update",
-      expect.objectContaining({
-        patch: expect.objectContaining({ taskId: "task-1" }),
-      }),
-    );
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
 
   it("keeps a successfully started run when task lookup stays unavailable", async () => {
@@ -3451,8 +3240,8 @@ describe("workboard controller", () => {
       runId: "run-1",
     });
     const client = createClient((method) => {
-      if (method === "agent") {
-        return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
+      if (method === "workboard.cards.start") {
+        return { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" };
       }
       if (method === "tasks.list") {
         throw new Error("task ledger unavailable");
@@ -3466,16 +3255,7 @@ describe("workboard controller", () => {
 
     expect(sessionKey).toBe(sampleTaskSessionKey);
     expect(client.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-    expect(client.request).toHaveBeenLastCalledWith(
-      "workboard.cards.update",
-      expect.objectContaining({
-        patch: expect.objectContaining({
-          sessionKey: sampleTaskSessionKey,
-          runId: "run-1",
-          taskId: null,
-        }),
-      }),
-    );
+    expect(state.cards).toEqual([running]);
     expect(getWorkboardState(host).error).toBeNull();
   });
 
@@ -3498,8 +3278,12 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return { cards: [parent, child], statuses: ["todo", "running", "done"] };
       }
-      if (method === "agent") {
-        return { sessionKey: "subagent:workboard-default-child-1", runId: "run-1" };
+      if (method === "workboard.cards.start") {
+        return {
+          card: running,
+          sessionKey: "subagent:workboard-default-child-1",
+          runId: "run-1",
+        };
       }
       if (method === "tasks.list") {
         return { tasks: [] };
@@ -3514,22 +3298,13 @@ describe("workboard controller", () => {
     });
 
     expect(sessionKey).toBe("subagent:workboard-default-child-1");
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "workboard.cards.update",
-      expect.objectContaining({ id: child.id, patch: { status: "running" } }),
-    );
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({ sessionKey: "subagent:workboard-default-child-1" }),
-    );
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.start", { id: child.id });
   });
 
   it("does not create a session when the gateway rejects start preflight", async () => {
     const client = createSequencedClient(
       {
-        "workboard.cards.update": [
+        "workboard.cards.start": [
           new Error("Parent cards must be done before starting this card."),
         ],
       },
@@ -3540,78 +3315,10 @@ describe("workboard controller", () => {
 
     expect(sessionKey).toBeNull();
     expect(client.request).toHaveBeenCalledTimes(1);
-    expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.update",
-      expect.objectContaining({ patch: { status: "running" } }),
-    );
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.start", { id: sampleCard.id });
     expect(getWorkboardState(host).error).toBe(
       "Parent cards must be done before starting this card.",
     );
-  });
-
-  it("rolls back the running preflight when task run creation fails", async () => {
-    const running = makeCard({ status: "running" });
-    const client = createSequencedClient({
-      "workboard.cards.update": [{ card: running }, { card: sampleCard }],
-      agent: [new Error("gateway disconnected")],
-    });
-
-    const sessionKey = await startSampleCard(client);
-
-    expect(sessionKey).toBeNull();
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "workboard.cards.update",
-      expect.objectContaining({ patch: { status: "running" } }),
-    );
-    expect(client.request).toHaveBeenNthCalledWith(
-      3,
-      "workboard.cards.update",
-      expect.objectContaining({
-        patch: expect.objectContaining({
-          status: "todo",
-          startedAt: null,
-          completedAt: null,
-        }),
-      }),
-    );
-    expect(getWorkboardState(host).cards).toEqual([sampleCard]);
-    expect(getWorkboardState(host).error).toBe("gateway disconnected");
-  });
-
-  it("rolls back the running preflight when final session link update fails", async () => {
-    const running = makeCard({ status: "running" });
-    const client = createSequencedClient({
-      "workboard.cards.update": [
-        { card: running },
-        new Error("write conflict"),
-        { card: sampleCard },
-      ],
-      agent: [{ sessionKey: sampleTaskSessionKey, runId: "run-1" }],
-      "tasks.list": [{ tasks: [sampleTask] }],
-      "chat.abort": [{ aborted: true, runIds: ["run-1"] }],
-    });
-
-    const sessionKey = await startSampleCard(client);
-
-    expect(sessionKey).toBeNull();
-    expect(client.request).toHaveBeenNthCalledWith(5, "chat.abort", {
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-    });
-    expect(client.request).toHaveBeenNthCalledWith(
-      6,
-      "workboard.cards.update",
-      expect.objectContaining({
-        patch: expect.objectContaining({
-          status: "todo",
-          startedAt: null,
-          completedAt: null,
-        }),
-      }),
-    );
-    expect(getWorkboardState(host).cards).toEqual([sampleCard]);
-    expect(getWorkboardState(host).error).toBe("write conflict");
   });
 
   it("does not start a card before its scheduled time", async () => {
@@ -3705,37 +3412,22 @@ describe("workboard controller", () => {
       id: "scheduled-3",
       metadata: { automation: { scheduledAt: Date.now() - 60_000 } },
     });
+    const dueSessionKeyValue = "subagent:workboard-default-scheduled-3";
     const dueRunning = makeCard({
       ...dueScheduled,
       status: "running",
-      sessionKey: "subagent:workboard-default-scheduled-3",
+      sessionKey: dueSessionKeyValue,
       runId: "run-due",
-      taskId: "task-due",
     });
     const dueClient = createClient((method) => {
       if (method === "workboard.cards.list") {
         return listResult([dueScheduled], ["scheduled", "running", "done"]);
       }
-      if (method === "agent") {
-        return {
-          sessionKey: "subagent:workboard-default-scheduled-3",
-          runId: "run-due",
-        };
+      if (method === "workboard.cards.start") {
+        return { card: dueRunning, sessionKey: dueSessionKeyValue, runId: "run-due" };
       }
       if (method === "tasks.list") {
-        return {
-          tasks: [
-            makeTask({
-              id: "task-due",
-              taskId: "task-due",
-              childSessionKey: "subagent:workboard-default-scheduled-3",
-              runId: "run-due",
-            }),
-          ],
-        };
-      }
-      if (method === "workboard.cards.update") {
-        return { card: dueRunning };
+        return { tasks: [] };
       }
       return {};
     });
@@ -3744,13 +3436,10 @@ describe("workboard controller", () => {
 
     const dueSessionKey = await startCard(dueClient, { card: dueScheduled });
 
-    expect(dueSessionKey).toBe("subagent:workboard-default-scheduled-3");
-    expect(dueClient.request).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        label: "Build board (schedule)",
-      }),
-    );
+    expect(dueSessionKey).toBe(dueSessionKeyValue);
+    expect(dueClient.request).toHaveBeenCalledWith("workboard.cards.start", {
+      id: dueScheduled.id,
+    });
   });
 
   it("starts a Codex execution with an explicit model override", async () => {
@@ -3768,8 +3457,9 @@ describe("workboard controller", () => {
       }),
     });
     const client = createSequencedClient({
-      "workboard.cards.update": [{ card: makeCard({ status: "running" }) }, { card: running }],
-      agent: [{ sessionKey: sampleTaskSessionKey, runId: "run-1" }],
+      "workboard.cards.start": [
+        { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      ],
       "tasks.list": [{ tasks: [sampleTask] }],
     });
 
@@ -3777,94 +3467,13 @@ describe("workboard controller", () => {
       engine: "codex",
     });
 
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "workboard.cards.update",
-      expect.objectContaining({
-        patch: { status: "running" },
-      }),
-    );
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "agent",
-      expect.objectContaining({
-        sessionKey: sampleTaskSessionKey,
-        model: "openai/gpt-5.6-sol",
-        message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
-      }),
-    );
-    expect(client.request).toHaveBeenNthCalledWith(3, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(
-      4,
-      "workboard.cards.update",
-      expect.objectContaining({
-        id: "card-1",
-        patch: expect.objectContaining({
-          status: "running",
-          execution: expect.objectContaining({
-            id: "card-1:agent-session",
-            engine: "codex",
-            mode: "autonomous",
-            model: "openai/gpt-5.6-sol",
-            runId: "run-1",
-          }),
-        }),
-      }),
-    );
-  });
-
-  it("resets execution start time when retrying a card run", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1234);
-    try {
-      const previous = makeCard({
-        execution: {
-          id: "card-1:codex",
-          kind: "agent-session",
-          engine: "codex",
-          mode: "autonomous",
-          status: "blocked",
-          model: "openai/gpt-5.5",
-          sessionKey: "agent:main:dashboard:1",
-          runId: "run-1",
-          startedAt: 10,
-          updatedAt: 20,
-        },
-      });
-      const client = createClient({
-        agent: { sessionKey: "agent:main:dashboard:1", runId: "run-2" },
-        "tasks.list": {
-          tasks: [
-            makeTask({
-              taskId: "task-2",
-              id: "task-2",
-              childSessionKey: "agent:main:dashboard:1",
-              runId: "run-2",
-            }),
-          ],
-        },
-        "workboard.cards.update": { card: previous },
-      });
-
-      await startCard(client, {
-        card: previous,
-        engine: "codex",
-      });
-
-      expect(client.request).toHaveBeenNthCalledWith(
-        4,
-        "workboard.cards.update",
-        expect.objectContaining({
-          patch: expect.objectContaining({
-            execution: expect.objectContaining({
-              runId: "run-2",
-              startedAt: 1234,
-            }),
-          }),
-        }),
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.start", {
+      id: sampleCard.id,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.list", { limit: 500 });
+    expect(state.cards).toEqual([running]);
   });
 
   it("starts a manual Claude execution without sending the card prompt", async () => {
@@ -3972,28 +3581,17 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).tasksByCardId.has("card-1")).toBe(false);
   });
 
-  it("rolls back when the Gateway does not return a task run id", async () => {
+  it("surfaces Workboard-owned start failures without client rollback", async () => {
     const client = createSequencedClient({
-      agent: [
-        {
-          sessionKey: sampleTaskSessionKey,
-          runStarted: false,
-          runError: { message: "provider unavailable" },
-        },
-      ],
-      "workboard.cards.update": [{ card: makeCard({ status: "running" }) }, { card: sampleCard }],
+      "workboard.cards.start": [new Error("provider unavailable")],
     });
 
     const sessionKey = await startSampleCard(client);
 
     expect(sessionKey).toBeNull();
-    expect(client.request).toHaveBeenNthCalledWith(2, "agent", expect.any(Object));
-    expect(client.request).toHaveBeenNthCalledWith(
-      3,
-      "workboard.cards.update",
-      expect.objectContaining({ patch: expect.objectContaining({ status: "todo" }) }),
-    );
-    expect(getWorkboardState(host).error).toBe("Gateway agent method returned an invalid runId.");
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.start", { id: sampleCard.id });
+    expect(getWorkboardState(host).error).toBe("provider unavailable");
   });
 
   it("moves cards through the plugin gateway method", async () => {
@@ -4009,285 +3607,6 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({
       status: "blocked",
       position: 2000,
-    });
-  });
-
-  it("keeps dragged status changes from being rewritten by stale lifecycle sync", async () => {
-    const linked = createWorkboardCard({
-      sessionKey: sampleSession.key,
-      execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
-    });
-    const moved = makeMovedCard(linked, { position: 2000 });
-    setLoadedCard(linked);
-    const client = createClient((method) => {
-      if (method === "workboard.cards.move") {
-        return { card: moved };
-      }
-      if (method === "workboard.cards.update") {
-        return { card: { ...moved, status: "review", updatedAt: 3 } };
-      }
-      return {};
-    });
-
-    await moveCard(client, {
-      cardId: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledTimes(3);
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
-      id: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request.mock.calls[2]?.[1]).toMatchObject({
-      id: "card-1",
-      patch: { execution: expect.objectContaining({ status: "review" }) },
-    });
-    expect(requestPatch(client, 2)).not.toHaveProperty("status");
-    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
-  });
-
-  it("does not start lifecycle writes while dragged status changes are in flight", async () => {
-    const linked = createWorkboardCard({
-      sessionKey: sampleSession.key,
-      execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
-    });
-    const moved = makeMovedCard(linked, { position: 2000 });
-    setLoadedCard(linked);
-    const moveResponse = createDeferred<{ card: WorkboardCard }>();
-    const client = createClient((method) => {
-      if (method === "workboard.cards.move") {
-        return moveResponse.promise;
-      }
-      return {};
-    });
-
-    const moving = moveCard(client, {
-      cardId: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    await Promise.resolve();
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    moveResponse.resolve({ card: moved });
-    await moving;
-    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
-  });
-
-  it("ignores stale lifecycle responses when dragged status changes while sync is in flight", async () => {
-    const linked = makeCard({ sessionKey: sampleSession.key });
-    const moved = makeMovedCard(linked, { position: 2000 });
-    const staleLifecycleCard = {
-      ...linked,
-      status: "review",
-      updatedAt: 3,
-      metadata: { lifecycleStatusSourceUpdatedAt: 1 },
-    } satisfies WorkboardCard;
-    setLoadedCard(linked);
-    const lifecycleResponse = createDeferred<{ card: WorkboardCard }>();
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return lifecycleResponse.promise;
-      }
-      if (method === "workboard.cards.move") {
-        return { card: moved };
-      }
-      return {};
-    });
-
-    const syncing = syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
-    await Promise.resolve();
-    await moveCard(client, {
-      cardId: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    lifecycleResponse.resolve({ card: staleLifecycleCard });
-    await syncing;
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({
-        status: "review",
-        metadata: { lifecycleStatusSourceUpdatedAt: 1 },
-      }),
-    });
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
-      id: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
-  });
-
-  it("ignores lifecycle responses after a newer comment write", async () => {
-    const linked = makeCard({ sessionKey: sampleSession.key });
-    const commented = makeCommentedCard(linked, "Keep this", { updatedAt: 2 });
-    const lifecycleResponse = createDeferred<{ card: WorkboardCard }>();
-    setLoadedCard(linked);
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return lifecycleResponse.promise;
-      }
-      if (method === "workboard.cards.comment") {
-        return { card: commented };
-      }
-      return {};
-    });
-
-    const syncing = syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 1 }),
-    ]);
-    await Promise.resolve();
-    await commentCard(client, {
-      cardId: linked.id,
-      body: "Keep this",
-    });
-    lifecycleResponse.resolve({ card: { ...linked, status: "review", updatedAt: 3 } });
-    await syncing;
-
-    expect(state.cards[0]?.metadata?.comments?.[0]?.body).toBe("Keep this");
-  });
-
-  it("ignores lifecycle responses without provenance when dragged status changes while sync is in flight", async () => {
-    const linked = createWorkboardCard({
-      sessionKey: sampleSession.key,
-      execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
-    });
-    const moved = makeMovedCard(linked, { position: 2000 });
-    const staleLifecycleCard = {
-      ...linked,
-      status: "review",
-      updatedAt: 3,
-      execution: createWorkboardExecution({
-        ...linked.execution,
-        status: "review",
-        updatedAt: 3,
-      }),
-    } satisfies WorkboardCard;
-    setLoadedCard(linked);
-    const lifecycleResponse = createDeferred<{ card: WorkboardCard }>();
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return lifecycleResponse.promise;
-      }
-      if (method === "workboard.cards.move") {
-        return { card: moved };
-      }
-      return {};
-    });
-
-    const syncing = syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: null }),
-    ]);
-    await Promise.resolve();
-    await moveCard(client, {
-      cardId: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    lifecycleResponse.resolve({ card: staleLifecycleCard });
-    await syncing;
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: { execution: expect.objectContaining({ status: "review" }) },
-    });
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
-      id: "card-1",
-      status: "running",
-      position: 2000,
-    });
-    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
-  });
-
-  it("keeps non-status edits following newer linked session lifecycle sync", async () => {
-    const edited = createSessionCard({
-      title: "Renamed only",
-      status: "running",
-      updatedAt: 5,
-      events: [
-        {
-          id: "move-1",
-          kind: "moved",
-          at: 2,
-          fromStatus: "todo",
-          toStatus: "running",
-        },
-        { id: "edit-1", kind: "edited", at: 5 },
-      ],
-    });
-    setLoadedCard(edited);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: { ...edited, status: "review", updatedAt: 6 },
-      },
-    });
-
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 3 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({ status: "review" }),
-    });
-    expect(state.cards[0]).toMatchObject({ title: "Renamed only", status: "review" });
-  });
-
-  it("keeps lifecycle-created moves following newer linked session lifecycle sync", async () => {
-    const lifecycleMoved = createSessionCard({
-      status: "running",
-      updatedAt: 5,
-      metadata: { lifecycleStatusSourceUpdatedAt: 1 },
-      events: [
-        {
-          id: "move-1",
-          kind: "moved",
-          at: 5,
-          fromStatus: "todo",
-          toStatus: "running",
-        },
-      ],
-    });
-    setLoadedCard(lifecycleMoved);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: {
-          ...lifecycleMoved,
-          status: "review",
-          updatedAt: 6,
-          metadata: { lifecycleStatusSourceUpdatedAt: 3 },
-        },
-      },
-    });
-
-    await syncLifecycle(client, [
-      makeSession({ hasActiveRun: false, status: "done", updatedAt: 3 }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({
-        status: "review",
-        metadata: { lifecycleStatusSourceUpdatedAt: 3 },
-      }),
-    });
-    expect(state.cards[0]).toMatchObject({
-      status: "review",
-      metadata: { lifecycleStatusSourceUpdatedAt: 3 },
     });
   });
 
@@ -4308,8 +3627,16 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.delete") {
         return { deleted: true };
       }
-      if (method === "sessions.create") {
-        return { key: "agent:main:dashboard:child", runId: "run-child" };
+      if (method === "workboard.cards.start") {
+        return {
+          card: {
+            ...child,
+            status: "running",
+            sessionKey: "subagent:workboard-default-child-1",
+            runId: "run-child",
+            metadata: undefined,
+          },
+        };
       }
       return { card: { ...child, status: "running", metadata: undefined } };
     });
@@ -4326,14 +3653,7 @@ describe("workboard controller", () => {
       card: remaining,
     });
 
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "workboard.cards.update",
-      expect.objectContaining({
-        id: child.id,
-        patch: { status: "running" },
-      }),
-    );
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.start", { id: child.id });
   });
 
   it("derives lifecycle state from linked dashboard sessions", () => {
@@ -4344,6 +3664,12 @@ describe("workboard controller", () => {
     > = [
       ["unlinked", sampleCard, sampleSession, { session: null, state: "unlinked" }],
       ["active", linked, sampleSession, { state: "running", targetStatus: "running" }],
+      [
+        "queued",
+        linked,
+        createGatewaySession({ hasActiveRun: true, status: "queued" }),
+        { state: "queued", targetStatus: "todo" },
+      ],
       [
         "running without an active run",
         linked,
@@ -4426,121 +3752,25 @@ describe("workboard controller", () => {
     }
   });
 
-  it("syncs linked card status from session lifecycle without overriding manual review", async () => {
-    state.loaded = true;
-    state.cards = [
-      makeCard({ sessionKey: sampleSession.key }),
-      makeCard({ id: "card-review", status: "review", sessionKey: "session-review" }),
-    ];
-    const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        return { card: makeCard({ status: "running", sessionKey: sampleSession.key }) };
-      }
-      return {};
-    });
-
-    await syncLifecycle(client, [
-      sampleSession,
-      makeSession({ key: "session-review", status: "failed", hasActiveRun: false }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({
-        status: "running",
-        metadata: expect.objectContaining({
-          lifecycleStatusSourceUpdatedAt: sampleSession.updatedAt,
-        }),
-      }),
-    });
-    expect(state.cards.find((card) => card.id === "card-review")?.status).toBe("review");
-  });
-
-  it("does not sync stale linked-session status over a card creation status", async () => {
-    state.loaded = true;
-    state.cards = [
-      createSessionCard({
-        status: "running",
-        createdAt: 2000,
-        updatedAt: 2000,
-        events: [{ id: "event-created", kind: "created", at: 2000, toStatus: "running" }],
-      }),
-    ];
-    const client = createClient({
-      "workboard.cards.update": {
-        card: makeCard({ status: "review", sessionKey: sampleSession.key }),
-      },
-    });
-
-    await syncLifecycle(client, [
-      makeSession({
-        status: "done",
-        hasActiveRun: false,
-        updatedAt: 1000,
-      }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-    expect(state.cards[0]?.status).toBe("running");
-  });
-
-  it("does not sync linked card status from sessions without lifecycle provenance", async () => {
-    state.loaded = true;
-    state.cards = [makeCard({ sessionKey: sampleSession.key })];
-    const client = createClient({
-      "workboard.cards.update": {
-        card: makeCard({ status: "review", sessionKey: sampleSession.key }),
-      },
-    });
-
-    await syncLifecycle(client, [
-      makeSession({
-        status: "done",
-        hasActiveRun: false,
-        updatedAt: null,
-      }),
-    ]);
-
-    expect(client.request).not.toHaveBeenCalled();
-    expect(state.cards[0]).toMatchObject({ status: "todo" });
-  });
-
-  it("refreshes task lifecycle before syncing task-backed cards", async () => {
-    const { card: linked } = createLifecycleHarness(host);
+  it("refreshes task lifecycle for task-backed cards", async () => {
+    createLifecycleHarness(host);
     const client = createClient({
       "tasks.list": { tasks: [makeTask({ status: "completed" })] },
-      "workboard.cards.update": {
-        card: { ...linked, status: "review" },
-      },
     });
 
     await syncLifecycle(client);
 
-    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
-      id: "card-1",
-      patch: expect.objectContaining({
-        status: "review",
-        metadata: expect.objectContaining({
-          lifecycleStatusSourceUpdatedAt: sampleTask.updatedAt,
-        }),
-      }),
-    });
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
   });
 
   it("cancels in-flight lifecycle reconciliation when refresh stops", async () => {
-    const { card: linked } = createLifecycleHarness(host);
+    createLifecycleHarness(host);
     const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "tasks.list") {
         return taskList.promise;
-      }
-      if (method === "workboard.cards.update") {
-        return { card: { ...linked, status: "review" } };
       }
       return {};
     });
@@ -4553,49 +3783,7 @@ describe("workboard controller", () => {
     taskList.resolve({ tasks: [makeTask({ status: "completed" })] });
     await sync;
 
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.cards[0]?.status).toBe("running");
-  });
-
-  it("cancels remaining lifecycle card writes when refresh stops", async () => {
-    const first = makeCard({ id: "card-1", sessionKey: "session-1" });
-    const second = makeCard({ id: "card-2", sessionKey: "session-2" });
-    const firstUpdate = createDeferred<{ card: WorkboardCard }>();
-    state.loaded = true;
-    state.cards = [first, second];
-    state.lifecycleTasksPrepared = true;
-    state.lifecycleTasksPreparedAt = Date.now();
-    const client = createClient((method, params) => {
-      if (method === "workboard.cards.update") {
-        return (params as { id: string }).id === first.id
-          ? firstUpdate.promise
-          : { card: { ...second, status: "running" } };
-      }
-      if (method === "workboard.cards.list") {
-        return { cards: [first, second], statuses: ["todo", "running"] };
-      }
-      return {};
-    });
-    const sessions = [makeSession({ key: "session-1" }), makeSession({ key: "session-2" })];
-
-    const syncing = syncWorkboardLifecycle({ host, client: client as never, sessions });
-    await waitForFast(() => {
-      expect(client.request).toHaveBeenCalledWith(
-        "workboard.cards.update",
-        expect.objectContaining({ id: first.id }),
-      );
-    });
-    stopWorkboardLifecycleRefresh(host);
-    expect(state.syncingCardIds).toEqual(new Set([first.id]));
-    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(false);
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
-    firstUpdate.resolve({ card: { ...first, status: "running" } });
-    await syncing;
-    expect(state.syncingCardIds.size).toBe(0);
-    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-
-    expect(requestCalls(client, "workboard.cards.update")).toHaveLength(1);
   });
 
   it("reuses an in-flight lifecycle task refresh across render-driven syncs", async () => {
@@ -4624,7 +3812,7 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
-  it("requests a fresh lifecycle sync after a shared task refresh is invalidated by a write", async () => {
+  it("requests a fresh task refresh after a shared refresh is invalidated by a write", async () => {
     const { card: linked } = createLifecycleHarness(host);
     const commented = makeCommentedCard(linked, "Keep this", { updatedAt: 2 });
     const completedTask = makeTask({ status: "completed", updatedAt: 3 });
@@ -4632,11 +3820,10 @@ describe("workboard controller", () => {
     const client = createSequencedClient({
       "tasks.list": [firstTaskList.promise, { tasks: [completedTask] }],
       "workboard.cards.comment": [{ card: commented }],
-      "workboard.cards.update": [{ card: { ...commented, status: "review", updatedAt: 4 } }],
     });
     const requestUpdate = vi.fn();
 
-    const first = syncLifecycle(client, [], { requestUpdate });
+    const first = syncLifecycle(client, { requestUpdate });
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
@@ -4647,21 +3834,18 @@ describe("workboard controller", () => {
     });
     vi.clearAllMocks();
 
-    const second = syncLifecycle(client, [], { requestUpdate });
+    const second = syncLifecycle(client, { requestUpdate });
     firstTaskList.resolve({ tasks: [sampleTask] });
     await Promise.all([first, second]);
 
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
-    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
-      id: linked.id,
-      patch: expect.objectContaining({ status: "review" }),
-    });
-    expect(state.cards[0]?.status).toBe("review");
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(state.tasksByCardId.get(linked.id)).toEqual(completedTask);
   });
 
   it("authoritatively refreshes running linked cards without task ids before lifecycle sync", async () => {
@@ -4684,62 +3868,7 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
-  it("reconciles session-only cards when task discovery is unavailable", async () => {
-    const linked = createSessionCard({
-      status: "running",
-      runId: "run-1",
-    });
-    setLoadedCard(linked);
-    const client = createClient((method) => {
-      if (method === "tasks.list") {
-        throw new Error("tasks unavailable");
-      }
-      if (method === "workboard.cards.update") {
-        return { card: { ...linked, status: "review" } };
-      }
-      return {};
-    });
-
-    await syncLifecycle(client, [makeSession({ status: "done", hasActiveRun: false })]);
-
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: linked.id,
-      patch: expect.objectContaining({ status: "review" }),
-    });
-    expect(state.cards[0]?.status).toBe("review");
-  });
-
-  it("honors task refresh backoff while reconciling session-only cards", async () => {
-    const linked = createSessionCard({
-      status: "running",
-      runId: "run-1",
-    });
-    setLoadedCard(linked);
-    state.lifecycleTaskRefreshFailed = true;
-    state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
-    state.lifecycleTaskRefreshError = "tasks unavailable";
-    const client = createClient((method) => {
-      if (method === "tasks.list") {
-        throw new Error("task refresh retried during backoff");
-      }
-      if (method === "workboard.cards.update") {
-        return { card: { ...linked, status: "review" } };
-      }
-      return {};
-    });
-
-    await syncLifecycle(client, [makeSession({ status: "done", hasActiveRun: false })]);
-
-    expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: linked.id,
-      patch: expect.objectContaining({ status: "review" }),
-    });
-    expect(state.cards[0]?.status).toBe("review");
-  });
-
-  it("exact-confirms task list omissions before lifecycle writes", async () => {
+  it("exact-confirms task list omissions before publishing task links", async () => {
     const { card: linked } = createLifecycleHarness(host);
     const client = createClient({
       "tasks.list": { tasks: [] },
@@ -4773,7 +3902,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(state.tasksByCardId.get(linked.id)).toEqual(confirmedTask);
     expect(state.lifecycleTasksPrepared).toBe(true);
@@ -4782,7 +3911,7 @@ describe("workboard controller", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("rotates bounded exact confirmations before lifecycle writes", async () => {
+  it("rotates bounded exact confirmations before publishing task links", async () => {
     vi.useFakeTimers();
     const cards = createConfirmationCards(65);
     state.loaded = true;
@@ -4790,7 +3919,7 @@ describe("workboard controller", () => {
     const client = createConfirmationClient();
     const requestUpdate = vi.fn();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(requestCalls(client, "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4800,7 +3929,7 @@ describe("workboard controller", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(requestCalls(client, "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4808,7 +3937,7 @@ describe("workboard controller", () => {
 
     vi.clearAllMocks();
     await vi.advanceTimersByTimeAsync(100);
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(requestCalls(client, "tasks.get")).toHaveLength(1);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4823,14 +3952,14 @@ describe("workboard controller", () => {
     const client = createConfirmationClient();
     const requestUpdate = vi.fn();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(requestCalls(client, "tasks.get")).toHaveLength(32);
     expect(state.lifecycleTaskRefreshContinueAt).not.toBeNull();
 
     vi.clearAllMocks();
     await vi.advanceTimersByTimeAsync(5001);
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4906,7 +4035,7 @@ describe("workboard controller", () => {
     expect(state.lifecycleTaskRefreshError).toBe(failure);
   });
 
-  it("defers lifecycle writes when exact confirmation after task listing fails", async () => {
+  it("defers task-link publication when exact confirmation after task listing fails", async () => {
     const linked = createLinkedCard();
     setLoadedCard(linked, sampleTask);
     const client = createClient((method) => {
@@ -4947,7 +4076,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(state.missingTaskIds).toEqual(new Set([sampleTask.taskId]));
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4970,24 +4099,23 @@ describe("workboard controller", () => {
 
   it("refreshes prepared task lifecycle state after its freshness window", async () => {
     vi.useFakeTimers();
-    const { card: linked } = createLifecycleHarness(host, { prepared: true });
+    createLifecycleHarness(host, { prepared: true });
     const completedTask = makeTask({ status: "completed" });
     const client = createClient({
       "tasks.list": { tasks: [completedTask] },
-      "workboard.cards.update": { card: { ...linked, status: "review" } },
     });
     const requestUpdate = vi.fn();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
     expect(client.request).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
-    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
   });
 
   it("retries a failed lifecycle task refresh after backoff", async () => {
@@ -5005,14 +4133,14 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
     expect(client.request).toHaveBeenCalledOnce();
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
     state.lastRefreshError = "tasks unavailable";
     vi.clearAllMocks();
 
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(requestUpdate).not.toHaveBeenCalled();
@@ -5023,7 +4151,7 @@ describe("workboard controller", () => {
     vi.clearAllMocks();
     state.error = "unrelated write error";
     state.lastRefreshError = "newer cards refresh failure";
-    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, { requestUpdate });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
@@ -5033,7 +4161,7 @@ describe("workboard controller", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
-  it("does not resume lifecycle writes when dispatch starts during task refresh", async () => {
+  it("does not publish task links when dispatch starts during task refresh", async () => {
     const { card: linked } = createLifecycleHarness(host);
     const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
@@ -5043,7 +4171,7 @@ describe("workboard controller", () => {
       return { card: { ...linked, status: "review" } };
     });
 
-    const syncing = syncLifecycle(client, []);
+    const syncing = syncLifecycle(client);
     await Promise.resolve();
     state.dispatching = true;
     taskList.resolve({ tasks: [makeTask({ status: "completed" })] });
@@ -5067,7 +4195,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const syncing = syncLifecycle(client, []);
+    const syncing = syncLifecycle(client);
     await Promise.resolve();
     await commentCard(client, {
       cardId: linked.id,
@@ -5081,149 +4209,7 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
-  it("moves stale running sessions into running while recording stale metadata", async () => {
-    const staleUpdatedAt = Date.now() - 31 * 60 * 1000;
-    const linked = createSessionCard({
-      metadata: {
-        comments: [{ id: "comment-1", body: "Keep me", createdAt: 1 }],
-      },
-    });
-    setLoadedCard(linked);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: {
-          ...linked,
-          status: "running",
-          metadata: {
-            stale: {
-              detectedAt: 1,
-              lastSessionUpdatedAt: staleUpdatedAt,
-              reason: "Linked session has not reported recent activity.",
-            },
-          },
-        },
-      },
-    });
-
-    await syncLifecycle(client, [makeSession({ updatedAt: staleUpdatedAt, hasActiveRun: false })]);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: {
-        status: "running",
-        metadata: {
-          lifecycleStatusSourceUpdatedAt: staleUpdatedAt,
-          stale: expect.objectContaining({
-            lastSessionUpdatedAt: staleUpdatedAt,
-            reason: "Linked session has not reported recent activity.",
-          }),
-        },
-      },
-    });
-  });
-
-  it("syncs stale session metadata and clears it when the session recovers", async () => {
-    const linked = createStaleSessionCard(1, {
-      metadata: {
-        comments: [{ id: "comment-1", body: "Keep me", createdAt: 1 }],
-      },
-    });
-    setLoadedCard(linked);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: { ...linked, metadata: undefined, updatedAt: 3 },
-      },
-    });
-
-    await syncLifecycle(client, [makeSession({ updatedAt: Date.now(), hasActiveRun: true })]);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: {
-        metadata: {
-          stale: null,
-        },
-      },
-    });
-  });
-
-  it("clears stale metadata after a newer manual status move", async () => {
-    const linked = createStaleSessionCard(1, {
-      events: [
-        {
-          id: "move-1",
-          kind: "moved",
-          at: 5,
-          fromStatus: "todo",
-          toStatus: "running",
-        },
-      ],
-    });
-    setLoadedCard(linked);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: { ...linked, metadata: undefined, updatedAt: 6 },
-      },
-    });
-
-    await syncLifecycle(client, [
-      makeSession({
-        status: "running",
-        updatedAt: 3,
-        hasActiveRun: true,
-      }),
-    ]);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
-      id: "card-1",
-      patch: { metadata: { stale: null } },
-    });
-    expect(state.cards[0]?.metadata?.stale).toBeUndefined();
-  });
-
-  it("does not rewrite unchanged stale session metadata", async () => {
-    const staleUpdatedAt = Date.now() - 31 * 60 * 1000;
-    const linked = createStaleSessionCard(staleUpdatedAt);
-    setLoadedCard(linked);
-    const client = createClient({ "workboard.cards.update": { card: linked } });
-
-    await syncLifecycle(client, [makeSession({ updatedAt: staleUpdatedAt, hasActiveRun: false })]);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-  });
-
-  it("does not mark executions blocked when the linked session is missing from the current list", async () => {
-    const linked = createWorkboardCard({
-      status: "running",
-      sessionKey: "agent:main:dashboard:missing",
-      execution: createWorkboardExecution({ sessionKey: "agent:main:dashboard:missing" }),
-    });
-    setLoadedCard(linked);
-    const client = createClient({ "workboard.cards.update": { card: linked } });
-
-    await syncLifecycle(client);
-
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-  });
-
-  it("skips lifecycle writeback for read-only workboard clients", async () => {
-    state.loaded = true;
-    state.cards = [makeCard({ sessionKey: sampleSession.key })];
-    const client = createClient(() => {
-      throw new Error("write denied");
-    });
-
-    await syncLifecycle(client, [sampleSession], { canWrite: false });
-
-    expect(client.request).not.toHaveBeenCalled();
-    expect(state.error).toBeNull();
-  });
-
-  it("recovers task refresh failures for read-only workboard clients", async () => {
+  it("recovers task refresh failures", async () => {
     const linked = createLinkedCard({ runId: sampleTask.runId });
     setLoadedCard(linked);
     state.lifecycleTaskRefreshFailed = true;
@@ -5231,40 +4217,14 @@ describe("workboard controller", () => {
     state.lastRefreshError = "tasks unavailable";
     const client = createClient({ "tasks.list": { tasks: [sampleTask] } });
 
-    await syncLifecycle(client, [], { canWrite: false });
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledOnce();
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshError).toBeNull();
     expect(state.lastRefreshError).toBeNull();
     expect(state.lifecycleTasksPrepared).toBe(true);
-  });
-
-  it("resyncs cards manually moved back to an active lifecycle column", async () => {
-    const linked = createSessionCard({
-      status: "running",
-      updatedAt: 1000,
-    });
-    const completedSession = makeSession({
-      hasActiveRun: false,
-      status: "done",
-      updatedAt: 2000,
-    });
-    setLoadedCard(linked);
-    const client = createClient({
-      "workboard.cards.update": {
-        card: { ...linked, status: "review", updatedAt: 3000 },
-      },
-    });
-
-    await syncLifecycle(client, [completedSession]);
-    state.cards = [{ ...linked, updatedAt: 4000 }];
-    await syncLifecycle(client, [completedSession]);
-
-    expect(client.request).toHaveBeenCalledTimes(3);
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
   });
 
   it("does not retry a failed lifecycle task refresh before backoff", async () => {
@@ -5272,30 +4232,21 @@ describe("workboard controller", () => {
       status: "running",
       updatedAt: 1000,
     });
-    const completedSession = makeSession({
-      hasActiveRun: false,
-      status: "done",
-      updatedAt: 2000,
-    });
     setLoadedCard(linked);
     const client = createClient((method) => {
       if (method === "tasks.list") {
         throw new Error("tasks unavailable");
       }
-      if (method === "workboard.cards.update") {
-        return { card: { ...linked, status: "review", updatedAt: 3000 } };
-      }
       return {};
     });
 
-    await syncLifecycle(client, [completedSession]);
-    await syncLifecycle(client, [completedSession]);
+    await syncLifecycle(client);
+    await syncLifecycle(client);
 
     expect(requestCalls(client, "tasks.list")).toHaveLength(1);
-    expect(requestCalls(client, "workboard.cards.update")).toHaveLength(1);
     expect(state.error).toBeNull();
     expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
-    expect(state.cards[0]?.status).toBe("review");
+    expect(state.cards[0]?.status).toBe("running");
   });
 
   it("stops linked sessions and marks cards blocked", async () => {

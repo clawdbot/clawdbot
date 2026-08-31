@@ -1,4 +1,8 @@
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
+import {
+  TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
+} from "./terminal-connection.ts";
 import type {
   TerminalPanelAction,
   TerminalPanelCatalogReference,
@@ -8,6 +12,44 @@ import {
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
+
+type RetryOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
+
+/** Retains the exact failed open intent until the operator retries or the tab becomes ready. */
+export class TerminalOpenRetry {
+  private action: RetryOpenAction | null = null;
+
+  remember(catalog: TerminalPanelCatalogReference | undefined, agentId: string | null): void {
+    this.action = catalog ? { kind: "catalog", agentId, catalog } : { kind: "open", agentId };
+  }
+
+  clearUnlessRetryable(error: unknown): void {
+    if (
+      !(
+        error instanceof TerminalOpenTimeoutError ||
+        error instanceof TerminalOpenUnusableSessionError
+      )
+    ) {
+      this.clear();
+    }
+  }
+
+  clear(): void {
+    this.action = null;
+  }
+
+  get available(): boolean {
+    return this.action !== null;
+  }
+
+  run(): void {
+    const action = this.action;
+    this.clear();
+    if (action) {
+      void terminalIntentQueue.queue(action);
+    }
+  }
+}
 
 export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;

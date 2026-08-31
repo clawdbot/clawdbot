@@ -34,6 +34,12 @@ describe("inferControlUiPublicAssetPath", () => {
     expect(
       inferControlUiPublicAssetPath("manifest.webmanifest", { pathname: "/skills/workshop" }),
     ).toBe("/manifest.webmanifest");
+    expect(
+      inferControlUiPublicAssetPath("favicon.svg", {
+        resourceBasePath: "",
+        pathname: "/__openclaw__/new",
+      }),
+    ).toBe("/favicon.svg");
   });
 
   it("infers base-mounted assets from nested routes", () => {
@@ -57,7 +63,7 @@ describe("inferControlUiPublicAssetPath", () => {
   it("prefers an explicit base path over pathname inference", () => {
     expect(
       inferControlUiPublicAssetPath("apple-touch-icon.png", {
-        basePath: "/control/",
+        resourceBasePath: "/control/",
         pathname: "/skills/workshop",
       }),
     ).toBe("/control/apple-touch-icon.png");

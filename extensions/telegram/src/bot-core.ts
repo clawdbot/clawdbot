@@ -300,7 +300,7 @@ export function createTelegramBotCore(
       }
       recordTelegramGroupHistoryEntry({
         historyMap: groupHistories,
-        historyKey: buildTelegramGroupPeerId(record.chatId, record.messageThreadId),
+        historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
         limit: historyLimit,
         entry: {
           sender: botHistorySender,
@@ -331,23 +331,21 @@ export function createTelegramBotCore(
       groupId: String(chatId),
     });
   const resolveGroupActivation = (params: {
-    chatId: string | number;
     agentId?: string;
-    messageThreadId?: number;
-    sessionKey?: string;
+    sessionKey: string;
     cfg: OpenClawConfig;
   }) => {
     const agentId = params.agentId ?? ownerAgentId;
-    const sessionKey =
-      params.sessionKey ??
-      `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
     const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     try {
       const getSessionEntry = telegramDeps.getSessionEntry;
       if (!getSessionEntry) {
         return undefined;
       }
-      const storedActivation = getSessionEntry({ storePath, sessionKey })?.groupActivation;
+      const storedActivation = getSessionEntry({
+        storePath,
+        sessionKey: params.sessionKey,
+      })?.groupActivation;
       const activation =
         storedActivation === "mention" || storedActivation === "always"
           ? normalizeGroupActivation(storedActivation)

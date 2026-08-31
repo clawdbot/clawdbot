@@ -103,7 +103,10 @@ enum CLIInstaller {
     enum LocalGatewayActivation: Equatable {
         case ready
         case deferred
-        case failed
+        /// Binds the concrete failure to this activation attempt: GatewayProcessManager's
+        /// lastFailureReason is mutable shared state that a later attempt can overwrite before
+        /// a caller gets around to rereading it, misattributing a stale or newer reason.
+        case failed(reason: String?)
     }
 
     enum Status: Equatable {
@@ -587,11 +590,14 @@ enum CLIInstaller {
         waitUntilReady: @MainActor () async -> Bool = {
             await GatewayProcessManager.shared.waitForGatewayReady(
                 timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
-        }) async -> LocalGatewayActivation
+        },
+        failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
+        -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }
         start()
-        return await waitUntilReady() ? .ready : .failed
+        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
+        return .ready
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {

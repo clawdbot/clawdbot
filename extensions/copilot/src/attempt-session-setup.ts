@@ -1,15 +1,10 @@
-import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessLlmInputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createSessionConfig,
-  createSystemMessageContent,
-  isRawCopilotModelRun,
-  type resolvePoolAcquire,
-} from "./attempt-config.js";
+import { createSessionConfig, type resolvePoolAcquire } from "./attempt-config.js";
+import { isRawCopilotModelRun } from "./attempt-mode.js";
 import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AttemptParamsLike,
@@ -17,8 +12,9 @@ import type {
   CopilotAttemptDeps,
   ModelRef,
 } from "./attempt-types.js";
+import { buildCopilotPromptGuidance } from "./prompt-guidance.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
-import { filterCopilotToolsForAllowlist, shouldForceCopilotMessageTool } from "./tool-bridge.js";
+import { shouldForceCopilotMessageTool, type createCopilotToolBridge } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 export async function createCopilotSessionSetup(params: {
@@ -32,7 +28,7 @@ export async function createCopilotSessionSetup(params: {
   operation: CopilotAttemptDeps["operation"];
   poolAcquire: ReturnType<typeof resolvePoolAcquire>;
   ringZeroSystemAgentRun: boolean;
-  sdkTools: SdkTool[];
+  promptToolPolicy?: Awaited<ReturnType<typeof createCopilotToolBridge>>["promptToolPolicy"];
   sessionProvider: ResolvedCopilotProvider;
   settledToolFinalization: boolean;
   signal: AbortSignal | undefined;
@@ -48,7 +44,7 @@ export async function createCopilotSessionSetup(params: {
     operation,
     poolAcquire,
     ringZeroSystemAgentRun,
-    sdkTools,
+    promptToolPolicy,
     sessionProvider,
     settledToolFinalization,
     signal,
@@ -66,31 +62,50 @@ export async function createCopilotSessionSetup(params: {
         warn: (message) => console.warn(message),
       })
     : { instructions: undefined };
-  const originalDeveloperInstructions = settledToolFinalization
-    ? ""
-    : (createSystemMessageContent(input, workspaceBootstrap.instructions) ?? "");
-  const promptBuild =
-    settledToolFinalization || isRawCopilotModelRun(input)
-      ? {
-          prompt: input.prompt,
-          developerInstructions: originalDeveloperInstructions,
-        }
-      : await resolveAgentHarnessBeforePromptBuildResult({
-          prompt: input.prompt,
-          developerInstructions: originalDeveloperInstructions,
-          messages,
-          ctx: hookContext,
-          bootstrapContextRunKind: input.bootstrapContextRunKind,
-        });
+  const forceToolNames =
+    ordinaryAttemptInput && shouldForceCopilotMessageTool(ordinaryAttemptInput)
+      ? (["message"] as const)
+      : undefined;
+  let promptPolicyResult: ReturnType<NonNullable<typeof promptToolPolicy>["apply"]> | undefined;
+  let promptBuild: Awaited<ReturnType<typeof resolveAgentHarnessBeforePromptBuildResult>>;
+  if (settledToolFinalization) {
+    promptBuild = { prompt: input.prompt, developerInstructions: "" };
+  } else if (isRawCopilotModelRun(input)) {
+    promptPolicyResult = promptToolPolicy?.apply();
+    promptBuild = { prompt: input.prompt, developerInstructions: "" };
+  } else {
+    if (!ordinaryAttemptInput) {
+      throw new Error("Copilot ordinary attempt authority is unavailable.");
+    }
+    if (!promptToolPolicy) {
+      throw new Error("Copilot ordinary attempts require a prompt tool policy.");
+    }
+    promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: input.prompt,
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          promptPolicyResult = promptToolPolicy.apply({ toolsAllow, forceToolNames });
+          return buildCopilotPromptGuidance({
+            attempt: input,
+            callableToolNames: promptPolicyResult.callableToolNames,
+            workspaceBootstrapInstructions: workspaceBootstrap.instructions,
+          });
+        },
+      },
+      messages,
+      ctx: hookContext,
+      bootstrapContextRunKind: input.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: input.toolAuthorityFingerprint,
+        activeToolNames: () => promptPolicyResult?.callableToolNames ?? [],
+        assertActive: ordinaryAttemptInput.hostCapabilities.assertActive,
+      },
+    });
+  }
   const attemptInput =
     promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
-  const promptTools = filterCopilotToolsForAllowlist(
-    sdkTools,
-    promptBuild.toolsAllow,
-    ordinaryAttemptInput && shouldForceCopilotMessageTool(ordinaryAttemptInput)
-      ? { forceToolNames: ["message"] }
-      : undefined,
-  );
+  const promptTools = promptPolicyResult?.tools ?? [];
+  const finalDeveloperInstructions = promptBuild.developerInstructions;
   // Restricted turns may expose native ask_user only when its policy-filtered
   // OpenClaw equivalent survived the canonical tool catalog.
   const includeAskUser =
@@ -108,9 +123,7 @@ export async function createCopilotSessionSetup(params: {
         sessionId: input.sessionId,
         provider: modelRef.provider,
         model: modelRef.id,
-        ...(promptBuild.developerInstructions
-          ? { systemPrompt: promptBuild.developerInstructions }
-          : {}),
+        ...(finalDeveloperInstructions ? { systemPrompt: finalDeveloperInstructions } : {}),
         prompt: additionalContext ? `${prompt}\n\n${additionalContext}` : prompt,
         historyMessages: [],
         imagesCount: promptImagesCount,
@@ -133,7 +146,7 @@ export async function createCopilotSessionSetup(params: {
     promptTools,
     poolAcquire.auth,
     sessionProvider,
-    promptBuild.developerInstructions || undefined,
+    finalDeveloperInstructions || undefined,
     effectiveWorkspaceDir,
     effectiveCwd,
     userInputBridge?.onUserInputRequest,
@@ -155,7 +168,7 @@ export async function createCopilotSessionSetup(params: {
         promptTools,
         poolAcquire.auth,
         poolAcquire.provider,
-        promptBuild.developerInstructions || undefined,
+        finalDeveloperInstructions || undefined,
         effectiveWorkspaceDir,
         effectiveCwd,
         userInputBridge?.onUserInputRequest,

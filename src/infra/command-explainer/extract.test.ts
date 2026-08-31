@@ -1,7 +1,7 @@
 // Covers rich shell-command extraction, fake parser shapes, source span mapping,
 // nested wrapper parsing, and parser error handling.
 import { describe, expect, it } from "vitest";
-import { explainShellCommand } from "./extract.js";
+import { CommandExplanationWorkLimitError, explainShellCommand } from "./extract.js";
 import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
 
 function riskMatches(risk: unknown, fields: Record<string, unknown>): boolean {
@@ -29,6 +29,10 @@ function spanText(source: string, span: { startIndex: number; endIndex: number }
   return source.slice(span.startIndex, span.endIndex);
 }
 
+function nestShellSyntax(open: string, inner: string, close: string, depth: number): string {
+  return open.repeat(depth) + inner + close.repeat(depth);
+}
+
 describe("command explainer tree-sitter runtime", () => {
   it("loads tree-sitter bash and parses a simple command", async () => {
     const tree = await parseBashForCommandExplanation("ls | grep stuff");
@@ -51,7 +55,6 @@ describe("command explainer tree-sitter runtime", () => {
     const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
-    expect(explanation.topLevelCommands).toHaveLength(2);
     expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
       ["echo", "café😀"],
       ["echo", "雪"],
@@ -278,6 +281,35 @@ describe("command explainer tree-sitter runtime", () => {
     expect(doubleBracket.topLevelCommands).toHaveLength(1);
     expect(doubleBracket.topLevelCommands[0]?.executable).toBe("[[");
     expect(doubleBracket.topLevelCommands[0]?.argv).toEqual(["[[", "-f", "package.json"]);
+  });
+
+  it.each([
+    ["echo 42 $VALUE", ["echo", "42", "$VALUE"], "echo", 2, "$VALUE"],
+    [
+      "export COUNT=42 NEXT=$VALUE",
+      ["export", "COUNT=42", "NEXT=$VALUE"],
+      "export",
+      2,
+      "NEXT=$VALUE",
+    ],
+    ["[[ 42 -gt $LIMIT ]]", ["[[", "42", "-gt", "$LIMIT"], "[[", 3, "$LIMIT"],
+  ] as const)("projects command arguments for %s", async (source, argv, command, index, text) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.topLevelCommands[0]?.argv).toEqual(argv);
+    const risk = expectRisk(explanation.risks, {
+      kind: "dynamic-argument",
+      command,
+      argumentIndex: index,
+      text,
+    });
+    const startIndex = source.indexOf(text);
+    expect(risk.span).toEqual({
+      startIndex,
+      endIndex: startIndex + text.length,
+      startPosition: { row: 0, column: startIndex },
+      endPosition: { row: 0, column: startIndex + text.length },
+    });
   });
 
   it("detects shell wrappers", async () => {
@@ -591,6 +623,34 @@ describe("command explainer tree-sitter runtime", () => {
     const span = syntaxError.span as { startIndex?: unknown; endIndex?: unknown } | undefined;
     expect(typeof span?.startIndex).toBe("number");
     expect(typeof span?.endIndex).toBe("number");
+  });
+
+  it.each([
+    {
+      name: "command substitutions",
+      source: nestShellSyntax("$( ", "/approve abc123 allow-once", " )", 5_000),
+      executable: "/approve",
+    },
+    {
+      name: "test expressions",
+      source: `[[ ${"! ".repeat(15_000)}x ]]`,
+      executable: "[[",
+    },
+  ])("walks deeply nested $name without overflowing", async ({ source, executable }) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.ok).toBe(true);
+    expect(
+      [...explanation.topLevelCommands, ...explanation.nestedCommands].some(
+        (command) => command.executable === executable,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects syntax trees beyond the explanation work limit without returning partial data", async () => {
+    const source = nestShellSyntax("$( ", "echo hi", " )", 11_000);
+
+    await expect(explainShellCommand(source)).rejects.toThrow(CommandExplanationWorkLimitError);
   });
 
   it("parses and extracts a repeated approval-sized corpus without parser state leakage", async () => {

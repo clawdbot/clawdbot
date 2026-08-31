@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const excludeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" } as const;

@@ -2,13 +2,14 @@
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
 import type { DaemonStatusOptions } from "./types.js";
 
 function failDaemonStatus(opts: DaemonStatusOptions, message: string): void {
   if (opts.json) {
-    defaultRuntime.writeJson({ ok: false, error: message });
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
   } else {
     defaultRuntime.error(colorize(isRich(), theme.error, message));
   }

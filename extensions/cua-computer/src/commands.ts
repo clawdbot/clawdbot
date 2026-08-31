@@ -292,7 +292,7 @@ async function handleDesktopAct(
     throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${desktopParams.action}`);
   }
 
-  // Every action uses scope:"desktop", a global SendInput/XTest/wayland_desktop
+  // Every action targets the primary desktop, a global SendInput/XTest/wayland_desktop
   // injection that is inherently foreground and ignores delivery_mode (that
   // background-vs-foreground contract is window-targeted only). We deliberately
   // never send delivery_mode.
@@ -485,6 +485,11 @@ export function createCuaComputerProvider(
       features: { recording: true, agentCursor: false, multiDisplay: false },
     }),
     isAvailable,
+    prepare: async () => {
+      if (isSupportedPlatform && macOsEndpoint === undefined && !stopped) {
+        await availabilityDriver().prepareAvailability?.();
+      }
+    },
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
       const timer = interval(() => {

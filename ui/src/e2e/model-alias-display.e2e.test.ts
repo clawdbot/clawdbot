@@ -86,7 +86,7 @@ suite.define(() => {
       const nvidia = main.locator(
         '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
-      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
+      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {

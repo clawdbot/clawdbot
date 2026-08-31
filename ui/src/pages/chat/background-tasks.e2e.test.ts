@@ -189,7 +189,7 @@ suite.define(() => {
         const listRequests = await gateway.getRequests("tasks.list");
         expect(listRequests.length).toBeGreaterThanOrEqual(2);
         for (const request of listRequests) {
-          expect(request.params).toMatchObject({ sessionKey: "main" });
+          expect(request.params).toMatchObject({ sessionKey: "agent:main:main" });
           expect(request.params).not.toHaveProperty("agentId");
         }
         await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
@@ -222,7 +222,7 @@ suite.define(() => {
         );
         expect(transcriptRequest?.params).toEqual({
           sessionKey: runningSubagent.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
@@ -393,7 +393,7 @@ suite.define(() => {
         );
         expect(childHistoryRequest?.params).toEqual({
           sessionKey: first.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
 
         await gateway.emitGatewayEvent("task", {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -9,6 +10,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -24,16 +26,32 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Direct embedders have no CLI lifecycle row, so the server start boundary
+  // still owns an exact generation instead of making clients infer one.
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
+    throw new Error("Gateway boot ID must contain 1 to 96 characters");
+  }
+  const bootId = suppliedBootId ?? randomUUID();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  if (!gatewayKernel.minimalTestGateway) {
+    // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
+    // shared promise before plugins can use TLS.
+    void beginMacOSSystemCaWarmupOnce({ log });
+  }
+  let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
-    clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
+    sealAndJoinRegisteredSidecarStops,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
@@ -41,12 +59,33 @@ export async function startGatewayServerCore(
     shutdownRuntime,
   } = gatewayKernel;
   try {
-    const transport = await createGatewayHttpTransport(gatewayKernel.createHttpTransportOptions());
+    const transport = await createGatewayHttpTransport({
+      ...gatewayKernel.createHttpTransportOptions(),
+      ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
+        ? {
+            prepareManagedTailscaleIngress: async (backend) => {
+              const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
+              const cleanup = await startGatewayTailscaleExposure({
+                tailscaleMode: gatewayKernel.tailscaleMode,
+                preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
+                port,
+                backend,
+                controlUiBasePath: gatewayKernel.controlUiBasePath,
+                logTailscale,
+              });
+              // The server close handle is not published until this callback settles.
+              // Startup failure therefore owns teardown before normal close can race it.
+              gatewayKernel.kernel.setTailscaleCleanup(cleanup);
+            },
+          }
+        : {}),
+    });
     gatewayKernel.transportBridge.attach(transport);
-    await finishGatewayStartup({
+    const startup = await finishGatewayStartup({
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
+      bootId,
       log,
       logHealth,
       logWsControl,
@@ -54,10 +93,10 @@ export async function startGatewayServerCore(
       logChannels,
       logCron,
       logReload,
-      logTailscale,
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
+    startupSettled = startup.startupSettled;
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -70,6 +109,8 @@ export async function startGatewayServerCore(
   const close = createCloseHandler();
 
   return {
+    startupSettled,
+    getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: async (optsLocal) => {
       await runGatewayShutdownSteps({
         steps: [
@@ -90,11 +131,8 @@ export async function startGatewayServerCore(
             },
           },
           { name: "gateway close prelude", run: runClosePrelude },
+          { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
           { name: "gateway close", run: () => close(optsLocal) },
-          {
-            name: "fallback gateway context",
-            run: () => clearFallbackGatewayContextForServer.get()(),
-          },
         ],
         onError: (message) => log.error(message),
       });

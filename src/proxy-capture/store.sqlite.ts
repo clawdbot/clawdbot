@@ -514,11 +514,7 @@ class DebugProxyCaptureStoreImpl {
         hosts.set(host, (hosts.get(host) ?? 0) + 1);
         // Local model/provider endpoints are useful to surface separately when
         // debugging why cloud-provider labels are absent.
-        if (
-          host === "127.0.0.1:11434" ||
-          host.startsWith("127.0.0.1:") ||
-          host.startsWith("localhost:")
-        ) {
+        if (host.startsWith("127.0.0.1:") || host.startsWith("localhost:")) {
           localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
         }
       }

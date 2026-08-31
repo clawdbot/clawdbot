@@ -7,7 +7,7 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -82,6 +82,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let attemptedFinalDelivery = false;
   let acceptedFinal = false;
   let finalDeliveryFailed = false;
+  let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
   const finalDeliveries: Promise<ReplyDispatchDeliveryOutcome>[] = [];
   let allQueuedFinalsObserved = true;
@@ -123,11 +124,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const shouldAttachDeferredText =
-      deferFinalTtsText &&
-      reply.isReasoning !== true &&
-      reply.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(reply);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
     const finalReply = await state.sendFinalPayload(reply, {
       deliveryId: String(replyIndex),
       ...(shouldAttachDeferredText
@@ -136,6 +133,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           }
         : {}),
     });
+    if (finalReply.sessionWriterDeliveryRevoked) {
+      sessionWriterDeliveryRevoked = true;
+      continue;
+    }
     if (finalReply.suppressionReason) {
       channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
       continue;
@@ -287,11 +288,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
     !pendingContinuation &&
+    !sessionWriterDeliveryRevoked &&
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
-    !turnLedger.hasVisibleDelivery() &&
-    !turnLedger.hasForeignQueuedAdmissions();
+    !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
     // Only a turn that still looks empty pays for settlement: pending admissions
@@ -300,6 +301,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // fallback skip the wait, so deliveries that legitimately outlive the turn
     // (queued same-session mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+  }
+  if (queuedSettleResult === "settled") {
+    sessionWriterDeliveryRevoked ||= replies.some(
+      (reply) => !state.isSessionWriterDeliveryAuthorized(reply),
+    );
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
@@ -363,12 +369,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   counts.final += routedFinalCount;
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
-  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const dispatchOutcome = queueCapRejected || messageInjectionAborted ? "skipped" : "completed";
   const dispatchReason = queueCapRejected
     ? "queue-cap"
-    : channelTransformSuppressed
-      ? "channel_transform"
-      : state.bindingState.pluginFallbackReason;
+    : messageInjectionAborted
+      ? "reply_operation_aborted"
+      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+        ? "active_run_injected"
+        : channelTransformSuppressed
+          ? "channel_transform"
+          : state.bindingState.pluginFallbackReason;
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,

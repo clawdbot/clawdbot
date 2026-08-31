@@ -18,6 +18,7 @@ import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
+import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -118,21 +119,6 @@ const VoiceCallServeConfigSchema = z
   })
   .strict()
   .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
-
-const VoiceCallTailscaleConfigSchema = z
-  .object({
-    /**
-     * Tailscale exposure mode:
-     * - "off": No Tailscale exposure
-     * - "serve": Tailscale serve (private to tailnet)
-     * - "funnel": Tailscale funnel (public HTTPS)
-     */
-    mode: z.enum(["off", "serve", "funnel"]).default("off"),
-    /** Path for Tailscale serve/funnel (should usually match serve.path) */
-    path: z.string().min(1).default("/voice/webhook"),
-  })
-  .strict()
-  .default({ mode: "off", path: "/voice/webhook" });
 
 // -----------------------------------------------------------------------------
 // Tunnel Configuration (unified ngrok/tailscale)
@@ -501,7 +487,11 @@ export const VoiceCallConfigSchema = z
     /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
   })
-  .strict();
+  .strict()
+  .refine(isTailscalePortAllowed, {
+    path: ["tailscale", "port"],
+    message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
+  });
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 type VoiceCallEffectiveConfigResult = {
@@ -537,6 +527,48 @@ function defaultRealtimeStreamPathForServePath(servePath: string): string {
     return "/voice/stream/realtime";
   }
   return `${normalized}/stream/realtime`;
+}
+
+export type VoiceCallStreamExposurePath = {
+  publicPath: string;
+  localPath: string;
+};
+
+export function resolveVoiceCallPublicPathPrefix(
+  publicWebhookPath: string,
+  localWebhookPath: string,
+): string {
+  const publicPath = normalizeWebhookPath(publicWebhookPath);
+  const localPathIndex = publicPath.indexOf(normalizeWebhookPath(localWebhookPath));
+  return localPathIndex > 0 ? publicPath.slice(0, localPathIndex) : "";
+}
+
+export function resolveVoiceCallStreamExposurePaths(
+  config: VoiceCallConfig,
+  webhookPaths: { publicWebhookPath?: string; localWebhookPath?: string } = {},
+): VoiceCallStreamExposurePath[] {
+  const exposurePaths: VoiceCallStreamExposurePath[] = [];
+  const localWebhookPath = webhookPaths.localWebhookPath ?? config.serve.path;
+  const publicWebhookPath = webhookPaths.publicWebhookPath ?? config.tailscale.path;
+  const publicPathPrefix = resolveVoiceCallPublicPathPrefix(publicWebhookPath, localWebhookPath);
+  if (config.realtime.enabled) {
+    const localPath = normalizeWebhookPath(
+      config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
+    );
+    exposurePaths.push({
+      localPath,
+      publicPath: `${publicPathPrefix}${localPath}`,
+    });
+  }
+  if (config.streaming.enabled) {
+    const localPath = normalizeWebhookPath(config.streaming.streamPath);
+    if (
+      !exposurePaths.some((path) => path.localPath === localPath && path.publicPath === localPath)
+    ) {
+      exposurePaths.push({ localPath, publicPath: localPath });
+    }
+  }
+  return exposurePaths;
 }
 
 function normalizeVoiceCallTtsConfig(

@@ -216,11 +216,13 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+    const activeClaimRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
+    const isExactRecoveryClaim = admissionRunId && activeClaimRunId === admissionRunId;
     if (sourceTurnId) {
       if (hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
         return "duplicate-source";
       }
-      if (hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
+      if (!isExactRecoveryClaim && hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
         if (entry.status !== "running") {
           const retired = await retireTerminalRestartRecoverySourceClaim({
             sessionId,
@@ -235,24 +237,24 @@ export function createReplyRestartRecoveryClaimController(params: {
         return "duplicate-source";
       }
     }
-    const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
-    const isTranscriptOnlyClaim =
-      admissionRunId &&
-      entry &&
-      entry.restartRecoveryDeliveryContext === undefined &&
-      activeClaimRunId === admissionRunId;
-    if (isTranscriptOnlyClaim) {
+    if (isExactRecoveryClaim) {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
         throw new Error("restart recovery claim changed before agent adoption");
       }
-      // Clear the retry verifier as the transcript-only claim crosses into execution.
+      // Clear the retry verifier as the exact admitted claim crosses into execution.
+      const preservesTerminalReceipt =
+        entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
           restartRecoveryBeforeAgentReplyState: undefined,
-          restartRecoveryDeliveryReceiptState: undefined,
-          restartRecoveryDeliveryToolCallId: undefined,
-          restartRecoveryDeliveryRequestFingerprint: undefined,
+          ...(preservesTerminalReceipt
+            ? {}
+            : {
+                restartRecoveryDeliveryReceiptState: undefined,
+                restartRecoveryDeliveryToolCallId: undefined,
+                restartRecoveryDeliveryRequestFingerprint: undefined,
+              }),
           restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
           updatedAt: Date.now(),
         },

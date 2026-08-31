@@ -43,10 +43,10 @@ struct OpenClawWatchApp: App {
                 onAction: { action in
                     guard let receiver = self.receiver else { return }
                     let draft = self.inboxStore.makeReplyDraft(action: action)
-                    self.inboxStore.markReplySending(actionLabel: action.label)
+                    guard let attemptID = self.inboxStore.markReplySending(actionLabel: action.label) else { return }
                     Task { @MainActor in
                         let result = await receiver.sendReply(draft)
-                        self.inboxStore.markReplyResult(result, actionLabel: action.label)
+                        self.inboxStore.markReplyResult(result, actionLabel: action.label, attemptID: attemptID)
                     }
                 },
                 onExecApprovalDecision: { approvalId, gatewayStableID, decision in
@@ -126,20 +126,20 @@ struct OpenClawWatchApp: App {
 
     private func refreshAppSnapshot() {
         guard let receiver else { return }
-        self.inboxStore.markAppSnapshotRequestStarted()
+        let attemptID = self.inboxStore.markAppSnapshotRequestStarted()
         Task { @MainActor in
             let result = await receiver.requestAppSnapshot()
-            self.inboxStore.markAppSnapshotRequestResult(result)
+            self.inboxStore.markAppSnapshotRequestResult(result, attemptID: attemptID)
         }
     }
 
     private func sendAppCommand(_ command: WatchAppCommand) {
         guard let receiver else { return }
         let message = self.inboxStore.makeAppCommand(command)
-        self.inboxStore.markAppCommandSending(command)
+        let attemptID = self.inboxStore.markAppCommandSending(command)
         Task { @MainActor in
             let result = await receiver.sendAppCommand(message)
-            self.inboxStore.markAppCommandResult(result, command: command)
+            self.inboxStore.markAppCommandResult(result, command: command, attemptID: attemptID)
         }
     }
 
@@ -155,11 +155,15 @@ struct OpenClawWatchApp: App {
             return nil
         }
         let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
-        self.inboxStore.markAppCommandSending(.sendChat)
+        let attemptID = self.inboxStore.markAppCommandSending(.sendChat)
         Task { @MainActor in
             let result = await receiver.sendAppCommand(message)
-            self.inboxStore.markAppCommandResult(result, command: .sendChat)
+            guard self.inboxStore.markAppCommandResult(result, command: .sendChat, attemptID: attemptID) else {
+                return
+            }
             try? await Task.sleep(nanoseconds: 900_000_000)
+            guard self.inboxStore.isCurrentAppCommandAttempt(attemptID, gatewayStableID: message.gatewayStableID)
+            else { return }
             self.refreshAppSnapshot()
         }
         return message.commandId

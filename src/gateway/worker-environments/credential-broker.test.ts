@@ -3,6 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -30,7 +31,18 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), { liveEvents });
+    const placementStore = {
+      readWorkerTurnClaim: vi.fn(),
+      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
+      validateWorkerTurn: vi.fn(() => true),
+      isWorkerTurnToolAuthorized: vi.fn(() => true),
+      updateAckCursors: vi.fn(),
+      registerTurnClaimClosedHandler: vi.fn(() => () => {}),
+    };
+    const workerService = support.createService(support.createProvider(), {
+      liveEvents,
+      placementStore,
+    });
     const event = { ...support.LIVE_EVENT, runEpoch: newer.ownerEpoch };
     await expect(workerService.pushLiveEvent(older, event)).resolves.toEqual({
       ok: false,
@@ -60,7 +72,7 @@ describe("worker environment service", () => {
         ownerEpoch: 1,
         sessionId: "session-1",
       }),
-    ).rejects.toThrow("must bootstrap the current build");
+    ).rejects.toThrow(STALE_WORKER_BUILD_REASON);
     expect(support.testState.store.get(staleId)).toMatchObject({
       state: "ready",
       attachedSessionIds: [],

@@ -7,6 +7,7 @@ import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
+  loadSessionEntryMock,
   makeCronSession,
   makeCronSessionEntry,
   resolveAgentConfigMock,
@@ -14,6 +15,7 @@ import {
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveSessionAuthSelectionMock,
   restoreFastTestEnv,
   runWithModelFallbackMock,
   patchSessionEntryMock,
@@ -191,6 +193,86 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(preRunSnapshot.systemSent).toBe(true);
   });
 
+  it("passes a configured model auth profile separately into cron auth selection", async () => {
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    );
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-luna@openai:test-profile" },
+            },
+          },
+          auth: {
+            profiles: {
+              "openai:test-profile": { provider: "openai", mode: "token" },
+            },
+          },
+        },
+        job: makeJob({
+          payload: { kind: "agentTurn", message: "run daily digest" },
+        }),
+      }),
+    );
+
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        configuredProfileId: "openai:test-profile",
+      }),
+    );
+  });
+
+  it("passes a payload model auth profile separately into cron auth selection", async () => {
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-5.6-luna" },
+    });
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    );
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          auth: {
+            profiles: {
+              "openai:test-profile": { provider: "openai", mode: "token" },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "run daily digest",
+            model: "openai/gpt-5.6-luna@openai:test-profile",
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        configuredProfileId: "openai:test-profile",
+      }),
+    );
+  });
+
   it("returns error without persisting model when payload model is disallowed", async () => {
     resolveAllowedModelRefMock.mockReturnValueOnce({
       error: "Model not allowed: anthropic/claude-sonnet-4-6",
@@ -248,50 +330,69 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
-  it("logs warning and continues when pre-run persist fails", async () => {
-    // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
-    // Only the pre-run persist (call 2) should fail — the skills snapshot
-    // persist is pre-existing code without a try-catch guard.
-    let basePersistCount = 0;
-    const committedRows = new Map<string, SessionEntry>();
-    patchSessionEntryMock.mockImplementation(
-      async (
-        scope: { storePath?: string; sessionKey: string },
-        update: (
-          entry: SessionEntry,
-          context: { existingEntry: SessionEntry | undefined },
-        ) => SessionEntry | null,
-        options: { fallbackEntry?: SessionEntry } = {},
-      ) => {
-        if (!scope.sessionKey.includes(":run:") && ++basePersistCount === 2) {
-          throw new Error("ENOSPC: no space left on device");
-        }
-        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
-        const current = committedRows.get(key);
-        const writeBase = current ?? options.fallbackEntry;
-        if (!writeBase) {
-          return null;
-        }
-        const committed = update(structuredClone(writeBase), {
-          existingEntry: current ? structuredClone(current) : undefined,
+  it.each([false, true])(
+    "blocks required work when pre-run persistence fails without configured roles (%s)",
+    async (required) => {
+      let initialEntry: SessionEntry | undefined;
+      if (required) {
+        Object.assign(cronSession.sessionEntry, {
+          createdActor: { type: "human", id: "profile-original-creator" },
+          sandbox: "required",
         });
-        if (committed) {
-          committedRows.set(key, structuredClone(committed));
-        }
-        return committed;
-      },
-    );
+        initialEntry = { ...structuredClone(cronSession.sessionEntry), skillsSnapshot: undefined };
+        cronSession.initialSessionEntry = initialEntry;
+        loadSessionEntryMock.mockReturnValue(initialEntry);
+      }
+      // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
+      // Only the pre-run persist (call 2) should fail — the skills snapshot
+      // persist is pre-existing code without a try-catch guard.
+      let basePersistCount = 0;
+      const committedRows = new Map<string, SessionEntry>();
+      patchSessionEntryMock.mockImplementation(
+        async (
+          scope: { storePath?: string; sessionKey: string },
+          update: (
+            entry: SessionEntry,
+            context: { existingEntry: SessionEntry | undefined },
+          ) => SessionEntry | null,
+          options: { fallbackEntry?: SessionEntry } = {},
+        ) => {
+          if (!scope.sessionKey.includes(":run:") && ++basePersistCount === 2) {
+            throw new Error("ENOSPC: no space left on device");
+          }
+          const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+          const current =
+            committedRows.get(key) ??
+            (scope.sessionKey.includes(":run:") ? undefined : initialEntry);
+          const writeBase = current ?? options.fallbackEntry;
+          if (!writeBase) {
+            return null;
+          }
+          const committed = update(structuredClone(writeBase), {
+            existingEntry: current ? structuredClone(current) : undefined,
+          });
+          if (committed) {
+            committedRows.set(key, structuredClone(committed));
+          }
+          return committed;
+        },
+      );
 
-    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+      runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 
-    const result = await runCronIsolatedAgentTurn(makeParams());
-
-    // The run should still complete successfully despite the persist failure
-    expect(result.status).toBe("ok");
-    expect(logWarnMock).toHaveBeenCalledWith(
-      "[cron:digest-job] Failed to persist pre-run session entry: Error: ENOSPC: no space left on device",
-    );
-  });
+      const running = runCronIsolatedAgentTurn(makeParams());
+      if (required) {
+        await expect(running).rejects.toThrow("ENOSPC");
+        expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+      } else {
+        await expect(running).resolves.toMatchObject({ status: "ok" });
+        expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      }
+      expect(logWarnMock).toHaveBeenCalledWith(
+        "[cron:digest-job] Failed to persist pre-run session entry: Error: ENOSPC: no space left on device",
+      );
+    },
+  );
 
   it("persists default model pre-run when no payload override is present", async () => {
     // No cron payload model override

@@ -12,7 +12,6 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
-  filterToolsByPolicy,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -20,7 +19,7 @@ import {
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
@@ -337,6 +336,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
       const hardDeniedTools = [
         "gateway",
         "agents_list",
+        "openclaw",
         "session_status",
         "automations",
         "cron",
@@ -649,14 +649,14 @@ describe("resolveEffectiveToolPolicy", () => {
             id: "messenger",
             tools: {
               profile: "messaging",
-              alsoAllow: ["image"],
+              alsoAllow: ["view_image"],
             },
           },
         ],
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
-    expect(result.profileAlsoAllow).toEqual(["image"]);
+    expect(result.profileAlsoAllow).toEqual(["view_image"]);
     expect(result.profileAlsoAllow).not.toContain("exec");
     expect(result.profileAlsoAllow).not.toContain("process");
   });
@@ -675,7 +675,7 @@ describe("resolveEffectiveToolPolicy", () => {
               id: "sage",
               tools: {
                 profile: "messaging",
-                alsoAllow: ["image"],
+                alsoAllow: ["view_image"],
               },
             },
           ],

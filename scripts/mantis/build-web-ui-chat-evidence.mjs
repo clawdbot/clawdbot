@@ -50,7 +50,7 @@ function artifactEntry({ inline = false, kind, label, path: artifactPath, requir
 export function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status }) {
   const passed = status === "pass";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "web-ui-chat-proof",
     title: "Mantis Web UI Chat Proof",
     summary:
@@ -61,9 +61,11 @@ export function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, sta
         ...(candidateSha ? { sha: candidateSha } : {}),
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "Control UI chat sends through the Gateway and renders the final reply",
+        expectationMet: passed,
         status,
         fixed: passed,
       },
+      outcome: passed ? "pass" : "fail",
       pass: passed,
     },
     artifacts: [

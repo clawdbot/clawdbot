@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { outputTail } from "./lib/output-tail.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";

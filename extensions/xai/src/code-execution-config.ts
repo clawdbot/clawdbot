@@ -1,4 +1,5 @@
 // Xai helper module supports code execution config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isXaiToolEnabled, type XaiToolAuthContext } from "./tool-auth-shared.js";
 
 type CodeExecutionConfig = {
@@ -18,27 +19,12 @@ export function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfi
   if (!cfg || typeof cfg !== "object") {
     return undefined;
   }
-  const entries = (cfg as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  if (!pluginEntries) {
-    return undefined;
-  }
-  const xaiEntry = pluginEntries.xai;
-  if (!xaiEntry || typeof xaiEntry !== "object") {
-    return undefined;
-  }
-  const config = (xaiEntry as Record<string, unknown>).config;
-  if (!config || typeof config !== "object") {
-    return undefined;
-  }
-  const codeExecution = (config as Record<string, unknown>).codeExecution;
-  if (!codeExecution || typeof codeExecution !== "object") {
-    return undefined;
-  }
-  return codeExecution as CodeExecutionConfig;
+  const plugins = (cfg as OpenClawConfig).plugins;
+  const entries = plugins && typeof plugins === "object" ? plugins.entries : undefined;
+  const entry = entries && entries.xai;
+  const config = entry && typeof entry === "object" ? entry.config : undefined;
+  const value = config && typeof config === "object" ? config.codeExecution : undefined;
+  return value && typeof value === "object" ? (value as CodeExecutionConfig) : undefined;
 }
 
 export function resolveCodeExecutionEnabled(params: {

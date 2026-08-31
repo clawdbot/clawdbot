@@ -11,18 +11,6 @@ export const IMAGE_MIME_INLINE_SET = new Set([
   "image/gif",
 ]);
 
-// Plain-text MIME types where inlining the content into a text block is more
-// useful than a "saved at <path>" stub for small files (under TEXT_INLINE_MAX).
-export const TEXT_INLINE_MIME_SET = new Set([
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "text/html",
-  "application/json",
-  "application/xml",
-  "text/xml",
-]);
-
 export const TEXT_INLINE_MAX_BYTES = 8 * 1024;
 
 export function mimeFromExtension(filePath: string): string {

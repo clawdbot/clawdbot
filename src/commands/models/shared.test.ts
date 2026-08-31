@@ -44,9 +44,54 @@ describe("models/shared", () => {
 
   it("names only the supported model-command escape for an ambiguous roster", () => {
     expect(() =>
-      resolveModelsTargetAgent({
-        agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
-      }),
+      resolveModelsTargetAgent(
+        {
+          agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
+        },
+        undefined,
+        { kind: "mutation" },
+      ),
+    ).toThrow(
+      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
+    );
+  });
+
+  it("resolves unscoped model reads through the configured system agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "helper" } },
+        entries: { main: {}, helper: {} },
+      },
+    };
+
+    expect(resolveModelsTargetAgent(cfg, undefined, { kind: "read" }).agentId).toBe("helper");
+    expect(resolveModelsTargetAgent(cfg, "main", { kind: "read" }).agentId).toBe("main");
+    expect(() => resolveModelsTargetAgent(cfg, "", { kind: "read" })).toThrow(
+      "--agent must not be blank",
+    );
+    expect(() =>
+      resolveModelsTargetAgent(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "missing" } },
+            entries: { main: {}, helper: {} },
+          },
+        },
+        undefined,
+        { kind: "read" },
+      ),
+    ).toThrow('Unknown agent id "missing".');
+  });
+
+  it("keeps credential mutations explicit on an ambiguous roster", () => {
+    expect(() =>
+      resolveModelsTargetAgent(
+        { agents: { ownership: "explicit", entries: { main: {}, helper: {} } } },
+        undefined,
+        { kind: "mutation" },
+      ),
     ).toThrow(
       "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
     );

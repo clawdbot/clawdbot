@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
+import { createServer, IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { connect, Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramMiniAppLaunchTickets,
@@ -33,13 +35,25 @@ vi.mock("./url.js", async (importOriginal) => ({
   resolveTelegramMiniAppUrls,
 }));
 
+vi.mock("node:timers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers")>();
+  return {
+    ...actual,
+    setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(callback, delay, ...args)) as typeof actual.setTimeout,
+    clearTimeout: ((timer: ReturnType<typeof globalThis.setTimeout> | undefined) =>
+      globalThis.clearTimeout(timer)) as typeof actual.clearTimeout,
+  };
+});
+
 const { registerTelegramMiniAppRoutes } = await import("./routes.js");
 
 const BOT_TOKEN = "fixture";
+const AUTH_BODY_MAX_BYTES = 4096;
 let signedNonceSequence = 0;
 let launchTickets: TelegramMiniAppLaunchTickets;
 
-class MockResponse {
+class MockResponse extends EventEmitter {
   statusCode = 200;
   headers: Record<string, string> = {};
   body = "";
@@ -50,8 +64,14 @@ class MockResponse {
     return this;
   }
 
+  setHeader(name: string, value: string) {
+    this.headers[name] = value;
+    return this;
+  }
+
   end(body?: string) {
     this.body = body ?? "";
+    this.emit("finish");
     return this;
   }
 }
@@ -79,16 +99,64 @@ async function callRoute(params: {
   contentType?: string;
   ip?: string;
 }) {
-  const req = Readable.from(params.body ? [params.body] : []) as IncomingMessage;
+  const req = createMockIncomingRequest(params.body ? [params.body] : []);
   req.method = params.method;
   req.url = params.url;
   req.headers = params.contentType ? { "content-type": params.contentType } : {};
-  Object.defineProperty(req, "socket", {
-    value: { remoteAddress: params.ip ?? "203.0.113.10" },
+  Object.defineProperty(req.socket, "remoteAddress", {
+    value: params.ip ?? "203.0.113.10",
   });
+  return await callRouteRequest(params.route, req);
+}
+
+async function callRouteRequest(route: OpenClawPluginHttpRouteParams, req: IncomingMessage) {
   const res = new MockResponse() as ServerResponse & MockResponse;
-  await params.route.handler(req, res);
+  await route.handler(req, res);
   return res;
+}
+
+function createPendingAuthRequest(ip: string): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = "POST";
+  req.url = "/__openclaw_tg_miniapp/auth";
+  req.headers = { "content-type": "application/json" };
+  Object.defineProperty(req.socket, "remoteAddress", { value: ip });
+  return req;
+}
+
+function expectBodyReadListenersCleaned(req: IncomingMessage) {
+  for (const event of ["data", "end", "error", "close"] as const) {
+    expect(req.listenerCount(event), event).toBe(0);
+  }
+}
+
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
+  return address.port;
+}
+
+async function readSocketResponse(socket: Socket): Promise<string> {
+  const chunks: Buffer[] = [];
+  return await new Promise((resolve, reject) => {
+    let done = false;
+    const finish = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    socket.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    socket.on("end", finish);
+    socket.on("close", finish);
+    socket.on("error", reject);
+  });
 }
 
 function config(allowFrom: string[] = ["123456"]): OpenClawConfig {
@@ -312,5 +380,150 @@ describe("registerTelegramMiniAppRoutes", () => {
 
     expect(last?.statusCode).toBe(429);
     expect(last?.body).toBe("Too many requests");
+  });
+
+  it("keeps malformed JSON on the expired-link response", async () => {
+    const route = createRoute(config());
+    const res = await callRoute({
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: "{",
+      ip: "203.0.113.49",
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["content-length", "chunked"])(
+    "flushes HTTP 413 before closing an oversized %s auth request",
+    async (framing) => {
+      const route = createRoute(config());
+      const handled: Promise<unknown>[] = [];
+      let request: IncomingMessage | undefined;
+      const server = createServer((req, res) => {
+        request = req;
+        handled.push(Promise.resolve(route.handler(req, res)));
+      });
+      let socket: Socket | undefined;
+      try {
+        const port = await listen(server);
+        socket = connect({ host: "127.0.0.1", port });
+        await new Promise<void>((resolve) => {
+          socket?.once("connect", resolve);
+        });
+
+        socket.write(
+          [
+            "POST /__openclaw_tg_miniapp/auth HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Content-Type: application/json",
+            framing === "content-length"
+              ? `Content-Length: ${AUTH_BODY_MAX_BYTES + 1}`
+              : "Transfer-Encoding: chunked",
+            "Connection: keep-alive",
+            "",
+            framing === "content-length"
+              ? "{"
+              : `${(AUTH_BODY_MAX_BYTES + 1).toString(16)}\r\n${"x".repeat(AUTH_BODY_MAX_BYTES + 1)}\r\n0\r\n\r\n`,
+          ].join("\r\n"),
+        );
+
+        const response = await readSocketResponse(socket);
+        const [, body = ""] = response.split("\r\n\r\n", 2);
+
+        expect(response).toContain("HTTP/1.1 413");
+        expect(response).toContain("Connection: close");
+        expect(body).toBe("Payload too large");
+        expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        await Promise.all(handled);
+        expect(request?.socket.destroyed).toBe(true);
+        if (!request) {
+          throw new Error("expected auth request");
+        }
+        expectBodyReadListenersCleaned(request);
+      } finally {
+        socket?.destroy();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("settles an early client close without leaking request-body listeners", async () => {
+    const route = createRoute(config());
+    const req = createPendingAuthRequest("203.0.113.51");
+    const responsePromise = callRouteRequest(route, req);
+
+    req.emit("close");
+    const res = await responsePromise;
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe("Connection closed");
+    expectBodyReadListenersCleaned(req);
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("flushes a real HTTP 408 response before closing a stalled auth request", async () => {
+    vi.useFakeTimers();
+    let markRequestStarted: (() => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const route = createRoute(config());
+    const handled: Promise<unknown>[] = [];
+    let request: IncomingMessage | undefined;
+    const server = createServer((req, res) => {
+      request = req;
+      handled.push(Promise.resolve(route.handler(req, res)));
+      markRequestStarted?.();
+    });
+    let socket: Socket | undefined;
+    try {
+      const port = await listen(server);
+      socket = connect({ host: "127.0.0.1", port });
+      await new Promise<void>((resolve) => {
+        socket?.once("connect", resolve);
+      });
+
+      socket.write(
+        [
+          "POST /__openclaw_tg_miniapp/auth HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/json",
+          "Content-Length: 64",
+          "Connection: keep-alive",
+          "",
+          "{",
+        ].join("\r\n"),
+      );
+
+      await requestStarted;
+      const responsePromise = readSocketResponse(socket);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const response = await responsePromise;
+      const [, body = ""] = response.split("\r\n\r\n", 2);
+
+      expect(response).toContain("HTTP/1.1 408");
+      expect(response).toContain("Connection: close");
+      expect(body).toBe("Request body timeout");
+      expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      await Promise.all(handled);
+      expect(request?.socket.destroyed).toBe(true);
+      if (!request) {
+        throw new Error("expected auth request");
+      }
+      expectBodyReadListenersCleaned(request);
+    } finally {
+      vi.useRealTimers();
+      socket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

@@ -1,5 +1,4 @@
 // OpenRouter OAuth support exchanges PKCE browser login codes for API keys.
-import { createServer } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext, ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -7,7 +6,10 @@ import {
   generatePkceVerifierChallenge,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  generateOAuthState,
+  startProviderOAuthLoopbackCallbackServer,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -36,6 +38,13 @@ type OpenRouterOAuthCallbackResult = {
   state: string;
 };
 
+type OpenRouterOAuthCallbackServer = Awaited<
+  ReturnType<typeof startProviderOAuthLoopbackCallbackServer>
+>;
+type OpenRouterOAuthLoopbackResult = Awaited<
+  ReturnType<OpenRouterOAuthCallbackServer["waitForCallback"]>
+>;
+
 type OpenRouterOAuthKeyResult = {
   key: string;
   userId?: string;
@@ -45,7 +54,7 @@ type OpenRouterOAuthLoginOptions = {
   createPkce?: () => { verifier: string; challenge: string };
   createState?: () => string;
   fetchImpl?: typeof fetch;
-  waitForCallback?: typeof waitForOpenRouterOAuthCallback;
+  startCallback?: typeof startProviderOAuthLoopbackCallbackServer;
 };
 
 function extractOpenRouterError(value: unknown): string | undefined {
@@ -206,125 +215,6 @@ async function exchangeOpenRouterOAuthCode(params: {
   return parseOpenRouterKeyResponse(body);
 }
 
-async function waitForOpenRouterOAuthCallback(params: {
-  expectedState: string;
-  timeoutMs?: number;
-  onProgress?: (message: string) => void;
-  signal?: AbortSignal;
-}): Promise<OpenRouterOAuthCallbackResult> {
-  const timeoutMs = params.timeoutMs ?? OPENROUTER_OAUTH_TIMEOUT_MS;
-  return new Promise<OpenRouterOAuthCallbackResult>((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      finish(new Error("OpenRouter OAuth callback timeout"));
-    }, timeoutMs);
-    const server = createServer((req, res) => {
-      try {
-        const requestUrl = new URL(
-          req.url ?? "/",
-          `http://${OPENROUTER_OAUTH_CALLBACK_HOST}:${OPENROUTER_OAUTH_CALLBACK_PORT}`,
-        );
-        if (requestUrl.pathname !== OPENROUTER_OAUTH_CALLBACK_PATH) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Not found");
-          return;
-        }
-        if (req.method !== "GET") {
-          res.statusCode = 405;
-          res.setHeader("Allow", "GET");
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Method not allowed");
-          return;
-        }
-
-        const state = normalizeOptionalString(requestUrl.searchParams.get("state"));
-        try {
-          requireOpenRouterOAuthState(state, params.expectedState);
-        } catch (err) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Invalid OAuth state");
-          finish(err instanceof Error ? err : new Error("OpenRouter OAuth state mismatch"));
-          return;
-        }
-
-        const error = normalizeOptionalString(requestUrl.searchParams.get("error"));
-        if (error) {
-          const description = normalizeOptionalString(
-            requestUrl.searchParams.get("error_description"),
-          );
-          const detail = description ? `${error}: ${description}` : error;
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end(`OpenRouter authentication failed: ${detail}`);
-          finish(new Error(`OpenRouter OAuth error: ${detail}`));
-          return;
-        }
-
-        const code = normalizeOptionalString(requestUrl.searchParams.get("code"));
-        if (!code) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Missing OAuth code");
-          finish(new Error("Missing OpenRouter OAuth code"));
-          return;
-        }
-
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(
-          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-            "<body><h2>OpenRouter OAuth complete</h2>" +
-            "<p>You can close this window and return to OpenClaw.</p></body></html>",
-        );
-        finish(undefined, { code, state: params.expectedState });
-      } catch (err) {
-        finish(err instanceof Error ? err : new Error("OpenRouter OAuth callback failed"));
-      }
-    });
-
-    const finish = (err?: Error, result?: OpenRouterOAuthCallbackResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      try {
-        server.close();
-      } catch {
-        // Best-effort cleanup after callback completion or timeout.
-      }
-      if (err) {
-        reject(err);
-        return;
-      }
-      if (result) {
-        resolve(result);
-      }
-    };
-
-    const onAbort = () => finish(new Error("OpenRouter OAuth cancelled"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    if (params.signal?.aborted) {
-      onAbort();
-      return;
-    }
-
-    server.once("error", (err) => {
-      finish(err instanceof Error ? err : new Error("OpenRouter OAuth callback server error"));
-    });
-    server.listen(OPENROUTER_OAUTH_CALLBACK_PORT, OPENROUTER_OAUTH_CALLBACK_HOST, () => {
-      params.onProgress?.(
-        `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
-      );
-    });
-  });
-}
-
 async function promptForOpenRouterRedirect(
   ctx: ProviderAuthContext,
   expectedState: string,
@@ -342,7 +232,7 @@ async function resolveOpenRouterOAuthCode(
   params: {
     authorizeUrl: string;
     state: string;
-    waitForCallback: typeof waitForOpenRouterOAuthCallback;
+    startCallback: typeof startProviderOAuthLoopbackCallbackServer;
     onProgress: (message: string) => void;
   },
 ): Promise<string> {
@@ -373,20 +263,30 @@ async function resolveOpenRouterOAuthCode(
     return await promptForOpenRouterRedirect(ctx, params.state);
   }
 
-  const callbackPromise = params
-    .waitForCallback({
+  let callback: OpenRouterOAuthCallbackServer | undefined;
+  try {
+    callback = await params.startCallback({
+      redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
       expectedState: params.state,
-      onProgress: params.onProgress,
+      timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
-    })
-    .catch(async (error: unknown) => {
-      if (ctx.signal?.aborted) {
-        throw error;
-      }
-      params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-      return { code: await promptForOpenRouterRedirect(ctx, params.state), state: params.state };
+      renderSuccess: () => ({
+        body:
+          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
+          "<body><h2>OpenRouter OAuth complete</h2>" +
+          "<p>You can close this window and return to OpenClaw.</p></body></html>",
+        contentType: "text/html; charset=utf-8",
+      }),
     });
-  void callbackPromise.catch(() => undefined);
+    params.onProgress(
+      `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
+    );
+  } catch (error) {
+    if (ctx.signal?.aborted) {
+      throw error;
+    }
+    params.onProgress("OAuth callback not detected; waiting for redirect URL...");
+  }
 
   try {
     await ctx.openUrl(params.authorizeUrl);
@@ -395,7 +295,32 @@ async function resolveOpenRouterOAuthCode(
     ctx.runtime.log(`Open manually: ${params.authorizeUrl}`);
   }
 
-  return (await callbackPromise).code;
+  if (!callback) {
+    return await promptForOpenRouterRedirect(ctx, params.state);
+  }
+
+  let result: OpenRouterOAuthLoopbackResult;
+  try {
+    try {
+      result = await callback.waitForCallback();
+    } finally {
+      await callback.close();
+    }
+  } catch (error) {
+    if (ctx.signal?.aborted) {
+      throw error;
+    }
+    params.onProgress("OAuth callback not detected; waiting for redirect URL...");
+    return await promptForOpenRouterRedirect(ctx, params.state);
+  }
+
+  if (result.type === "oauth_error") {
+    const detail = result.errorDescription
+      ? `${result.error}: ${result.errorDescription}`
+      : result.error;
+    throw new Error(`OpenRouter OAuth error: ${detail}`);
+  }
+  return result.code;
 }
 
 async function loginOpenRouterOAuth(
@@ -413,7 +338,7 @@ async function loginOpenRouterOAuth(
     const code = await resolveOpenRouterOAuthCode(ctx, {
       authorizeUrl,
       state,
-      waitForCallback: options.waitForCallback ?? waitForOpenRouterOAuthCallback,
+      startCallback: options.startCallback ?? startProviderOAuthLoopbackCallbackServer,
       onProgress: (message) => progress.update(message),
     });
     progress.update("Exchanging OpenRouter OAuth code...");

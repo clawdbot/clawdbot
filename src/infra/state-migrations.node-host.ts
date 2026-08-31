@@ -9,6 +9,7 @@ import {
   type NodeHostConfig,
   type NodeHostGatewayConfig,
 } from "../node-host/config.js";
+import { normalizeNodeHostCloudflareAccessConfig } from "../node-host/gateway-cloudflare-access.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -30,7 +31,7 @@ const LEGACY_NODE_HOST_MAX_BYTES = 64 * 1024;
 const CONFIG_KEYS = new Set(["version", "nodeId", "token", "displayName", "gateway"]);
 const GATEWAY_KEYS = new Set(["host", "port", "tls", "tlsFingerprint", "contextPath"]);
 
-type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "node_host_config">;
+type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 type CanonicalNodeHostState = {
   config: NodeHostConfig;
@@ -140,55 +141,72 @@ function parseLegacyNodeHostConfig(snapshot: LegacySourceSnapshot): CanonicalNod
   };
 }
 
-function nullableNonEmptyString(value: string | null, label: string): string | undefined {
-  if (value === null) {
+function nullableNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === null || value === undefined) {
     return undefined;
   }
-  if (!value.trim()) {
+  if (typeof value !== "string" || !value.trim()) {
     throw new Error(`invalid node-host SQLite row: ${label} must not be empty`);
   }
   return value.trim();
 }
 
 function rowToCanonicalState(row: {
-  version: number;
-  node_id: string;
-  display_name: string | null;
-  gateway_host: string | null;
-  gateway_port: number | null;
-  gateway_tls: number | null;
-  gateway_tls_fingerprint: string | null;
-  gateway_context_path: string | null;
+  value_json: string;
   updated_at_ms: number;
 }): CanonicalNodeHostState {
-  if (row.version !== 1 || !row.node_id.trim()) {
+  const value = JSON.parse(row.value_json) as unknown;
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.nodeId !== "string" ||
+    !value.nodeId.trim()
+  ) {
     throw new Error("invalid canonical node-host SQLite identity");
   }
   if (!Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
     throw new Error("invalid canonical node-host SQLite timestamp");
   }
+  const storedGateway = value.gateway;
+  if (storedGateway !== undefined && !isRecord(storedGateway)) {
+    throw new Error("invalid canonical node-host SQLite gateway");
+  }
+  const gatewayPort = storedGateway?.port;
   if (
-    row.gateway_port !== null &&
-    (!Number.isSafeInteger(row.gateway_port) || row.gateway_port <= 0 || row.gateway_port > 65_535)
+    gatewayPort !== undefined &&
+    (typeof gatewayPort !== "number" ||
+      !Number.isSafeInteger(gatewayPort) ||
+      gatewayPort <= 0 ||
+      gatewayPort > 65_535)
   ) {
     throw new Error("invalid canonical node-host SQLite gateway port");
   }
-  if (row.gateway_tls !== null && row.gateway_tls !== 0 && row.gateway_tls !== 1) {
+  const gatewayTls = storedGateway?.tls;
+  if (gatewayTls !== undefined && typeof gatewayTls !== "boolean") {
     throw new Error("invalid canonical node-host SQLite gateway tls");
   }
+  if (value.installedAppsSharing !== undefined && typeof value.installedAppsSharing !== "boolean") {
+    throw new Error("invalid canonical node-host SQLite installed-app sharing");
+  }
+  const cloudflareAccess = normalizeNodeHostCloudflareAccessConfig(storedGateway?.cloudflareAccess);
   const gateway: NodeHostGatewayConfig = {
-    host: nullableNonEmptyString(row.gateway_host, "gateway_host"),
-    port: row.gateway_port ?? undefined,
-    tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
-    tlsFingerprint: nullableNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
-    contextPath: nullableNonEmptyString(row.gateway_context_path, "gateway_context_path"),
+    host: nullableNonEmptyString(storedGateway?.host, "gateway_host"),
+    port: typeof gatewayPort === "number" ? gatewayPort : undefined,
+    tls: typeof gatewayTls === "boolean" ? gatewayTls : undefined,
+    tlsFingerprint: nullableNonEmptyString(
+      storedGateway?.tlsFingerprint,
+      "gateway_tls_fingerprint",
+    ),
+    contextPath: nullableNonEmptyString(storedGateway?.contextPath, "gateway_context_path"),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
   return {
     config: {
       version: 1,
-      nodeId: row.node_id.trim(),
-      displayName: nullableNonEmptyString(row.display_name, "display_name"),
+      nodeId: value.nodeId.trim(),
+      displayName: nullableNonEmptyString(value.displayName, "display_name"),
       gateway: Object.values(gateway).some((entry) => entry !== undefined) ? gateway : undefined,
+      installedAppsSharing: value.installedAppsSharing === true,
     },
     updatedAtMs: row.updated_at_ms,
   };
@@ -202,7 +220,9 @@ function configsEqual(left: NodeHostConfig, right: NodeHostConfig): boolean {
     left.gateway?.port === right.gateway?.port &&
     left.gateway?.tls === right.gateway?.tls &&
     left.gateway?.tlsFingerprint === right.gateway?.tlsFingerprint &&
-    left.gateway?.contextPath === right.gateway?.contextPath
+    left.gateway?.contextPath === right.gateway?.contextPath &&
+    JSON.stringify(left.gateway?.cloudflareAccess) ===
+      JSON.stringify(right.gateway?.cloudflareAccess)
   );
 }
 
@@ -210,27 +230,21 @@ function writeCanonicalState(
   db: Parameters<typeof getNodeSqliteKysely>[0],
   state: CanonicalNodeHostState,
 ): void {
-  const gateway = state.config.gateway;
   const row = {
-    config_key: NODE_HOST_CONFIG_KEY,
-    version: 1,
-    node_id: state.config.nodeId,
-    token: null,
-    display_name: state.config.displayName ?? null,
-    gateway_host: gateway?.host ?? null,
-    gateway_port: gateway?.port ?? null,
-    gateway_tls: gateway?.tls === undefined ? null : gateway.tls ? 1 : 0,
-    gateway_tls_fingerprint: gateway?.tlsFingerprint ?? null,
-    gateway_context_path: gateway?.contextPath ?? null,
+    state_key: NODE_HOST_CONFIG_KEY,
+    value_json: JSON.stringify({
+      ...state.config,
+      installedAppsSharing: state.config.installedAppsSharing ?? false,
+    }),
     updated_at_ms: state.updatedAtMs,
   };
-  const { config_key: _configKey, ...updates } = row;
+  const { state_key: _stateKey, ...updates } = row;
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<NodeHostConfigDatabase>(db)
-      .insertInto("node_host_config")
+      .insertInto("config_machine_state")
       .values(row)
-      .onConflict((conflict) => conflict.column("config_key").doUpdateSet(updates)),
+      .onConflict((conflict) => conflict.column("state_key").doUpdateSet(updates)),
   );
 }
 
@@ -246,9 +260,9 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
       const row = executeSqliteQueryTakeFirstSync(
         db,
         stateDb
-          .selectFrom("node_host_config")
+          .selectFrom("config_machine_state")
           .selectAll()
-          .where("config_key", "=", NODE_HOST_CONFIG_KEY),
+          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
       );
       const existing = row ? rowToCanonicalState(row) : null;
       if (existing && existing.config.nodeId !== params.legacy.config.nodeId) {
@@ -269,21 +283,26 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
       if (
         !existing ||
         !configsEqual(existing.config, expected.config) ||
-        existing.updatedAtMs !== expected.updatedAtMs ||
-        row?.token !== null
+        existing.updatedAtMs !== expected.updatedAtMs
       ) {
+        if (expected === params.legacy && existing?.config.installedAppsSharing) {
+          expected = {
+            ...expected,
+            config: { ...expected.config, installedAppsSharing: true },
+          };
+        }
         writeCanonicalState(db, expected);
-        imported = expected === params.legacy;
+        imported = expected.updatedAtMs === params.legacy.updatedAtMs;
       }
 
       const verifiedRow = executeSqliteQueryTakeFirstSync(
         db,
         stateDb
-          .selectFrom("node_host_config")
+          .selectFrom("config_machine_state")
           .selectAll()
-          .where("config_key", "=", NODE_HOST_CONFIG_KEY),
+          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
       );
-      if (!verifiedRow || verifiedRow.token !== null) {
+      if (!verifiedRow) {
         throw new Error("SQLite verification failed for node-host config");
       }
       const verified = rowToCanonicalState(verifiedRow);

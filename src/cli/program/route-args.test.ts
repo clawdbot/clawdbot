@@ -182,10 +182,10 @@ describe("route-args", () => {
         "list",
         "--json",
       ]),
-    ).toEqual({ json: true, bindings: false });
+    ).toEqual({ json: true, bindings: false, tree: false });
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "--json", "--bindings"]),
-    ).toEqual({ json: true, bindings: true });
+    ).toEqual({ json: true, bindings: true, tree: false });
   });
 
   it("parses gateway status route args and rejects probe-only ssh flags", () => {
@@ -332,14 +332,24 @@ describe("route-args", () => {
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
     expect(
-      parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
+      parseAgentsListRouteArgs([
+        "node",
+        "openclaw",
+        "agents",
+        "list",
+        "--json",
+        "--bindings",
+        "--tree",
+      ]),
     ).toEqual({
       json: true,
       bindings: true,
+      tree: true,
     });
     expect(parseAgentsListRouteArgs(["node", "openclaw", "agents"])).toEqual({
       json: false,
       bindings: false,
+      tree: false,
     });
   });
 

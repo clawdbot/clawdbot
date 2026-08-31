@@ -4,6 +4,7 @@ import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller
 import {
   clearIMessageApprovalReactionTargetsForTest,
   registerIMessageApprovalReactionTarget as registerIMessageApprovalReactionTargetRaw,
+  resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
 
@@ -20,9 +21,15 @@ const registerIMessageApprovalReactionTarget = (
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveApprovalOverGateway,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+  };
+});
 
 function createClient(request: ReturnType<typeof vi.fn>): IMessageRpcClient {
   return { request } as unknown as IMessageRpcClient;
@@ -320,7 +327,7 @@ describe("iMessage approval reaction poller", () => {
     expect(logVerboseMessage.mock.calls.flat().join(" ")).not.toContain("decision=allow-once");
   });
 
-  it("stops scanning after an authorized resolver failure", async () => {
+  it("propagates an authorized resolver failure and retries it on the next poll", async () => {
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway down"));
     registerIMessageApprovalReactionTarget({
       accountId,
@@ -355,11 +362,12 @@ describe("iMessage approval reaction poller", () => {
         ],
       }),
     ]);
+    const pollParams = buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) });
 
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) }),
-    );
-
+    // The transient failure aborts the cycle before the later 👎 is resolved:
+    // first-answer ordering must survive the retry, and the caller
+    // (monitor-provider) logs the throw and re-polls on the next interval.
+    await expect(pollPendingIMessageApprovalReactions(pollParams)).rejects.toThrow("gateway down");
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
       accountId,
@@ -371,5 +379,30 @@ describe("iMessage approval reaction poller", () => {
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
+    // The binding stays registered for the next interval's retry.
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId,
+        conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
+        messageId: "msg-1",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeTruthy();
+
+    // Next interval: the retried 👍 resolves first; the later 👎 then finds no
+    // binding and never reaches the resolver.
+    await pollPendingIMessageApprovalReactions(pollParams);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+    expect(resolverMocks.resolveApprovalOverGateway.mock.calls[1]?.[0]).toEqual(
+      resolverMocks.resolveApprovalOverGateway.mock.calls[0]?.[0],
+    );
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId,
+        conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
+        messageId: "msg-1",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
   });
 });

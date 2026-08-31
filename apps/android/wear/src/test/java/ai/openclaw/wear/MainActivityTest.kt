@@ -80,7 +80,7 @@ class MainActivityTest {
   @Test
   fun chatFollowTracksStreamingGrowthAtLatest() {
     val messages = listOf(WearChatMessage(id = "user-1", role = "user", text = "Status?", timestamp = 1L))
-    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false, hasAssistant = false, hasFailure = false)
+    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false)
     val first =
       nextWearThreadFollowForContent(
         state = WearThreadFollowState(),
@@ -131,19 +131,26 @@ class MainActivityTest {
   }
 
   @Test
-  fun chatFollowTargetsRenderedTrailingAnchor() {
+  fun chatFollowStopsAtLatestMessageBeforeControls() {
     assertEquals(
       -1,
-      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = true),
+      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false),
     )
     assertEquals(
-      5,
-      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = false),
+      3,
+      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false),
     )
     assertEquals(
-      10,
-      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true, hasAssistant = true, hasFailure = true),
+      6,
+      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true),
     )
+  }
+
+  @Test
+  fun nestedContextPickerCloseReturnsToSessionPicker() {
+    assertEquals(WearContextPicker.Session, wearContextPickerAfterClose(WearContextPicker.Agent))
+    assertEquals(WearContextPicker.Session, wearContextPickerAfterClose(WearContextPicker.Model))
+    assertNull(wearContextPickerAfterClose(WearContextPicker.Session))
   }
 
   @Test
@@ -254,17 +261,72 @@ class MainActivityTest {
         hasActiveRun = false,
         phoneNodeId = "phone-1",
       )
+    val phoneSession =
+      WearSession(
+        key = "session-2",
+        title = "Phone session",
+        updatedAt = 7,
+        hasActiveRun = false,
+        phoneNodeId = "phone-1",
+      )
     val snapshot =
       WearUiState(
         connected = true,
         phoneNodeId = "phone-1",
-        sessions = listOf(session),
+        phoneActiveSessionKey = phoneSession.key,
+        sessions = listOf(session, phoneSession),
         selectedSession = session,
         failure = WearConversationFailure.ACTION_REJECTED,
       ).toConversationSnapshot()
 
     assertEquals(WearConversationFailure.ACTION_REJECTED, snapshot?.failure)
-    assertNull(snapshot?.sessions?.single()?.title)
+    assertNull(snapshot?.sessions?.first()?.title)
+    assertFalse(snapshot?.sessions?.first()?.activeOnPhone == true)
+    assertTrue(snapshot?.sessions?.first()?.openOnWatch == true)
+    assertTrue(snapshot?.sessions?.last()?.activeOnPhone == true)
+    assertFalse(snapshot?.sessions?.last()?.openOnWatch == true)
+    assertEquals(phoneSession.key, snapshot?.phoneActiveSessionId)
+  }
+
+  @Test
+  fun modelSearchResultsRemainSelectableOutsideTheCompactModelWindow() {
+    val state =
+      WearUiState(
+        models = listOf(WearModel(ref = "openai/gpt-a", name = "GPT A")),
+        modelSearchResults =
+          listOf(WearModel(ref = "anthropic/claude", name = "Claude")),
+      )
+
+    assertTrue(state.containsModelRef("openai/gpt-a"))
+    assertTrue(state.containsModelRef("anthropic/claude"))
+    assertFalse(state.containsModelRef("google/gemini"))
+  }
+
+  @Test
+  fun pickerSearchVisibilityFollowsNegotiatedCapabilities() {
+    val legacySnapshot =
+      WearUiState(
+        phoneNodeId = "phone-1",
+        proxyCapabilities =
+          setOf(
+            WearProxyCapability.ModelControls,
+            WearProxyCapability.SessionSelectionLookup,
+          ),
+      ).toConversationSnapshot()
+    val currentSnapshot =
+      WearUiState(
+        phoneNodeId = "phone-1",
+        proxyCapabilities =
+          setOf(
+            WearProxyCapability.ModelCatalogSearch,
+            WearProxyCapability.SessionSearchPagination,
+          ),
+      ).toConversationSnapshot()
+
+    assertFalse(legacySnapshot?.modelSearchSupported == true)
+    assertFalse(legacySnapshot?.sessionSearchSupported == true)
+    assertTrue(currentSnapshot?.modelSearchSupported == true)
+    assertTrue(currentSnapshot?.sessionSearchSupported == true)
   }
 
   @Test

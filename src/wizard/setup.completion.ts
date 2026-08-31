@@ -1,9 +1,11 @@
 // Setup completion helpers render completion instructions after onboarding.
 import { resolveCliName } from "../cli/cli-name.js";
 import {
+  findCompletionProfileWriteError,
   formatCompletionReloadCommand,
   installCompletion,
   resolveCompletionProfileHint,
+  resolveCompletionProfilePath,
 } from "../cli/completion-runtime.js";
 import type {
   CompletionCacheGenerationOptions,
@@ -42,6 +44,25 @@ export async function setupWizardShellCompletion(params: {
 
   const cliName = deps.resolveCliName();
   const completionStatus = await deps.checkShellCompletionStatus(cliName);
+  const installCompletionForSetup = async (): Promise<boolean> => {
+    try {
+      await deps.installCompletion(completionStatus.shell, true, cliName);
+      return true;
+    } catch (error) {
+      const writeError = findCompletionProfileWriteError(error);
+      if (!writeError) {
+        throw error;
+      }
+      await params.prompter.note(
+        t("wizard.completion.profileNotWritable", {
+          profile: writeError.path ?? resolveCompletionProfilePath(completionStatus.shell),
+          command: `${cliName} completion --install`,
+        }),
+        t("wizard.completion.title"),
+      );
+      return false;
+    }
+  };
   const generationOptions = { generationMode: "full" } as const;
   const ensureCompletionCache = async (): Promise<boolean> => {
     const cacheGenerated = await deps.ensureCompletionCacheExists(cliName, generationOptions);
@@ -60,7 +81,7 @@ export async function setupWizardShellCompletion(params: {
     // Case 1: Profile uses slow dynamic pattern - silently upgrade to cached version
     const cacheGenerated = await ensureCompletionCache();
     if (cacheGenerated) {
-      await deps.installCompletion(completionStatus.shell, true, cliName);
+      await installCompletionForSetup();
     }
     return;
   }
@@ -95,7 +116,10 @@ export async function setupWizardShellCompletion(params: {
     }
 
     // Install to shell profile
-    await deps.installCompletion(completionStatus.shell, true, cliName);
+    const completionInstalled = await installCompletionForSetup();
+    if (!completionInstalled) {
+      return;
+    }
 
     const shell = completionStatus.shell;
     const command = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));

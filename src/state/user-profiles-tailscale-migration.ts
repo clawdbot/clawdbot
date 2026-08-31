@@ -10,8 +10,9 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { githubAuthenticationSubject } from "./user-profile-github-identity.js";
+import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
-import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles.js";
 
 type UserProfileIdentityMigrationResult = {
   changes: string[];
@@ -49,14 +50,17 @@ export function migrateLegacyTailscaleProfileIdentities(
       let migrated = 0;
       const warnings: string[] = [];
       for (const row of legacyRows) {
+        const subject =
+          row.provider === "github" ? githubAuthenticationSubject(row.subject) : row.subject;
         executeSqliteQuerySync(
           db,
           transactionKysely
             .insertInto("user_profile_identities")
             .values({
               provider: row.provider,
-              subject: row.subject,
+              subject,
               profile_id: row.profile_id,
+              canonical_login: null,
               created_at: row.created_at,
             })
             .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
@@ -67,7 +71,7 @@ export function migrateLegacyTailscaleProfileIdentities(
             .selectFrom("user_profile_identities")
             .select("profile_id")
             .where("provider", "=", row.provider)
-            .where("subject", "=", row.subject),
+            .where("subject", "=", subject),
         );
         if (identity?.profile_id !== row.profile_id) {
           warnings.push(

@@ -44,6 +44,7 @@ export async function startQaGatewayAccount(
       config: ctx.cfg as CoreConfig,
       message,
       buildContext,
+      ...(channelRuntime ? { channelRuntime } : {}),
     });
   const captureInboundError = (error: unknown) => {
     inboundError ??= error instanceof Error ? error : new Error(String(error));

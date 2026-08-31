@@ -1,7 +1,9 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import {
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,7 +13,6 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
@@ -100,10 +101,13 @@ export function bootstrapOutboundChannelPlugin(params: {
 
   // Outbound callers already know the admitted run owner. Preserve it here so
   // explicit fleets do not fall back to forbidden ambient-agent selection.
-  const agentId = params.agentId?.trim()
-    ? normalizeAgentId(params.agentId)
-    : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
-  const outcomeKey = `${agentId}\0${params.channel}`;
+  // Agent-less sends route through the configured ambient owner (systemAgent,
+  // then the legacy default); ownerless fleets never throw — startup
+  // delivery recovery runs this path — and bootstrap with global-scope
+  // plugin discovery only. Normalized agent ids never equal "", so "" is a
+  // collision-free ownerless cache slot.
+  const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
+  const outcomeKey = `${agentId ?? ""}\0${params.channel}`;
   const registries = resolveBootstrapRegistries(cfg);
   const cachedRegistry = registries.get(outcomeKey);
   if (cachedRegistry !== undefined) {
@@ -112,7 +116,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const workspaceDir = agentId === undefined ? undefined : resolveAgentWorkspaceDir(cfg, agentId);
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,

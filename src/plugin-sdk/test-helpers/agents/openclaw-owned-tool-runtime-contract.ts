@@ -19,7 +19,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 
 export function textToolResult(
   text: string,
@@ -73,7 +73,7 @@ export function createOwnerBackedContractTool(params: {
     name: params.name,
     label: `${params.name} owner contract tool`,
     description: `${params.name} owner contract tool`,
-    parameters: { type: "object", properties: {} },
+    parameters: { type: "object", properties: {}, additionalProperties: true },
     execute: vi.fn(async () => params.result),
   } as AnyAgentTool;
   setPluginToolMeta(tool, {

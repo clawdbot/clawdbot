@@ -32,6 +32,7 @@ import {
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
@@ -551,6 +552,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       targetDeviceId: deviceId,
       controlId: "device.pair.rename",
     });
+    context.broadcast(GATEWAY_EVENT_DEVICE_PAIR_CHANGED, {}, { dropIfSlow: true });
     respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {

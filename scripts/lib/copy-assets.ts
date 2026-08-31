@@ -1,5 +1,4 @@
 // Copy Assets script supports OpenClaw repository automation.
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,12 +15,6 @@ export function resolveBuildCopyContext(importMetaUrl: string): BuildCopyContext
     projectRoot: path.resolve(path.dirname(filePath), ".."),
     verbose: process.env.OPENCLAW_BUILD_VERBOSE === "1",
   };
-}
-
-export function ensureDirectory(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
 }
 
 export function logVerboseCopy(context: BuildCopyContext, message: string): void {

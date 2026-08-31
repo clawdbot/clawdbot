@@ -1,5 +1,5 @@
 // Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   planManifestModelCatalogRows,
   planManifestModelCatalogSuppressions,
@@ -75,6 +75,66 @@ describe("manifest model catalog planner", () => {
     });
     expect(aliasPlan.rows).toMatchObject([
       { provider: "anthropic-alias", id: "old", name: "Remote alias", source: "runtime-refresh" },
+    ]);
+  });
+
+  it("scopes requested merge keys while preserving alias overlays", () => {
+    const resolveRemoteProvider = vi.fn((provider: string) =>
+      provider === "anthropic"
+        ? {
+            models: [
+              { id: "requested", name: "Remote" },
+              { id: "unrelated", name: "Remote unrelated" },
+            ],
+          }
+        : undefined,
+    );
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              aliases: {
+                "anthropic-alias": {
+                  provider: "anthropic",
+                  api: "anthropic-messages",
+                  baseUrl: "https://alias.anthropic.test",
+                },
+              },
+              providers: {
+                anthropic: {
+                  models: [{ id: "requested", name: "Bundled" }, { id: "unrelated" }],
+                },
+              },
+            },
+          },
+          {
+            id: "unrelated",
+            providers: ["unrelated"],
+            modelCatalog: {
+              providers: { unrelated: { models: [{ id: "unrelated" }] } },
+            },
+          },
+        ],
+      },
+      providerFilters: ["anthropic-alias"],
+      mergeKeyFilter: new Set(["anthropic-alias::requested"]),
+      resolveRemoteProvider,
+    });
+
+    expect(resolveRemoteProvider.mock.calls).toEqual([["anthropic"]]);
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.rows).toMatchObject([
+      {
+        provider: "anthropic-alias",
+        id: "requested",
+        name: "Remote",
+        api: "anthropic-messages",
+        baseUrl: "https://alias.anthropic.test",
+        source: "runtime-refresh",
+      },
     ]);
   });
 

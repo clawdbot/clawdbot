@@ -480,9 +480,10 @@ describe("AgentSession queued user turns", () => {
     });
   });
 
-  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+  it("preserves prompt image ownership across steered and follow-up messages", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
@@ -509,6 +510,10 @@ describe("AgentSession queued user turns", () => {
       mediaImageBlockFactIndexes: [0],
     });
     expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+    await session.followUp("inspect queued attachment", images);
+    expect(followUp.mock.calls[0]?.[0]).toMatchObject({
+      __openclaw: { mediaImageBlockFactIndexes: [0] },
+    });
   });
 });
 

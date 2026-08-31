@@ -1,30 +1,19 @@
 // Stale-while-revalidate cache for models.authStatus provider usage enrichment.
-import {
-  ensureAuthProfileStore,
-  externalCliDiscoveryForConfigStatus,
-  type AuthProfileStore,
-} from "../../agents/auth-profiles.js";
-import {
-  fingerprintAuthProfileCredential,
-  fingerprintAuthProfileOwnerShape,
-  fingerprintResolvedProviderAuth,
-} from "../../agents/execution-auth-binding.js";
-import {
-  resolveLegacyInheritedAuthAgentId,
-  resolveLegacyInheritedAuthDir,
-} from "../../agents/legacy-inherited-auth-dir.js";
-import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
-import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
+import { PROVIDER_USAGE_TIMEOUT_MS } from "../../infra/provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageSummary,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { listProviderUsagePluginDescriptors } from "../../plugins/provider-runtime.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  clearProviderUsageRuntimeSnapshot,
+  getProviderUsageRuntimeSnapshot,
+} from "./provider-usage-runtime.js";
 
 const log = createSubsystemLogger("provider-usage-cache");
 const USAGE_CACHE_TTL_MS = 60_000;
@@ -56,59 +45,11 @@ const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
 let cacheGeneration = 0;
 
-function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
-  return Object.entries(value ?? {}).toSorted(([left], [right]) => left.localeCompare(right));
-}
-
-export function fingerprintProviderUsageCredentials(params: {
-  cfg: OpenClawConfig;
-  directApiKeys: ReadonlyMap<string, { source: "config" | "env"; envVar?: string } | undefined>;
-  store: AuthProfileStore;
-}): string {
-  const profiles = Object.entries(params.store.profiles)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([profileId, credential]) => {
-      const fingerprint =
-        fingerprintAuthProfileCredential({ profileId, credential }) ??
-        fingerprintAuthProfileOwnerShape({ profileId, credential });
-      return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
-    });
-  const direct = [...params.directApiKeys]
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([provider, evidence]) => {
-      const configured = resolveUsableCustomProviderApiKey({
-        cfg: params.cfg,
-        provider,
-        env: process.env,
-      });
-      const envValue = evidence?.envVar ? process.env[evidence.envVar]?.trim() : undefined;
-      const resolved =
-        configured ??
-        (envValue ? { apiKey: envValue, source: `env: ${evidence?.envVar}` } : undefined);
-      const fingerprint = resolved
-        ? fingerprintResolvedProviderAuth({
-            apiKey: resolved.apiKey,
-            source: resolved.source,
-            mode: "api-key",
-          })
-        : undefined;
-      return [provider, fingerprint ?? null];
-    });
-  // Profile selection can switch accounts without changing the profile set.
-  // Include every non-secret selector that resolveAuthProfileOrder consults.
-  return JSON.stringify({
-    profiles,
-    direct,
-    order: sortedRecordEntries(params.store.order),
-    lastGood: sortedRecordEntries(params.store.lastGood),
-    usageStats: sortedRecordEntries(params.store.usageStats),
-  });
-}
-
 export function clearModelAuthStatusUsageCache(): void {
   cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
+  clearProviderUsageRuntimeSnapshot();
 }
 
 function providerUsageCacheKey(providerIds: readonly UsageProviderId[]): string {
@@ -122,6 +63,9 @@ function scopeProviderUsageCredentialKey(
   // models.authStatus fingerprints every direct provider. Scope that evidence to
   // this fetch set so usage.status can share the same credential-bound snapshot.
   try {
+    // Produced only by fingerprintProviderUsageCredentials below, which always
+    // stringifies an object with a `direct` array; a parse failure returns the input.
+    // SAFETY: in-module producer guarantees this shape, and `direct` is re-checked.
     const parsed = JSON.parse(credentialKey) as {
       direct?: Array<[string, string | null]>;
       [key: string]: unknown;
@@ -155,13 +99,41 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
   return usageByProvider;
 }
 
+function retainLastGoodOnTimeout(
+  summary: UsageSummary,
+  lastGood: UsageSummary | undefined,
+): UsageSummary {
+  if (!lastGood) {
+    return summary;
+  }
+  const lastGoodByProvider = new Map(
+    lastGood.providers
+      .filter((provider) => provider.error === undefined)
+      .map((provider) => [provider.provider, provider]),
+  );
+  const retainedLastGood = summary.providers.some(
+    (provider) => provider.error === "Timeout" && lastGoodByProvider.has(provider.provider),
+  );
+  return {
+    ...summary,
+    updatedAt: retainedLastGood ? lastGood.updatedAt : summary.updatedAt,
+    providers: summary.providers.map((provider) =>
+      provider.error === "Timeout"
+        ? (lastGoodByProvider.get(provider.provider) ?? provider)
+        : provider,
+    ),
+  };
+}
+
 function scheduleProviderUsageRefresh(params: {
   agentId: string;
   agentDir: string;
+  authStore?: AuthProfileStore;
   configRef: OpenClawConfig;
   credentialKey: string;
   providerIds: UsageProviderId[];
   providerKey: string;
+  lastGood?: UsageSummary;
 }): Promise<UsageSummary> {
   const active = usageRefreshByAgentId.get(params.agentId);
   if (
@@ -176,10 +148,12 @@ function scheduleProviderUsageRefresh(params: {
   const promise = loadProviderUsageSummary({
     providers: params.providerIds,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     config: params.configRef,
-    timeoutMs: 3500,
+    timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
   })
-    .then((usage) => {
+    .then((freshUsage) => {
+      const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
       if (
         publishGeneration === cacheGeneration &&
         usageRefreshByAgentId.get(params.agentId) === refresh
@@ -197,8 +171,9 @@ function scheduleProviderUsageRefresh(params: {
       return usage;
     })
     .catch((err: unknown) => {
-      // Usage is auxiliary and stale data remains valid. Keep failures visible
-      // without delaying fresh auth-health responses.
+      // Usage is auxiliary and stale data remains valid. A failed refresh
+      // publishes nothing, so a capable client keeps seeing the incomplete
+      // marker and reports it once its retry budget is spent.
       log.debug(
         `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
       );
@@ -223,8 +198,10 @@ function scheduleProviderUsageRefresh(params: {
 type ProviderUsageCacheParams = {
   agentId: string;
   agentDir: string;
+  authStore?: AuthProfileStore;
   configRef: OpenClawConfig;
   credentialKey: string;
+  coldRead?: "refresh-marker";
   forceRefresh?: boolean;
   providerIds: UsageProviderId[];
   now: number;
@@ -264,16 +241,18 @@ export function readProviderUsageStaleWhileRevalidate(
     void scheduleProviderUsageRefresh({
       agentId: params.agentId,
       agentDir: params.agentDir,
+      authStore: params.authStore,
       configRef: params.configRef,
       credentialKey,
       providerIds,
       providerKey,
+      lastGood: matching?.summary,
     }).catch(() => {});
   }
   return matching?.usageByProvider ?? new Map();
 }
 
-/** Returns cached provider usage, awaiting only a cold miss and refreshing stale data in place. */
+/** Returns cached provider usage while network refreshes run in the background for capable clients. */
 async function loadProviderUsageSummaryStaleWhileRevalidate(
   params: ProviderUsageCacheParams,
 ): Promise<UsageSummary> {
@@ -289,59 +268,39 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   const refresh = scheduleProviderUsageRefresh({
     agentId: params.agentId,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     configRef: params.configRef,
     credentialKey,
     providerIds,
     providerKey,
+    lastGood: matching?.summary,
   });
   if (matching) {
     void refresh.catch(() => {});
     return matching.summary;
   }
-  return await refresh;
+  if (params.coldRead !== "refresh-marker") {
+    return await refresh;
+  }
+  void refresh.catch(() => {});
+  return { updatedAt: params.now, providers: [], refreshing: true };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
+  coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
-  const agentId = resolveLegacyInheritedAuthAgentId(params.config);
-  const agentDir = resolveLegacyInheritedAuthDir(params.config);
-  const store = ensureAuthProfileStore(agentDir, {
-    externalCli: externalCliDiscoveryForConfigStatus({ cfg: params.config }),
-  });
-  const providerIds = listProviderUsagePluginDescriptors({
-    config: params.config,
-    env: process.env,
-  }).map((descriptor) => descriptor.provider);
-  const directApiKeys = new Map<
-    string,
-    { source: "config" | "env"; envVar?: string } | undefined
-  >();
-  for (const provider of providerIds) {
-    const resolved =
-      resolveUsableCustomProviderApiKey({
-        cfg: params.config,
-        provider,
-        env: process.env,
-      }) ?? resolveEnvApiKey(provider, process.env, { config: params.config });
-    if (!resolved) {
-      continue;
-    }
-    const envVar = resolved.source.match(/^(?:shell env|env): ([A-Z][A-Z0-9_]*)$/u)?.[1];
-    directApiKeys.set(provider, envVar ? { source: "env", envVar } : { source: "config" });
-  }
+  const snapshot = getProviderUsageRuntimeSnapshot({ config: params.config });
   return await loadProviderUsageSummaryStaleWhileRevalidate({
-    agentId,
-    agentDir,
-    configRef: params.config,
-    credentialKey: fingerprintProviderUsageCredentials({
-      cfg: params.config,
-      directApiKeys,
-      store,
-    }),
-    providerIds,
+    agentId: snapshot.agentId,
+    agentDir: snapshot.agentDir,
+    authStore: snapshot.store,
+    configRef: snapshot.configRef,
+    credentialKey: snapshot.credentialKey,
+    providerIds: snapshot.providerIds,
+    coldRead: params.coldRead,
     now: params.now ?? Date.now(),
   });
 }

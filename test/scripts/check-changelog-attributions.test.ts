@@ -37,8 +37,7 @@ function createRepoWithPrChangelogDiff(entry: string): string {
   run(repo, "git", ["add", "CHANGELOG.md"]);
   run(repo, "git", ["commit", "-qm", "seed"]);
   const baseSha = run(repo, "git", ["rev-parse", "HEAD"]);
-  // validate_changelog_entry_for_pr reads origin/main...HEAD, so the test
-  // fixture needs a real base ref plus a feature-branch changelog diff.
+  // Direct helper callers capture this base as the operation's main snapshot.
   run(repo, "git", ["update-ref", "refs/remotes/origin/main", baseSha]);
   run(repo, "git", ["checkout", "-qb", "feature"]);
   writeFileSync(
@@ -63,7 +62,7 @@ function validateChangelogEntry(repo: string, contrib: string): string {
     "bash",
     [
       "-c",
-      'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
+      'source "$OPENCLAW_PR_CHANGELOG_SH"; PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
     ],
     {
       OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
@@ -236,7 +235,7 @@ source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
 
-enter_worktree() { :; }
+enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
@@ -288,7 +287,7 @@ source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
 
-enter_worktree() { :; }
+enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }

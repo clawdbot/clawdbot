@@ -8,7 +8,7 @@ import { listRecommendedToolInstalls } from "../plugins/recommended-tool-install
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
-const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
+const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 30_000;
 
 const log = createSubsystemLogger("system-agent/setup-inference-detection");
 
@@ -17,8 +17,8 @@ class SetupInferenceDetectionTimeoutError extends Error {
 
   constructor(timeoutMs: number) {
     super(
-      `Checking this Gateway for AI access timed out after ${timeoutMs / 1_000}s. ` +
-        "The Gateway may be busy — try again.",
+      `AI access detection did not finish after ${timeoutMs / 1_000}s. ` +
+        "This Gateway may still be checking — try again.",
     );
   }
 }

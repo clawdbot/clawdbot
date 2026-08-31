@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { clearExtensionCache } from "./extensions/loader.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
+import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -41,6 +42,27 @@ afterEach(() => {
 });
 
 describe("DefaultResourceLoader", () => {
+  it("does not load a direct local extension disabled by its package filter", async () => {
+    const root = tempDirs.make("openclaw-resource-loader-filter-");
+    const extensionPath = join(root, "extension.ts");
+    await writeFile(extensionPath, "export default function extension() {}\n");
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({
+        packages: [{ source: extensionPath, extensions: [] }],
+      }),
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions).toEqual([]);
+  });
+
   it("skips ambient package resolution while preserving explicit resource paths", async () => {
     const root = tempDirs.make("openclaw-resource-loader-explicit-");
     const promptDir = join(root, "explicit-prompts");

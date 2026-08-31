@@ -53,6 +53,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [inferrs (local models)](/providers/inferrs)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [LM Studio (local models)](/providers/lmstudio)
 - [LongCat](/providers/longcat)
 - [MiniMax](/providers/minimax)

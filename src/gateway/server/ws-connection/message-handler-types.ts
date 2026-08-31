@@ -11,6 +11,7 @@ import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
@@ -34,7 +35,9 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
+  ingressAttribution: GatewayAttributedIngress;
   connId: string;
+  bootId: string;
   remoteAddr?: string;
   remotePort?: number;
   localAddr?: string;
@@ -56,6 +59,7 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -127,6 +131,7 @@ export type AuthenticatedGatewayConnect = {
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
   isNativeAppUi: boolean;
+  startupPending: boolean;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;

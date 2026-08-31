@@ -1,15 +1,42 @@
 ---
-summary: "Store durable user preferences and profile facts as directive-based USER.md entries"
+summary: "Manage durable user preferences and your Gateway profile identity"
 title: "User model"
 read_when:
   - You want stable preferences to guide future sessions
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
+  - You want verified GitHub identity and optional commit credit on your Gateway profile
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
+
+## Gateway profile and GitHub credit
+
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified.
+
+GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint, requires the returned email to match the authenticated proxy principal and the identity provider to be GitHub, then resolves the canonical GitHub login from the returned numeric account id. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account id plus the current canonical login.
+
+For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account, falling back to the sign-in provider's name when GitHub has none. A saved name is upgraded only when it exactly matches the current canonical GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup; existing profiles are not renamed in a background migration.
+
+The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
+
+Identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+
+Public commit metadata is a separate choice. **Git co-author credit** defaults on for verified accounts. It adds the verified account's public GitHub noreply address to commits created from shared sessions; OpenClaw never requests or stores a private GitHub email for this feature. Signing in as a different numeric GitHub account resets the choice to that default, so one account cannot inherit another account's explicit opt-out.
+
+When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer and commits and pull requests visibly credit who worked on the session. Profile participants with verified GitHub identity and Git co-author credit enabled are eligible; remote identities, agents, bots, and the configured primary Git author are excluded. Contributors appear by recorded contribution aggregate, highest first. Ties use the earliest known profile input, with unknown historical times after known times, then immutable GitHub account id. These best-effort aggregates are not exact lifetime prompt counts. Contributions from merged profiles remain attached to their surviving verified account. New participant admission and model-facing credit output are each capped at 32; repair can retain larger histories. The run tells the model when a profile has no enabled credit or history may be incomplete; it never guesses an identity from transcript names.
+
+OpenClaw supplies exact trailers and the ordered contributor list in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The Gateway publication broker enforces the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so agent instructions and post-commit verification remain their enforcement boundary.
+
+Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
+
+## Profile appearance preferences
+
+When a Control UI connection is bound to an authenticated Gateway profile, its theme, theme mode, and accent color are stored per profile in the existing `user_preferences` table in the shared state database. Those choices follow that person across devices without changing appearance for other people on the same Gateway.
+
+Profile theme and theme mode preferences override their gateway-wide `ui.prefs` settings and otherwise fall back to the active theme's defaults. The imported custom theme is the exception: its palette lives only in the browser that imported it, so selecting it stays browser-local and never follows the profile. Accent precedence is the profile's `ui.accent` preference, gateway-wide `ui.prefs.accent`, `ui.seamColor`, and finally the active theme's default accent. Restoring a default clears only the profile preference. Connections without an authenticated profile, including token, password, or unauthenticated connections, keep the existing gateway-wide appearance behavior unchanged. Language, chat preferences, and sidebar entries continue using gateway configuration.
 
 ## Write directives, not observations
 

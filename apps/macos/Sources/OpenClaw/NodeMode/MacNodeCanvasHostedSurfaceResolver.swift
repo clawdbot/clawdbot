@@ -12,18 +12,7 @@ struct MacNodeCanvasHostedSurfaceResolver: Sendable {
         self.refreshSurfaceURL = refreshSurfaceURL
     }
 
-    func resolveA2UIURL(forceRefresh: Bool = false) async -> String? {
-        let observedSurface = await currentSurfaceURL()
-        if !forceRefresh,
-           let current = CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: observedSurface)
-        {
-            return current
-        }
-        let refreshedSurface = await refreshSurfaceURL(observedSurface)
-        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: refreshedSurface)
-    }
-
-    func resolveTarget(_ target: String?) async throws -> CanvasHostedTarget? {
+    func resolveTarget(_ target: String?) async throws -> URL? {
         guard let target, CanvasHostedURLResolver.isHostedTarget(target) else { return nil }
         let observedSurface = await currentSurfaceURL()
         if let refreshedSurface = await refreshSurfaceURL(observedSurface),

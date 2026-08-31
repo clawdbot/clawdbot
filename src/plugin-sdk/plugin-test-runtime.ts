@@ -61,6 +61,7 @@ export {
 } from "../infra/diagnostic-events.js";
 export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
@@ -138,6 +139,9 @@ export {
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+export async function loadWebFetchToolFactoryForTest() {
+  return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,

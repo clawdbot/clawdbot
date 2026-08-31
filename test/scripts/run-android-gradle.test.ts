@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   linuxArmAndroidGradleSkipMessage,
   resolveAndroidSdkEnv,
@@ -12,10 +12,8 @@ import {
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
 } from "../../scripts/run-android-gradle.mts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("run-android-gradle", () => {
   it("splits Gradle args from an optional post command", () => {
@@ -102,19 +100,15 @@ describe("run-android-gradle", () => {
   });
 
   posixIt("terminates the active command tree when the wrapper is terminated", async () => {
-    const dir = tempDirs.make("openclaw-android-gradle-process-");
-    const processTreePath = path.join(dir, "process-tree.json");
     const moduleUrl = pathToFileURL(path.resolve("scripts/run-android-gradle.mts")).href;
     const childSource = `
 const { spawn } = require("node:child_process");
-const fs = require("node:fs");
 const descendant = spawn(process.execPath, [
   "-e",
   "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);",
 ], { stdio: "ignore" });
-fs.writeFileSync(
-  process.argv[1],
-  JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }),
+process.stdout.write(
+  JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
 );
 setInterval(() => {}, 1_000);
 `;
@@ -122,25 +116,22 @@ setInterval(() => {}, 1_000);
 import { run } from ${JSON.stringify(moduleUrl)};
 process.exitCode = await run(
   process.execPath,
-  ["-e", ${JSON.stringify(childSource)}, ${JSON.stringify(processTreePath)}],
+  ["-e", ${JSON.stringify(childSource)}],
   process.cwd(),
 );
 `;
     const runner = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", runnerSource],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "pipe", "ignore"] },
     );
     const runnerPid = expectPid(runner.pid);
+    const processTreeReady = readProcessTree(runner);
     let childPid = 0;
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(processTreePath));
-      const processTree = JSON.parse(fs.readFileSync(processTreePath, "utf8")) as {
-        childPid: number;
-        descendantPid: number;
-      };
+      const processTree = await processTreeReady;
       childPid = processTree.childPid;
       descendantPid = processTree.descendantPid;
       expect(Number.isInteger(childPid)).toBe(true);
@@ -187,6 +178,43 @@ function expectPid(pid: number | undefined): number {
     throw new Error("expected child process pid");
   }
   return pid;
+}
+
+async function readProcessTree(child: ReturnType<typeof spawn>): Promise<{
+  childPid: number;
+  descendantPid: number;
+}> {
+  const stdout = child.stdout;
+  if (!stdout) {
+    throw new Error("expected child process stdout");
+  }
+  stdout.setEncoding("utf8");
+  return await new Promise((resolve, reject) => {
+    let output = "";
+    const cleanup = () => {
+      stdout.off("data", onData);
+      child.off("close", onClose);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(new Error(`runner closed before reporting its process tree (${code}, ${signal})`));
+    };
+    const onData = (chunk: string) => {
+      output += chunk;
+      const newline = output.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      cleanup();
+      try {
+        resolve(JSON.parse(output.slice(0, newline)));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    stdout.on("data", onData);
+    child.once("close", onClose);
+  });
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {

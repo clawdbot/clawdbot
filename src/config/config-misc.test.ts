@@ -518,6 +518,18 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.accent", () => {
+  it.each([
+    ["lowercase hex", "#ff5c5c", true],
+    ["uppercase hex", "#AbCdEf", true],
+    ["missing hash", "ff5c5c", false],
+    ["invalid hex", "#gggggg", false],
+    ["invalid length", "#ff5c5c00", false],
+  ])("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({
@@ -567,6 +579,42 @@ describe("gateway.controlUi.embedSandbox", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("gateway.controlUi.environment", () => {
+  it("accepts named environment colors and trims the label", () => {
+    for (const color of [
+      "teal",
+      "amber",
+      "purple",
+      "coral",
+      "pink",
+      "blue",
+      "green",
+      "red",
+      "gray",
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { environment: { label: " edge ", color } } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
+      }
+    }
+  });
+
+  it.each([
+    { label: "edge", color: "orange" },
+    { label: " ", color: "amber" },
+    { label: "a".repeat(25), color: "amber" },
+    { label: "edge" },
+    { color: "amber" },
+  ])("rejects invalid environment configuration %#", (environment) => {
+    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -876,6 +924,53 @@ describe("gateway.remote.transport", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.remote.remotePort");
+    }
+  });
+});
+
+describe("gateway.remote.edgeAuth", () => {
+  it("accepts valid header names with literal and SecretRef values", () => {
+    const res = validateConfigObjectRaw({
+      gateway: {
+        remote: {
+          edgeAuth: {
+            "X-Edge-Literal": "test-secret",
+            "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "empty map",
+      edgeAuth: {},
+      expected: "header map must not be empty",
+    },
+    {
+      name: "transport-owned header",
+      edgeAuth: { Host: "test-secret" },
+      expected: 'transport-owned header "Host"',
+    },
+    {
+      name: "invalid header name",
+      edgeAuth: { "Bad Header": "test-secret" },
+      expected: 'invalid gateway.remote.edgeAuth header name: "Bad Header"',
+    },
+    {
+      name: "case-duplicate headers",
+      edgeAuth: { "X-Edge-Auth": "one", "x-edge-auth": "two" },
+      expected: 'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
+    },
+  ])("rejects $name", ({ edgeAuth, expected }) => {
+    const res = validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.message).join("\n")).toContain(expected);
     }
   });
 });

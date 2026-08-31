@@ -9,7 +9,6 @@ const {
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse,
 } = minimaxWebSearchTesting;
 
 function restoreEnvValue(key: string, value: string | undefined) {
@@ -42,6 +41,66 @@ describe("minimax web search provider", () => {
     restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
     restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
   });
+
+  it.each([0, 1])(
+    "applies the current cache TTL of %i minutes to existing results",
+    async (ttl) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      for (const result of ["initial", "fresh", "uncached"]) {
+        fetchMock.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              organic: [{ title: result, link: `https://example.test/${result}` }],
+              base_resp: { status_code: 0 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      const createTool = (cacheTtlMinutes: number) => {
+        const tool = createMiniMaxWebSearchProvider().createTool({
+          config: {
+            plugins: {
+              entries: { minimax: { config: { webSearch: { apiKey: "minimax-test-key" } } } },
+            },
+          },
+          searchConfig: { cacheTtlMinutes },
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+        return tool;
+      };
+
+      try {
+        const args = { query: `minimax current cache TTL ${ttl}` };
+        const originalTool = createTool(15);
+        const initial = await originalTool.execute(args);
+        expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        expect(fetchMock).toHaveBeenCalledOnce();
+
+        now.mockReturnValue(1_700_000_060_000);
+        const currentTool = createTool(ttl);
+        const fresh = await currentTool.execute(args);
+        expect(fresh.cached).toBeUndefined();
+        expect(fresh.results).toEqual([
+          expect.objectContaining({ url: "https://example.test/fresh" }),
+        ]);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        const repeated = await currentTool.execute(args);
+        expect(repeated.cached).toBe(ttl === 0 ? undefined : true);
+        expect(fetchMock).toHaveBeenCalledTimes(ttl === 0 ? 3 : 2);
+        if (ttl === 0) {
+          expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        }
+      } finally {
+        fetchMock.mockRestore();
+        now.mockRestore();
+      }
+    },
+  );
 
   it("does not send an already canceled MiniMax search", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -240,11 +299,5 @@ describe("minimax web search provider", () => {
     it("uses correct CN endpoint", () => {
       expect(MINIMAX_SEARCH_ENDPOINT_CN).toBe("https://api.minimaxi.com/v1/coding_plan/search");
     });
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      readMiniMaxSearchJsonResponse(new Response("{ nope"), "MiniMax Search API error"),
-    ).rejects.toThrow("MiniMax Search API error: malformed JSON response");
   });
 });

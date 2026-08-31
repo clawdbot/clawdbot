@@ -41,6 +41,7 @@ private data class CachedMessagePayload(
   val content: List<CachedMessageContent>,
   val provenance: CachedMessageProvenance? = null,
   @SerialName("__openclaw") val transcriptMarker: CachedTranscriptMarker? = null,
+  val senderLabel: String? = null,
 )
 
 @Serializable
@@ -114,6 +115,7 @@ internal data class CachedSessionEntity(
   val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
   val status: String?,
   val startedAt: Long?,
@@ -306,6 +308,7 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
         status = row.status,
         startedAt = row.startedAt,
         endedAt = row.endedAt,
@@ -365,6 +368,7 @@ class RoomChatTranscriptCache internal constructor(
               tokensAfter = it.tokensAfter,
             )
           },
+        senderLabel = payload.senderLabel,
       )
     }
   }
@@ -391,6 +395,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = entry.key,
               displayName = entry.displayName,
+              color = entry.color,
               updatedAtMs = entry.updatedAtMs,
               status = entry.status,
               startedAt = entry.startedAt,
@@ -412,6 +417,7 @@ class RoomChatTranscriptCache internal constructor(
             agentId = agent,
             sessionKey = session.key,
             displayName = session.displayName,
+            color = session.color,
             updatedAtMs = session.updatedAtMs,
             status = session.status,
             startedAt = session.startedAt,
@@ -464,7 +470,7 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                   )
-                part.type == "audio" || part.type == "video" ->
+                part.type == "audio" || part.type == "video" || part.type == "file" ->
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -499,6 +505,7 @@ class RoomChatTranscriptCache internal constructor(
                     tokensAfter = it.tokensAfter,
                   )
                 },
+              senderLabel = message.senderLabel,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
@@ -531,6 +538,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = key,
               displayName = null,
+              color = null,
               updatedAtMs = null,
               status = null,
               startedAt = null,

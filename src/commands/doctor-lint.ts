@@ -54,6 +54,7 @@ type DoctorLintStateView = {
 
 type DoctorLintExecution = {
   exitCode: number;
+  findings: readonly HealthFinding[];
   writeOutput: () => void;
 };
 
@@ -84,6 +85,23 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
+  const execution = await prepareDoctorLintExecution(runtime, opts);
+  execution.writeOutput();
+  return execution.exitCode;
+}
+
+/** Collect advisory doctor findings without writing output or repairing operator state. */
+export async function collectDoctorFindings(
+  runtime: RuntimeEnv,
+): Promise<readonly HealthFinding[]> {
+  const execution = await prepareDoctorLintExecution(runtime, { severityMin: "info" });
+  return execution.findings;
+}
+
+async function prepareDoctorLintExecution(
+  runtime: RuntimeEnv,
+  opts: DoctorLintCliOptions,
+): Promise<DoctorLintExecution> {
   const sevMin =
     opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
@@ -139,8 +157,7 @@ export async function runDoctorLintCli(
       execution = createStateSnapshotFailureExecution(runtime, opts, sevMin, error);
     }
   }
-  execution.writeOutput();
-  return execution.exitCode;
+  return execution;
 }
 
 async function executeDoctorLint(
@@ -155,6 +172,7 @@ async function executeDoctorLint(
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
     return {
       exitCode: exitCodeFromFindings(findings, sevMin),
+      findings: visible,
       writeOutput() {
         if (detectMode(opts) === "json") {
           writeJsonResult({
@@ -215,6 +233,7 @@ async function executeDoctorLint(
   const exitCode = exitCodeFromFindings(result.findings, sevMin);
   return {
     exitCode,
+    findings: visible,
     writeOutput() {
       const mode = detectMode(opts);
       if (mode === "json") {
@@ -326,6 +345,7 @@ function createStateSnapshotFailureExecution(
   const visible = healthFindingMeetsSeverity(finding, sevMin) ? [finding] : [];
   return {
     exitCode: exitCodeFromFindings([finding], sevMin),
+    findings: visible,
     writeOutput() {
       if (detectMode(opts) === "json") {
         writeJsonResult({

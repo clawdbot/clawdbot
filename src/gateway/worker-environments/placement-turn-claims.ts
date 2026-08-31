@@ -13,7 +13,7 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { ensureLocal, find, getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { ensureLocal, find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
@@ -64,6 +64,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     db: DatabaseSync,
     input: WorkerTurnClaimInput,
     updatedAtMs: number,
+    options: { allowDraining?: boolean } = {},
   ): WorkerSessionTurnClaim => {
     const identity = normalizeIdentity(input);
     const claimId = required(input.claimId, "turn claim id");
@@ -92,7 +93,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       const localPlacement = current.state === "local" && owner.environmentId === undefined;
       const remotePlacement =
         current.executionMode === "remote-exec" &&
-        current.state === "active" &&
+        (current.state === "active" || (options.allowDraining && current.state === "draining")) &&
         owner.environmentId === current.environmentId &&
         owner.ownerEpoch === current.activeOwnerEpoch;
       if (!localPlacement && !remotePlacement) {
@@ -102,7 +103,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       }
     } else if (
       current.executionMode !== "worker-turn" ||
-      current.state !== "active" ||
+      (current.state !== "active" && !(options.allowDraining && current.state === "draining")) ||
       current.environmentId !== owner.environmentId ||
       current.activeOwnerEpoch !== owner.ownerEpoch
     ) {
@@ -150,7 +151,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       // transaction leaves startup recovery enough state to finish or abandon it.
       return write((db) => {
         const updatedAtMs = now();
-        const claim = claimTurnInDatabase(db, input, updatedAtMs);
+        const claim = claimTurnInDatabase(db, input, updatedAtMs, { allowDraining: true });
         insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
         return claim;
       });
@@ -200,7 +201,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     completeWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
-      options: { reclaim?: boolean } = {},
     ): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
@@ -219,16 +219,14 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
-        const values = options.reclaim
-          ? transitionValues(current, "reclaimed", {}, now())
-          : {
-              turn_claim_owner: null,
-              turn_claim_id: null,
-              turn_claim_run_id: null,
-              turn_claim_generation: null,
-              turn_claim_owner_epoch: null,
-              updated_at_ms: now(),
-            };
+        const values = {
+          turn_claim_owner: null,
+          turn_claim_id: null,
+          turn_claim_run_id: null,
+          turn_claim_generation: null,
+          turn_claim_owner_epoch: null,
+          updated_at_ms: now(),
+        };
         clearWorkerWorkspacePendingResult(db, sessionId);
         const result = executeSqliteQuerySync(
           db,
@@ -252,15 +250,16 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     cancelWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
+      options?: { reason: "node-disconnect" },
     ): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
-      if (claimId !== runId || !claimId.startsWith("reclaim-")) {
+      const nodeDisconnect = options?.reason === "node-disconnect";
+      if (!nodeDisconnect && (claimId !== runId || !claimId.startsWith("reclaim-"))) {
         throw new Error(`Session ${sessionId} workspace result is not owned by reclaim`);
       }
-      // A failed stop must not expose a claim without its recovery fence (or vice
-      // versa), because either half-state permanently blocks the next reclaim.
+      // Claim and recovery fence disappear together; either surviving half blocks the next attempt.
       const released = write((db) => {
         const current = getRequired(db, sessionId);
         const environment = resolvePlacementTurnEnvironment(current, claim);
@@ -279,7 +278,21 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           pending.placement_generation !== claim.placementGeneration ||
           pending.claim_id !== claimId ||
           pending.run_id !== runId ||
-          pending.workspace_accepted_at_ms !== null
+          pending.workspace_accepted_at_ms !== null ||
+          (nodeDisconnect &&
+            (current.state !== "active" ||
+              current.executionMode !== "remote-exec" ||
+              claim.owner.kind !== "local" ||
+              pending.gateway_instance_id !== instanceId ||
+              pending.recovery_requested_at_ms !== null ||
+              pending.staged_result_ref !== null ||
+              executeSqliteQuerySync(
+                db,
+                workspaceJournalQuery(db)
+                  .selectFrom("worker_workspace_reconciliations")
+                  .select("session_id")
+                  .where("session_id", "=", sessionId),
+              ).rows.length > 0))
         ) {
           throw new Error(
             `Session ${sessionId} workspace result owner changed before cancellation`,

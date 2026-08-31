@@ -8,6 +8,7 @@ import type {
   RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
 import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
@@ -15,7 +16,10 @@ import {
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
+  retainFulfilledNodeCapabilities,
 } from "./node-command-policy.js";
+
+const log = createSubsystemLogger("gateway/node-connect");
 
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
@@ -26,6 +30,8 @@ type NodeConnectPairingReconcileResult = {
   effectiveCaps: string[];
   declaredCommands: string[];
   effectiveCommands: string[];
+  /** Commands the node declared that gateway policy refused to admit. */
+  withheldCommands: string[];
   declaredComputerUse?: ComputerUseCapabilityDescriptor;
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
@@ -142,13 +148,23 @@ export async function reconcileNodePairingOnConnect(params: {
     commands: params.connectParams.commands,
   };
   const pairingAllowlist = resolveNodePairingCommandAllowlist(params.cfg, policyNode);
+  const connectCommands = normalizeNodeApprovalSurfaceList(params.connectParams.commands);
   const declared = normalizeDeclaredNodeCommands({
-    declaredCommands: Array.isArray(params.connectParams.commands)
-      ? params.connectParams.commands
-      : [],
+    declaredCommands: connectCommands,
     allowlist: pairingAllowlist,
   });
-  const declaredCaps = normalizeNodeApprovalSurfaceList(params.connectParams.caps);
+  // Caps and commands arrive as one advertisement and must stay one after policy,
+  // or the node reads as capable and rejects every invoke. Refusing a declared
+  // command is an operator-visible decision, so it is recorded where it happens.
+  const withheldCommands = connectCommands.filter((command) => !declared.includes(command));
+  const declaredCaps = retainFulfilledNodeCapabilities({
+    caps: normalizeNodeApprovalSurfaceList(params.connectParams.caps),
+    admittedCommands: declared,
+    withheldCommands,
+  });
+  if (withheldCommands.length > 0) {
+    log.warn(`node command surface withheld node=${nodeId} commands=${withheldCommands.join(",")}`);
+  }
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
   const declaredComputerUse =
     params.connectParams.computerUse === undefined
@@ -176,6 +192,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: [],
       declaredCommands: declared,
       effectiveCommands: [],
+      withheldCommands,
       ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: undefined,
@@ -232,6 +249,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: effectiveApprovedDeclaredCaps,
       declaredCommands: declared,
       effectiveCommands: effectiveApprovedDeclaredCommands,
+      withheldCommands,
       ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
@@ -245,6 +263,7 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCaps: declaredCaps,
     declaredCommands: declared,
     effectiveCommands: declared,
+    withheldCommands,
     ...(declaredComputerUse ? { declaredComputerUse } : {}),
     declaredPermissions,
     effectivePermissions: declaredPermissions,

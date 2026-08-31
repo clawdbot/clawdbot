@@ -103,6 +103,22 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
+  it.each([false, true])(
+    "retains parent and child overrides during normalization (childrenFirst=%s)",
+    (childrenFirst) => {
+      const entries = [
+        ["parent", "1.2.3"],
+        ["parent>child", "2.0.0"],
+        ["parent>sibling", "3.0.0"],
+      ];
+      expect(
+        normalizeOverrides(Object.fromEntries(childrenFirst ? entries.toReversed() : entries)),
+      ).toEqual({
+        parent: { ".": "1.2.3", child: "2.0.0", sibling: "3.0.0" },
+      });
+    },
+  );
+
   it("rejects short flag package selectors before resolving npm-lock targets", () => {
     expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
       "--package-dir requires a package directory.",

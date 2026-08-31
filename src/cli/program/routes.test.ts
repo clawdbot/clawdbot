@@ -122,15 +122,15 @@ describe("program routes", () => {
   it("passes parsed agents list flags through", async () => {
     await expect(expectRoute(["agents"]).run(routeArgv("agents"))).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
-      { json: false, bindings: false },
+      { json: false, bindings: false, tree: false },
       defaultRuntime,
     );
 
     await expect(
-      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings")),
+      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings --tree")),
     ).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenLastCalledWith(
-      { json: true, bindings: true },
+      { json: true, bindings: true, tree: true },
       defaultRuntime,
     );
   });

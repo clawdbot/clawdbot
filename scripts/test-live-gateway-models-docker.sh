@@ -23,6 +23,7 @@ DOCKER_AUTH_PRESTAGED=0
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
 DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
 openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
 openclaw_live_init_cache_home_dir
 openclaw_live_init_managed_home
 openclaw_live_init_profile_mount
@@ -38,7 +39,10 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
 export npm_config_cache="$NPM_CONFIG_CACHE"
-mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export npm_config_prefix="$NPM_CONFIG_PREFIX"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 tmp_dir="$(mktemp -d)"
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
@@ -50,11 +54,14 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-if [[ -f scripts/test-live.mjs ]]; then
-  node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts
-else
-  node --import tsx scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts
-fi
+docker_packages="$(node --import tsx scripts/print-cli-backend-live-metadata.ts \
+  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" "${OPENCLAW_LIVE_GATEWAY_MODELS:-}")"
+while IFS= read -r docker_package; do
+  [ -n "$docker_package" ] || continue
+  openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
+done <<<"$docker_packages"
+openclaw_live_stage_gemini_auth
+openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -62,6 +69,7 @@ if openclaw_live_uses_managed_bind_dirs; then
   openclaw_live_chown_bind_dirs_for_container_user \
     "$LIVE_IMAGE_NAME" \
     "$DOCKER_USER" \
+    "$CLI_TOOLS_DIR" \
     "$CACHE_HOME_DIR" \
     "${DOCKER_HOME_DIR:-}"
 fi
@@ -114,6 +122,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\
+  -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \

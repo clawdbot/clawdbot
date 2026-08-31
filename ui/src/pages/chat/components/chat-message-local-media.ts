@@ -1,3 +1,5 @@
+import { buildAssistantMediaUrl } from "../../../app/assistant-media.ts";
+
 export function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
   if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
@@ -5,7 +7,7 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
   }
   return (
     isCanonicalInboundMediaSource(trimmed) ||
-    trimmed.startsWith("file://") ||
+    /^file:/iu.test(trimmed) ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
     /^[a-zA-Z]:[\\/]/.test(trimmed)
@@ -30,15 +32,15 @@ function isCanonicalInboundMediaSource(source: string): boolean {
 
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
-  if (!isLocalAssistantAttachmentSource(trimmed)) {
+  if (!isLocalAssistantAttachmentSource(trimmed) || isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
-  if (isCanonicalInboundMediaSource(trimmed)) {
-    return null;
-  }
-  if (trimmed.startsWith("file://")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const url = new URL(trimmed);
+      if (url.hostname || /%2f|%5c/iu.test(url.pathname)) {
+        return null;
+      }
       const pathname = decodeURIComponent(url.pathname);
       if (/^\/[a-zA-Z]:\//.test(pathname)) {
         return pathname.slice(1);
@@ -94,7 +96,7 @@ export function isLocalAttachmentPreviewAllowed(
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
     : source.trim().startsWith("~")
       ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
+          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, () => home)),
         )
       : [];
   if (comparableSources.length === 0) {
@@ -114,20 +116,13 @@ export function isLocalAttachmentPreviewAllowed(
 
 export function buildAssistantAttachmentUrl(
   source: string,
-  basePath?: string,
+  resourceBasePath?: string,
   mediaTicket?: string | null,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  const params = new URLSearchParams({ source });
-  const normalizedMediaTicket = mediaTicket?.trim();
-  if (normalizedMediaTicket) {
-    params.set("mediaTicket", normalizedMediaTicket);
-  }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket);
 }
 
 export function appendAttachmentUrlSearchParam(

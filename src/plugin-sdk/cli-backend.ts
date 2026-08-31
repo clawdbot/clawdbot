@@ -4,9 +4,13 @@
 export type {
   CliBackendAuthEpochMode,
   CliBackendConfig,
+  CliBackendExecute,
+  CliBackendExecuteContext,
   CliBackendExecutionMode,
   CliBackendJsonlUsage,
-  CliBackendLiveSessionRequirement,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionCloseReason,
+  CliBackendLiveSessionHandle,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,
@@ -14,14 +18,21 @@ export type {
   CliBackendParsedJsonlEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
+  CliBackendPromptContext,
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
   CliBackendSideQuestionToolMode,
   CliBackendToolAvailability,
   CliBackendToolAvailabilityEnforcement,
+  CliBackendToolPermissionRequest,
+  CliBackendToolPermissionResult,
   CliBackendThinkingLevel,
-} from "../plugins/types.js";
+  CliBackendUserInputOption,
+  CliBackendUserInputQuestion,
+  CliBackendUserInputRequest,
+  CliBackendUserInputResult,
+} from "../plugins/cli-backend.types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";
 export {

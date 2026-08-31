@@ -4,6 +4,7 @@ read_when:
   - You want to inspect, audit, or cancel background task records
   - You are documenting Task Flow commands under `openclaw tasks flow`
 title: "`openclaw tasks`"
+doc-schema-version: 1
 ---
 
 Inspect durable background tasks and Task Flow state. With no subcommand,
@@ -19,6 +20,7 @@ openclaw tasks
 openclaw tasks list
 openclaw tasks list --runtime acp
 openclaw tasks list --status running
+openclaw tasks list --status blocked
 openclaw tasks show <lookup>
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
@@ -34,11 +36,11 @@ openclaw tasks flow cancel <lookup>
 
 ## Root Options
 
-| Flag               | Description                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `--json`           | Output JSON.                                                                                       |
-| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                               |
-| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, or `lost`. |
+| Flag               | Description                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--json`           | Output JSON.                                                                                                  |
+| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                                          |
+| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, `lost`, or `blocked`. |
 
 ## Subcommands
 
@@ -49,6 +51,11 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 ```
 
 Lists tracked background tasks newest first.
+
+Use `--status blocked` to find completed tasks whose result delivery is blocked.
+These tasks retain their stored `succeeded` status and also remain included in
+`--status succeeded` results; JSON task records keep the same stored status and
+`terminalOutcome` fields.
 
 ### `show`
 
@@ -84,6 +91,13 @@ Retries 1-10 blocked subagent completion deliveries. The child execution stays
 successful; retry creates a fenced delivery generation from the retained
 canonical result. An ambiguous earlier acknowledgement can still cause a
 duplicate visible result.
+
+Retry and dismissal select the task's exact retained run, never another result
+from the same child session. Unrelated parent turns leave suspended completions
+blocked until you retry them. Upgrading from an older release repairs missing task
+bindings before loading runs, including runs that have not finished yet. Only
+unambiguous bindings are repaired; conflicting records remain unchanged and
+cannot be recovered by guessing from a shared session.
 
 ### `dismiss`
 
@@ -124,10 +138,11 @@ pruning, and stale cron run session registry cleanup.
 For cron tasks, reconciliation uses persisted run logs/job state before
 marking an old active task `lost`, so completed cron runs do not become
 false audit errors just because the in-memory Gateway runtime state is gone.
-Offline CLI audit is not authoritative for the Gateway's process-local cron
-active-job set. CLI tasks with a run id/source id are marked `lost` when
-their live Gateway run context is gone, even if an old child-session row
-remains.
+Offline CLI audit and maintenance are not authoritative for the Gateway's
+process-local cron, CLI, or ACP liveness. They retain active tasks of those
+kinds when the local runtime cannot prove completion. Gateway maintenance
+marks CLI tasks with a run id/source id `lost` when their live run context is
+gone, even if an old child-session row remains.
 
 When applied, maintenance also prunes `cron:<jobId>:run:<uuid>` session
 registry rows older than 7 days while preserving currently running cron
@@ -141,9 +156,13 @@ openclaw tasks flow show <lookup> [--json]
 openclaw tasks flow cancel <lookup>
 ```
 
-Inspects or cancels durable Task Flow state under the task ledger.
+Inspects or cancels durable Task Flow state under the task ledger. There is no
+top-level `openclaw flows` command. Both `flow show` and `flow cancel` accept a
+flow ID or its stable owner key as `<lookup>`.
+
 `flow list --status` accepts `queued`, `running`, `waiting`, `blocked`,
-`succeeded`, `failed`, `cancelled`, or `lost`.
+`succeeded`, `failed`, `cancelled`, or `lost`. See [Task Flow](/automation/taskflow)
+for ownership and lifecycle details.
 
 ## Related
 

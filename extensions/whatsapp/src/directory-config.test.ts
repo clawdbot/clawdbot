@@ -1,5 +1,6 @@
 // Whatsapp tests cover directory config plugin behavior.
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWebAuthExistsForDecision } from "./auth-store.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
@@ -12,7 +13,6 @@ import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import {
   createWaDirectorySocket,
   waitForCredsSaveQueueWithTimeout,

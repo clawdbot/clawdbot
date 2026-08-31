@@ -1,4 +1,5 @@
 // QA Lab plugin module implements QA evidence summary behavior.
+import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
@@ -276,10 +277,10 @@ function buildQaEvidenceCoverage(params: {
     role,
   });
   return [
-    ...uniqueSortedStrings(params.primaryCoverageIds ?? []).map((id) =>
+    ...normalizeSortedUniqueTrimmedStringList(params.primaryCoverageIds ?? []).map((id) =>
       buildCoverage(id, "primary"),
     ),
-    ...uniqueSortedStrings(params.secondaryCoverageIds ?? []).map((id) =>
+    ...normalizeSortedUniqueTrimmedStringList(params.secondaryCoverageIds ?? []).map((id) =>
       buildCoverage(id, "secondary"),
     ),
   ];
@@ -291,12 +292,6 @@ function buildQaEvidenceArtifacts(paths: readonly QaEvidenceArtifactInput[], sou
     path: artifact.path,
     source,
   }));
-}
-
-function uniqueSortedStrings(values: readonly (string | undefined)[]) {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
 }
 
 export function resolveQaEvidenceProfile(params: {
@@ -526,8 +521,10 @@ export function buildQaSuiteEvidenceSummary(
   const channelDriver = params.channelDriver?.trim() || undefined;
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.scenarioDefinitions[index];
-    const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
-    const coverageIds = uniqueSortedStrings([
+    const primaryCoverageIds = normalizeSortedUniqueTrimmedStringList(
+      scenario?.coverage?.primary ?? [],
+    );
+    const coverageIds = normalizeSortedUniqueTrimmedStringList([
       ...(scenario?.coverage?.primary ?? []),
       ...(scenario?.coverage?.secondary ?? []),
     ]);

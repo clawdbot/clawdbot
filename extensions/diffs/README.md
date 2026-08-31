@@ -12,7 +12,7 @@ Restart the Gateway after installing or updating the plugin.
 
 It gives agents one tool, `diffs`, that can:
 
-- render a gateway-hosted diff viewer for canvas use
+- render a gateway-hosted diff viewer
 - render the same diff to a file (PNG or PDF)
 - accept either arbitrary `before` and `after` text or a unified patch
 
@@ -21,7 +21,7 @@ It gives agents one tool, `diffs`, that can:
 The tool can return:
 
 - `details.changed`: `false` when before/after inputs are identical and no artifact was rendered; `true` for rendered results
-- `details.viewerUrl`: a gateway URL that can be opened in the canvas
+- `details.viewerUrl`: a gateway URL that can be opened in the operator's browser
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
 - `details.artifactId` and `details.expiresAt`: artifact identity and TTL metadata
@@ -31,7 +31,7 @@ When the plugin is enabled, it also ships a companion skill from `skills/` and p
 
 This means an agent can:
 
-- call `diffs` with `mode=view`, then pass `details.viewerUrl` to `canvas present`
+- call `diffs` with `mode=view`, then return `details.viewerUrl` for the operator to open
 - call `diffs` with `mode=file`, then send the file through the normal `message` tool using `path` or `filePath`
 - call `diffs` with `mode=both` when it wants both outputs
 
@@ -154,10 +154,10 @@ Example:
 
 ## Example Agent Prompts
 
-Open in canvas:
+Open in the browser:
 
 ```text
-Use the `diffs` tool in `view` mode for this before and after content, then open the returned viewer URL in the canvas.
+Use the `diffs` tool in `view` mode for this before and after content, then return the viewer URL.
 
 Path: docs/example.md
 
@@ -189,7 +189,7 @@ OpenClaw supports plugins and hosted diff views.
 Do both:
 
 ```text
-Use the `diffs` tool in `both` mode for this diff. Open the viewer in the canvas and then send the rendered file by passing `details.filePath` to the `message` tool.
+Use the `diffs` tool in `both` mode for this diff. Return the viewer URL and then send the rendered file by passing `details.filePath` to the `message` tool.
 
 Path: src/demo.ts
 
@@ -203,7 +203,7 @@ const status = "new";
 Patch input:
 
 ```text
-Use the `diffs` tool with this unified patch in `view` mode. After it returns the viewer URL, present it in the canvas.
+Use the `diffs` tool with this unified patch in `view` mode. Return its viewer URL.
 
 diff --git a/src/example.ts b/src/example.ts
 --- a/src/example.ts

@@ -53,9 +53,18 @@ describe("runtime config capability", () => {
   });
 
   it.each([
-    { label: "same-client reconnect", replaceClient: false },
-    { label: "client replacement", replaceClient: true },
-  ])("refreshes config and schema after a $label", async ({ replaceClient }) => {
+    {
+      label: "read-only same-client reconnect",
+      replaceClient: false,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["config.get", "config.schema"] },
+      } as GatewayHelloOk,
+    },
+    { label: "client replacement", replaceClient: true, hello: undefined },
+  ])("refreshes config and schema after a $label", async ({ replaceClient, hello }) => {
     let snapshot = {
       config: { endpoint: "initial" },
       hash: "hash-initial",
@@ -78,6 +87,9 @@ describe("runtime config capability", () => {
     const clientB = { request: requestB } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(clientA);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
+    if (hello) {
+      publish(true, clientA, hello);
+    }
     await runtimeConfig.ensureLoaded();
     await runtimeConfig.ensureSchemaLoaded();
 
@@ -89,7 +101,7 @@ describe("runtime config capability", () => {
     };
     schema = { ...schema, version: "schema-current" };
     publish(false, clientA);
-    publish(true, replaceClient ? clientB : clientA);
+    publish(true, replaceClient ? clientB : clientA, hello);
 
     await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
     expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
@@ -108,16 +120,6 @@ describe("runtime config capability", () => {
   });
 
   it.each([
-    {
-      label: "same-client scope downgrade",
-      replaceClient: false,
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["config.get", "config.schema"] },
-      } as GatewayHelloOk,
-    },
     {
       label: "replacement without config.schema",
       replaceClient: true,
@@ -342,9 +344,12 @@ describe("runtime config capability", () => {
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
-    await runtimeConfig.ensureLoaded();
+    const initialLoad = runtimeConfig.ensureLoaded();
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    await initialLoad;
 
     await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configLoading).toBe(false);
     runtimeConfig.patchForm(["count"], 2);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
@@ -1007,66 +1012,6 @@ describe("runtime config capability", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
     expect(sets).toHaveLength(1);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
-    runtimeConfig.dispose();
-  });
-
-  it("restores a revert made while the interrupted write was in flight", async () => {
-    vi.useFakeTimers();
-    let committedRaw = '{\n  "count": 1\n}\n';
-    let hash = "hash-1";
-    const sets: Array<{ raw: string; baseHash: string }> = [];
-    const request = vi.fn((method: string, params?: unknown) => {
-      if (method === "config.get") {
-        return Promise.resolve({
-          config: JSON.parse(committedRaw) as Record<string, unknown>,
-          raw: committedRaw,
-          hash,
-          valid: true,
-          issues: [],
-        });
-      }
-      if (method === "config.set") {
-        sets.push(params as { raw: string; baseHash: string });
-        if (sets.length === 1) {
-          // Commits server-side; the ack is lost to the disconnect.
-          committedRaw = (params as { raw: string }).raw;
-          hash = "hash-2";
-          return new Promise(() => {});
-        }
-        committedRaw = (params as { raw: string }).raw;
-        hash = "hash-3";
-        return Promise.resolve({ hash });
-      }
-      return Promise.resolve({});
-    });
-    const { runtimeConfig, publish } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(sets).toHaveLength(1);
-
-    // Revert to the original while the save is in flight: the draft reads
-    // clean, so a plain reconnect reload would silently replace it with the
-    // committed bytes and drop the revert forever.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    publish(false);
-    publish(true);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-
-    expect(sets).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-
-    await expect(runtimeConfig.save()).resolves.toBe(true);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
     runtimeConfig.dispose();
   });
 

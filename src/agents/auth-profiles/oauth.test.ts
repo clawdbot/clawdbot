@@ -8,14 +8,17 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
   vi.resetModules();
 });
 
+const resolveProviderOAuthCredentialWithPlugin = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "unhandled" as const })),
+);
+
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -25,7 +28,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
+  resolveProviderOAuthCredentialWithPlugin,
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
@@ -120,6 +123,7 @@ async function expectResolvedApiKey(params: {
 beforeAll(loadOAuthModuleForTest);
 
 beforeEach(() => {
+  resolveProviderOAuthCredentialWithPlugin.mockClear();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
   // SecretRef cases consume the materialized store published by runtime activation.
@@ -157,6 +161,61 @@ beforeEach(() => {
         tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
       },
     },
+  });
+});
+
+describe("resolveApiKeyForProfile retired external CLI profiles", () => {
+  it("rejects a persisted Claude CLI token even when legacy metadata marks it external", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "copied-native-access",
+          refresh: "copied-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimePersistedProfileIds: [profileId],
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime-only Claude CLI token without refreshing it", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "current-native-access",
+          refresh: "current-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "claude-cli", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
   });
 });
 

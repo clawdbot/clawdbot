@@ -1,8 +1,16 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
-import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  WizardNextResult as ProtocolWizardNextResult,
+  WizardStep as ProtocolWizardStep,
+} from "../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
@@ -45,17 +53,8 @@ export function sanitizeWizardStepForClient(step: WizardStep): WizardStep {
   return safe;
 }
 
-type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
-
-type WizardNextResult = {
-  done: boolean;
-  step?: WizardStep;
-  status: WizardSessionStatus;
-  error?: string;
-  channels?: string[];
-  accounts?: Array<{ channel: string; accountId: string }>;
-  preparedModelRef?: string;
-};
+type WizardSessionStatus = NonNullable<ProtocolWizardNextResult["status"]>;
+type WizardNextResult = ProtocolWizardNextResult & { status: WizardSessionStatus };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
   if (value === null || value === undefined) {
@@ -109,9 +108,12 @@ class WizardSessionPrompter implements WizardPrompter {
     const fallbackMessage = [
       params.message ?? "Enter this one-time code on the provider's sign-in page.",
       `Code: ${params.code}`,
-      ...(params.expiresInMinutes
-        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
-        : []),
+      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+      // Device-code phishing works by getting the victim to enter the attacker's
+      // code, so the warning has to cover received codes, not just shared ones.
+      // Unconditional: codes delivered over a chat channel are the risky case and
+      // carry no expiry hint. Matches the Codex CLI prompt.
+      DEVICE_CODE_PHISHING_WARNING,
     ].join("\n");
     await this.prompt({
       type: "note",
@@ -209,7 +211,8 @@ class WizardSessionPrompter implements WizardPrompter {
       initialValue: params.initialValue,
       executor: "client",
     });
-    return Boolean(res);
+    // Answers cross the wire as unknown values; truthy strings are not consent.
+    return res === true;
   }
 
   progress(label: string): WizardProgress {
@@ -278,6 +281,7 @@ export class WizardSession {
   private error: string | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
+  private modelActivation: ProtocolWizardNextResult["modelActivation"];
 
   constructor(
     private runner: (
@@ -335,6 +339,9 @@ export class WizardSession {
       ...(this.status === "done" && this.preparedModelRef
         ? { preparedModelRef: this.preparedModelRef }
         : {}),
+      ...(this.status === "done" && this.modelActivation
+        ? { modelActivation: this.modelActivation }
+        : {}),
     };
   }
 
@@ -346,6 +353,11 @@ export class WizardSession {
   /** Record the exact provider-owned model prepared by a setup flow. */
   setPreparedModelRef(modelRef: string) {
     this.preparedModelRef = modelRef;
+  }
+
+  /** Record the live activation result, distinct from provider preparation. */
+  setModelActivation(activation: NonNullable<ProtocolWizardNextResult["modelActivation"]>) {
+    this.modelActivation = activation;
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {

@@ -31,7 +31,6 @@ function writeAgentsDeleteConfig() {
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
       ownership: "explicit",
-      defaults: { heartbeat: { agentId: "main" } },
       entries: {
         main: { workspace: sharedWorkspace },
         ops: { workspace: sharedWorkspace },

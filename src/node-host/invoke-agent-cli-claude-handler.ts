@@ -1,3 +1,4 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
@@ -28,6 +29,7 @@ export type NodeHostInvokeRuntime = {
   scanInstalledApps?: typeof scanInstalledApps;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   desktopHostConfig?: DesktopHostConfig;
   emitProgress?: (text: string) => Promise<void>;
 };

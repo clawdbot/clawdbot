@@ -172,6 +172,22 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.monitor.version()).toBe(0);
   });
 
+  it("advances the projection fence when an observation loses its active placement", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(1);
+
+    harness.setPlacement({ ...activePlacement(), state: "draining" });
+    await harness.monitor.sweep();
+
+    expect(harness.monitor.read(harness.placement)).toBeUndefined();
+    expect(harness.monitor.version()).toBe(2);
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(2);
+  });
+
   it("keeps the last exact-binding sample when a later advisory probe fails", async () => {
     let fail = false;
     const harness = createHarness(async () =>

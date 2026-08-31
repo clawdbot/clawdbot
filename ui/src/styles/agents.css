@@ -15,9 +15,3 @@
 .agents-panel-body + .settings-kv {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
-
-/* .agents-main is a 14px-gap grid (components.css); settings sections need
-   more whitespace between each other than panel chrome does. */
-.agents-main > .settings-section:not(:first-child) {
-  margin-top: var(--space-4);
-}

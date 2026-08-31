@@ -5,6 +5,8 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 export type AutoSelectableProvider = {
   /** Provider id used for explicit config lookup and selected result metadata. */
   id: string;
+  /** Declared aliases, in preference order, used for automatic config defaults. */
+  aliases?: readonly string[];
   /** Lower values win when no explicit provider is configured. */
   autoSelectOrder?: number;
 };
@@ -35,7 +37,11 @@ export type ResolvedConfiguredProvider<TProvider, TConfig> =
       /** Provider selection failed before a configured provider could be used. */
       ok: false;
       /** Stable failure code for setup/runtime callers. */
-      code: "missing-configured-provider" | "no-registered-provider" | "provider-not-configured";
+      code:
+        | "missing-configured-provider"
+        | "no-registered-provider"
+        | "provider-not-configured"
+        | "provider-unavailable";
       /** Normalized explicit provider id, when the caller supplied one. */
       configuredProviderId?: string;
       /** Candidate provider that existed but failed configuration checks. */
@@ -71,25 +77,27 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
   };
 }
 
-/** Merge canonical provider config with selected-provider override config. */
+/** Merge automatic alias defaults, canonical config, and explicit selected overrides. */
 export function resolveProviderRawConfig(params: {
-  /** Canonical provider id whose default config should be read first. */
+  /** Canonical provider id whose config overrides automatic alias defaults. */
   providerId: string;
+  /** Declared aliases used only for automatic selection; earlier aliases take precedence. */
+  providerAliases?: readonly string[];
   /** Optional selected/alias provider id whose config overrides canonical values. */
   configuredProviderId?: string;
   /** Provider config map keyed by canonical and configured provider ids. */
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
 }): Record<string, unknown> {
-  const canonicalProviderConfig = readProviderConfig(params.providerConfigs, params.providerId);
-  const selectedProviderConfig = readProviderConfig(
-    params.providerConfigs,
-    params.configuredProviderId,
+  // Canonical values beat automatic alias defaults. Explicit selection retains
+  // its canonical-plus-selected merge without inheriting unrelated alias config.
+  const providerIds = params.configuredProviderId
+    ? [params.providerId, params.configuredProviderId]
+    : [...(params.providerAliases ?? []).toReversed(), params.providerId];
+  return Object.fromEntries(
+    providerIds.flatMap((providerId) =>
+      Object.entries(readProviderConfig(params.providerConfigs, providerId) ?? {}),
+    ),
   );
-
-  return {
-    ...canonicalProviderConfig,
-    ...selectedProviderConfig,
-  };
 }
 
 /** Resolve a configured or auto-selected provider that passes capability config checks. */
@@ -100,7 +108,7 @@ export function resolveConfiguredCapabilityProvider<
 >(params: {
   /** Optional explicit provider id from config or user input. */
   configuredProviderId?: string;
-  /** Provider config map used to merge canonical and selected provider settings. */
+  /** Provider config map used to merge alias defaults, canonical settings, and explicit overrides. */
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
   /** Current full config used only for configured-state checks. */
   cfg: TFullConfig | undefined;
@@ -110,12 +118,14 @@ export function resolveConfiguredCapabilityProvider<
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
   /** Iterable of providers eligible for auto-selection. */
   listProviders: () => Iterable<TProvider>;
+  /** Availability gate checked before provider-specific config normalization. */
+  isProviderAvailable?: (params: { provider: TProvider }) => boolean;
   resolveProviderConfig: (params: {
     /** Candidate provider being resolved. */
     provider: TProvider;
     /** Full config passed through for capability-specific config resolution. */
     cfg: TFullConfig;
-    /** Merged raw provider config for canonical and selected provider ids. */
+    /** Raw provider config after alias defaults and canonical/explicit precedence. */
     rawConfig: Record<string, unknown>;
   }) => TConfig;
   isProviderConfigured: (params: {
@@ -153,16 +163,30 @@ export function resolveConfiguredCapabilityProvider<
     };
   }
 
+  let firstUnavailable: TProvider | undefined;
   let firstUnconfigured: TProvider | undefined;
   for (const provider of providers) {
+    if (params.isProviderAvailable && !params.isProviderAvailable({ provider })) {
+      firstUnavailable ??= provider;
+      continue;
+    }
     const resolution = resolveProviderCandidate({
       ...params,
+      configuredProviderId,
       provider,
     });
     if (resolution.ok) {
       return resolution;
     }
     firstUnconfigured ??= provider;
+  }
+
+  if (!firstUnconfigured && firstUnavailable) {
+    return {
+      ok: false,
+      code: "provider-unavailable",
+      provider: firstUnavailable,
+    };
   }
 
   return {
@@ -228,6 +252,7 @@ function resolveProviderCandidate<
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
   const rawProviderConfig = resolveProviderRawConfig({
     providerId: params.provider.id,
+    providerAliases: params.provider.aliases,
     configuredProviderId: params.configuredProviderId,
     providerConfigs: params.providerConfigs,
   });

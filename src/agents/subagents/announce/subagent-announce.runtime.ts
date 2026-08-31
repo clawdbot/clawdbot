@@ -5,6 +5,7 @@
  * IO without changing the announce logic itself.
  */
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 export { getRuntimeConfig } from "../../../config/config.js";
 export {
   resolveAgentIdFromSessionKey,
@@ -16,7 +17,6 @@ export function readSubagentSessionEntry(storePath: string, sessionKey: string) 
 }
 export { callGateway } from "../../../gateway/call.js";
 export { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
-export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 export {
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,

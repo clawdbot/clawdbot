@@ -94,38 +94,6 @@ describe("control reply display projection", () => {
     ]);
   });
 
-  it("strips a trailing control token after removing inline directives", () => {
-    expect(
-      projectChatDisplayMessages([
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "The handoff is complete.\n\nREPLY_SKIP [[audio_as_voice]]",
-            },
-          ],
-        },
-      ]),
-    ).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "The handoff is complete." }],
-      },
-    ]);
-  });
-
-  it("hides a control-only reply with an inline directive", () => {
-    expect(
-      projectChatDisplayMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "NO_REPLY [[audio_as_voice]]" }],
-        },
-      ]),
-    ).toEqual([]);
-  });
-
   it("hides a control-only reply that also contains model thinking", () => {
     expect(
       projectChatDisplayMessages([

@@ -4,10 +4,10 @@
  * expanded only after unknown core/plugin entries are classified.
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -260,16 +260,4 @@ function describeUnknownAllowlistSuffix(params: {
         ? unavailableCoreDetail
         : "These entries won't match any tool unless the plugin is enabled.";
   return preface ? `${preface} ${detail}` : detail;
-}
-
-/** Clears process-local warning dedupe state between tests. */
-function resetToolPolicyWarningCacheForTest(): void {
-  seenToolPolicyWarnings.clear();
-  toolPolicyWarningOrder.length = 0;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
-  ] = { resetToolPolicyWarningCacheForTest };
 }

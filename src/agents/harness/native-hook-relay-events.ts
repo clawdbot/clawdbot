@@ -51,7 +51,7 @@ function nativePreToolUseMayRunLoopDetection(
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled === true;
 }
 
 export function nativeHookRelayEventHasLocalWork(

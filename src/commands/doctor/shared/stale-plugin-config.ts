@@ -416,7 +416,10 @@ export function maybeRepairStalePluginConfig(
     const slots = asNullableRecord(nextPlugins?.slots);
     if (slots) {
       for (const hit of slotHits) {
-        slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
+        delete slots[hit.slotKey];
+      }
+      if (Object.keys(slots).length === 0 && nextPlugins) {
+        delete nextPlugins.slots;
       }
     }
   }

@@ -4,7 +4,6 @@
  * Stores failure metadata used by transcripts, retry behavior, and mutation recovery logic.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { FileTarget } from "./tool-mutation.js";
 
 export type ProcessTerminalDiagnostic = {
   kind: "process";
@@ -20,6 +19,7 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  executionStarted?: boolean;
   meta?: string;
   errorCode?: string;
   error?: string;
@@ -27,10 +27,6 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
-  /** Canonical host-private plugin/tool identity for owner-declared side effects. */
-  ownerKey?: string;
-  actionFingerprint?: string;
-  fileTarget?: FileTarget;
   terminalDiagnostic?: ProcessTerminalDiagnostic;
 };
 

@@ -104,7 +104,7 @@ async function assertSafe(
   }
   if ((unresolved > 0 || projectedDynamicDefaults > 0) && provenOwnerAgentId) {
     try {
-      deps.materializeLegacyDefaultCronJobOwners({
+      await deps.materializeLegacyDefaultCronJobOwners({
         storePath,
         legacyDefaultAgentId: provenOwnerAgentId,
         env,

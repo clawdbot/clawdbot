@@ -537,6 +537,28 @@ describe("TwilioProvider", () => {
     expect(secondBody).not.toContain("hold-queue");
   });
 
+  it("records the webhook URL needed to control an inbound call", async () => {
+    const provider = new TwilioProvider(
+      { accountSid: "AC123", authToken: "secret" },
+      { publicUrl: "https://example.ngrok.app/voice/twilio" },
+    );
+    const apiRequest = createApiRequestMock();
+    (provider as unknown as { apiRequest: TwilioApiRequest }).apiRequest = apiRequest;
+
+    provider.parseWebhookEvent(
+      createContext("CallStatus=in-progress&Direction=inbound&CallSid=CA-inbound"),
+    );
+    await provider.startListening({
+      callId: "call-inbound",
+      providerCallId: "CA-inbound",
+    });
+
+    expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-inbound.json");
+    expect(requireApiRequestCall(apiRequest)[1]).toMatchObject({
+      Twiml: expect.stringContaining('action="https://example.ngrok.app/voice/twilio"'),
+    });
+  });
+
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
     const provider = createProvider();
     const rawBody = "CallSid=CA789&Direction=inbound&SpeechResult=hello";
@@ -595,6 +617,17 @@ describe("TwilioProvider", () => {
     const parsed = requireEvent(event, "expected speech event from Twilio webhook");
     expect(parsed.type).toBe("call.speech");
     expect(parsed.turnToken).toBe("turn-xyz");
+  });
+
+  it.each(["", "   ", "\t\n"])("does not emit blank speech results %#", (speechResult) => {
+    const provider = createProvider();
+    const body = new URLSearchParams({
+      CallSid: "CA-blank",
+      Direction: "inbound",
+      SpeechResult: speechResult,
+    }).toString();
+
+    expect(provider.parseWebhookEvent(createContext(body)).events).toEqual([]);
   });
 
   it("does not coerce partial Twilio speech confidence values", () => {
@@ -745,7 +778,7 @@ describe("TwilioProvider", () => {
       provider.registerCallStream("CA-timeout", "MZ-timeout");
 
       const sendAudio = vi.fn();
-      const sendMark = vi.fn();
+      const sendMarkAndWait = vi.fn();
       const mediaStreamHandler = {
         queueTts: async (
           _streamSid: string,
@@ -754,7 +787,8 @@ describe("TwilioProvider", () => {
           await playFn(new AbortController().signal);
         },
         sendAudio,
-        sendMark,
+        sendMarkAndWait,
+        clearAudio: vi.fn(),
       };
 
       provider.setMediaStreamHandler(mediaStreamHandler as never);
@@ -773,20 +807,25 @@ describe("TwilioProvider", () => {
       await vi.advanceTimersByTimeAsync(5_100);
       await playExpectation;
       expect(sendAudio).toHaveBeenCalled();
-      expect(sendMark).not.toHaveBeenCalled();
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("fails stream playback when all audio sends and completion mark are dropped", async () => {
+  it("stops and clears playback on the first failed audio chunk", async () => {
     vi.useFakeTimers();
     try {
       const provider = createProvider();
       provider.registerCallStream("CA-dropped", "MZ-dropped");
 
-      const sendAudio = vi.fn(() => ({ sent: false }));
-      const sendMark = vi.fn(() => ({ sent: false }));
+      const sendAudio = vi
+        .fn<() => { sent: boolean }>()
+        .mockReturnValueOnce({ sent: true })
+        .mockReturnValueOnce({ sent: true })
+        .mockReturnValue({ sent: false });
+      const sendMarkAndWait = vi.fn();
+      const clearAudio = vi.fn();
       const mediaStreamHandler = {
         queueTts: async (
           _streamSid: string,
@@ -795,13 +834,14 @@ describe("TwilioProvider", () => {
           await playFn(new AbortController().signal);
         },
         sendAudio,
-        sendMark,
+        sendMarkAndWait,
+        clearAudio,
       };
 
       provider.setMediaStreamHandler(mediaStreamHandler as never);
       provider.setTTSProvider({
         synthesisTimeoutMs: 5000,
-        synthesizeForTelephony: async () => Buffer.alloc(320),
+        synthesizeForTelephony: async () => Buffer.alloc(480),
       });
 
       const playback = provider.playTts({
@@ -812,8 +852,9 @@ describe("TwilioProvider", () => {
       const playExpectation = expect(playback).rejects.toThrow("Telephony stream playback failed");
       await vi.advanceTimersByTimeAsync(100);
       await playExpectation;
-      expect(sendAudio).toHaveBeenCalled();
-      expect(sendMark).toHaveBeenCalledTimes(1);
+      expect(sendAudio).toHaveBeenCalledTimes(3);
+      expect(clearAudio).toHaveBeenCalledWith("MZ-dropped");
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -824,7 +865,7 @@ describe("TwilioProvider", () => {
     provider.registerCallStream("CA-empty", "MZ-empty");
 
     const sendAudio = vi.fn();
-    const sendMark = vi.fn();
+    const sendMarkAndWait = vi.fn();
     const mediaStreamHandler = {
       queueTts: async (
         _streamSid: string,
@@ -833,7 +874,8 @@ describe("TwilioProvider", () => {
         await playFn(new AbortController().signal);
       },
       sendAudio,
-      sendMark,
+      sendMarkAndWait,
+      clearAudio: vi.fn(),
     };
 
     provider.setMediaStreamHandler(mediaStreamHandler as never);
@@ -850,7 +892,7 @@ describe("TwilioProvider", () => {
       }),
     ).rejects.toThrow("Telephony TTS produced no audio");
     expect(sendAudio).toHaveBeenCalled();
-    expect(sendMark).not.toHaveBeenCalled();
+    expect(sendMarkAndWait).not.toHaveBeenCalled();
   });
 
   it("exits chunk pacing early when the abort signal fires after the first chunk", async () => {
@@ -859,7 +901,7 @@ describe("TwilioProvider", () => {
       const provider = createProvider();
       provider.registerCallStream("CA-abort-chunk", "MZ-abort-chunk");
 
-      const sendMark = vi.fn(() => ({ sent: true }));
+      const sendMarkAndWait = vi.fn(async () => {});
       const controller = new AbortController();
       const sendAudio = vi.fn(() => {
         // The first send is the synthesis keepalive; the second is the first real audio chunk.
@@ -877,7 +919,8 @@ describe("TwilioProvider", () => {
           await playFn(controller.signal);
         },
         sendAudio,
-        sendMark,
+        sendMarkAndWait,
+        clearAudio: vi.fn(),
       };
 
       provider.setMediaStreamHandler(mediaStreamHandler as never);
@@ -899,10 +942,105 @@ describe("TwilioProvider", () => {
 
       expect(Date.now()).toBe(startedAt);
       expect(sendAudio).toHaveBeenCalledTimes(2);
-      expect(sendMark).not.toHaveBeenCalled();
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits for the provider playback mark before completing stream playback", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-mark", "MZ-mark");
+      let acknowledgeMark!: () => void;
+      const markAcknowledgement = new Promise<void>((resolve) => {
+        acknowledgeMark = resolve;
+      });
+      const sendMarkAndWait = vi.fn(async () => await markAcknowledgement);
+      provider.setMediaStreamHandler({
+        queueTts: async (_streamSid: string, playFn: (signal: AbortSignal) => Promise<void>) =>
+          await playFn(new AbortController().signal),
+        sendAudio: () => ({ sent: true }),
+        sendMarkAndWait,
+        clearAudio: vi.fn(),
+      } as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5_000,
+        synthesizeForTelephony: async () => Buffer.alloc(320, 0x80),
+      });
+
+      let completed = false;
+      const playback = provider
+        .playTts({ callId: "call-mark", providerCallId: "CA-mark", text: "hello" })
+        .then(() => {
+          completed = true;
+        });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(sendMarkAndWait).toHaveBeenCalledOnce();
+      expect(completed).toBe(false);
+      acknowledgeMark();
+      await playback;
+      expect(completed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases serialized playback immediately when barge-in aborts synthesis", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-synth-abort", "MZ-synth-abort");
+    let activeController: AbortController | undefined;
+    let queueTail = Promise.resolve();
+    const mediaStreamHandler = {
+      queueTts: (_streamSid: string, playFn: (signal: AbortSignal) => Promise<void>) => {
+        const controller = new AbortController();
+        const operation = queueTail.then(async () => {
+          activeController = controller;
+          try {
+            await playFn(controller.signal);
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              throw error;
+            }
+          } finally {
+            if (activeController === controller) {
+              activeController = undefined;
+            }
+          }
+        });
+        queueTail = operation.catch(() => {});
+        return operation;
+      },
+      clearTtsQueue: () => activeController?.abort(),
+      sendAudio: () => ({ sent: true }),
+      sendMarkAndWait: async () => {},
+      clearAudio: vi.fn(),
+    };
+    provider.setMediaStreamHandler(mediaStreamHandler as never);
+    const synthesizeForTelephony = vi
+      .fn<() => Promise<Buffer>>()
+      .mockImplementationOnce(async () => await new Promise<Buffer>(() => {}))
+      .mockResolvedValueOnce(Buffer.alloc(160, 0x80));
+    provider.setTTSProvider({ synthesisTimeoutMs: 30_000, synthesizeForTelephony });
+
+    const cancelled = provider.playTts({
+      callId: "call-synth-abort",
+      providerCallId: "CA-synth-abort",
+      text: "cancel me",
+    });
+    await vi.waitFor(() => expect(synthesizeForTelephony).toHaveBeenCalledTimes(1));
+    provider.clearTtsQueue("CA-synth-abort", "barge-in");
+    const next = provider.playTts({
+      callId: "call-synth-abort",
+      providerCallId: "CA-synth-abort",
+      text: "play next",
+    });
+
+    await expect(cancelled).resolves.toBeUndefined();
+    await expect(next).resolves.toBeUndefined();
+    expect(synthesizeForTelephony).toHaveBeenCalledTimes(2);
   });
 });

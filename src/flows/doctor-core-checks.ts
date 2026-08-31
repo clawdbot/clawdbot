@@ -27,6 +27,7 @@ import {
 import {
   collectCodexRuntimeCompatibilityWarnings,
   collectDisabledCodexPluginRouteIssues,
+  resolveKnownModelRefMigrationTarget,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,7 +46,11 @@ import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
+import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
+import type {
+  SplitHealthCheckDefinition,
+  SplitHealthCheckInput,
+} from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -426,7 +431,6 @@ const gatewayAuthCheck: HealthCheck = {
         cfg: ctx.cfg,
         env: process.env,
         unresolvedReasonStyle: "detailed",
-        envFallback: gatewayTokenRef ? "never" : "always",
       });
       if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
         return [];
@@ -535,7 +539,7 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   source: "doctor",
   defaultEnabled: false,
   async detect(ctx) {
-    const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
+    const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
     const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
@@ -654,6 +658,66 @@ function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): Health
     source: "doctor",
     async detect(ctx) {
       return deps.collectProviderCatalogProjectionFindings(ctx);
+    },
+  };
+}
+
+function createModelReferenceCheck(): HealthCheck {
+  return {
+    id: "core/doctor/model-references",
+    kind: "core",
+    description: "Configured model references have installed or configured provider owners.",
+    source: "doctor",
+    async detect(ctx) {
+      const { inspectConfiguredModelReferences } =
+        await import("../commands/models/model-reference-validation.js");
+      return inspectConfiguredModelReferences({
+        cfg: ctx.cfg,
+        env: ctx.env,
+        workspaceDir: ctx.cwd,
+      }).flatMap((inspection): HealthFinding[] => {
+        const migrationTarget = resolveKnownModelRefMigrationTarget(ctx.cfg, inspection.ref);
+        const migrationFinding = migrationTarget
+          ? {
+              message: `Configured model "${inspection.ref}" is a legacy reference. Doctor can migrate it to "${migrationTarget}".`,
+              requirement: `canonical model reference "${migrationTarget}"`,
+              fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${migrationTarget}".`,
+            }
+          : undefined;
+        if (inspection.status === "unknown-provider") {
+          return [
+            {
+              checkId: "core/doctor/model-references",
+              severity: "warning",
+              source: "doctor",
+              target: inspection.ref,
+              ...(migrationFinding ?? {
+                message: `Configured model "${inspection.ref}" uses unknown provider "${inspection.provider}". No installed plugin manifest or models.providers entry declares it.`,
+                requirement: "an installed plugin manifest or models.providers configuration",
+                fixHint:
+                  "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
+              }),
+            },
+          ];
+        }
+        if (inspection.status === "unknown-model" && inspection.active) {
+          return [
+            {
+              checkId: "core/doctor/model-references",
+              severity: "info",
+              source: "doctor",
+              target: inspection.ref,
+              ...(migrationFinding ?? {
+                message: `Configured model "${inspection.ref}" uses a known provider but is not in the local model catalog. It may be newly released or self-hosted.`,
+                requirement: "a provider-supported model id",
+                fixHint:
+                  "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+              }),
+            },
+          ];
+        }
+        return [];
+      });
     },
   };
 }
@@ -840,7 +904,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: SplitHealthCheckInput = {
+const legacyCronStoreCheck: SplitHealthCheckDefinition = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -994,11 +1058,11 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
-    description: "Gateway reachability is represented as structured findings.",
+    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
     source: "doctor",
     defaultEnabled: false,
     async detect(ctx) {
@@ -1007,7 +1071,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckIn
   };
 }
 
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
   return {
     id: GATEWAY_DAEMON_CHECK_ID,
     kind: "core",
@@ -1318,7 +1382,7 @@ function createWorkspaceSuggestionsCheck(
 
 function createConvertedWorkflowChecks(
   deps: CoreHealthCheckDeps,
-): readonly SplitHealthCheckInput[] {
+): readonly SplitHealthCheckDefinition[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1339,6 +1403,7 @@ function createConvertedWorkflowChecks(
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createModelReferenceCheck(),
     createProviderCatalogProjectionCheck(deps),
     {
       id: "core/doctor/local-audio-acceleration",
@@ -1384,7 +1449,7 @@ function createConvertedWorkflowChecks(
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
 ): readonly SplitHealthCheckInput[] {
-  return [
+  const checks: readonly SplitHealthCheckDefinition[] = [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
@@ -1392,6 +1457,7 @@ export function createCoreHealthChecks(
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
+  return checks.map(defineSplitHealthCheckInput);
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();

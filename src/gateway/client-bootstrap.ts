@@ -269,7 +269,11 @@ export async function resolveGatewayClientBootstrap(params: {
   const surface =
     configuredTarget?.authSurface ??
     params.modeOverride ??
-    (params.config.gateway?.mode === "remote" ? "remote" : "local");
+    (params.localPortOverride !== undefined
+      ? "local"
+      : params.config.gateway?.mode === "remote"
+        ? "remote"
+        : "local");
   let auth: { token?: string; password?: string; failureReason?: string };
   if (params.skipImplicitAuth) {
     auth = explicitAuth;

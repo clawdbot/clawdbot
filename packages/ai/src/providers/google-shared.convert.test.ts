@@ -253,8 +253,8 @@ describe("google-shared convertMessages", () => {
     } as Context);
 
     expect(contents[0]?.parts).toEqual([
-      { functionCall: { name: "signed", args: {} }, thoughtSignature: "c2lnbmVk" },
-      { functionCall: { name: "unsigned", args: {} } },
+      { functionCall: { id: "call_1", name: "signed", args: {} }, thoughtSignature: "c2lnbmVk" },
+      { functionCall: { id: "call_2", name: "unsigned", args: {} } },
     ]);
   });
 
@@ -634,6 +634,28 @@ describe("google-shared convertMessages", () => {
 
     expect(assertRecord(toolCall.functionCall).id).toBeUndefined();
     expect(assertRecord(toolResponse.functionResponse).id).toBeUndefined();
+  });
+
+  it("preserves matching provider call identities on same-route Gemini replay", () => {
+    const model = makeModel("gemini-3-flash");
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        makeGoogleAssistantMessage(model.id, [
+          { type: "toolCall", id: "provider_call_42", name: "lookup", arguments: {} },
+        ]),
+        {
+          role: "toolResult",
+          toolCallId: "provider_call_42",
+          toolName: "lookup",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as Context);
+
+    expect(contents[0]?.parts?.[0]?.functionCall?.id).toBe("provider_call_42");
+    expect(contents[1]?.parts?.[0]?.functionResponse?.id).toBe("provider_call_42");
   });
 
   it("serializes structured tool results into function responses", () => {

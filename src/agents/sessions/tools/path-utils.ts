@@ -3,7 +3,7 @@
  *
  * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
  */
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
 
@@ -34,9 +34,8 @@ export function expandOsHomePrefix(filePath: string): string {
   return home ? expandHomePrefix(filePath, { home }) : filePath;
 }
 
-function expandPath(filePath: string, normalizeSpaces = true): string {
-  const withoutAtPrefix = normalizeAtPrefix(filePath);
-  const normalized = normalizeSpaces ? normalizeUnicodeSpaces(withoutAtPrefix) : withoutAtPrefix;
+function expandPath(filePath: string): string {
+  const normalized = normalizeAtPrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -53,29 +52,38 @@ function expandPath(filePath: string, normalizeSpaces = true): string {
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
-  if (isAbsolute(expanded)) {
-    return expanded;
-  }
-  return resolvePath(cwd, expanded);
-}
-
-export function resolveReadPath(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath, false);
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-/** Equivalent spellings worth probing after an exact read path misses. */
-export function getReadPathVariants(filePath: string): string[] {
+function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {
   const variants = new Set<string>();
-  const asciiSpace = normalizeUnicodeSpaces(filePath);
+  const fileName = basename(filePath);
+  const parentPrefix = filePath.slice(0, filePath.length - fileName.length);
+  // The caller may already have authorized the parent directory. Only vary the
+  // basename so a fallback cannot escape that validated boundary.
+  const asciiSpace = normalizeUnicodeSpaces(fileName);
   for (const spaced of [asciiSpace, tryMacOSScreenshotPath(asciiSpace)]) {
     const straightQuotes = spaced.replace(/[\u2018\u2019]/g, "'");
     const curlyQuotes = spaced.replace(/['\u2018]/g, "\u2019");
     for (const quoted of [straightQuotes, curlyQuotes]) {
-      variants.add(quoted.normalize("NFC"));
-      variants.add(quoted.normalize("NFD"));
+      variants.add(`${parentPrefix}${quoted.normalize("NFC")}`);
+      // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
+      // makes one file look ambiguous. Other platforms can store both distinctly.
+      if (includeNfd) {
+        variants.add(`${parentPrefix}${quoted.normalize("NFD")}`);
+      }
     }
   }
   variants.delete(filePath);
   return [...variants];
+}
+
+/** Equivalent filename spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  return collectReadPathVariants(filePath, process.platform !== "darwin");
+}
+
+/** Every spelling an exact read or its fallback probes can accept. */
+export function getReadQueuePaths(filePath: string): string[] {
+  return [filePath, ...collectReadPathVariants(filePath, true)];
 }

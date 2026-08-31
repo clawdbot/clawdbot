@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
   buildTimedWatchCommand,
+  calculateDistRuntimeByteGrowth,
   collectGatewayWatchFindings,
   hasGatewayReadyLog,
   parseArgs,
@@ -84,6 +85,35 @@ describe("check-gateway-watch-regression", () => {
       true,
     );
     expect(hasGatewayReadyLog("[gateway] starting HTTP server...")).toBe(false);
+  });
+
+  it("detects byte growth in existing dist-runtime paths", () => {
+    const distRuntimeByteGrowth = calculateDistRuntimeByteGrowth(100, 2_097_253);
+    const findings = collectGatewayWatchFindings({
+      cpuMs: 0,
+      distRuntimeByteGrowth,
+      distRuntimeFileGrowth: 0,
+      options: {
+        cpuFailMs: 8000,
+        cpuWarnMs: 1000,
+        distRuntimeByteGrowthMax: 2 * 1024 * 1024,
+        distRuntimeFileGrowthMax: 200,
+        windowMs: 10_000,
+      },
+      watchBuildReason: null,
+      watchResult: {
+        idleCpuMs: 0,
+        readyBeforeWindow: true,
+        spawnError: null,
+        timingFileMissing: false,
+      },
+      watchTriggeredBuild: false,
+    });
+
+    expect(distRuntimeByteGrowth).toBe(2_097_153);
+    expect(findings.failures).toContain(
+      "dist-runtime apparent byte growth 2097153 exceeded max 2097152",
+    );
   });
 
   it("bounds in-memory watch output capture while keeping the newest logs", () => {

@@ -79,9 +79,27 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
     const updater = vi.fn(() => true);
 
-    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).resolves.toBeNull();
+    // The unreadable store names its own remediation; a null return would make
+    // callers report generic lock contention instead.
+    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).rejects.toThrow(
+      "is unreadable; run openclaw doctor --fix",
+    );
     expect(updater).not.toHaveBeenCalled();
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
+  });
+
+  it("returns null for classified SQLite lock contention", async () => {
+    const { agentDir } = await withAgentStore({});
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+
+    await expect(
+      updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: () => {
+          throw lockError;
+        },
+      }),
+    ).resolves.toBeNull();
   });
 
   it("detects a legacy credential source that appears after an earlier clean load", async () => {

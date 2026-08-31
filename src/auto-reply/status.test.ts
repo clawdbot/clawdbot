@@ -157,13 +157,20 @@ function makeFallbackContextStatusArgs({
       totalTokens: 49_000,
       totalTokensFresh: true,
       totalTokensVersion: 1 as const,
-      ...(sessionContextTokens === undefined ? {} : { contextTokens: sessionContextTokens }),
+      ...(sessionContextTokens === undefined
+        ? {}
+        : {
+            contextTokens: sessionContextTokens,
+            contextTokensSource: "runtime" as const,
+            agentHarnessId: "openclaw" as const,
+          }),
     },
     sessionKey: "agent:main:main",
     sessionScope: "per-sender",
     queue: { mode: "collect", depth: 0 },
     modelAuth: "api-key",
     activeModelAuth: "api-key",
+    resolvedHarness: "openclaw",
   };
 }
 
@@ -1846,13 +1853,18 @@ describe("buildStatusMessage", () => {
         sessionId: params.sessionId,
         updatedAt: 0,
         totalTokens: 3,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        agentHarnessId: "openclaw",
         contextTokens: 32_000,
+        contextTokensSource: "runtime",
       },
       sessionKey: params.sessionKey,
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
       includeTranscriptUsage: true,
       modelAuth: "api-key",
+      resolvedHarness: "openclaw",
     });
   }
 
@@ -2010,13 +2022,18 @@ describe("buildStatusMessage", () => {
             sessionId,
             updatedAt: 0,
             totalTokens: 5,
+            modelProvider: "anthropic",
+            model: "claude-opus-4-6",
+            agentHarnessId: "openclaw",
             contextTokens: 32_000,
+            contextTokensSource: "runtime",
           },
           // Intentionally omitted: sessionKey
           sessionScope: "per-sender",
           queue: { mode: "collect", depth: 0 },
           includeTranscriptUsage: true,
           modelAuth: "api-key",
+          resolvedHarness: "openclaw",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.2k/32k");

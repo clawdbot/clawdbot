@@ -65,6 +65,57 @@ describe("resolveCronExecutionRetryHint", () => {
     }
   });
 
+  it("does not classify incidental 529 numbers as provider overload", () => {
+    for (const message of [
+      "529 lines of output",
+      "529 files missing",
+      "529 workers failed",
+      "context limit 529 exceeded",
+      "process exited with 529 lines of output",
+      "assertion failed: expected 529 got 0",
+      "process exited with code 529",
+      "killed worker pid 529 after deadline",
+      "ENOENT: no such file '/var/run/app-529.sock'",
+      "API error: 5291",
+      "HTTP/2 5291",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["overloaded"] })).toEqual({
+        retryable: false,
+      });
+      expect(resolveCronExecutionRetryHint({ error: message })).toEqual({ retryable: false });
+    }
+  });
+
+  it("classifies genuine HTTP and provider API overload errors", () => {
+    for (const message of [
+      "HTTP 529",
+      "HTTP/2 529",
+      "HTTP/1.1 529",
+      "received status 529 from upstream",
+      "response code: 529",
+      "statusCode: 529",
+      "status_code=529",
+      "responseCode: 529",
+      "API error: 529",
+      "APIError: 529",
+      "api_error: 529",
+      "Provider API error (529): request rejected",
+      "curl: (22) The requested URL returned error: 529",
+      "URL returned error: 529",
+      "529 API is busy",
+      "529 Please try again",
+      "529",
+      "overloaded_error",
+      "temporarily overloaded",
+      "capacity exceeded",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["overloaded"] })).toEqual({
+        retryable: true,
+        category: "overloaded",
+      });
+    }
+  });
+
   it("does not classify bare 5xx-looking numbers as server_error", () => {
     for (const message of [
       "context limit 512 exceeded",

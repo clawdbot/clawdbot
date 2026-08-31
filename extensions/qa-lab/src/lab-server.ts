@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import {
   closeQaHttpServer,
+  dispatchQaHttpRequest,
   handleQaBusRequest,
   isQaMalformedJsonBodyError,
   readQaJsonBody,
@@ -301,19 +302,15 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStoreLease = acquireDebugProxyCaptureStore();
-  const captureStore = captureStoreLease.store;
+  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
+  const getCaptureStore = () => (captureStoreLease ??= acquireDebugProxyCaptureStore()).store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioCatalog.scenarios);
   const runnerChannels = [
-    ...new Set(
-      scenarioCatalog.scenarios
-        .map((scenario) => scenario.execution.channel)
-        .filter((channel): channel is string => Boolean(channel)),
-    ),
+    ...new Set(scenarioCatalog.scenarios.flatMap((scenario) => scenario.execution.channels ?? [])),
   ].toSorted();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];
@@ -375,7 +372,6 @@ export async function startQaLabServer(
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
   let labHandle: QaLabServerHandle | null = null;
-  let captureStoreReleased = false;
   let serverListening = false;
 
   let listenUrl = "";
@@ -450,7 +446,7 @@ export async function startQaLabServer(
   }
 
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
       if (await handleQaBusRequest({ req, res, state })) {
@@ -592,7 +588,7 @@ export async function startQaLabServer(
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
           writeJson(res, 200, {
-            sessions: captureStore.listSessions(50),
+            sessions: getCaptureStore().listSessions(50),
           });
           return;
         }
@@ -626,7 +622,7 @@ export async function startQaLabServer(
           const sessionId = url.searchParams.get("sessionId")?.trim();
           writeJson(res, 200, {
             events: sessionId
-              ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+              ? getCaptureStore().getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
               : [],
           });
           return;
@@ -638,7 +634,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            coverage: captureStore.summarizeSessionCoverage(sessionId),
+            coverage: getCaptureStore().summarizeSessionCoverage(sessionId),
           });
           return;
         }
@@ -654,7 +650,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            rows: captureStore.queryPreset(preset, sessionId),
+            rows: getCaptureStore().queryPreset(preset, sessionId),
           });
           return;
         }
@@ -664,7 +660,7 @@ export async function startQaLabServer(
             writeError(res, 400, "Missing blob id");
             return;
           }
-          const content = captureStore.readBlob(blobId);
+          const content = getCaptureStore().readBlob(blobId);
           if (content == null) {
             writeError(res, 404, "Blob not found");
             return;
@@ -678,13 +674,13 @@ export async function startQaLabServer(
             ? body.sessionIds.filter((value): value is string => typeof value === "string")
             : [];
           writeJson(res, 200, {
-            result: captureStore.deleteSessions(sessionIds),
+            result: getCaptureStore().deleteSessions(sessionIds),
           });
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/capture/purge") {
           writeJson(res, 200, {
-            result: captureStore.purgeAll(),
+            result: getCaptureStore().purgeAll(),
           });
           return;
         }
@@ -934,15 +930,12 @@ export async function startQaLabServer(
       } catch (error) {
         writeQaLabServerError(res, error);
       }
-    })();
+    });
   });
 
   const releaseCaptureStore = () => {
-    if (captureStoreReleased) {
-      return;
-    }
-    captureStoreReleased = true;
-    captureStoreLease.release();
+    captureStoreLease?.release();
+    captureStoreLease = undefined;
   };
 
   const stopLabServerResources = async (): Promise<Error | undefined> => {

@@ -1,11 +1,11 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
  */
-import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
-export { hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
 
 /**
  * Helpers for deciding whether an embedded run produced user-visible or outbound effects.
@@ -114,6 +114,15 @@ function hasNonEmptyArray(value: unknown): boolean {
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
+  return Array.isArray(value)
+    ? value.some((entry) => {
+        const spawn = asOptionalRecord(entry);
+        return hasNonEmptyString(spawn?.runId) && hasNonEmptyString(spawn?.childSessionKey);
+      })
+    : false;
 }
 
 function collectStringValues(value: unknown, output: Set<string>) {
@@ -520,8 +529,7 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
     // metadata exists, it owns visibility so blank sends cannot suppress recovery.
     (result.didSendViaMessagingTool === true &&
       !hasGranularMessagingToolDeliveryEvidence(result)) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
     hasPositiveNumber(result.successfulCronAdds)
   );
 }
@@ -531,8 +539,7 @@ function hasCommittedNonMessagingOutboundDeliveryEvidence(
   result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
 ): boolean {
   return (
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
     hasPositiveNumber(result.successfulCronAdds)
   );
 }

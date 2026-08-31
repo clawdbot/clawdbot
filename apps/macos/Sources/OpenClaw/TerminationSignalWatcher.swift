@@ -49,12 +49,11 @@ final class TerminationSignalWatcher {
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
         Self.scheduleExitFailsafe()
-        NSApp.terminate(nil)
+        AppDelegate.requestTermination()
     }
 
     static func scheduleExitFailsafe() {
-        // AppKit waits in a nested event loop while async termination cleanup runs.
-        // A main-queue failsafe cannot fire from that loop, so enforce the deadline off-main.
+        // Keep the last-resort exit independent of a stuck main actor or AppKit loop.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(
             deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds)
         {

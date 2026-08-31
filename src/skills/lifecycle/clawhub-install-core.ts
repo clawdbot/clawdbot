@@ -8,15 +8,10 @@ import {
   normalizeClawHubSha256Integrity,
   type ClawHubDownloadResult,
 } from "../../infra/clawhub-artifacts.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
-  ClawHubRequestError,
-  isDefaultClawHubBaseUrl,
-  resolveClawHubBaseUrl,
-} from "../../infra/clawhub-client.js";
-import {
+  checkClawHubPackageTrust,
   type ClawHubTrustErrorCode,
-  ensureClawHubPackageTrustAcknowledged,
-  type ClawHubRiskAcknowledgementRequest,
 } from "../../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
@@ -41,6 +36,7 @@ import {
   installExtractedSkillRoot,
   resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import {
   formatClawHubSkillRef,
   normalizeGitHubCommitSegment,
@@ -71,12 +67,12 @@ export type ClawHubInstallParams = {
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  confirmInstall?: () => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   clawManaged?: boolean;
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 };
 
 export type InstallClawHubSkillResult =
@@ -188,32 +184,6 @@ export async function resolveInstallVersion(params: {
     throw new Error(`Skill "${params.slug}" has no installable version.`);
   }
   return { detail, version };
-}
-
-function formatClawHubSkillInstallError(error: unknown, slug: string): string {
-  if (!(error instanceof ClawHubRequestError)) {
-    return formatErrorMessage(error);
-  }
-  const skillPath = `/api/v1/skills/${encodeURIComponent(slug)}`;
-  if (
-    error.status === 404 &&
-    (error.requestPath.endsWith(skillPath) || error.requestPath.endsWith(`${skillPath}/install`))
-  ) {
-    return `Skill "${slug}" not found. Run \`openclaw skills list\` to see available skills.`;
-  }
-  if (error.status === 401) {
-    return `ClawHub authentication failed while installing skill "${slug}". Authenticate with ClawHub and try again.`;
-  }
-  if (error.status === 403) {
-    return `ClawHub denied access while installing skill "${slug}". Check your ClawHub access and try again.`;
-  }
-  if (error.status === 429) {
-    return `ClawHub rate limit reached while installing skill "${slug}". Wait and try again later.`;
-  }
-  if (error.status >= 500) {
-    return `ClawHub is temporarily unavailable while installing skill "${slug}". Try again later.`;
-  }
-  return `ClawHub could not install skill "${slug}". Check the skill reference and try again.`;
 }
 
 function normalizeGitHubSourcePath(raw: string): string {
@@ -342,6 +312,7 @@ async function installArchiveResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -355,6 +326,7 @@ async function installArchiveResolution(params: {
         extractedRoot: rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onAfterBackup: params.onAfterBackup,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -390,6 +362,7 @@ async function installGitHubResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }) {
   // Preserve the repository root for sourcePath selection. Root markers validate
   // the selected skill directory afterward, so nested paths are not applied twice.
@@ -404,6 +377,7 @@ async function installGitHubResolution(params: {
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onAfterBackup: params.onAfterBackup,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -454,7 +428,7 @@ function assertInstallResolutionAllowed(
   return { ...resolution, github: { ...resolution.github, commit } };
 }
 
-export async function ensureClawHubSkillTrustAcknowledged(
+export async function checkClawHubSkillTrust(
   params: ClawHubInstallParams & { version: string; skipClawHubTrustCheck?: boolean },
 ): Promise<
   | { ok: true; warning?: string }
@@ -463,7 +437,7 @@ export async function ensureClawHubSkillTrustAcknowledged(
   if (params.skipClawHubTrustCheck) {
     return { ok: true };
   }
-  const result = await ensureClawHubPackageTrustAcknowledged({
+  const result = await checkClawHubPackageTrust({
     subject: {
       kind: "skill",
       packageName: params.slug,
@@ -472,10 +446,9 @@ export async function ensureClawHubSkillTrustAcknowledged(
     },
     version: params.version,
     baseUrl: params.baseUrl,
-    acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-    onClawHubRisk: params.onClawHubRisk,
     logger: params.logger,
     mode: params.force ? "update" : "install",
+    confirmInstall: params.confirmInstall,
   });
   return result.ok
     ? { ok: true, ...(result.warning ? { warning: result.warning } : {}) }
@@ -512,7 +485,7 @@ export async function performClawHubSkillInstall(
       detail = resolved.detail;
       version = resolved.version;
       official = isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail });
-      const trust = await ensureClawHubSkillTrustAcknowledged({
+      const trust = await checkClawHubSkillTrust({
         ...params,
         version,
         skipClawHubTrustCheck: official,
@@ -577,7 +550,7 @@ export async function performClawHubSkillInstall(
         });
       } else {
         version = resolution.archive.version;
-        const trust = await ensureClawHubSkillTrustAcknowledged({
+        const trust = await checkClawHubSkillTrust({
           ...params,
           version,
           skipClawHubTrustCheck: official,
@@ -617,6 +590,7 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onAfterBackup: params.onAfterBackup,
             })
           : await installArchiveResolution({
               workspaceDir: params.workspaceDir,
@@ -634,6 +608,7 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onAfterBackup: params.onAfterBackup,
             });
       if (!install.ok) {
         return { ok: false, error: install.error };
@@ -713,6 +688,9 @@ export async function performClawHubSkillInstall(
       await archive.cleanup().catch(() => undefined);
     }
   } catch (err) {
-    return { ok: false, error: formatClawHubSkillInstallError(err, params.slug) };
+    return {
+      ok: false,
+      error: formatClawHubSkillRequestError(err, { slug: params.slug, operation: "install" }),
+    };
   }
 }

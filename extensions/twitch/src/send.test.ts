@@ -204,6 +204,10 @@ describe("send", () => {
 
     it("should skip sending empty message after markdown stripping", async () => {
       setupAccountContext();
+      const sendMessage = vi.fn();
+      vi.mocked(getClientManager).mockReturnValue({
+        sendMessage,
+      } as unknown as ReturnType<typeof getClientManager>);
       vi.mocked(stripMarkdownForTwitch).mockReturnValue("");
 
       const result = await sendMessageTwitchInternal(
@@ -216,9 +220,14 @@ describe("send", () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(result.messageId).toBe("skipped");
+      expect(result.outcome).toBe("not_sent");
+      expect(result.messageId).toBe("");
       expect(result.receipt.platformMessageIds).toStrictEqual([]);
       expect(result.receipt.parts).toStrictEqual([]);
+      // A no-send disposition must stay upstream of the platform client: reporting
+      // "not_sent" while still hitting sendMessage would emit an untracked Twitch
+      // message that the delivery receipt claims never happened.
+      expect(sendMessage).not.toHaveBeenCalled();
     });
 
     it("should return error when client manager not found", async () => {

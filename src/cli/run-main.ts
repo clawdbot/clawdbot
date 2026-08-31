@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
@@ -20,6 +20,8 @@ import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   hasFlag,
@@ -44,6 +46,7 @@ import {
 } from "./gateway-run-argv.js";
 import {
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -51,7 +54,6 @@ import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNamesCore,
@@ -172,7 +174,6 @@ async function tryRunGatewayRunFastPath(
     { addGatewayRunCommand },
     { VERSION },
     { emitCliBanner },
-    { resolveCliStartupPolicy },
     { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
@@ -181,13 +182,12 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-startup-policy.js"),
       import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
   const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
-  const startupPolicy = resolveCliStartupPolicy({
+  const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
@@ -444,9 +444,9 @@ async function resolveConfiguredTuiLaunchTarget(
     }
     return { kind: "onboarding" };
   }
-  const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
+  const { listAgentIds, resolveAgentEffectiveModelPrimary } =
     await import("../agents/agent-scope.js");
-  if (!resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))) {
+  if (!listAgentIds(config).some((agentId) => resolveAgentEffectiveModelPrimary(config, agentId))) {
     return { kind: "onboarding" };
   }
   return { kind: "tui", local: true };
@@ -510,13 +510,14 @@ async function resolveReachableGateway(
     if (options.hasConfiguredGateway && !configuredGateway) {
       configuredGateway = toReachableGateway(target, auth);
     }
-    const probeOptions: {
-      url: string;
-      token?: string;
-      password?: string;
-      tlsFingerprint?: string;
-      preauthHandshakeTimeoutMs?: number;
-    } = { url: target.url };
+    const probeOptions: Parameters<typeof probeGatewayConfiguredModel>[0] = {
+      url: target.url,
+      // A configured remote origin stays remote through a loopback tunnel.
+      ...(target.scope === "remote" ? { originScopedDeviceAuth: true } : {}),
+    };
+    if (config.gateway?.remote?.edgeAuth) {
+      probeOptions.config = config;
+    }
     if (auth.token) {
       probeOptions.token = auth.token;
     }
@@ -629,12 +630,10 @@ async function resolveLocalGatewayProbeTargets(
   config: OpenClawConfig,
 ): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
   const [
-    { resolveGatewayPort },
     { resolveControlUiLinks },
     { resolveGatewayClientBootstrap },
     { readActiveGatewayLockPort },
   ] = await Promise.all([
-    import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
     import("../gateway/client-bootstrap.js"),
     import("../infra/gateway-lock.js"),
@@ -851,11 +850,15 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (
+function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  ) {
+  );
+}
+
+function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
     return true;
   }
   return CLI_PROXY_ENV_KEYS.some((key) => {
@@ -894,6 +897,7 @@ function resolveBuiltInMachineOutput(argv: string[]): boolean {
 async function resolvePluginMachineOutput(params: {
   argv: string[];
   config: OpenClawConfig;
+  session?: PluginCliLoadSession;
 }): Promise<boolean> {
   const { primary } = resolveCliArgvInvocation(params.argv);
   if (!primary || isKnownBuiltInCommandRoot(primary)) {
@@ -904,14 +908,17 @@ async function resolvePluginMachineOutput(params: {
     cfg: params.config,
     env: process.env,
     primaryCommand: primary,
+    session: params.session,
   });
   const descriptor = descriptors.find((entry) => entry.name === primary);
-  return descriptor ? resolvesMachineOutput(descriptor, params.argv) : false;
+  const resolveOutput = () => (descriptor ? resolvesMachineOutput(descriptor, params.argv) : false);
+  return params.session ? params.session.withCache(resolveOutput) : resolveOutput();
 }
 
 async function isPluginCliRoot(params: {
   primary: string;
   config: OpenClawConfig;
+  session?: PluginCliLoadSession;
 }): Promise<boolean | null> {
   try {
     const { resolvePluginCliRootOwnerIds } = await loadCliRegistryLoaderModule();
@@ -919,6 +926,7 @@ async function isPluginCliRoot(params: {
       cfg: params.config,
       env: process.env,
       primaryCommand: params.primary,
+      session: params.session,
     });
     return ownerIds === null ? null : ownerIds.length > 0;
   } catch {
@@ -983,22 +991,28 @@ function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
 async function resolveUnownedCliPrimary(params: {
   argv: string[];
   config: OpenClawConfig;
+  session?: PluginCliLoadSession;
 }): Promise<string | null> {
   const primary = resolveUnownedCliPrimaryCandidate(params.argv);
   if (!primary) {
     return null;
   }
-  const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
+  const pluginRoot = await isPluginCliRoot({
+    primary,
+    config: params.config,
+    session: params.session,
+  });
   if (pluginRoot !== false) {
     return null;
   }
   return primary;
 }
 
-async function resolveUnownedCliPrimaryMessage(params: {
+async function resolveUnownedCliPrimaryError(params: {
+  argv: string[];
   primary: string;
   config: OpenClawConfig;
-}): Promise<string> {
+}): Promise<Error> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
@@ -1008,41 +1022,48 @@ async function resolveUnownedCliPrimaryMessage(params: {
     resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
   });
   if (pluginPolicyMessage) {
-    return pluginPolicyMessage;
+    return await createExpectedPluginPolicyError(pluginPolicyMessage);
   }
   const sanitizedPrimary = sanitizeTerminalText(params.primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
-  const suggestion =
-    displayPrimary === params.primary ? formatCliCommandSuggestions(params.primary) : "";
-  return [
-    `Unknown command: openclaw ${displayPrimary}. No built-in command or plugin CLI metadata owns "${displayPrimary}".`,
-    suggestion,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { createCliUnknownCommandError } = await import("./program/error-output.js");
+  return createCliUnknownCommandError(displayPrimary, {
+    argv: params.argv,
+    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+  });
+}
+
+async function createExpectedPluginPolicyError(message: string): Promise<Error> {
+  const { ExpectedCliError } = await import("./failure-output.js");
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
-  const [
-    { initializeDebugProxyCapture, finalizeDebugProxyCapture },
-    { maybeWarnAboutDebugProxyCoverage },
-  ] = await startupTrace.measure("proxy-imports", () =>
-    Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
-  );
-  initializeDebugProxyCapture("cli");
-  process.once("exit", () => {
-    finalizeDebugProxyCapture();
-  });
+  // Capture init, exit finalize, and coverage warnings all no-op unless the
+  // debug-proxy env requests capture; importing their sqlite-store graph anyway
+  // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
+  if (isDebugProxyCaptureEnvEnabled()) {
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await startupTrace.measure("proxy-imports", () =>
+      Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
+    );
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
+  }
   if (options.ensureDispatcher !== false) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
-  maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
 }
 
 export async function runCli(
@@ -1056,7 +1077,34 @@ export async function runCli(
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
-    () => runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput }),
+    () => {
+      const run = async () => {
+        try {
+          return await runCliWithPreparedOutputMode(originalArgv, {
+            ...options,
+            builtInMachineOutput,
+          });
+        } catch (error) {
+          // Selection and Commander preactions run before the Gateway action's failure boundary.
+          if (
+            isGatewayRunInvocationArgv(originalArgv) &&
+            !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
+          ) {
+            const { handleGatewayStartupMaintenance } =
+              await import("./gateway-cli/startup-maintenance.js");
+            if (await handleGatewayStartupMaintenance(error)) {
+              return;
+            }
+          }
+          throw error;
+        }
+      };
+      // Nested registrars and late actions share this lightweight owner, even when no
+      // top-level plugin preparation is needed. Gateway retains its boot/process owner.
+      return isGatewayRunInvocationArgv(originalArgv)
+        ? run()
+        : withPluginCache(createPluginCache(), run);
+    },
     {
       machineOutput: builtInMachineOutput,
       restoreChanges: true,
@@ -1201,58 +1249,49 @@ async function runCliWithPreparedOutputMode(
   let onExit: (() => void) | null = null;
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  let pluginCliSession: PluginCliLoadSession | undefined;
+  const getPluginCliSession = async () => {
+    pluginCliSession ??= (await loadCliRegistryLoaderModule()).createPluginCliLoadSession(
+      getPluginCache(),
+    );
+    return pluginCliSession;
+  };
   const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
+  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
-  }).skipConfigGuard;
+  });
   const useSourceOnlyBestEffortConfig =
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
-      bestEffortConfigPromise = import("../config/io.js").then((configIo) =>
-        useSourceOnlyBestEffortConfig
-          ? configIo.readSourceConfigBestEffort()
-          : configIo.readBestEffortConfig({
-              ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-              ...(skipBestEffortConfigObservation ? { observe: false } : {}),
-              skipPluginValidation: true,
-            }),
-      );
+      bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
+        if (useSourceOnlyBestEffortConfig) {
+          return configIo.readSourceConfigBestEffort();
+        }
+        const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
+          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
+          bestEffortConfigStartupPolicy.validateConfigOnly
+            ? { observe: false }
+            : {}),
+          ...(bestEffortConfigStartupPolicy.validateConfigOnly
+            ? { pluginValidation: "core-only" }
+            : { skipPluginValidation: true }),
+        };
+        if (!resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+          return configIo.readBestEffortConfig(readOptions);
+        }
+        const session = await getPluginCliSession();
+        return (await session.readConfig(() => configIo.readBestEffortConfigSnapshot(readOptions)))
+          .config;
+      });
     }
     return await bestEffortConfigPromise;
   };
-  const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-    (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
-  );
-  if (
-    !isDatabaseInvocation &&
-    (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
-      Boolean,
-    )
-  ) {
-    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-    await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
-  }
-  if (
-    !isHelpOrVersionInvocation &&
-    !bareSessionInvocation &&
-    normalizedInvocation.primary &&
-    !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
-  ) {
-    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-    if (
-      await withConsoleLogsRoutedToStderr(() =>
-        resolvePluginMachineOutput({ argv: normalizedArgv, config }),
-      )
-    ) {
-      const { routeLogsToStderr } = await loadLoggingModule();
-      routeLogsToStderr();
-    }
-  }
   const uninstallProxySignalHandlers = () => {
     if (onSigterm) {
       process.off("SIGTERM", onSigterm);
@@ -1306,27 +1345,64 @@ async function runCliWithPreparedOutputMode(
     proxyHandle = await startProxy(config);
     installProxySignalHandlers();
   };
-  if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
-    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-    if (!bareSessionInvocation) {
-      const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
-      if (unownedPrimary) {
-        throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
-      }
-    }
-    await replaceStartedProxy(config?.proxy ?? undefined);
-  }
-
   let uninstallGatewayRunRuntimeHooks: (() => void) | null = null;
-  if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
-    const { installGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
-    uninstallGatewayRunRuntimeHooks = installGatewayRunRuntimeHooks({
-      releaseManagedProxy: stopStartedProxy,
-      refreshManagedProxy: replaceStartedProxy,
-    });
-  }
 
   try {
+    const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
+      (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
+    );
+    if (
+      !isDatabaseInvocation &&
+      (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+        Boolean,
+      )
+    ) {
+      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+      await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+    }
+    if (
+      !isHelpOrVersionInvocation &&
+      !bareSessionInvocation &&
+      normalizedInvocation.primary &&
+      !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
+    ) {
+      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+      if (
+        await withConsoleLogsRoutedToStderr(() =>
+          resolvePluginMachineOutput({ argv: normalizedArgv, config, session: pluginCliSession }),
+        )
+      ) {
+        const { routeLogsToStderr } = await loadLoggingModule();
+        routeLogsToStderr();
+      }
+    }
+    if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
+      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+      if (!bareSessionInvocation) {
+        const unownedPrimary = await resolveUnownedCliPrimary({
+          argv: normalizedArgv,
+          config,
+          session: pluginCliSession,
+        });
+        if (unownedPrimary) {
+          throw await resolveUnownedCliPrimaryError({
+            argv: normalizedArgv,
+            primary: unownedPrimary,
+            config,
+          });
+        }
+      }
+      await replaceStartedProxy(config?.proxy ?? undefined);
+    }
+
+    if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+      const { installGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
+      uninstallGatewayRunRuntimeHooks = installGatewayRunRuntimeHooks({
+        releaseManagedProxy: stopStartedProxy,
+        refreshManagedProxy: replaceStartedProxy,
+      });
+    }
+
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
         await loadRootHelpLiveConfigModule();
@@ -1382,11 +1458,17 @@ async function runCliWithPreparedOutputMode(
       const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
       if (unownedPrimaryCandidate) {
         const config = await readBestEffortCliConfig();
-        const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+        const unownedPrimary = await resolveUnownedCliPrimary({
+          argv: normalizedArgv,
+          config,
+          session: pluginCliSession,
+        });
         if (unownedPrimary) {
-          throw new Error(
-            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
-          );
+          throw await resolveUnownedCliPrimaryError({
+            argv: normalizedArgv,
+            primary: unownedPrimary,
+            config,
+          });
         }
       }
     }
@@ -1485,21 +1567,23 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure(
-      "route",
-      () =>
-        options.builtInMachineOutput
-          ? tryRouteCli(normalizedArgv, { machineOutput: true })
-          : tryRouteCli(normalizedArgv),
-      { timeline: false },
-    );
-    if (routed) {
-      return;
+    if (!isHelpOrVersionInvocation) {
+      const route = await startupTrace.measure("route-import", () => import("./route.js"));
+      const routed = await startupTrace.measure(
+        "route",
+        () =>
+          options.builtInMachineOutput
+            ? route.tryRouteCli(normalizedArgv, { machineOutput: true })
+            : route.tryRouteCli(normalizedArgv),
+        { timeline: false },
+      );
+      if (routed) {
+        return;
+      }
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
+    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
@@ -1520,14 +1604,14 @@ async function runCliWithPreparedOutputMode(
       const [
         { buildProgram },
         { formatUncaughtError },
-        { formatCliFailureLines },
+        { formatCliFailureLines, formatCliJsonFailure },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreRuntimeTerminalState },
+        { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1554,6 +1638,9 @@ async function runCliWithPreparedOutputMode(
             formatUncaughtError(error),
           );
           return;
+        }
+        if (isJsonOutputModeActive(normalizedArgv)) {
+          defaultRuntime.writeJson(formatCliJsonFailure(error));
         }
         for (const line of formatCliFailureLines({
           title: "OpenClaw hit an unexpected runtime error.",
@@ -1598,9 +1685,9 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
-            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
-          const startupPolicy = resolveCliStartupPolicy({
+          const { registerPluginCliCommandsFromValidatedConfig } =
+            await import("../plugins/cli.js");
+          const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
             jsonOutputMode: suppressStartupProgress,
@@ -1609,6 +1696,7 @@ async function runCliWithPreparedOutputMode(
             mode: "lazy",
             primary,
             skipPluginValidation: startupPolicy.skipConfigGuard,
+            session: await getPluginCliSession(),
           });
         });
         if (config) {
@@ -1634,7 +1722,7 @@ async function runCliWithPreparedOutputMode(
               },
             );
             if (missingPluginCommandMessage) {
-              throw new Error(missingPluginCommandMessage);
+              throw await createExpectedPluginPolicyError(missingPluginCommandMessage);
             }
           }
         }
@@ -1648,12 +1736,17 @@ async function runCliWithPreparedOutputMode(
 
       let completedHelpOrVersion = false;
       try {
+        pluginCliSession?.close();
+        // The invocation's cache scope survives closed preparation through action completion.
         await startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
           timeline: false,
         });
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
+          throw error;
+        }
+        if (isJsonOutputModeActive(parseArgv) && error.exitCode !== 0) {
           throw error;
         }
         process.exitCode = error.exitCode;
@@ -1669,6 +1762,7 @@ async function runCliWithPreparedOutputMode(
       stopStartupProgress();
     }
   } finally {
+    pluginCliSession?.close();
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
     await closeCliResources();

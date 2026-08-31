@@ -77,6 +77,7 @@ import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
+import { qualifySlackRoutePeerId } from "../workspace-routing.js";
 import {
   discardSlackPreflightMedia,
   findCaptionlessSlackAudioFile,
@@ -1494,6 +1495,10 @@ export async function prepareSlackMessage(params: {
       })
     : undefined;
   const senderName = await resolveSenderName();
+  const conversationAvatar =
+    isDirectMessage && message.user
+      ? ctx.resolveUserAvatar(message.user, opts.eventScope)
+      : undefined;
   const preview = truncateUtf16Safe(bodyForAgent.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -1687,10 +1692,19 @@ export async function prepareSlackMessage(params: {
     conversation: {
       kind: chatType,
       id: message.channel,
+      routePeer: {
+        kind: chatType,
+        id: qualifySlackRoutePeerId({
+          id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
+          kind: isDirectMessage ? "user" : "channel",
+          eventScope: opts.eventScope,
+        }),
+      },
       label: envelopeFrom,
       spaceId: opts.eventScope?.teamId || ctx.teamId || undefined,
       threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
+      avatar: conversationAvatar,
     },
     route: {
       agentId: route.agentId,

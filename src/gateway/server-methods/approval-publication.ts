@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 // Best-effort legacy approval resolution events after durable CAS wins.
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
@@ -30,7 +31,7 @@ export type PluginApprovalIosPushDelivery = {
 async function runSideEffect(params: {
   context: GatewayRequestContext;
   approvalKind: "exec" | "plugin" | "system-agent";
-  effect: "broadcast" | "forwarder" | "ios-push";
+  effect: "broadcast" | "forwarder" | "ios-push" | "web-push";
   run: () => void | Promise<void>;
 }): Promise<void> {
   try {
@@ -44,7 +45,7 @@ async function runSideEffect(params: {
 
 function runSynchronousSideEffect(params: {
   context: GatewayRequestContext;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   run: () => void;
 }): void {
   try {
@@ -95,6 +96,18 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: nativeApprovalKind,
       run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
     });
+    const webPushDelivery = params.context.approvalWebPushDelivery;
+    if (webPushDelivery) {
+      await runSideEffect({
+        context: params.context,
+        approvalKind: nativeApprovalKind,
+        effect: "web-push",
+        run: () =>
+          params.record.status === "expired"
+            ? webPushDelivery.handleExpired(params.liveRecord)
+            : webPushDelivery.handleResolved(event),
+      });
+    }
   }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({

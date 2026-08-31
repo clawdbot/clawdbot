@@ -1,26 +1,55 @@
 // Shared fixtures for agent runner tests and temporary session files.
+import path from "node:path";
+import { onTestFinished } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FollowupRun } from "./queue.js";
+import type { TemplateContext } from "../templating.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+
+type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueuedAt"> &
+  Partial<Omit<FollowupRun, "prompt" | "summaryLine" | "enqueuedAt" | "run">> & {
+    run: Partial<Omit<FollowupRun["run"], "skillsSnapshot">> & {
+      skillsSnapshot?: Partial<FollowupRun["run"]["skillsSnapshot"]>;
+    };
+  };
+
+export function createTestTemplateContext(
+  overrides: Partial<TemplateContext> = {},
+): TemplateContext {
+  return { ...overrides };
+}
+
+export function createTestQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
+  return { mode: "interrupt", ...overrides };
+}
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-followup-run-");
   return {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        {
+          provider: overrides.provider ?? "anthropic",
+          id: overrides.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",
@@ -31,6 +60,10 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       ...overrides,
     },
   } satisfies FollowupRun;
+}
+
+export function createTestQueuedFollowupRun(fixture: FollowupRunFixture): FollowupRun {
+  return fixture as FollowupRun;
 }
 
 export function withTestModelContextTokens(params: {

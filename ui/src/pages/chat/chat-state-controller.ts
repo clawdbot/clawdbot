@@ -17,7 +17,6 @@ import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = {
-  connectionEpoch: number;
   cancellations: Set<() => void>;
 };
 
@@ -28,16 +27,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
   private previousChatToolMessages: Record<string, unknown>[] = [];
+  private previousGuardianNotices: ChatPageHost["guardianNotices"] = [];
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
   private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
-  private chatThreadResizeObserver: ResizeObserver | null = null;
-  private chatThreadResizeTarget: Element | null = null;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
-  private renderLifecycleConnectionEpoch = 0;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -55,7 +52,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   createRenderLifecycle(): RenderLifecycle {
     this.cancelRenderLifecycleScope();
     const scope: ChatRenderLifecycleScope = {
-      connectionEpoch: this.renderLifecycleConnectionEpoch,
       cancellations: new Set(),
     };
     this.renderLifecycleScope = scope;
@@ -81,17 +77,18 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(subscribeChatOutboxProjection(state));
     const sendChat = state.handleSendChat;
-    state.handleSendChat = async (messageOverride, options) => {
-      const pending = sendChat(messageOverride, options);
+    state.handleSendChat = async (messageOverride, options, submissionAction) => {
+      const pending = sendChat(messageOverride, options, submissionAction);
       renderLifecycle.invalidate();
       try {
-        await pending;
+        return await pending;
       } finally {
         renderLifecycle.invalidate();
       }
@@ -119,11 +116,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
-    return (
-      this.renderLifecycleConnected &&
-      this.renderLifecycleScope === scope &&
-      scope.connectionEpoch === this.renderLifecycleConnectionEpoch
-    );
+    return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
   private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
@@ -225,6 +218,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const messagesChanged =
       this.previousChatMessages !== state.chatMessages ||
       this.previousChatToolMessages !== state.chatToolMessages ||
+      this.previousGuardianNotices !== state.guardianNotices ||
       this.previousRealtimeConversation !== state.realtimeTalkConversation;
     const streamChanged = this.previousChatStream !== state.chatStream;
     const loadingChanged = this.previousChatLoading !== state.chatLoading;
@@ -233,6 +227,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
@@ -243,37 +238,13 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
-  private syncChatThreadResizeObserver(state: TState) {
-    if (typeof ResizeObserver !== "function") {
-      return;
+  handleTranscriptResize(): void {
+    if (this.stateValue && this.renderLifecycleConnected) {
+      scheduleCommittedChatScroll(this.stateValue, false, false, { source: "resize" });
     }
-    const thread = state.querySelector(".chat-thread");
-    if (thread && this.chatThreadResizeTarget === thread) {
-      return;
-    }
-
-    this.chatThreadResizeObserver?.disconnect();
-    this.chatThreadResizeObserver = null;
-    this.chatThreadResizeTarget = null;
-    if (!thread) {
-      return;
-    }
-
-    // The transcript virtualizer owns row measurement and content-height
-    // correction. This observer only follows viewport-size changes.
-    this.chatThreadResizeObserver = new ResizeObserver(() => {
-      const currentState = this.stateValue;
-      if (!currentState) {
-        return;
-      }
-      scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
-    });
-    this.chatThreadResizeObserver.observe(thread);
-    this.chatThreadResizeTarget = thread;
   }
 
   hostConnected() {
-    this.renderLifecycleConnectionEpoch += 1;
     this.renderLifecycleConnected = true;
     // A lifecycle created while detached must never become active on reconnect.
     this.cancelRenderLifecycleScope();
@@ -281,9 +252,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   hostUpdated() {
     const state = this.stateValue;
-    if (state) {
-      this.syncChatThreadResizeObserver(state);
-    }
     if (!this.scrollAfterUpdate) {
       return;
     }
@@ -315,9 +283,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private stopChatEffects() {
-    this.chatThreadResizeObserver?.disconnect();
-    this.chatThreadResizeObserver = null;
-    this.chatThreadResizeTarget = null;
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }

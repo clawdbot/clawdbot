@@ -1,4 +1,7 @@
-import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveMemoryIndexIdentityReason,
+  type MemoryEmbeddingProbeResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -62,12 +65,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
-  const reason =
-    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
-    typeof indexIdentity.reason === "string"
-      ? indexIdentity.reason
-      : undefined;
+  const reason = resolveMemoryIndexIdentityReason(status);
   if (!reason) {
     return null;
   }
@@ -165,6 +163,7 @@ export async function runMemoryStatus(
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: opts.index ? "cli" : "status",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       const deep = Boolean(opts.deep || opts.index);
@@ -231,7 +230,7 @@ export async function runMemoryStatus(
         }
       }
       const status = manager.status();
-      const scan = await scanMemoryManagerSources(status, agentId);
+      const scan = await scanMemoryManagerSources(status);
       const workspaceDir = status.workspaceDir;
       let audit: ShortTermAuditSummary | undefined;
       let repair: RepairShortTermPromotionArtifactsResult | undefined;

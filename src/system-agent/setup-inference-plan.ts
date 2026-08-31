@@ -1,4 +1,4 @@
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -13,15 +13,20 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
-import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import {
+  resolveManifestProviderAuthChoice,
+  type ProviderAuthChoiceMetadata,
+} from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
@@ -47,6 +52,47 @@ import {
 } from "./setup-inference-plan-helpers.js";
 import { runProviderManualSecretMethod } from "./setup-inference-plan-provider-auth.js";
 
+async function prepareSetupProviderAuthChoice(
+  params: Parameters<typeof buildTestPlan>[0],
+  choice: ProviderAuthChoiceMetadata,
+) {
+  // Carry callable auth methods past the lease, never an unbound enabled config.
+  return await withPluginLifecycleLease({}, async () => {
+    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
+    const enableResult = await enablePluginWithCapabilityConsent(params.cfg, choice.pluginId, {
+      workspaceDir: params.pluginWorkspaceDir,
+      onCapabilityConsent: params.prompter
+        ? createPluginCapabilityConsentPrompter(params.prompter, () =>
+            throwIfSetupInferenceCancelled(params),
+          )
+        : undefined,
+    });
+    if (!enableResult.enabled) {
+      return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
+    }
+    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
+    if (!sourceEnableResult.enabled) {
+      return {
+        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
+      };
+    }
+    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+      config: enableResult.config,
+      workspaceDir: params.pluginWorkspaceDir,
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
+      onlyPluginIds: [choice.pluginId],
+    });
+    const provider = providers.find(
+      (candidate) =>
+        candidate.pluginId === choice.pluginId &&
+        normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
+    );
+    const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+    return { enableResult, sourceEnableResult, provider, method };
+  });
+}
+
 export async function buildTestPlan(params: {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
   modelRef?: string;
@@ -67,7 +113,7 @@ export async function buildTestPlan(params: {
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
-  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.routeAgentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.routeAgentId);
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
     const selected = parseRef(modelRef);
@@ -97,30 +143,11 @@ export async function buildTestPlan(params: {
     ) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
-    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
-    const enableResult = enablePlugin(cfg, choice.pluginId);
-    if (!enableResult.enabled) {
-      return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
+    const providerChoice = await prepareSetupProviderAuthChoice(params, choice);
+    if (providerChoice.error !== undefined) {
+      return { error: providerChoice.error };
     }
-    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
-    if (!sourceEnableResult.enabled) {
-      return {
-        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
-      };
-    }
-    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: enableResult.config,
-      workspaceDir: params.pluginWorkspaceDir,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [choice.pluginId],
-    });
-    const provider = providers.find(
-      (candidate) =>
-        candidate.pluginId === choice.pluginId &&
-        normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-    );
-    const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+    const { enableResult, sourceEnableResult, provider, method } = providerChoice;
     if (!provider || !method?.appGuidedSetup) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
@@ -407,32 +434,11 @@ export async function buildTestPlan(params: {
             : "That key-based provider is not available on this Gateway.",
         };
       }
-      const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
-      const enableResult = enablePlugin(cfg, choice.pluginId);
-      if (!enableResult.enabled) {
-        return {
-          error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).`,
-        };
+      const providerChoice = await prepareSetupProviderAuthChoice(params, choice);
+      if (providerChoice.error !== undefined) {
+        return { error: providerChoice.error };
       }
-      const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
-      if (!sourceEnableResult.enabled) {
-        return {
-          error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
-        };
-      }
-      const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-        config: enableResult.config,
-        workspaceDir: params.pluginWorkspaceDir,
-        mode: "setup",
-        includeUntrustedWorkspacePlugins: false,
-        onlyPluginIds: [choice.pluginId],
-      });
-      const provider = providers.find(
-        (candidate) =>
-          candidate.pluginId === choice.pluginId &&
-          normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-      );
-      const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+      const { enableResult, sourceEnableResult, provider, method } = providerChoice;
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||

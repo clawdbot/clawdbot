@@ -127,7 +127,7 @@ describe("Talk relay audio base64", () => {
     realtime.set(session.relaySessionId, "conn");
     await Promise.resolve();
     events.length = 0;
-    sendTalkRealtimeRelayAudio({
+    await sendTalkRealtimeRelayAudio({
       relaySessionId: session.relaySessionId,
       connId: "conn",
       audioBase64: "YXVkaW8taW4=",

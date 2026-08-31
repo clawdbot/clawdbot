@@ -1,7 +1,9 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
@@ -14,13 +16,9 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
-import {
-  chunkTextForOutbound,
-  resolveOutboundSendDep,
-  type ChannelOutboundAdapter,
-} from "./runtime-api.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
@@ -29,6 +27,11 @@ const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
 };
+
+function toMatrixOutboundResult<T extends { roomId: string }>(result: T) {
+  const { roomId, ...delivery } = result;
+  return { ...delivery, target: { kind: "room" as const, id: roomId } };
+}
 
 function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
   const raw = asOptionalRecord(payload.channelData)?.matrix;
@@ -103,7 +106,7 @@ function resolveMatrixDeliveryProgress(
 ) {
   return onDeliveryResult
     ? async (result: Awaited<ReturnType<typeof sendMessageMatrix>>) => {
-        await onDeliveryResult(attachChannelToResult("matrix", result));
+        await onDeliveryResult(attachChannelToResult("matrix", toMatrixOutboundResult(result)));
       }
     : undefined;
 }
@@ -188,12 +191,15 @@ export const matrixOutbound: ChannelOutboundAdapter = {
         // One payload owns one receipt; keep every attachment and its original reply metadata.
         const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
         receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return attachChannelToResult("matrix", {
-          ...lastResult,
-          primaryMessageId: receipt.primaryPlatformMessageId,
-          receipt,
-          content: sentResults.map((result) => result.content).join("\n"),
-        });
+        return attachChannelToResult(
+          "matrix",
+          toMatrixOutboundResult({
+            ...lastResult,
+            primaryMessageId: receipt.primaryPlatformMessageId,
+            receipt,
+            content: sentResults.map((result) => result.content).join("\n"),
+          }),
+        );
       }
     }
     const result = await send(to, payloadText, {
@@ -212,7 +218,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendText: async ({
     cfg,
@@ -245,7 +251,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendMedia: async ({
     cfg,
@@ -286,7 +292,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
     const resolvedThreadId = threadId !== undefined && threadId !== null ? threadId : undefined;

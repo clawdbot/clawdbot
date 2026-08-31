@@ -3,7 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 type PreparedModelRuntimePublicationEvent =
-  | { phase: "invalidated" | "published" }
+  | { phase: "catalog-published" | "invalidated" | "published" }
   | { phase: "failed"; error: Error };
 
 const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();

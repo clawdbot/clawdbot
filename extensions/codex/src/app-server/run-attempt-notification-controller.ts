@@ -14,10 +14,7 @@ import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import {
-  readCodexFinalizationHookNotification,
-  waitForCodexNotificationDispatchTurn,
-} from "./run-attempt-state.js";
+import { readCodexFinalizationHookNotification } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
@@ -101,7 +98,7 @@ export function createCodexAttemptNotificationController(
     if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
       const item = readCodexNotificationItem(notification.params);
       if (item?.type === "userMessage" && typeof item.clientId === "string") {
-        steeringQueue?.confirmConsumed(item.clientId);
+        await steeringQueue?.confirmConsumed(item.clientId);
       }
     }
     if (notificationState.isTurnAbortMarker) {
@@ -123,7 +120,6 @@ export function createCodexAttemptNotificationController(
       state.terminalTurnNotificationQueued = true;
     }
     try {
-      await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
       const canRelease =
         isAssistantCompletionReleaseNotification(notification, state.turnCrossedToolHandoff) ||

@@ -11,6 +11,7 @@ export type SkillInstallSpec = {
   package?: string;
   module?: string;
   url?: string;
+  sha256?: string;
   archive?: string;
   extract?: boolean;
   stripComponents?: number;
@@ -124,7 +125,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 4;
 
 export type SkillSnapshot = {
   prompt: string;
@@ -143,6 +144,11 @@ export type SkillSnapshot = {
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
+  /** Present only when a session merges skills from distinct agent and execution roots. */
+  skillRoots?: {
+    agentWorkspaceDir: string;
+    executionSkillsDir: string;
+  };
   version?: number;
   promptFormatVersion?: number;
 };

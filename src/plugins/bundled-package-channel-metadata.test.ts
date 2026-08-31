@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 vi.mock("./bundled-dir.js", () => ({
   resolveBundledPluginsDir: vi.fn(),
@@ -125,5 +126,56 @@ describe("bundled package channel metadata", () => {
     expect(
       listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix")?.label,
     ).toBe("After");
+  });
+});
+
+describe("bundled channel schema source", () => {
+  it("keeps bundled channel schemas single-sourced from the generated metadata", async () => {
+    const { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } =
+      await import("../config/bundled-channel-config-metadata.generated.js");
+    const { listGitTrackedFiles } = await import("../test-utils/repo-files.js");
+    const { pluginTestRepoRoot } = await import("./generated-plugin-test-helpers.js");
+    type BundledManifest = {
+      id?: string;
+      channels?: string[];
+      configSchema?: unknown;
+      channelConfigs?: Record<string, { schema?: unknown }>;
+    };
+    const tracked =
+      listGitTrackedFiles({
+        repoRoot: pluginTestRepoRoot,
+        pathspecs: "extensions/*/openclaw.plugin.json",
+      }) ?? [];
+    expect(tracked.length).toBeGreaterThan(0);
+    const generatedChannelIds = new Set(
+      GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => entry.channelId),
+    );
+    // Channel plugins whose plugin-entry config is a real, distinct surface.
+    const pluginEntryConfigExceptions = new Set(["whatsapp"]);
+    const emptyStub = { type: "object", additionalProperties: false, properties: {} };
+    for (const file of tracked) {
+      const dirName = file.split("/")[1] ?? file;
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginTestRepoRoot, file), "utf8"),
+      ) as BundledManifest;
+      const channelIds = (manifest.channels ?? []).filter((id) => generatedChannelIds.has(id));
+      if (channelIds.length === 0) {
+        continue;
+      }
+      for (const channelId of channelIds) {
+        // A manifest copy silently overrides the zod-derived generated schema in
+        // config validation and rots (stale copies rejected valid keys; see #131292).
+        expect(
+          manifest.channelConfigs?.[channelId]?.schema,
+          `extensions/${dirName}: delete channelConfigs.${channelId}.schema — the zod-derived generated bundled channel metadata is the single schema source`,
+        ).toBeUndefined();
+      }
+      if (!pluginEntryConfigExceptions.has(manifest.id ?? dirName)) {
+        expect(
+          manifest.configSchema,
+          `extensions/${dirName}: channel plugins carry no plugin-entry config; keep configSchema as the empty stub or add a named exception here with its reason`,
+        ).toEqual(emptyStub);
+      }
+    }
   });
 });

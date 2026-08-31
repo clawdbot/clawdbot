@@ -197,7 +197,7 @@ describe("tasks commands", () => {
         };
       };
 
-      expect(payload.summary.byCode.lost).toBe(1);
+      expect(payload.summary.byCode.stale_running).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
       expect(payload.summary.combined.total).toBe(3);
@@ -801,6 +801,17 @@ describe("tasks commands", () => {
       const lookupRuntime = createRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
       expectSafeTaskOutput(lookupRuntime, "error");
+
+      const jsonLookupRuntime = createRuntime();
+      await tasksShowCommand({ lookup: `missing${unsafe}`, json: true }, jsonLookupRuntime);
+      expect(readFirstJsonLog(jsonLookupRuntime)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("Task not found: missing"),
+        },
+      });
+      expect(jsonLookupRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
     });
   });
 

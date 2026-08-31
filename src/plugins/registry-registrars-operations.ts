@@ -19,6 +19,7 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
@@ -57,7 +58,55 @@ export function canClaimReservedCommandOwnership(
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, pushDiagnostic } = state;
+  const { registry, reportRegistrationError, reportRegistrationWarning } = state;
+
+  const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
+    const description = normalizeOptionalString(presenter.description);
+    const currentCapabilities =
+      presenter.target === "current_channel" ? presenter.capabilities : undefined;
+    const currentChannelValid =
+      presenter.target === "current_channel" &&
+      typeof presenter.match === "function" &&
+      currentCapabilities !== undefined &&
+      Array.isArray(currentCapabilities.sourceKinds) &&
+      currentCapabilities.sourceKinds.length > 0 &&
+      currentCapabilities.sourceKinds.every(
+        (kind) => typeof kind === "string" && kind.trim().length > 0,
+      ) &&
+      (currentCapabilities.maxSourceBytes === undefined ||
+        (Number.isInteger(currentCapabilities.maxSourceBytes) &&
+          currentCapabilities.maxSourceBytes > 0));
+    if (
+      (presenter.target !== "node_panel" && !currentChannelValid) ||
+      !description ||
+      description.length > 160 ||
+      typeof presenter.availability !== "function" ||
+      typeof presenter.present !== "function"
+    ) {
+      reportRegistrationError(record, "invalid widget presenter registration");
+      return;
+    }
+    const existing =
+      presenter.target === "current_channel"
+        ? undefined
+        : registry.widgetPresenters.find(
+            (registration) => registration.presenter.target === presenter.target,
+          );
+    if (existing) {
+      reportRegistrationError(
+        record,
+        `widget presenter already registered for ${presenter.target} (${existing.pluginId})`,
+      );
+      return;
+    }
+    registry.widgetPresenters.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      presenter: { ...presenter, description },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
 
   const registerCli = (
     record: PluginRecord,
@@ -67,12 +116,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
       if (!normalized) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
-        });
+        reportRegistrationError(
+          record,
+          `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
+        );
       }
       return normalized;
     };
@@ -107,19 +154,13 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .filter(
         (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
-    const commands = [
-      ...(opts?.commands ?? []),
-      ...descriptors.map((descriptor) => descriptor.name),
-    ]
-      .map((command) => normalizeCommandRoot(command, "command"))
-      .filter((command): command is string => command !== null);
+    const commands = normalizeUniqueStringEntries(
+      [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
+        .map((command) => normalizeCommandRoot(command, "command"))
+        .filter((command): command is string => command !== null),
+    );
     if (commands.length === 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "cli registration missing explicit commands metadata",
-      });
+      reportRegistrationError(record, "cli registration missing explicit commands metadata");
       return;
     }
     const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
@@ -135,12 +176,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
       );
       const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `cli command already registered: ${overlap ?? commands[0]} (${existing.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `cli command already registered: ${overlap ?? commands[0]} (${existing.pluginId})`,
+      );
       return;
     }
     record.cliCommands.push(...commandPaths);
@@ -167,12 +206,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       (normalized.hotPrefixes?.length ?? 0) === 0 &&
       (normalized.noopPrefixes?.length ?? 0) === 0
     ) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: "reload registration missing prefixes",
-      });
+      reportRegistrationWarning(record, "reload registration missing prefixes");
       return;
     }
     registry.reloads.push({
@@ -197,12 +231,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   ) => {
     const command = nodeCommand.command.trim();
     if (!command) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "node host command registration missing command",
-      });
+      reportRegistrationError(record, "node host command registration missing command");
       return;
     }
     // Native nodes already own system.notify. A bundled node-host plugin may
@@ -210,22 +239,15 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const bundledSystemNotify =
       record.origin === "bundled" && command === NODE_SYSTEM_NOTIFY_COMMAND;
     if (reservedNodeHostCommands.has(command) && !bundledSystemNotify) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `node host command reserved by core: ${command}`,
-      });
+      reportRegistrationError(record, `node host command reserved by core: ${command}`);
       return;
     }
     const existing = registry.nodeHostCommands.find((entry) => entry.command.command === command);
     if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `node host command already registered: ${command} (${existing.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `node host command already registered: ${command} (${existing.pluginId})`,
+      );
       return;
     }
     registry.nodeHostCommands.push({
@@ -246,31 +268,22 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       Array.isArray(policy.commands) ? policy.commands : [],
     );
     if (commands.length === 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "node invoke policy registration missing commands",
-      });
+      reportRegistrationError(record, "node invoke policy registration missing commands");
       return;
     }
     const reservedCommand = commands.find(isPrivateNodeInvokeCommand);
     if (reservedCommand) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `node invoke policy command reserved by core: ${reservedCommand}`,
-      });
+      reportRegistrationError(
+        record,
+        `node invoke policy command reserved by core: ${reservedCommand}`,
+      );
       return;
     }
     if (typeof policy.handle !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `node invoke policy registration missing handler: ${commands.join(", ")}`,
-      });
+      reportRegistrationError(
+        record,
+        `node invoke policy registration missing handler: ${commands.join(", ")}`,
+      );
       return;
     }
     for (const command of commands) {
@@ -278,12 +291,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         entry.policy.commands.includes(command),
       );
       if (existing) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `node invoke policy already registered for ${command} (${existing.pluginId})`,
-        });
+        reportRegistrationError(
+          record,
+          `node invoke policy already registered for ${command} (${existing.pluginId})`,
+        );
         return;
       }
     }
@@ -310,23 +321,33 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const resolveServiceRegistrationId = (
+    record: PluginRecord,
+    service: { id: string },
+    kind: "service" | "gateway discovery service",
+  ) => {
     const id = service.id.trim();
-    if (!id) {
-      return;
+    const registrations =
+      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
+    if (id && !existing) {
+      return id;
     }
-    const existing = registry.services.find((entry) => entry.service.id === id);
-    if (existing) {
-      // Snapshot and activating loads can both register the same owner; keep the first.
-      if (existing.pluginId === record.id) {
-        return;
-      }
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `service already registered: ${id} (${existing.pluginId})`,
-      });
+    // Snapshot and activating loads can both register the same owner; keep the first.
+    if (existing?.pluginId !== record.id) {
+      reportRegistrationError(
+        record,
+        existing
+          ? `${kind} already registered: ${id} (${existing.pluginId})`
+          : `${kind} registration missing id`,
+      );
+    }
+    return undefined;
+  };
+
+  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+    const id = resolveServiceRegistrationId(record, service, "service");
+    if (!id) {
       return;
     }
     record.services.push(id);
@@ -345,21 +366,8 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     service: OpenClawGatewayDiscoveryService,
   ) => {
-    const id = service.id.trim();
+    const id = resolveServiceRegistrationId(record, service, "gateway discovery service");
     if (!id) {
-      return;
-    }
-    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
-    if (existing) {
-      if (existing.pluginId === record.id) {
-        return;
-      }
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
-      });
       return;
     }
     record.gatewayDiscoveryServiceIds.push(id);
@@ -375,40 +383,29 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "command registration missing name",
-      });
+      reportRegistrationError(record, "command registration missing name");
       return;
     }
     const allowReservedCommandNames = command.ownership === "reserved";
     if (allowReservedCommandNames && !canClaimReservedCommandOwnership(record)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `only bundled plugins can claim reserved command ownership: ${name}`,
-      });
+      reportRegistrationError(
+        record,
+        `only bundled plugins can claim reserved command ownership: ${name}`,
+      );
       return;
     }
     if (allowReservedCommandNames && !isReservedCommandName(name)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `reserved command ownership requires a reserved command name: ${name}`,
-      });
+      reportRegistrationError(
+        record,
+        `reserved command ownership requires a reserved command name: ${name}`,
+      );
       return;
     }
     if (allowReservedCommandNames && record.id !== normalizeLowercaseStringOrEmpty(name)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `command registration failed: Reserved command ownership requires plugin id "${record.id}" to match reserved command name "${normalizeLowercaseStringOrEmpty(name)}"`,
-      });
+      reportRegistrationError(
+        record,
+        `command registration failed: Reserved command ownership requires plugin id "${record.id}" to match reserved command name "${normalizeLowercaseStringOrEmpty(name)}"`,
+      );
       return;
     }
     const { ownership: _ownership, ...commandForRegistration } = command;
@@ -425,12 +422,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       },
     );
     if (!result.ok) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `command registration failed: ${result.error}`,
-      });
+      reportRegistrationError(record, `command registration failed: ${result.error}`);
       return;
     }
     const registered = registry.commands.at(-1);
@@ -444,6 +436,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   };
 
   return {
+    registerWidgetPresenter,
     registerCli,
     registerReload,
     registerNodeHostCommand,

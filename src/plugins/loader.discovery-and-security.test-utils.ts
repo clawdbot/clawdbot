@@ -209,32 +209,8 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: memoryPluginBody("memory-b"),
           });
-          fs.writeFileSync(
-            path.join(memoryADir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-a",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryBDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-b",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryADir }, { kind: "memory" });
+          updatePluginManifest({ dir: memoryBDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
@@ -408,43 +384,7 @@ describe("loadOpenClawPlugins", () => {
         label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
-          const bundledDir = makePluginLoaderTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-core"),
-          });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          const openSchema = { type: "object", additionalProperties: true };
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: openSchema },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+          setupBundledDreamingMemoryPlugins();
 
           return loadOpenClawPlugins({
             cache: false,
@@ -472,46 +412,9 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "excludes dreaming engine when dreaming is disabled and it is not the slot",
         loadRegistry: () => {
-          const bundledDir = makePluginLoaderTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: `throw new Error("memory-core should not load when dreaming is disabled");`,
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("memory-core should not load when dreaming is disabled");`,
           });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-lancedb",
-                kind: "memory",
-                configSchema: { type: "object", additionalProperties: true },
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
             cache: false,
@@ -549,15 +452,7 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: `throw new Error("memory-core should not load when memory slot is none");`,
           });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({

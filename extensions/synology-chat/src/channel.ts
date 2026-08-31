@@ -178,7 +178,7 @@ const collectSynologyChatCriticalFindings = createConditionalWarningCollector.fi
 type SynologyChatOutboundResult = {
   channel: typeof CHANNEL_ID;
   messageId: string;
-  chatId: string;
+  target: { kind: "chat"; id: string };
   receipt: MessageReceipt;
 };
 
@@ -273,7 +273,7 @@ function createSynologyChatSendResult(params: {
     // The webhook acknowledges delivery without returning a platform message id.
     // Keep the empty receipt so a chat id cannot become a fabricated message id.
     messageId: "",
-    chatId: params.chatId,
+    target: { kind: "chat", id: params.chatId },
     receipt: createMessageReceiptFromOutboundResults({
       results: [],
       threadId: params.chatId,

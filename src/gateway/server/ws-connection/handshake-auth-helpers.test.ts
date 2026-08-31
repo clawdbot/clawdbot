@@ -174,7 +174,7 @@ describe("handshake auth helpers", () => {
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { token: "shared-token" },
+      connectAuth: { token: "shared" },
       failedAuth: { ok: false, reason: "token_mismatch" },
       hasDeviceIdentity: true,
     });

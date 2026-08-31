@@ -1,4 +1,4 @@
-/** Process-local ACP runtime handle cache with idle eviction and reuse checks. */
+/** Process-local ACP runtime handle cache with lifecycle cleanup and reuse checks. */
 import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
@@ -6,32 +6,34 @@ import {
 import type {
   AcpRuntime,
   AcpRuntimeHandle,
+  AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../../globals.js";
-import type { ActiveTurnState, SessionAcpMeta } from "./manager.types.js";
-import { DEFAULT_ACP_RUNTIME_IDLE_TTL_MS, normalizeActorKey } from "./manager.utils.js";
-import { RuntimeCache, type CachedRuntimeState } from "./runtime-cache.js";
+import type { SessionAcpMeta } from "./manager.types.js";
+import { normalizeActorKey } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 
+/** Cached runtime handle plus the configuration signature that made it reusable. */
+export type CachedRuntimeState = {
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  backend: string;
+  agent: string;
+  mode: AcpRuntimeSessionMode;
+  cwd?: string;
+  configSignature: string;
+  appliedControlSignature?: string;
+};
+
 /** Process-local cache of live ACP runtime handles keyed by canonical session actor. */
 export class ManagerRuntimeHandleCache {
-  private readonly runtimeCache = new RuntimeCache();
-  private evictedRuntimeCount = 0;
-  private lastEvictedAt: number | undefined;
-
-  size(): number {
-    return this.runtimeCache.size();
-  }
-
-  has(sessionKey: string): boolean {
-    return this.runtimeCache.has(normalizeActorKey(sessionKey));
-  }
+  private readonly runtimeCache = new Map<string, CachedRuntimeState>();
 
   get(sessionKey: string): CachedRuntimeState | null {
-    return this.runtimeCache.get(normalizeActorKey(sessionKey));
+    return this.runtimeCache.get(normalizeActorKey(sessionKey)) ?? null;
   }
 
   set(sessionKey: string, state: CachedRuntimeState): void {
@@ -39,16 +41,15 @@ export class ManagerRuntimeHandleCache {
   }
 
   clear(sessionKey: string): void {
-    this.runtimeCache.clear(normalizeActorKey(sessionKey));
+    this.runtimeCache.delete(normalizeActorKey(sessionKey));
   }
 
   /** Returns cache counters used by ACP manager observability snapshots. */
   getObservabilitySnapshot() {
     return {
-      activeSessions: this.runtimeCache.size(),
-      idleTtlMs: DEFAULT_ACP_RUNTIME_IDLE_TTL_MS,
-      evictedTotal: this.evictedRuntimeCount,
-      ...(this.lastEvictedAt ? { lastEvictedAt: this.lastEvictedAt } : {}),
+      activeSessions: this.runtimeCache.size,
+      idleTtlMs: 0,
+      evictedTotal: 0,
     };
   }
 
@@ -75,7 +76,7 @@ export class ManagerRuntimeHandleCache {
   /** Drains every cached handle behind its session actor before process shutdown. */
   async closeAll(params: { actorQueue: SessionActorQueue; reason: string }): Promise<void> {
     await Promise.all(
-      this.runtimeCache.snapshot().map(({ actorKey }) =>
+      [...this.runtimeCache.keys()].map((actorKey) =>
         params.actorQueue.run(actorKey, async () => {
           await this.close({ sessionKey: actorKey, reason: params.reason });
         }),
@@ -92,55 +93,6 @@ export class ManagerRuntimeHandleCache {
     this.clear(params.sessionKey);
   }
 
-  /** Closes handles that exceeded the configured idle TTL without racing active turns. */
-  async evictIdle(params: {
-    actorQueue: SessionActorQueue;
-    activeTurnBySession: Map<string, ActiveTurnState>;
-  }): Promise<void> {
-    const idleTtlMs = DEFAULT_ACP_RUNTIME_IDLE_TTL_MS;
-    if (idleTtlMs <= 0 || this.runtimeCache.size() === 0) {
-      return;
-    }
-    const now = Date.now();
-    const candidates = this.runtimeCache.collectIdleCandidates({
-      maxIdleMs: idleTtlMs,
-      now,
-    });
-    if (candidates.length === 0) {
-      return;
-    }
-
-    for (const candidate of candidates) {
-      // Evict under the same actor queue so turns cannot race with runtime close.
-      await params.actorQueue.run(candidate.actorKey, async () => {
-        if (params.activeTurnBySession.has(candidate.actorKey)) {
-          return;
-        }
-        const lastTouchedAt = this.runtimeCache.getLastTouchedAt(candidate.actorKey);
-        if (lastTouchedAt == null || now - lastTouchedAt < idleTtlMs) {
-          return;
-        }
-        const cached = this.runtimeCache.peek(candidate.actorKey);
-        if (!cached) {
-          return;
-        }
-        this.runtimeCache.clear(candidate.actorKey);
-        this.evictedRuntimeCount += 1;
-        this.lastEvictedAt = Date.now();
-        try {
-          await cached.runtime.close({
-            handle: cached.handle,
-            reason: "idle-evicted",
-          });
-        } catch (error) {
-          logVerbose(
-            `acp-manager: idle eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
-          );
-        }
-      });
-    }
-  }
-
   /** Checks whether a cached runtime handle is still healthy enough to reuse. */
   async isReusable(params: {
     sessionKey: string;
@@ -155,7 +107,6 @@ export class ManagerRuntimeHandleCache {
         handle: params.handle,
       });
       if (isRuntimeStatusUnavailable(status)) {
-        this.clear(params.sessionKey);
         logVerbose(
           `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status probe: ${status.summary ?? "status unavailable"}`,
         );
@@ -163,7 +114,6 @@ export class ManagerRuntimeHandleCache {
       }
       return true;
     } catch (error) {
-      this.clear(params.sessionKey);
       logVerbose(
         `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
       );

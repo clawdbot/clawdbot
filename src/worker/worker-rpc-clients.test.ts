@@ -11,12 +11,9 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
-import {
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection.js";
+import { WorkerConnectionInterruptedError } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
@@ -37,7 +34,7 @@ const HELLO: WorkerHelloOk = {
 function connectionHarness() {
   let state: WorkerConnectionState = { kind: "ready", hello: HELLO };
   const readyListeners = new Set<Parameters<WorkerConnection["onReady"]>[0]>();
-  const stateListeners = new Set<Parameters<WorkerConnection["onStateChange"]>[0]>();
+  const terminalErrorListeners = new Set<Parameters<WorkerConnection["onTerminalError"]>[0]>();
   const inferenceEventListeners = new Set<Parameters<WorkerConnection["onInferenceEvent"]>[0]>();
   const inferenceTerminalListeners = new Set<
     Parameters<WorkerConnection["onInferenceTerminal"]>[0]
@@ -62,10 +59,10 @@ function connectionHarness() {
         readyListeners.delete(listener);
       };
     },
-    onStateChange: (listener: Parameters<WorkerConnection["onStateChange"]>[0]) => {
-      stateListeners.add(listener);
+    onTerminalError: (listener: Parameters<WorkerConnection["onTerminalError"]>[0]) => {
+      terminalErrorListeners.add(listener);
       return () => {
-        stateListeners.delete(listener);
+        terminalErrorListeners.delete(listener);
       };
     },
     onInferenceEvent: (listener: Parameters<WorkerConnection["onInferenceEvent"]>[0]) => {
@@ -93,10 +90,10 @@ function connectionHarness() {
         listener(HELLO);
       }
     },
-    emitState: (nextState: WorkerConnectionState) => {
+    emitTerminalError: (nextState: WorkerConnectionState, error: Error) => {
       state = nextState;
-      for (const listener of stateListeners) {
-        listener(nextState);
+      for (const listener of terminalErrorListeners) {
+        listener(error);
       }
     },
     emitInferenceEvent: (frame: WorkerInferenceEventFrame) => {
@@ -731,7 +728,7 @@ describe("worker live-event client", () => {
   it("drops previews and rejects terminal delivery after stop without rescheduling", async () => {
     const harness = connectionHarness();
     harness.waitForReady.mockRejectedValue(new WorkerConnectionStoppedError());
-    harness.emitState({ kind: "stopped" });
+    harness.emitTerminalError({ kind: "stopped" }, new WorkerConnectionStoppedError());
     const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
 
     client.enqueuePreview("run-1", LIVE_EVENT);
@@ -751,7 +748,10 @@ describe("worker live-event client", () => {
     client.enqueuePreview("run-1", LIVE_EVENT);
     const terminal = client.emitTerminal("run-1", TERMINAL_EVENT);
     await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2));
-    harness.emitState({ kind: "fenced", reason: "owner-epoch-mismatch" });
+    harness.emitTerminalError(
+      { kind: "fenced", reason: "owner-epoch-mismatch" },
+      new WorkerFencedError("owner-epoch-mismatch"),
+    );
 
     await expect(terminal).rejects.toEqual(new WorkerFencedError("owner-epoch-mismatch"));
     client.dispose();

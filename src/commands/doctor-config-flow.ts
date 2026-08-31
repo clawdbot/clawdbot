@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -6,12 +7,15 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
@@ -49,10 +53,7 @@ function collectInvalidHookTransformsDirWarnings(
   const resolved = path.isAbsolute(transformsDir)
     ? path.resolve(transformsDir)
     : path.resolve(transformsRoot, transformsDir);
-  const relative = path.relative(transformsRoot, resolved);
-  const escapesRoot =
-    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-  if (!escapesRoot) {
+  if (isPathInside(transformsRoot, resolved)) {
     return [];
   }
   return [
@@ -268,8 +269,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
-    const stampsExplicitOwnership =
-      legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
+    const stampsExplicitOwnership = Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
         ...migrated,
@@ -360,6 +360,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
   changesPanelSink.emit(legacyStep.changeLines);
+
+  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+    await import("./doctor/shared/model-metadata-corruption-repair.js");
+  const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
+    repairGeneratedModelMetadataCorruption({
+      config: state.candidate,
+      authoredRoot: snapshot.parsed,
+      configPath: snapshot.path,
+      currentHash: snapshot.hash ?? null,
+      auditRecords: readRecentConfigAuditRecords({
+        env: process.env,
+        homedir,
+        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
+      }),
+    }),
+  );
+  applyConfigMutation(modelMetadataRepair, {
+    fixHint: `Run "${doctorFixCommand}" to remove audit-proven generated model metadata.`,
+    emitWarnings: true,
+  });
+
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
     state.cfg,
     snapshot.path,
@@ -387,6 +408,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     emitWarnings: true,
   });
+
+  const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
+  applyConfigMutation(
+    await prepareTailscaleConfigMigration({
+      cfg: state.candidate,
+      env: process.env,
+    }),
+    {
+      fixHint: `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
+      emitWarnings: true,
+    },
+  );
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
   const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({
@@ -492,6 +525,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
+    const prompter = params.prompter;
     const repairSequence = await runDoctorRepairSequence({
       state,
       doctorFixCommand,
@@ -499,6 +533,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       blockedCodexProviderPlan,
       pluginMetadataSnapshotState,
       runWithPluginMetadataSnapshot,
+      ...(prompter
+        ? {
+            onCapabilityConsent: createPluginCapabilityConsentPrompter({
+              note: async (message, title) => note(message, title),
+              confirm: (confirmation) =>
+                prompter.confirmRuntimeRepair({
+                  ...confirmation,
+                  requiresInteractiveConfirmation: true,
+                }),
+            }),
+          }
+        : {}),
     });
     state = repairSequence.state;
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;

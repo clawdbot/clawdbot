@@ -29,28 +29,6 @@ export const terminalPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  /* The strip and its tabs stretch to the rail height so a tab's underline lands
-     on the rail's bottom edge. Management actions keep their shared 28px size. */
-  .tp-header .tabstrip,
-  .tp-header .tabstrip::part(base),
-  .tp-header .tabstrip::part(nav),
-  .tp-header .tabstrip::part(tabs),
-  .tp-header .tabstrip-tab,
-  .tp-header .tabstrip-new {
-    height: 100%;
-    align-self: stretch;
-  }
-  .tp-header .tabstrip::part(nav),
-  .tp-header .tabstrip::part(tabs) {
-    align-items: stretch;
-  }
-  .tp-header .tabstrip-tab::part(base) {
-    box-sizing: border-box;
-    height: 100%;
-    /* Offset the underline so the label centres on the same line as the
-       management icons instead of riding 2px high. */
-    padding-top: 2px;
-  }
   .tp-header .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
   }
@@ -68,31 +46,6 @@ export const terminalPanelStyles = css`
     width: 15px;
     height: 15px;
     stroke-width: 1.6px;
-  }
-  .tp-header .tabstrip-tab[active]::part(base) {
-    border-bottom-color: var(--text, #d7dae0);
-  }
-  .tp-header .tabstrip-tab__close {
-    box-sizing: border-box;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-  }
-  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close {
-    border-bottom-color: var(--text, #d7dae0);
-  }
-  .tp-header .tabstrip-new {
-    position: relative;
-    margin-left: 6px;
-  }
-  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-new::before {
-    position: absolute;
-    top: 50%;
-    left: -4px;
-    width: 1px;
-    height: 14px;
-    background: color-mix(in srgb, var(--muted, #8a919e) 20%, transparent);
-    content: "";
-    transform: translateY(-50%);
   }
   .tp-dock-modes {
     display: flex;
@@ -116,10 +69,10 @@ export const terminalPanelStyles = css`
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--overlay-border);
     border-radius: var(--menu-radius);
     background: var(--bg-elevated);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--overlay-shadow);
   }
   .tp-session-menu__header {
     display: flex;
@@ -207,40 +160,22 @@ export const terminalPanelStyles = css`
     padding: 6px 8px;
     caret-color: transparent;
   }
-  .tp-connecting {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
+  .tp-error {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 10px;
-    color: var(--muted, #8a919e);
-    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
-    font-size: 12px;
-    pointer-events: none;
-  }
-  .tp-connecting__spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
-    border-top-color: var(--accent, #ff5c5c);
-    border-radius: 50%;
-    animation: tp-spin 0.8s linear infinite;
-  }
-  .tp-error {
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
     color: var(--danger, #ff6b6b);
   }
-  @keyframes tp-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .tp-connecting__spinner {
-      animation: none;
-    }
+  .tp-error .btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text);
+    padding: 6px 10px;
+    font: inherit;
   }
 `;

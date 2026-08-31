@@ -20,7 +20,8 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("suppresses update_plan from generic work-tool progress", () => {
+  it("suppresses status tools from generic work-tool progress", () => {
+    expect(isChannelProgressDraftWorkToolName("progress_card")).toBe(false);
     expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
   });
 

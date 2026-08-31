@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   isPluginNpmProjectDir,
   resolveDefaultPluginNpmDir,
@@ -126,11 +127,6 @@ export async function markRetainedManagedNpmInstall(params: {
   return true;
 }
 
-function isPathEqualOrInside(parentPath: string, childPath: string): boolean {
-  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
-}
-
 function listManagedNpmPackageDirs(npmRoot: string): string[] {
   const nodeModulesDir = path.join(npmRoot, "node_modules");
   let entries: fs.Dirent[];
@@ -185,7 +181,7 @@ async function cleanupRetainedLegacyNpmPackages(params: {
     if (
       !hasRetainedManagedNpmInstallMarker(packageDir) ||
       markerPreservesPackageFiles(resolveRetainedManagedNpmInstallMarkerPath(packageDir)) ||
-      params.activeInstallPaths.some((installPath) => isPathEqualOrInside(packageDir, installPath))
+      params.activeInstallPaths.some((installPath) => isPathInside(packageDir, installPath))
     ) {
       continue;
     }
@@ -243,13 +239,13 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
       markerEntries.some((entry) =>
         markerPreservesPackageFiles(path.join(markerDir, entry.name)),
       ) ||
-      !isPathEqualOrInside(projectsDir, projectRoot) ||
+      !isPathInside(projectsDir, projectRoot) ||
       !isOwnedManagedNpmProject({
         markerNames: new Set(markerEntries.map((entry) => entry.name)),
         npmDir,
         projectRoot,
       }) ||
-      activeInstallPaths.some((installPath) => isPathEqualOrInside(projectRoot, installPath))
+      activeInstallPaths.some((installPath) => isPathInside(projectRoot, installPath))
     ) {
       continue;
     }

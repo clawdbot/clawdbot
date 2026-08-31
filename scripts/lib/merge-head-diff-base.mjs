@@ -1,6 +1,7 @@
 // Resolves the diff base for merge commits when first-parent comparison is requested.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { requireOptionArgument } from "./arg-utils.runtime.mjs";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 
@@ -73,20 +74,6 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
 }
 
 /**
- * @param {readonly string[]} argv
- * @param {number} index
- * @param {string} optionName
- * @returns {string}
- */
-function readRefValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
-/**
  * @internal Directly tested script implementation detail.
  * @param {readonly string[]} argv
  * @returns {{base: string, head: string, preferFirstParent: boolean}}
@@ -100,12 +87,12 @@ export function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base") {
-      args.base = readRefValue(argv, index, "--base");
+      args.base = requireOptionArgument(argv, index, "--base");
       index += 1;
       continue;
     }
     if (arg === "--head") {
-      args.head = readRefValue(argv, index, "--head");
+      args.head = requireOptionArgument(argv, index, "--head");
       index += 1;
       continue;
     }

@@ -20,7 +20,10 @@ import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
-import { withFileMutationQueue } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
@@ -72,6 +75,8 @@ const WriteToolOutputSchema = Type.Union([
  * Override these to delegate file writing to remote systems (for example SSH).
  */
 export interface WriteOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
@@ -323,9 +328,6 @@ async function readOriginalWriteState(
   content: string,
   ops: WriteOperations,
 ): Promise<WriteToolPrecheck> {
-  if (!ops.statFile) {
-    return { state: "unknown" };
-  }
   let stat: PersistedFileStat | null;
   try {
     stat = await ops.statFile(absolutePath);
@@ -349,14 +351,16 @@ async function readOriginalWriteState(
 
   try {
     const originalContent = await ops.readFile(absolutePath);
-    const originalText = Buffer.isBuffer(originalContent)
-      ? originalContent.toString("utf8")
-      : originalContent;
+    const originalBytes = Buffer.isBuffer(originalContent)
+      ? originalContent
+      : Buffer.from(originalContent, "utf8");
+    const originalText = originalBytes.toString("utf8");
     if (Buffer.byteLength(originalText, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
       return { state: "unknown", beforeStat: stat, readAttempted: true };
     }
     return {
-      state: originalText === content ? "same" : "different",
+      // No-op receipts need the same encoded bytes as post-write verification.
+      state: originalBytes.equals(Buffer.from(content, "utf8")) ? "same" : "different",
       beforeStat: stat,
       beforeText: originalText,
       readAttempted: true,
@@ -539,7 +543,8 @@ export function createWriteToolDefinition(
       void ctx;
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
-      return withFileMutationQueue(absolutePath, async () => {
+      const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
+      return withFileMutationQueueKeyResolution(queueKey, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");

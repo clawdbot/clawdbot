@@ -13,6 +13,7 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
   expectNoMockCallWithFields,
@@ -78,7 +79,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       ).toBe(0);
 
       for (const event of [
-        { stream: "assistant", data: { phase: "commentary", text: "Working" } },
+        {
+          stream: "item",
+          data: { kind: "preamble", phase: "update", progressText: "Working" },
+        },
         { stream: "tool", data: { phase: "start", name: "read", toolCallId: "call-1" } },
         {
           stream: "tool",
@@ -773,7 +777,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("preserves GPT ack-turn final prose without reply-side truncation", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],
@@ -814,7 +818,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("does not trim GPT replies when the user asked for depth", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],

@@ -1,6 +1,11 @@
 // Shared mobile pairing setup state for app-level entry points.
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  type GatewayProtocolRequestOptions,
+} from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
+  DevicePairSetupCodeParams,
   DevicePairSetupCodeResult,
   DevicePairSetupCompletedEvent,
   DevicePairSetupDeliveryUncertainEvent,
@@ -9,7 +14,11 @@ import type {
 import { formatUiError } from "./format-error.ts";
 
 type GatewayRequestClient = {
-  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: GatewayProtocolRequestOptions,
+  ): Promise<T>;
 };
 
 export type DevicePairSetup = DevicePairSetupCodeResult & {
@@ -54,11 +63,15 @@ export type DevicePairSetupLifecycle =
       access: DevicePairSetupDeliveryUncertain["access"];
     }
   | { phase: "expired"; access: DevicePairSetupAccess };
-export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
-  return client.request<DevicePairSetup>("device.pair.setupCode", {
-    includeQr: false,
-    joinUrl: true,
+
+function requestDevicePairSetup(client: GatewayRequestClient, params: DevicePairSetupCodeParams) {
+  return client.request<DevicePairSetup>("device.pair.setupCode", params, {
+    timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   });
+}
+
+export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
+  return requestDevicePairSetup(client, { includeQr: false, joinUrl: true });
 }
 
 type DevicePairSetupState = {
@@ -345,8 +358,8 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupLifecycle = { phase: "loading", access };
   try {
-    const result = await client.request<DevicePairSetup>(
-      "device.pair.setupCode",
+    const result = await requestDevicePairSetup(
+      client,
       access === "full"
         ? {}
         : access === "node"

@@ -4,20 +4,17 @@ import { property, state } from "lit/decorators.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
-type QuestionPanelQuestion = {
-  questionId: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description?: string }>;
-  multiSelect?: boolean;
-  isOther?: boolean;
-};
+type QuestionPanelQuestion = QuestionPrompt["questions"][number];
 
 type QuestionPanelViewModel = {
   requestKey: string;
   title: string;
   questions: QuestionPanelQuestion[];
+  agentId?: string;
+  sessionKey?: string;
+  secretStoreAllowedHostsDraft?: string;
   collapsed: boolean;
   disabled: boolean;
   submitting?: boolean;
@@ -31,6 +28,7 @@ type QuestionPanelProps = {
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
   onAnswersChange?: (answersById: Record<string, string[]>) => void;
+  onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
   onPreviousRequest?: () => void;
@@ -52,10 +50,8 @@ function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
   return Object.fromEntries(
     prompt.questions.map((question) => {
       const draft = prompt.drafts.get(question.questionId);
-      return [
-        question.questionId,
-        [...(draft?.selected ?? []), ...(draft?.freeText.trim() ? [draft.freeText.trim()] : [])],
-      ];
+      const freeText = question.isSecret ? draft?.freeText : draft?.freeText.trim();
+      return [question.questionId, [...(draft?.selected ?? []), ...(freeText ? [freeText] : [])]];
     }),
   );
 }
@@ -80,6 +76,9 @@ export function createGatewayQuestionPanelProps(
       requestKey: prompt.id,
       title: t("chat.questions.eyebrow"),
       questions: prompt.questions,
+      agentId: prompt.agentId,
+      sessionKey: prompt.sessionKey,
+      secretStoreAllowedHostsDraft: prompt.secretStoreAllowedHostsDraft,
       collapsed: options.collapsed ?? false,
       disabled: prompt.status !== "pending" || prompt.submitting,
       submitting: prompt.submitting,
@@ -89,6 +88,10 @@ export function createGatewayQuestionPanelProps(
     },
     onAnswersChange: (answersById) => {
       updatePromptDrafts(prompt, answersById);
+      options.onChange?.();
+    },
+    onSecretStoreAllowedHostsChange: (allowedHosts) => {
+      prompt.secretStoreAllowedHostsDraft = allowedHosts;
       options.onChange?.();
     },
     onSubmit: options.onSubmit
@@ -129,6 +132,9 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
   }
   if (prompt.status === "unavailable") {
     return t("chat.questions.unavailable");
+  }
+  if (question.isSecret) {
+    return t("chat.questions.answered");
   }
   const answer = prompt.answers?.answers[question.questionId]?.join(", ");
   if (answer) {
@@ -244,9 +250,14 @@ class ChatQuestionPanel extends LitElement {
     this.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   }
 
+  private freeTextValue(question: QuestionPanelQuestion): string | undefined {
+    const draft = this.freeTextById.get(question.questionId);
+    return question.isSecret ? draft : draft?.trim();
+  }
+
   private answerValues(question: QuestionPanelQuestion): string[] {
     const selected = this.selectedById.get(question.questionId) ?? [];
-    const freeText = this.freeTextById.get(question.questionId)?.trim();
+    const freeText = this.freeTextValue(question);
     return [...selected, ...(freeText ? [freeText] : [])];
   }
 
@@ -309,7 +320,7 @@ class ChatQuestionPanel extends LitElement {
     value: string,
   ): void {
     this.freeTextById = new Map(this.freeTextById).set(question.questionId, value);
-    if (!question.multiSelect && value.trim()) {
+    if (!question.multiSelect && (question.isSecret ? value : value.trim())) {
       this.selectedById = new Map(this.selectedById).set(question.questionId, []);
     }
     this.answersChanged(model);
@@ -426,6 +437,13 @@ class ChatQuestionPanel extends LitElement {
       this.toggleOption(model, question, question.options[optionIndex].label);
       return;
     }
+    if (question.isOther && optionIndex === question.options.length) {
+      event.preventDefault();
+      this.querySelector<HTMLInputElement>(".chat-question-panel__other")?.focus({
+        preventScroll: true,
+      });
+      return;
+    }
     if (
       event.key === "Enter" &&
       !(event.target instanceof HTMLButtonElement) &&
@@ -454,6 +472,22 @@ class ChatQuestionPanel extends LitElement {
       ? `${model.requestPosition.current}/${model.requestPosition.total}`
       : null;
 
+    const requestNavigation = requestProgress
+      ? html`<div class="chat-question-panel__request-nav">
+          <button
+            type="button"
+            aria-label=${t("common.previous")}
+            @click=${props.onPreviousRequest}
+          >
+            ${icons.chevronLeft}
+          </button>
+          <span>${requestProgress}</span>
+          <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
+            ${icons.chevronRight}
+          </button>
+        </div>`
+      : nothing;
+
     if (this.collapsed) {
       return html`
         <section
@@ -472,21 +506,7 @@ class ChatQuestionPanel extends LitElement {
             <span class="chat-question-panel__progress">${progress}</span>
             <span class="chat-question-panel__chevron">${icons.chevronDown}</span>
           </button>
-          ${requestProgress
-            ? html`<div class="chat-question-panel__request-nav">
-                <button
-                  type="button"
-                  aria-label=${t("common.previous")}
-                  @click=${props.onPreviousRequest}
-                >
-                  ${icons.chevronLeft}
-                </button>
-                <span>${requestProgress}</span>
-                <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
-                  ${icons.chevronRight}
-                </button>
-              </div>`
-            : nothing}
+          ${requestNavigation}
         </section>
       `;
     }
@@ -501,21 +521,8 @@ class ChatQuestionPanel extends LitElement {
       >
         <div class="chat-question-panel__topline">
           <div class="chat-question-panel__title">${model.title}</div>
-          ${requestProgress
-            ? html`<div class="chat-question-panel__request-nav">
-                <button
-                  type="button"
-                  aria-label=${t("common.previous")}
-                  @click=${props.onPreviousRequest}
-                >
-                  ${icons.chevronLeft}
-                </button>
-                <span>${requestProgress}</span>
-                <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
-                  ${icons.chevronRight}
-                </button>
-              </div>`
-            : nothing}
+          ${requestNavigation}
+          <span class="chat-question-panel__progress">${progress}</span>
           <button
             class="chat-question-panel__collapse"
             type="button"
@@ -527,7 +534,6 @@ class ChatQuestionPanel extends LitElement {
         </div>
 
         <div class="chat-question-panel__heading">
-          <span class="chat-question-panel__progress">${progress}</span>
           <span class="chat-question-panel__prompt">${question.question}</span>
         </div>
 
@@ -570,19 +576,94 @@ class ChatQuestionPanel extends LitElement {
           })}
         </div>
 
+        ${question.secretStore
+          ? html`
+              <div class="chat-question-panel__store">
+                <div class="chat-question-panel__store-requester">
+                  ${t("chat.questions.storeRequestedBy", {
+                    agent: model.agentId ?? t("common.unknown"),
+                    session: model.sessionKey ?? t("common.unknown"),
+                  })}
+                </div>
+                <div class="chat-question-panel__store-entry">
+                  ${t("chat.questions.storeEntry", {
+                    name: question.secretStore.name,
+                    kind:
+                      question.secretStore.kind === "secret"
+                        ? t("secretsStore.protectedSecret")
+                        : t("secretsStore.agentReadable"),
+                  })}
+                </div>
+                ${question.secretStore.reason
+                  ? html`<div class="chat-question-panel__store-reason">
+                      ${question.secretStore.reason}
+                    </div>`
+                  : nothing}
+                ${question.secretStoreExisting
+                  ? html`<div class="chat-question-panel__store-replacement">
+                      ${question.secretStoreExisting.updatedBy
+                        ? t("chat.questions.storeReplacementBy", {
+                            name: question.secretStore.name,
+                            updated: formatRelativeTimestamp(
+                              question.secretStoreExisting.updatedAtMs,
+                            ),
+                            updatedBy: question.secretStoreExisting.updatedBy,
+                          })
+                        : t("chat.questions.storeReplacement", {
+                            name: question.secretStore.name,
+                            updated: formatRelativeTimestamp(
+                              question.secretStoreExisting.updatedAtMs,
+                            ),
+                          })}
+                    </div>`
+                  : nothing}
+                ${question.secretStore.kind === "secret"
+                  ? html`<label class="chat-question-panel__store-hosts">
+                      <span>${t("secretsStore.allowedHosts")}</span>
+                      <input
+                        class="chat-question-panel__other chat-question-panel__hosts"
+                        type="text"
+                        autocomplete="off"
+                        placeholder=${t("secretsStore.allowedHostsPlaceholder")}
+                        .value=${model.secretStoreAllowedHostsDraft ??
+                        question.secretStore.allowedHosts?.join(", ") ??
+                        ""}
+                        ?disabled=${disabled}
+                        @input=${(event: Event) => {
+                          const target = event.target;
+                          if (target instanceof HTMLInputElement) {
+                            props.onSecretStoreAllowedHostsChange?.(target.value);
+                          }
+                        }}
+                      />
+                    </label>`
+                  : nothing}
+              </div>
+            `
+          : nothing}
         ${question.isOther || question.options.length === 0
           ? html`
-              <input
-                class="chat-question-panel__other"
-                type="text"
-                autocomplete="off"
-                placeholder=${t("chat.questions.other")}
-                aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
-                .value=${this.freeTextById.get(question.questionId) ?? ""}
-                ?disabled=${disabled}
-                @input=${(event: Event) =>
-                  this.setFreeText(model, question, (event.target as HTMLInputElement).value)}
-              />
+              <label
+                class="chat-question-panel__option chat-question-panel__option--other ${this.freeTextValue(
+                  question,
+                )
+                  ? "chat-question-panel__option--selected"
+                  : ""}"
+              >
+                <span class="chat-question-panel__option-marker" aria-hidden="true"></span>
+                <input
+                  class="chat-question-panel__other"
+                  type=${question.isSecret ? "password" : "text"}
+                  autocomplete="off"
+                  placeholder=${t("chat.questions.other")}
+                  aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
+                  .value=${this.freeTextById.get(question.questionId) ?? ""}
+                  ?disabled=${disabled}
+                  @input=${(event: Event) =>
+                    this.setFreeText(model, question, (event.target as HTMLInputElement).value)}
+                />
+                <kbd>${question.options.length + 1}</kbd>
+              </label>
             `
           : nothing}
 

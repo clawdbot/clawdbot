@@ -1,3 +1,4 @@
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -5,9 +6,11 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
@@ -16,19 +19,24 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type {
+  EmbeddedRunAttemptInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
-type InternalRunParams = RunEmbeddedAgentParams & {
+type InternalRunParams = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
   systemAgentTool?: SystemAgentToolOptions;
 };
@@ -40,6 +48,7 @@ type AttemptRuntime = {
   sessionKey?: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
@@ -112,6 +121,10 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>;
+  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
+  /** Run-owned start timestamp captured before admission; projected on recovery. */
+  runStartedAtMs: number;
   runtime: AttemptRuntime;
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
@@ -198,6 +211,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ? await (async () => {
         const workspace = await resolveAttemptWorkspaceSandbox({
           ...params,
+          agentId: runtime.agentId,
           cwd: undefined,
           sessionId: runtime.sessionId,
           sessionKey: runtime.sessionKey,
@@ -205,6 +219,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
+          mediaOwnerAgentId: workspace.sessionAgentId,
           effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
           effectiveWorkspace: workspace.effectiveWorkspace,
           prompt: "",
@@ -224,6 +239,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
+  const sessionKey = runtime.sessionKey?.trim() || runtime.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const pluginSandbox = control.pluginHarnessOwnsTransport
     ? ((await resolveSessionPlacementSandbox({
         agentId: runtime.agentId,
@@ -234,15 +251,39 @@ export async function dispatchEmbeddedRunAttempt(input: {
       })) ??
       (await resolveSandboxContext({
         config: params.config,
-        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        agentId: sandboxSessionKey === sessionKey ? runtime.agentId : undefined,
+        sessionKey: sandboxSessionKey,
         workspaceDir: runtime.workspaceDir,
       })))
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
-  const attemptParams: EmbeddedRunAttemptParams = {
+  if (params.permissionMode) {
+    // Attempts narrow this shared run-owned policy before recovery can reuse it.
+    params.execOverrides ??= {};
+    params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
+  }
+  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
+    agentId: runtime.agentId,
+    extraSystemPrompt: params.extraSystemPrompt,
+    sessionKey: params.sessionKey,
+    storePath: params.sessionTarget?.storePath,
+  });
+  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+    agentId: runtime.agentId,
+    authProfileId: runtime.authProfileId,
+    config: params.config,
+    extraSystemPrompt: incognitoSystemPrompt,
+    modelId: runtime.modelId,
+    provider: runtime.provider,
+    sessionKey: params.sessionKey,
+    toolsAllow: params.toolsAllow,
+  });
+  const attemptParams: EmbeddedRunAttemptInternalParams = {
+    permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
+    startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
@@ -257,8 +298,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     toolBindings: params.toolBindings,
+    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+    githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
     conversationToolPolicy: params.conversationToolPolicy,
@@ -290,7 +334,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
+    bootstrapWorkspaceDir: runtime.bootstrapWorkspaceDir,
     cwd: params.cwd,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
@@ -352,6 +399,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ? {
           agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
             requesterSessionKey: params.sessionKey,
+            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
       : {}),
@@ -428,13 +476,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAgentEvent: control.onAgentEvent,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+    onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
+    onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: appendIncognitoSystemPrompt({
-      agentId: runtime.agentId,
-      extraSystemPrompt: params.extraSystemPrompt,
-      sessionKey: params.sessionKey,
-      storePath: params.sessionTarget?.storePath,
-    }),
+    extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
@@ -457,13 +502,22 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    // Authorized prompt enrichment needs the exact prepared turn policy identity.
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    sessionPersistence: params.sessionPersistence,
+    // The host loop settles all completed counts, including default/SDK runs.
+    compactionCountOwner: "caller",
+    onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    codeModeRecovery: input.codeModeRecovery,
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceCodeModeTools: params.forceCodeModeTools,
+    codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
@@ -482,6 +536,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attemptParams.admittedRunContext,

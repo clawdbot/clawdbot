@@ -20,6 +20,7 @@ const FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN = 32;
 export type VoiceChannelResidency = {
   guildId: string;
   channelId: string;
+  whenOccupied?: boolean;
 };
 
 type FollowUserReconcileGuildPlan = {
@@ -35,14 +36,18 @@ type FollowUserReconcileUserSelection = {
 };
 
 export function normalizeVoiceChannelResidencies(
-  entries: Array<{ guildId?: string; channelId?: string }> | undefined,
+  entries: Array<{ guildId?: string; channelId?: string; whenOccupied?: boolean }> | undefined,
 ): VoiceChannelResidency[] {
   const normalized: VoiceChannelResidency[] = [];
   for (const entry of entries ?? []) {
     const guildId = entry.guildId?.trim();
     const channelId = entry.channelId?.trim();
     if (guildId && channelId) {
-      normalized.push({ guildId, channelId });
+      normalized.push({
+        guildId,
+        channelId,
+        ...(entry.whenOccupied === true ? { whenOccupied: true } : {}),
+      });
     }
   }
   return normalized;
@@ -648,6 +653,9 @@ export class DiscordVoiceFollowing {
     const autoJoinTarget = this.params.autoJoinChannels
       .toReversed()
       .find((entry) => entry.guildId === guildId);
+    if (autoJoinTarget?.whenOccupied) {
+      return null;
+    }
     if (autoJoinTarget && this.params.isAllowedVoiceChannel(autoJoinTarget)) {
       return autoJoinTarget;
     }

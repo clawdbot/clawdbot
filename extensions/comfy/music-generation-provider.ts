@@ -70,6 +70,7 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
         authStore: req.authStore,
         prompt: req.prompt,
         model: req.model,
+        timeoutMs: req.timeoutMs,
         capability: "music",
         outputKinds: ["audio"],
         inputImage: resolveInputImage(req.inputImages?.[0]),

@@ -15,6 +15,7 @@ import {
   isCopilotCatalogModelVisible,
   resolveCopilotForwardCompatModel,
 } from "./models.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 type GithubCopilotCatalogContext = {
   agentDir?: string;
@@ -54,7 +55,7 @@ export function createGithubCopilotDynamicModelHooks(params: {
     }
     const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } =
       await loadGithubCopilotRuntime();
-    const { githubToken, hasProfile } = await resolveFirstGithubToken({
+    const { githubToken, githubDomain, hasProfile } = await resolveFirstGithubToken({
       agentDir: ctx.agentDir,
       env: ctx.env,
       ...(ctx.config ? { config: ctx.config } : {}),
@@ -71,7 +72,11 @@ export function createGithubCopilotDynamicModelHooks(params: {
         const auth = await resolveCopilotRuntimeAuth({
           githubToken,
           env: ctx.env,
-          githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
+          githubDomain: resolveGithubCopilotDomain({
+            env: ctx.env,
+            explicit: githubDomain,
+            config: ctx.config,
+          }),
         });
         baseUrl = auth.baseUrl;
         copilotApiToken = auth.apiKey;
@@ -83,10 +88,17 @@ export function createGithubCopilotDynamicModelHooks(params: {
     // manifest models remain the visible fallback when exchange or discovery fails.
     let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
     if (copilotApiToken) {
+      const headers = buildCopilotRuntimeHeaders({ config: ctx.config });
       try {
         discoveredModels = await getCachedLiveCatalogValue({
-          keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl }),
+          keyParts: [
+            PROVIDER_ID,
+            "models",
+            baseUrl,
+            copilotApiToken,
+            headers["Copilot-Integration-Id"],
+          ],
+          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl, headers }),
         });
       } catch {
         discoveredModels = [];

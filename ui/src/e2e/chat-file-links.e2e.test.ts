@@ -34,6 +34,57 @@ describeControlUiE2e("Control UI chat file links", () => {
     await server?.close();
   });
 
+  it("shows the Review panel before a clicked file finishes loading", async () => {
+    const context = await browser.newContext({
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    try {
+      const file = {
+        root: "/workspace",
+        sessionKey: "agent:main:main",
+        file: {
+          content: "export const loaded = true;\n",
+          kind: "read",
+          missing: false,
+          name: "slow.ts",
+          path: "src/slow.ts",
+          workspacePath: "src/slow.ts",
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.files.get"],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Review `src/slow.ts`." }],
+            timestamp: 1,
+          },
+        ],
+        methodResponses: { "sessions.files.get": file },
+      });
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
+      await gateway.waitForRequest("sessions.files.get");
+
+      await page.locator(".side-panel").waitFor({ state: "visible" });
+      expect(await page.locator(".sidebar-file-view").count()).toBe(0);
+      await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
+
+      await gateway.resolveDeferred("sessions.files.get");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      await expect
+        .poll(() => page.locator(".cm-content").textContent())
+        .toContain("export const loaded = true;");
+      await page.screenshot({ path: path.join(artifactDir, "latency-file-loaded.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("opens the selected file from chat and the workspace root", async () => {
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
@@ -85,7 +136,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           },
           "sessions.files.list": {
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             files: [],
             browser: {
               entries: [
@@ -142,7 +193,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     const responses = {
       "/workspace/notes.txt": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "Exact-head workspace preview proof.\n",
           contentEncoding: "utf8",
@@ -159,7 +210,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/openclaw.png": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: pngBase64,
           contentEncoding: "base64",
@@ -175,7 +226,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           kind: "read",
           mimeType: "image/bmp",
@@ -213,7 +264,7 @@ describeControlUiE2e("Control UI chat file links", () => {
             },
             files: [],
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           },
         },
       });
@@ -267,12 +318,12 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
       ).toEqual([
-        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
-        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "main" },
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "agent:main:main" },
+        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "agent:main:main" },
         {
           agentId: "main",
           path: "/workspace/unsupported-binary.bmp",
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         },
       ]);
     } finally {

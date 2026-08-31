@@ -1,6 +1,8 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -19,7 +21,8 @@ import { createDoctorHealthContribution } from "./doctor-health-contribution.js"
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -58,8 +61,11 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
-    await import("../commands/doctor-auth-flat-profiles.js");
+  const {
+    collectOpenAICodexAuthProfileStoreIdMap,
+    maybeMigrateAuthProfileJsonStoresToSqlite,
+    maybeRepairOpenAICodexAuthConfig,
+  } = await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -74,17 +80,44 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  await maybeMigrateAuthProfileJsonStoresToSqlite({
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
     cfg: ctx.cfg,
-    prompter: ctx.prompter,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
+  const authConfigCandidate = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
+    profileIdMap: openAICodexAuthProfileIdMap,
+  }).config;
+  const authProfileMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: authConfigCandidate,
+    prompter: ctx.prompter,
+    openAICodexAuthProfileIdMap,
+    ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  if (authProfileMigration.configOwnerMigrationApplied) {
+    // The candidate is safe only after the migration verifies and archives its source.
+    ctx.cfg = authConfigCandidate;
+  }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
+  const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
+  const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
+  ctx.cfg = legacyOAuthRepair.config;
+  if (legacyOAuthRepair.retiredProfileCleanupPlans.length > 0) {
+    ctx.configResult.retiredAuthProfileCleanupPlans = [
+      ...(ctx.configResult.retiredAuthProfileCleanupPlans ?? []),
+      ...legacyOAuthRepair.retiredProfileCleanupPlans,
+    ];
+  }
+  if (!isDeepStrictEqual(modelsBeforeRepair, ctx.cfg.agents?.defaults?.models)) {
+    ctx.configResult.explicitSetPaths = [
+      ...(ctx.configResult.explicitSetPaths ?? []),
+      ["agents", "defaults", "models"],
+    ];
+  }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
   await maybeMigrateModelCatalogCredentials({
@@ -93,12 +126,24 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
-  ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
-  await noteAuthProfileHealth({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-    allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
-  });
+  let authProfileHealthReady = true;
+  if (ctx.configResult.retiredAuthProfileCleanupPlans?.length) {
+    const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
+      await import("./doctor-health-contribution-runners.config.js");
+    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    authProfileHealthReady =
+      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+    if (authProfileHealthReady) {
+      await runRetiredAuthProfileCleanup(ctx);
+    }
+  }
+  if (authProfileHealthReady) {
+    await noteAuthProfileHealth({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
+    });
+  }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
@@ -164,7 +209,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       cfg: ctx.cfg,
       env: ctx.env ?? process.env,
       unresolvedReasonStyle: "detailed",
-      envFallback: gatewayTokenRef ? "never" : "always",
     });
     if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
       return;
@@ -221,7 +265,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
+    await import("../infra/state-migrations.doctor.js");
   const { note } = await loadNoteModule();
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
@@ -273,25 +317,27 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
+async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
+  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local"
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return;
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return;
   }
   await ensureSystemdUserLingerInteractive({
@@ -309,18 +355,18 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function detectSystemdLingerFindings(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+  if (
+    process.platform !== "linux" ||
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
+  ) {
     return [];
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return [];
   }
   const {
@@ -409,10 +455,12 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   ];
 }
 
-export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
+export async function resolveDoctorContributionHealthChecks(): Promise<
+  readonly DetectableHealthCheckInput[]
+> {
   const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
   const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: HealthCheck[] = [];
+  const checks: DetectableHealthCheckInput[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
       checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
@@ -446,14 +494,9 @@ async function runDoctorHealthContributionList(
           contribution.run(ctx),
         );
       }
-      if (ctx.configWriteDeferredByCronOwnership === true) {
-        // Later repairs consume the candidate config. Stop before they persist state under an
-        // ownership topology that the config writer deliberately left non-durable.
-        return;
-      }
-      if (ctx.configWriteBlockedByValidation === true) {
-        // Same invariant for a validation-refused write: the candidate never reached
-        // disk, so later repairs must not persist state derived from it.
+      if (ctx.configWriteRefusal) {
+        // Later repairs consume the candidate. Stop before they persist state
+        // derived from config that the writer deliberately left non-durable.
         return;
       }
     } catch (error) {

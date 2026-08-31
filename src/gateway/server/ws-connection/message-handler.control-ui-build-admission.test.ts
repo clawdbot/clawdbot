@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  readControlUiBuildMismatchId,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -37,7 +40,10 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: () => gatewayConfig,
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
-vi.mock("../../../infra/system-presence.js", () => ({ upsertPresence: upsertPresenceMock }));
+vi.mock("../../../infra/system-presence.js", () => ({
+  upsertPresence: upsertPresenceMock,
+  listSystemPresence: vi.fn(() => []),
+}));
 vi.mock("../../../state/user-profiles.js", () => ({
   adoptTailscaleProfileAvatar: vi.fn(),
   ensureProfileForEmail: vi.fn(async () => ({
@@ -74,7 +80,6 @@ vi.mock("../health-state.js", () => ({
   })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
-  incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 vi.mock("../../../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../version.js")>();
@@ -184,7 +189,16 @@ describe("Control UI build admission over WebSocket", () => {
       attachGatewayWsMessageHandler({
         socket,
         upgradeReq: request as IncomingMessage,
+        ingressAttribution: {
+          kind: "direct-local",
+          clientIp: "127.0.0.1",
+          rateLimit: {
+            subject: { key: "127.0.0.1" },
+            resetOnSuccess: true,
+          },
+        },
         connId: "legacy-build-connection",
+        bootId: "control-ui-build-admission-test-boot",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",
         requestHost: request.headers.host,
@@ -199,7 +213,12 @@ describe("Control UI build admission over WebSocket", () => {
         gatewayMethods: [],
         events: [],
         extraHandlers: {},
-        buildRequestContext: () => ({ broadcast: vi.fn() }) as unknown as GatewayRequestContext,
+        buildRequestContext: () =>
+          ({
+            broadcast: vi.fn(),
+            incrementPresenceVersion: incrementPresenceVersionMock,
+            getHealthVersion: () => 1,
+          }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,
@@ -290,9 +309,18 @@ describe("Control UI build admission over WebSocket", () => {
           code: ErrorCodes.UNAVAILABLE,
           message: "protocol mismatch: Control UI updated; reload this page to continue",
           retryable: false,
-          details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+          details: {
+            code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+            gatewayBuildId: "gateway-build",
+            reloadRequired: true,
+          },
         },
       });
+      expect(
+        readControlUiBuildMismatchId(
+          (rejection.error as { details?: unknown } | undefined)?.details,
+        ),
+      ).toBe("gateway-build");
       ws.send(
         JSON.stringify({
           type: "req",
