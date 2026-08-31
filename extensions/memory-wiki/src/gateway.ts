@@ -349,12 +349,14 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config } = resolveRequestContext(requestParams);
+        // Source sync can write imported pages and indexes, so validate first.
+        const mutation = normalizeMemoryWikiMutationInput(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(
           true,
           await applyMemoryWikiMutation({
             config,
-            mutation: normalizeMemoryWikiMutationInput(requestParams),
+            mutation,
           }),
         );
       } catch (error) {
