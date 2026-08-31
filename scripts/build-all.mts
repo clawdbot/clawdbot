@@ -2,22 +2,13 @@
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import prettyMilliseconds from "pretty-ms";
 import {
-  acquireBuildArtifactLock,
-  artifactRecordMatches,
-  collectArtifactRecord,
-  readArtifactRecord,
-  writeArtifactRecord,
-  publishArtifactFiles,
-  resolveTsdownCompilerIdentity,
-  hashInputFiles,
-  listCacheFiles,
-  portableRelativePath,
-  type BuildCacheEntry,
+  finalizeBuildStepCache,
+  resolveBuildStepCacheState,
+  restoreBuildStepCacheOutputs,
+  type BuildCacheStep,
 } from "./lib/build-artifact-cache.mts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -26,14 +17,11 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import {
-  listPluginSdkDistArtifacts,
-  listPluginSdkDeclarationOutputs,
-  pluginSdkEntrypoints,
-} from "./lib/plugin-sdk-entries.mts";
+import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
@@ -42,24 +30,15 @@ import {
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import {
   TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  TSDOWN_DECLARATION_EXTENSIONS,
+  TSDOWN_DECLARATION_TOOL_INPUTS,
+  TSDOWN_PACKAGES_CACHE_INPUT,
+  TSDOWN_UNIFIED_CACHE_INPUTS,
   resolveTsdownBuildPlan,
   type MemoryLimitParams,
 } from "./tsdown-build.mts";
-export type { BuildCacheEntry } from "./lib/build-artifact-cache.mts";
 
 const nodeBin = process.execPath;
-
-type BuildCache = {
-  env?: string[];
-  inputs: BuildCacheEntry[];
-  outputs: BuildCacheEntry[];
-  requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
-  requiredCacheHitOutputs?: string[];
-  restore?: "always";
-  runOnHit?: { env?: NodeJS.ProcessEnv; finalize?: "refresh" };
-};
-
-type BuildCacheStep = { label: string; env?: NodeJS.ProcessEnv; cache?: BuildCache };
 
 export type BuildAllStep = BuildCacheStep &
   (
@@ -68,7 +47,6 @@ export type BuildAllStep = BuildCacheStep &
   );
 
 type BuildAllTiming = { label: string; durationMs: number; status: string };
-type BuildAllFs = typeof fs;
 type BuildAllStepParams = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -76,70 +54,11 @@ type BuildAllStepParams = {
   npmExecPath?: string;
   comSpec?: string;
 };
-type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
-const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
-const TSDOWN_SOURCE_EXTENSIONS = [
-  ".cjs",
-  ".cts",
-  ".js",
-  ".json",
-  ".json5",
-  ".mjs",
-  ".mts",
-  ".sql",
-  ".ts",
-  ".tsx",
-  ".yaml",
-  ".yml",
-];
 const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
 const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
   (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
 );
-const TSDOWN_DECLARATION_TOOL_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "scripts/tsdown-build.mts",
-  "scripts/lib/build-artifact-cache.mts",
-  "scripts/lib/dist-artifact-ownership.mts",
-  "scripts/lib/managed-child-process.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/repo-root.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/tsx.mjs",
-  "scripts/lib/tsx-cli-shim.mjs",
-  "scripts/lib/bundled-plugin-build-entries.mjs",
-  "scripts/lib/bundled-plugin-paths.mjs",
-  "scripts/lib/optional-bundled-clusters.mjs",
-  "scripts/lib/plugin-sdk-entries.mts",
-  "scripts/lib/plugin-sdk-entrypoints.json",
-  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-  "scripts/lib/tsdown-config-groups.mts",
-  "scripts/lib/tsdown-output-roots.mts",
-];
-const TSDOWN_PACKAGES_CACHE_INPUT = {
-  path: "packages",
-  extensions: TSDOWN_SOURCE_EXTENSIONS,
-  excludeDirectories: ["dist", "node_modules"],
-};
-const TSDOWN_UNIFIED_CACHE_INPUTS = [
-  {
-    path: "src",
-    extensions: TSDOWN_SOURCE_EXTENSIONS,
-    excludeDirectories: ["dist", "node_modules"],
-  },
-  {
-    path: "extensions",
-    extensions: TSDOWN_SOURCE_EXTENSIONS,
-    excludeDirectories: ["dist", "node_modules"],
-  },
-  TSDOWN_PACKAGES_CACHE_INPUT,
-];
 const declarationCacheOutputs = (roots: string[]) =>
   roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
 const tsxScript = (script: string, ...args: string[]) => ["--import", "tsx", script, ...args];
@@ -205,22 +124,12 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
     ),
     cache: {
       env: ["OPENCLAW_BUILD_PRIVATE_QA", "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
-      inputs: [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.config.ts",
-        "scripts/lib/runtime-process-build-entries.mts",
-        "scripts/lib/vitest-worker-artifacts.mts",
-        "scripts/lib/fs-safe-native-assets.mts",
-        ...TSDOWN_UNIFIED_CACHE_INPUTS,
-      ],
+      inputs: TSDOWN_UNIFIED_CACHE_INPUTS,
       outputs: declarationCacheOutputs(["dist"]),
-      requiredOutputs: (env) =>
-        env.OPENCLAW_BUILD_PRIVATE_QA === "1"
-          ? listPluginSdkDeclarationOutputs(pluginSdkEntrypoints)
-          : listPluginSdkDeclarationOutputs(),
       // Shared declaration snapshots cannot make a replaced live dist complete.
       // Rebuild the unified unit when its package artifacts are no longer intact.
       requiredCacheHitOutputs: listPluginSdkDistArtifacts(),
@@ -240,7 +149,10 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   nodeStep("runtime-postbuild", ["scripts/runtime-postbuild.mjs"]),
   tsxStep("build-stamp", "scripts/build-stamp.mts"),
   tsxStep("runtime-postbuild-stamp", "scripts/runtime-postbuild-stamp.mts"),
-  tsxStep("write-plugin-sdk-entry-dts", "scripts/write-plugin-sdk-entry-dts.ts"),
+  {
+    ...tsxStep("write-plugin-sdk-entry-dts", "scripts/write-plugin-sdk-entry-dts.ts"),
+    env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+  },
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
     label: "ui:build",
@@ -278,6 +190,7 @@ const FULL_BUILD_STEP_LABELS = [
   "runtime-postbuild",
   "build-stamp",
   "runtime-postbuild-stamp",
+  "write-plugin-sdk-entry-dts",
   "check-plugin-sdk-exports",
   "ui:build",
   "write-build-info",
@@ -382,9 +295,6 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
       // (full profile, docker packaging) keep canonical dts.
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "write-plugin-sdk-entry-dts": {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
     },
   },
   gatewayWatch: {
@@ -610,239 +520,6 @@ export function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   };
 }
 
-function normalizePortablePath(filePath: string) {
-  return filePath.replaceAll("\\", "/");
-}
-
-function resolveCacheRequiredOutputs(cache: BuildCache, env: NodeJS.ProcessEnv) {
-  const outputs =
-    typeof cache.requiredOutputs === "function"
-      ? cache.requiredOutputs(env)
-      : (cache.requiredOutputs ?? []);
-  return outputs.map((output) => normalizePortablePath(output));
-}
-
-function resolveBuildCacheRoot(rootDir: string, env: NodeJS.ProcessEnv) {
-  // Dev update preflight and final builds run in separate worktrees. A shared
-  // root lets content signatures decide reuse without relocating built trees.
-  const configuredRoot = env?.BUILD_ALL_CACHE_ROOT?.trim();
-  if (!configuredRoot) {
-    return path.resolve(rootDir, ".artifacts/build-all-cache");
-  }
-  return path.isAbsolute(configuredRoot)
-    ? path.normalize(configuredRoot)
-    : path.resolve(rootDir, configuredRoot);
-}
-
-function resolveCachePaths(rootDir: string, step: BuildCacheStep, env: NodeJS.ProcessEnv) {
-  const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
-  const cacheDir = path.join(resolveBuildCacheRoot(rootDir, env), safeLabel);
-  return {
-    cacheDir,
-    outputRoot: path.join(cacheDir, "outputs"),
-    stampPath: path.join(cacheDir, "stamp.json"),
-  };
-}
-
-function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildAllFs) {
-  return relativeFiles.every((relativeFile) => {
-    try {
-      return fsImpl.statSync(path.resolve(rootDir, relativeFile)).isFile();
-    } catch {
-      return false;
-    }
-  });
-}
-
-export function resolveBuildAllStepCacheState(
-  step: BuildCacheStep,
-  params: BuildAllCacheParams = {},
-) {
-  if (!step.cache) {
-    return { cacheable: false, fresh: false, reason: "no-cache" };
-  }
-  const rootDir = params.rootDir ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
-  const inputFiles = listCacheFiles(rootDir, step.cache.inputs, fsImpl);
-  if (inputFiles.length === 0) {
-    return { cacheable: true, fresh: false, reason: "missing-inputs" };
-  }
-  const signature = hashInputFiles(
-    rootDir,
-    inputFiles,
-    fsImpl,
-    step.cache.env ?? [],
-    params.env ?? process.env,
-    step.label.startsWith("tsdown") ? resolveTsdownCompilerIdentity() : "",
-  );
-  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
-  const lock = acquireBuildArtifactLock(stampPath);
-  try {
-    const stamp = readArtifactRecord(stampPath);
-    const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-    const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
-    const stampedOutputs = Object.keys(stamp?.outputs ?? {});
-    const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-    const actualOutputsPresent = artifactRecordMatches(rootDir, stamp, signature, requiredOutputs);
-    const cachedOutputsPresent = artifactRecordMatches(
-      outputRoot,
-      stamp,
-      signature,
-      requiredOutputs,
-    );
-    const stampMatches = stamp?.signature === signature;
-    const cacheHitContractMatches =
-      stampMatches && hasAllFiles(rootDir, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
-    const alwaysRestore = step.cache.restore === "always";
-    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
-    const restorable =
-      cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
-    const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
-    return {
-      cacheable: true,
-      fresh,
-      restorable,
-      reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
-      signature,
-      outputRoot,
-      stampPath,
-      inputFiles: inputFiles.length,
-      outputFiles: outputFiles.length,
-      relativeOutputFiles,
-      stampedOutputs,
-      record: stamp,
-    };
-  } finally {
-    lock.release();
-  }
-}
-
-type BuildAllCacheState = ReturnType<typeof resolveBuildAllStepCacheState>;
-
-export function writeBuildAllStepCacheStamp(
-  step: BuildCacheStep,
-  cacheState: BuildAllCacheState,
-  params: Pick<BuildAllCacheParams, "rootDir" | "fs" | "env"> = {},
-) {
-  if (
-    !step.cache ||
-    !cacheState.cacheable ||
-    !cacheState.signature ||
-    !cacheState.stampPath ||
-    !cacheState.outputRoot ||
-    !cacheState.relativeOutputFiles?.length
-  ) {
-    return;
-  }
-  const fsImpl = params.fs ?? fs;
-  const rootDir = params.rootDir ?? process.cwd();
-  const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-  const relativeOutputSet = new Set(
-    cacheState.relativeOutputFiles.map((output) => normalizePortablePath(output)),
-  );
-  // Validate before copying so an incomplete run cannot mutate the cached tree
-  // while leaving its previous stamp in place.
-  if (
-    !requiredOutputs.every((output) => relativeOutputSet.has(output)) ||
-    !hasAllFiles(rootDir, requiredOutputs, fsImpl)
-  ) {
-    return;
-  }
-  const lock = acquireBuildArtifactLock(cacheState.stampPath);
-  try {
-    const record = collectArtifactRecord(
-      rootDir,
-      cacheState.signature,
-      cacheState.relativeOutputFiles,
-    );
-    const previous = readArtifactRecord(cacheState.stampPath);
-    // Invalidate before the first copied byte; readers and publishers use this
-    // same lock, so neither crashes nor overlap can expose a partial snapshot.
-    fsImpl.rmSync(cacheState.stampPath, { force: true });
-    publishArtifactFiles(
-      rootDir,
-      cacheState.outputRoot,
-      Object.keys(record.outputs),
-      Object.keys(previous?.outputs ?? {}),
-    );
-    if (
-      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
-    ) {
-      throw new Error(`Incomplete build cache snapshot: ${step.label}`);
-    }
-    writeArtifactRecord(cacheState.stampPath, record);
-  } finally {
-    lock.release();
-  }
-}
-
-export function resolveBuildAllStepCacheStampState(
-  step: BuildCacheStep,
-  cacheState: BuildAllCacheState,
-  params: Pick<BuildAllCacheParams, "rootDir" | "fs"> = {},
-) {
-  if (!cacheState.cacheable || !cacheState.signature || !step.cache) {
-    return cacheState;
-  }
-  const rootDir = params.rootDir ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
-  const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  return {
-    ...cacheState,
-    outputFiles: outputFiles.length,
-    relativeOutputFiles: outputFiles.map((file) => portableRelativePath(rootDir, file)),
-  };
-}
-
-export function restoreBuildAllStepCacheOutputs(
-  cacheState: BuildAllCacheState,
-  params: Pick<BuildAllCacheParams, "rootDir" | "fs"> = {},
-) {
-  if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
-    return false;
-  }
-  if (!cacheState.stampPath || !cacheState.signature || !cacheState.record) {
-    return false;
-  }
-  const lock = acquireBuildArtifactLock(cacheState.stampPath);
-  try {
-    const record = readArtifactRecord(cacheState.stampPath);
-    if (
-      JSON.stringify(record) !== JSON.stringify(cacheState.record) ||
-      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature)
-    ) {
-      return false;
-    }
-    publishArtifactFiles(
-      cacheState.outputRoot,
-      params.rootDir ?? process.cwd(),
-      cacheState.stampedOutputs,
-      cacheState.relativeOutputFiles,
-    );
-    return true;
-  } finally {
-    lock.release();
-  }
-}
-
-export function finalizeBuildAllStepCache(
-  step: BuildCacheStep,
-  cacheState: BuildAllCacheState,
-  params: BuildAllCacheParams & { reusedCache?: boolean } = {},
-) {
-  if (params.reusedCache && step.cache?.runOnHit?.finalize !== "refresh") {
-    return restoreBuildAllStepCacheOutputs(cacheState, params);
-  }
-  // Validator-style cache hits may update a restored seed. Capture that result;
-  // restoring the old seed here would silently discard the validated refresh.
-  writeBuildAllStepCacheStamp(
-    step,
-    resolveBuildAllStepCacheStampState(step, cacheState, params),
-    params,
-  );
-  return true;
-}
-
 export function formatBuildAllDuration(durationMs: number) {
   const clampedMs = Math.max(0, durationMs);
   const roundedMs =
@@ -876,12 +553,12 @@ export async function runBuildAllSteps(
   params: {
     cacheEnabled?: boolean;
     env?: NodeJS.ProcessEnv;
-    finalizeCache?: typeof finalizeBuildAllStepCache;
+    finalizeCache?: typeof finalizeBuildStepCache;
     logger?: Pick<Console, "error" | "warn">;
     memoryLimit?: Omit<MemoryLimitParams, "env">;
     now?: () => number;
-    resolveCacheState?: typeof resolveBuildAllStepCacheState;
-    restoreCache?: typeof restoreBuildAllStepCacheOutputs;
+    resolveCacheState?: typeof resolveBuildStepCacheState;
+    restoreCache?: typeof restoreBuildStepCacheOutputs;
     runStep?: (
       invocation: ReturnType<typeof resolveBuildAllStep>,
     ) => { status: number | null } | Promise<{ status: number | null }>;
@@ -897,9 +574,9 @@ export async function runBuildAllSteps(
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
   const now = params.now ?? performance.now.bind(performance);
-  const resolveCacheState = params.resolveCacheState ?? resolveBuildAllStepCacheState;
-  const restoreCache = params.restoreCache ?? restoreBuildAllStepCacheOutputs;
-  const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
+  const resolveCacheState = params.resolveCacheState ?? resolveBuildStepCacheState;
+  const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
+  const finalizeCache = params.finalizeCache ?? finalizeBuildStepCache;
   const runStep =
     params.runStep ??
     (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {

@@ -1783,18 +1783,10 @@ jobs:
           install-bun: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
+          build-all-cache-scope: full
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-
-      - name: Restore build-all step cache
-        if: needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'scripts/lib/build-artifact-cache.mts', 'scripts/lib/declaration-stage.mts', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
-          restore-keys: |
-            ${{ runner.os }}-build-all-v4-
 
       - name: Restore dist build cache
         id: dist_build_cache

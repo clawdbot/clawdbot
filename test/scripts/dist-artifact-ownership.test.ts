@@ -288,7 +288,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const replacements = {
           "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
           "../tsdown.config.ts": `export default ['openclaw-dts-plugin-sdk-1', 'openclaw-dts-plugin-sdk-2'].map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
-          "./tsdown-build.mts": "export const prepareTsdownBuildExecution = () => ({});",
+          "./tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
           "./lib/declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
         };
         const hook = write(

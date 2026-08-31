@@ -4865,9 +4865,6 @@ server.listen(0, "127.0.0.1", () => {
     const buildSetupNodeStep = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
-    const buildStepCache = workflow.jobs["build-artifacts"].steps.find(
-      (step: WorkflowStep) => step.name === "Restore build-all step cache",
-    );
     const hostedTestCacheInput =
       "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}";
     const hostedTestCacheJobs = [
@@ -4943,16 +4940,11 @@ server.listen(0, "127.0.0.1", () => {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-compile-cache": "true",
       "node-compile-cache-scope": "build",
+      "build-all-cache-scope": "full",
     });
     expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
       setupNodeStep.with["node-compile-cache-scope"],
     );
-    expect(buildStepCache.with.key).toContain("build-all-v4-");
-    expect(buildStepCache.with.key).toContain("'src/**'");
-    expect(buildStepCache.with.key).toContain("'packages/**'");
-    expect(buildStepCache.with.key).toContain("'!packages/**/dist/**'");
-    expect(buildStepCache.with.key).toContain("'!packages/**/node_modules/**'");
-    expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
 
     for (const jobName of hostedTestCacheJobs) {
       const setup = workflow.jobs[jobName].steps.find(

@@ -283,11 +283,12 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
-Packaged declarations belong to the public/private tsdown SDK groups. Full and
-package builds emit them in the canonical build; `ciArtifacts` stages only those
-two groups and publishes after both succeed and their relative declaration closure
-is complete. Local preparation never overwrites packaged declarations or writes
-workspace forwarding bridges.
+Packaged SDK declarations belong to one staged owner shared by full, package, and
+`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+and caches their complete staged generation. Cache hits restore into fresh staging
+and pass the same entry and relative declaration closure checks before publication.
+Local preparation never overwrites packaged declarations or writes workspace
+forwarding bridges.
 
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
