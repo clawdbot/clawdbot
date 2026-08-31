@@ -1,6 +1,8 @@
 // Line tests cover gateway startup plugin behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createStartAccountContext,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
@@ -38,10 +40,7 @@ describe("lineGatewayAdapter.startAccount", () => {
   beforeEach(() => {
     probeLineBotMock.mockReset();
     monitorLineProviderMock.mockClear();
-    setLineRuntime({
-      logging: { shouldLogVerbose: () => false },
-      channel: {},
-    } as unknown as PluginRuntime);
+    setLineRuntime(createPluginRuntimeMock());
   });
 
   afterAll(() => {

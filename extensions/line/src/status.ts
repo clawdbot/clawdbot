@@ -26,10 +26,10 @@ const collectLineCredentialIssues = createDependentCredentialStatusIssueCollecto
   missingDependentMessage: "LINE channel secret not configured",
 });
 
-/** The resolved route this account serves, published by resolveAccountSnapshot below. */
+/** The resolved route this account serves, published by resolveAccountSnapshot below.
+ *  Snapshots built elsewhere may not carry it, so the account's own default stands in. */
 function readSnapshotWebhookPath(account: ChannelAccountSnapshot): string {
-  const configured = isRecord(account) ? account.webhookPath : undefined;
-  return typeof configured === "string" && configured ? configured : LINE_DEFAULT_WEBHOOK_PATH;
+  return account.webhookPath?.trim() ? account.webhookPath : LINE_DEFAULT_WEBHOOK_PATH;
 }
 
 function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefined {
@@ -40,7 +40,9 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
   if (status === "unset") {
     return { status };
   }
-  return (status === "active" || status === "disabled") && typeof endpoint === "string"
+  // An empty endpoint would render "turn Use webhook on for  in ..." — a state LINE
+  // cannot actually return, but the fix text is only useful when it names a URL.
+  return (status === "active" || status === "disabled") && typeof endpoint === "string" && endpoint
     ? { status, endpoint }
     : undefined;
 }

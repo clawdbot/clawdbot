@@ -121,6 +121,33 @@ describe("probeLineBot", () => {
     }
   });
 
+  // The early return is load-bearing, not defensive: withTimeout treats a budget of 0 or
+  // less as "no timeout at all", so without it a lookup started with no time left would
+  // wait forever and spend the outer deadline — the same inversion the margin prevents.
+  it("skips the webhook lookup when the identity call left no room for it", async () => {
+    vi.useFakeTimers();
+    getBotInfoMock.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({ displayName: "Bot", userId: "U1", basicId: "@bot" });
+          }, 4900);
+        }),
+    );
+    getWebhookEndpointMock.mockReturnValue(new Promise(() => {}));
+    try {
+      const pending = probeLineBotUnderTest();
+      await vi.advanceTimersByTimeAsync(6000);
+      const result = await pending;
+
+      expect(result.ok).toBe(true);
+      expect(result.webhook).toBeUndefined();
+      expect(getWebhookEndpointMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still fails the probe when the bot identity call fails", async () => {
     getBotInfoMock.mockRejectedValue(new Error("bad token"));
 

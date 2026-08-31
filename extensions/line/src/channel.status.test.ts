@@ -81,7 +81,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           tokenSource: "config",
           webhookPath: "/hooks/line-primary",
           probe: { ok: true, webhook: { status: "unset" } },
-        } as never,
+        },
       ]),
     ).toEqual([
       {

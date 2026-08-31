@@ -4,8 +4,8 @@ import type { NextFunction, Request, Response } from "express";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  LINE_DEFAULT_WEBHOOK_PATH,
   parseLineWebhookBody,
+  resolveLineWebhookPath,
   validateLineSignature,
 } from "./webhook-utils.js";
 
@@ -105,7 +105,7 @@ export function startLineWebhook(options: StartLineWebhookOptions): {
         "Set channels.line.channelSecret in your config.",
     );
   }
-  const path = options.path ?? LINE_DEFAULT_WEBHOOK_PATH;
+  const path = resolveLineWebhookPath(options.path);
   const middleware = createLineWebhookMiddleware({
     channelSecret,
     onEvents: options.onEvents,

@@ -14,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -321,7 +320,7 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizeWebhookPath(resolveLineWebhookPath(webhookPath));
+  const normalizedPath = resolveLineWebhookPath(webhookPath);
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
