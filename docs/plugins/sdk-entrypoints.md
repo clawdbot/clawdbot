@@ -415,7 +415,7 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 | `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
 | `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
 | `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
-| `openclaw/plugin-sdk/archive`           | Bounded archive extraction, private-directory regular-file alias materialization with joined extraction/copy cancellation, and single-entry reads                                  |
+| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
 | `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
 | `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
 

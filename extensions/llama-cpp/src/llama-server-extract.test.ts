@@ -178,7 +178,7 @@ describe("extractLlamaServerArchive", () => {
     });
 
     await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid archive regular-file manifest filename/u,
+      /invalid llama-server archive manifest filename/u,
     );
   });
 

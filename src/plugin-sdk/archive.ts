@@ -3,7 +3,6 @@ export {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
   extractArchive,
-  extractArchiveInPrivateDestinationWithRegularFileAliases,
   readArchiveEntry,
   type ArchiveEntryKind,
   type ArchiveExtractLimits,
