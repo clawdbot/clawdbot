@@ -62,6 +62,11 @@ request never establishes trace context for later frames. Use a separate
 the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
+Authenticated operator requests share a bounded queue for starting RPC handlers.
+When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
+before the method runs; retry within the request's budget. Started requests
+complete concurrently, so responses can arrive out of order.
+
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
 authorization failures use top-level `code: "FORBIDDEN"` with structured

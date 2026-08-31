@@ -2990,7 +2990,6 @@ src/gateway/server/ws-connection.ts	3
 src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
-src/gateway/server/ws-connection/connect-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	10
 src/gateway/server/ws-connection/worker-connection.ts	2
 src/gateway/session-compaction-checkpoints.ts	7
