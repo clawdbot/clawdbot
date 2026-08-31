@@ -1029,7 +1029,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               const restart =
                 restarts.get(rKey) ?? new RetrySupervisor(RESTART_POLICY, MAX_RESTARTS);
               restarts.set(rKey, restart);
-              const retry = restart.next(abort.signal);
+              // The supervisor owns restart delay; the exited run is deliberately
+              // aborted before its replacement and must not cancel that delay.
+              const retry = restart.next();
               if (!retry) {
                 setRuntime(channelId, id, {
                   accountId: id,
@@ -1050,7 +1052,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
-                if (manuallyStopped.has(rKey)) {
+                if (manuallyStopped.has(rKey) || store.stops.has(id) || retry.signal.aborted) {
                   return;
                 }
                 if (store.tasks.get(id) === trackedPromise) {
@@ -1066,8 +1068,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
-              } catch {
-                // abort or startup failure — next crash will retry
+              } catch (error) {
+                const intentionalStop =
+                  manuallyStopped.has(rKey) || store.stops.has(id) || retry.signal.aborted;
+                const lastError = formatErrorMessage(error);
+                if (!intentionalStop) {
+                  log.error?.(`[${id}] auto-restart failed: ${lastError}`);
+                }
+                // Once this restart task settles, no later crash owns another
+                // attempt; never leave health checks reporting a pending start.
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: false,
+                  reconnectAttempts: restart.attempts,
+                  ...(intentionalStop ? {} : { lastError }),
+                });
               } finally {
                 pendingAutoRestarts.delete(rKey);
               }
@@ -1156,6 +1171,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (manual) {
           manuallyStopped.add(rKey);
         }
+        // The run and its restart delay have distinct owners; a requested
+        // stop must cancel both so a pending retry cannot revive the account.
+        restarts.get(rKey)?.cancel();
 
         const runStopAttempt = async (
           previousOutcome: ChannelAccountStopOutcome,
