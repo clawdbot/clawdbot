@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import type { Transport } from "../../llm/types.js";
@@ -139,9 +139,14 @@ export class FileSettingsStorage implements SettingsStorage {
   }
 
   readSettingsScope(scope: SettingsScope): string | undefined {
-    // Absence is a complete read: do not create and fsync a sidecar for defaults.
-    // Present files still use the writer lock so readers cannot observe partial writes.
-    if (!existsSync(this.paths[scope])) {
+    const path = this.paths[scope];
+    // Observe ownership before absence: a first writer may commit between probes.
+    // Existing lock names and reclaim guards still go through the canonical lock checks.
+    if (
+      !lstatSync(`${path}.lock`, { throwIfNoEntry: false }) &&
+      !lstatSync(`${path}.lock.reclaim`, { throwIfNoEntry: false }) &&
+      !existsSync(path)
+    ) {
       return undefined;
     }
     let content: string | undefined;
