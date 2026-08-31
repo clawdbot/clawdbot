@@ -54,7 +54,11 @@ import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
-import { quotesLineBotMessage } from "./outbound-message-log.js";
+import {
+  readLineQuotedMessageId,
+  recordLineAgentVisibleMessage,
+  resolveLineQuotedMessage,
+} from "./quoted-messages.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -219,7 +223,8 @@ async function resolveLineEventAdmission(
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
-        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+        resolveLineQuotedMessage(account.accountId, readLineQuotedMessageId(event.message))
+          ?.fromBot === true,
       ),
     };
   })();
@@ -363,13 +368,6 @@ async function resolveLineEventAdmission(
   return null;
 }
 
-// LINE reports a quote only on the message kinds a person can quote from.
-function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | undefined {
-  return message.type === "text" || message.type === "sticker"
-    ? message.quotedMessageId
-    : undefined;
-}
-
 function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -393,16 +391,18 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
+  // Text a later quote of this message must resolve to. Non-text messages keep
+  // the same kind marker the ambient window shows, so both readers agree.
+  const quotableBody =
+    (message.type === "text" ? readLineTextMessageBody(message) : "") || `<${message.type}>`;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
-    const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = sourceInfo.userId ?? "unknown";
+    const senderId = userId ?? "unknown";
     if (historyKey && context.groupHistories) {
-      const displayName = sourceInfo.userId
-        ? await getUserDisplayName(sourceInfo.userId, {
+      const displayName = userId
+        ? await getUserDisplayName(userId, {
             cfg,
             accountId: account.accountId,
             channelAccessToken: account.channelAccessToken,
@@ -412,15 +412,24 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         : senderId;
       // History has one sender string; keep the stable ID when display names collide.
       const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+      const recorded = createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
           sender,
-          body: rawText || `<${message.type}>`,
+          body: quotableBody,
           timestamp: event.timestamp,
         },
       });
+      // A quote may only resolve what the ambient window actually kept, so the
+      // record that made this message agent-visible is what opens it to quotes.
+      if (recorded.length > 0) {
+        recordLineAgentVisibleMessage(account.accountId, {
+          id: message.id,
+          body: quotableBody,
+          ...(userId ? { senderId: userId } : {}),
+        });
+      }
     }
     return;
   }
@@ -495,6 +504,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       logVerbose("line: skipping empty message");
       return;
     }
+
+    // This message is on its way to the agent, so a later quote of it may name it.
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: message.id,
+      body: quotableBody,
+      ...(userId ? { senderId: userId } : {}),
+    });
 
     await processMessage(messageContext, {
       cfg,

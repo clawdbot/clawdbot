@@ -17,6 +17,7 @@ import type {
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   ensureConfiguredBindingRouteReady,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -35,6 +36,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
+import { readLineQuotedMessageId, resolveLineQuotedMessage } from "./quoted-messages.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -271,6 +273,7 @@ async function finalizeLineInboundContext(params: {
   channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
+  quotedMessageId?: string;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
   mentions?: LineInboundMentionAccess;
@@ -282,18 +285,25 @@ async function finalizeLineInboundContext(params: {
     accountId: params.account.accountId,
     channelAccessToken: params.account.channelAccessToken,
   };
+  // LINE names a quoted message by id alone, so its text and author come from
+  // what this account already saw. An id it no longer holds still reaches the
+  // agent as a bare quote rather than disappearing.
+  const quoted = resolveLineQuotedMessage(params.account.accountId, params.quotedMessageId);
   // A LINE webhook carries no display name and no group name, so both are
   // separate lookups. They are cached, they run in parallel, and either one
   // failing degrades to the raw id rather than failing the turn.
-  const [senderName, groupName] = await Promise.all([
-    params.source.userId
-      ? getUserProfile(params.source.userId, {
+  const resolveDisplayName = (userId: string | undefined) =>
+    userId
+      ? getUserProfile(userId, {
           ...clientOpts,
           groupId: params.source.groupId,
           roomId: params.source.roomId,
         }).then((profile) => profile?.displayName)
-      : undefined,
+      : undefined;
+  const [senderName, groupName, quotedSenderName] = await Promise.all([
+    resolveDisplayName(params.source.userId),
     params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
+    resolveDisplayName(quoted?.senderId),
   ]);
   const senderLabel =
     senderName ?? (params.source.userId ? `user:${params.source.userId}` : "unknown");
@@ -370,6 +380,28 @@ async function finalizeLineInboundContext(params: {
     },
     access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
+    contextVisibility: resolveChannelContextVisibilityMode({
+      cfg: params.cfg,
+      channel: "line",
+      accountId: params.account.accountId,
+    }),
+    supplemental: params.quotedMessageId
+      ? {
+          quote: {
+            id: params.quotedMessageId,
+            isQuote: true,
+            // The store only holds messages this conversation already showed the
+            // agent, so a resolved quote can never reintroduce a sender the
+            // allowlist turned away.
+            senderAllowed: true,
+            // A quote of the bot's own message keeps its linkage without a body:
+            // the store holds no outbound text, matching the core default that
+            // never repeats an assistant message the transcript already carries.
+            ...(quoted?.body ? { body: quoted.body } : {}),
+            ...(quotedSenderName ? { sender: quotedSenderName } : {}),
+          },
+        }
+      : undefined,
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
@@ -459,6 +491,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   const message = event.message;
   const messageId = message.id;
+  const quotedMessageId = readLineQuotedMessageId(message);
   const timestamp = event.timestamp;
 
   const textContent = extractMessageText(message);
@@ -517,6 +550,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
+    ...(quotedMessageId ? { quotedMessageId } : {}),
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });

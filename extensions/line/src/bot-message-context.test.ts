@@ -15,11 +15,14 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import { recordLineAgentVisibleMessage, recordLineSentMessages } from "./quoted-messages.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+// Mirrors getUserProfile: the id decides the answer, so a test can name one
+// profile per user the context asks about.
 const getUserProfileMock = vi.hoisted(() =>
-  vi.fn(async () => null as { displayName: string } | null),
+  vi.fn(async (_userId: string) => null as { displayName: string } | null),
 );
 const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
 const toInboundMediaFactsWithMetadataMock = vi.hoisted(() => vi.fn());
@@ -152,6 +155,77 @@ describe("buildLineMessageContext", () => {
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
+  });
+
+  const quotingEvent = (quotedMessageId: string, text: string) =>
+    createMessageEvent({ type: "group", groupId: "group-quote", userId: "user-asking" }, {
+      message: { id: "m-quoting", type: "text", text, quotedMessageId },
+    } as Partial<MessageEvent>);
+
+  it("answers a quote with the message it points at", async () => {
+    getUserProfileMock.mockImplementation(async (userId: string) =>
+      userId === "U-teammate" ? { displayName: "Mika" } : null,
+    );
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-teammate",
+    });
+
+    const context = await buildLineMessageContext({
+      event: quotingEvent("m-quoted", "ping this one"),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToId).toBe("m-quoted");
+    expect(context?.ctxPayload.ReplyToIsQuote).toBe(true);
+    expect(context?.ctxPayload.ReplyToBody).toBe("staging is on 10.0.0.5");
+    expect(context?.ctxPayload.ReplyToSender).toBe("Mika");
+  });
+
+  it("keeps the quote linkage when the quoted message is no longer held", async () => {
+    const context = await buildLineMessageContext({
+      event: quotingEvent("m-evicted", "and this one?"),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToId).toBe("m-evicted");
+    expect(context?.ctxPayload.ReplyToIsQuote).toBe(true);
+    expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
+  });
+
+  it("does not repeat the bot's own message back to it", async () => {
+    recordLineSentMessages(account.accountId, ["m-sent"]);
+
+    const context = await buildLineMessageContext({
+      event: quotingEvent("m-sent", "redo that in English"),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToId).toBe("m-sent");
+    expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
+  });
+
+  it("leaves a message that quotes nothing without reply-target metadata", async () => {
+    const context = await buildLineMessageContext({
+      event: createMessageEvent({ type: "group", groupId: "group-quote", userId: "user-asking" }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToId).toBeUndefined();
+    expect(context?.ctxPayload.ReplyToIsQuote).toBeUndefined();
   });
 
   const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
