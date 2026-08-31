@@ -37,6 +37,7 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
+import type { ActiveNativeHookRelayRegistration } from "./native-hook-relay-types.js";
 import {
   registerRetainedNativeHookRelay,
   testing,
@@ -862,8 +863,8 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe("run-successor");
   });
 
-  it("keeps the callback-created successor after replacement teardown", async () => {
-    const relayId = uniqueNativeHookRelayIdForTests("replacement-reentrant-successor");
+  it("keeps an earlier retained registration undisposed when a sibling registers the same id", async () => {
+    const relayId = uniqueNativeHookRelayIdForTests("overlapping-retained-siblings");
     let callbackSuccessor: ReturnType<typeof registerNativeHookRelay> | undefined;
     const first = registerRetainedNativeHookRelay({
       provider: "codex",
@@ -886,23 +887,35 @@ describe("native hook relay registry", () => {
         },
       },
     });
-    const replacementUnregistered = vi.fn();
-    registerRetainedNativeHookRelay({
+    const siblingDisposed = vi.fn();
+    const sibling = registerRetainedNativeHookRelay({
       provider: "codex",
       relayId,
       sessionId: "session-1",
-      runId: "run-replacement",
+      runId: "run-sibling",
       allowedEvents: ["post_tool_use"],
       retention: {
         readClaim: readTestNativeAgentId,
         shouldRetainAfterForegroundClose: () => false,
         allowPreToolUse: () => false,
-        onDispose: replacementUnregistered,
+        onDispose: siblingDisposed,
       },
     });
 
+    // Registering a sibling on the stable id must not dispose the live first
+    // registration or fire retention callbacks.
+    expect(callbackSuccessor).toBeUndefined();
+    expect(siblingDisposed).not.toHaveBeenCalled();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toEqual([
+      first.generation,
+      sibling.generation,
+    ]);
+
+    // The first registration's own unregister still delivers its dispose
+    // callback, and a reentrant same-id successor coexists with the sibling.
+    first.unregister();
     expect(callbackSuccessor).toBeDefined();
-    expect(replacementUnregistered).toHaveBeenCalledOnce();
+    expect(siblingDisposed).not.toHaveBeenCalled();
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe(
       "run-callback-successor",
     );
@@ -916,14 +929,26 @@ describe("native hook relay registry", () => {
         rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
-    first.unregister();
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId,
+        generation: sibling.generation,
+        event: "post_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    sibling.unregister();
+    expect(siblingDisposed).toHaveBeenCalledOnce();
     callbackSuccessor?.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("delivers old replacement callback when the successor signal is already aborted", () => {
-    const relayId = uniqueNativeHookRelayIdForTests("replacement-preaborted");
-    const oldUnregistered = vi.fn();
-    registerRetainedNativeHookRelay({
+  it("keeps the live registration when a pre-aborted successor registration throws", async () => {
+    const relayId = uniqueNativeHookRelayIdForTests("preaborted-successor");
+    const oldDisposed = vi.fn();
+    const old = registerRetainedNativeHookRelay({
       provider: "codex",
       relayId,
       sessionId: "session-1",
@@ -932,7 +957,7 @@ describe("native hook relay registry", () => {
         readClaim: readTestNativeAgentId,
         shouldRetainAfterForegroundClose: () => false,
         allowPreToolUse: () => false,
-        onDispose: oldUnregistered,
+        onDispose: oldDisposed,
       },
     });
     const controller = new AbortController();
@@ -948,7 +973,17 @@ describe("native hook relay registry", () => {
       }),
     ).toThrow("native hook relay registration aborted");
 
-    expect(oldUnregistered).toHaveBeenCalledOnce();
+    // The aborted registration removes only its own slot; the live sibling
+    // stays registered, undisposed, and current.
+    expect(oldDisposed).not.toHaveBeenCalled();
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe("run-old");
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toEqual([
+      old.generation,
+    ]);
+    await waitForNativeHookRelayBridgeRecord(relayId);
+
+    old.unregister();
+    expect(oldDisposed).toHaveBeenCalledOnce();
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     expect(testing.getNativeHookRelayBridgeRecordForTests(relayId)).toBeUndefined();
   });
@@ -1457,7 +1492,7 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("allows callers to replace a relay at a stable id", async () => {
+  it("keeps overlapping registrations live at a stable id", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-stable-session",
@@ -1475,6 +1510,10 @@ describe("native hook relay registry", () => {
     });
 
     expect(second.relayId).toBe(first.relayId);
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(first.relayId)).toEqual([
+      first.generation,
+      second.generation,
+    ]);
     expectRecordFields(
       requireRecord(
         testing.getNativeHookRelayRegistrationForTests(first.relayId),
@@ -1487,22 +1526,25 @@ describe("native hook relay registry", () => {
     );
     const secondExpiresAtMs = requireRecord(
       testing.getNativeHookRelayRegistrationForTests(first.relayId),
-      "replacement native hook relay registration",
+      "newest native hook relay registration",
     ).expiresAtMs;
 
     first.renew(60_000);
     expect(
       requireRecord(
         testing.getNativeHookRelayRegistrationForTests(first.relayId),
-        "replacement native hook relay registration",
+        "newest native hook relay registration",
       ).expiresAtMs,
     ).toBe(secondExpiresAtMs);
 
     first.unregister();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(first.relayId)).toEqual([
+      second.generation,
+    ]);
     expectRecordFields(
       requireRecord(
         testing.getNativeHookRelayRegistrationForTests(first.relayId),
-        "replacement native hook relay registration",
+        "surviving native hook relay registration",
       ),
       {
         runId: "run-2",
@@ -1515,7 +1557,9 @@ describe("native hook relay registry", () => {
         relayId: second.relayId,
         generation: second.generation,
         event: "post_tool_use",
-        timeoutMs: 2_000,
+        // Generous budget: this is the file's first bridge await, so it also
+        // absorbs the deferred listen/publish backlog on slow hosts.
+        timeoutMs: 10_000,
         rawPayload: {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
@@ -1528,6 +1572,969 @@ describe("native hook relay registry", () => {
 
     second.unregister();
     expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(first.relayId)).toEqual([]);
+  });
+
+  it("keeps an active run routable when an overlapping sibling registers and unregisters", async () => {
+    // Regression: a stable per-session relayId with a single registration slot
+    // let an overlapping run replace the active registration and remove it on
+    // its own unregister, failing every later hook closed mid-turn.
+    const active = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-overlapping-siblings",
+      sessionId: "session-1",
+      runId: "run-active",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const invokeActive = (toolUseId: string) =>
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: active.relayId,
+        generation: active.generation,
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+        },
+      });
+    await expect(invokeActive("call-before-overlap")).resolves.toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const sibling = registerNativeHookRelay({
+      provider: "codex",
+      relayId: active.relayId,
+      sessionId: "session-1",
+      runId: "run-sibling",
+      allowedEvents: ["pre_tool_use"],
+    });
+    // Sibling registration must not stale the active run's generation.
+    await expect(invokeActive("call-during-overlap")).resolves.toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    // Sibling completion must not remove the active run's registration.
+    sibling.unregister();
+    await expect(invokeActive("call-after-sibling-unregister")).resolves.toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(
+      testing
+        .getNativeHookRelayInvocationsForTests()
+        .map((invocation) => [invocation.runId, invocation.toolUseId]),
+    ).toEqual([
+      ["run-active", "call-before-overlap"],
+      ["run-active", "call-during-overlap"],
+      ["run-active", "call-after-sibling-unregister"],
+    ]);
+
+    active.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(active.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(active.relayId)).toEqual([]);
+  });
+
+  it("binds concurrent same-generation registrations to their own run's policy context", async () => {
+    // Regression: two overlapping live runs of one bound thread share
+    // (relayId, generation) and byte-identical persisted hook commands, and
+    // generation-based routing sent the older run's hooks to the newest
+    // sibling — running them under the wrong run's policy context. The
+    // provider-minted turn id claimed at turn start is the run-exact binding.
+    const runPolicyFirst = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const runPolicySecond = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-same-generation-policy",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicyFirst,
+    });
+    first.claimTurn("turn-1");
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicySecond,
+    });
+    second.claimTurn("turn-2");
+    expect(second.generation).toBe(first.generation);
+    const invokeForTurn = (turnId: string, toolUseId: string) =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: turnId,
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+        },
+      });
+
+    // The older run's hook must bind the older registration even though a
+    // newer same-generation sibling is live.
+    await expect(invokeForTurn("turn-1", "call-run-1")).resolves.toMatchObject({ exitCode: 0 });
+    expect(runPolicyFirst).toHaveBeenCalledTimes(1);
+    expect(runPolicySecond).not.toHaveBeenCalled();
+
+    await expect(invokeForTurn("turn-2", "call-run-2")).resolves.toMatchObject({ exitCode: 0 });
+    expect(runPolicyFirst).toHaveBeenCalledTimes(1);
+    expect(runPolicySecond).toHaveBeenCalledTimes(1);
+
+    // Same proof through the loopback bridge transport.
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        event: "pre_tool_use",
+        timeoutMs: 10_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "turn-1",
+          tool_name: "Bash",
+          tool_use_id: "call-run-1-bridge",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    expect(runPolicyFirst).toHaveBeenCalledTimes(2);
+    expect(runPolicySecond).toHaveBeenCalledTimes(1);
+
+    expect(
+      testing
+        .getNativeHookRelayInvocationsForTests()
+        .map((invocation) => [invocation.runId, invocation.toolUseId]),
+    ).toEqual([
+      ["run-1", "call-run-1"],
+      ["run-2", "call-run-2"],
+      ["run-1", "call-run-1-bridge"],
+    ]);
+
+    first.unregister();
+    second.unregister();
+  });
+
+  it("fails closed for unclaimed hooks while same-generation registrations overlap", async () => {
+    const runPolicyFirst = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const runPolicySecond = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-contested-generation",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicyFirst,
+    });
+    first.claimTurn("turn-1");
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicySecond,
+    });
+    const invokeForPayload = (rawPayload: Record<string, unknown>) =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-contested",
+          tool_input: { command: "pnpm test" },
+          ...rawPayload,
+        },
+      });
+
+    // No live registration claimed this turn and two live runs share the
+    // generation: no provable originating run, so policy must fail closed
+    // instead of executing under the newest sibling's context.
+    await expect(invokeForPayload({ turn_id: "turn-unknown" })).rejects.toThrow(
+      "native hook relay bridge stale registration",
+    );
+    // A payload without any turn id is equally unprovable while contested.
+    await expect(invokeForPayload({})).rejects.toThrow(
+      "native hook relay bridge stale registration",
+    );
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+    expect(runPolicyFirst).not.toHaveBeenCalled();
+    expect(runPolicySecond).not.toHaveBeenCalled();
+
+    // Once the older run ends, its claimed selector is stale and must not
+    // downgrade to the surviving sibling even though the generation is no
+    // longer contested.
+    first.unregister();
+    await expect(invokeForPayload({ turn_id: "turn-1" })).rejects.toThrow(
+      "native hook relay bridge stale registration",
+    );
+    await expect(invokeForPayload({ turn_id: "turn-unknown" })).rejects.toThrow(
+      "native hook relay bridge stale registration",
+    );
+    expect(runPolicySecond).not.toHaveBeenCalled();
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+
+    second.unregister();
+  });
+
+  it("refuses a steered duplicate turn claim so hook ownership stays with the original run", async () => {
+    // Codex turn/start is start-or-steer: with run A's turn already active,
+    // run B's turn/start steers it and returns A's ACTIVE turn id. B claiming
+    // that id must never transfer A's live hook and approval routing to B's
+    // policy context.
+    const runPolicyFirst = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const runPolicySecond = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-steered-turn-claim",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicyFirst,
+    });
+    first.claimTurn("turn-live");
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicySecond,
+    });
+    // The steered turn/start handed run-2 the sibling's active turn id.
+    second.claimTurn("turn-live");
+    const invokeForTurn = (turnId: string, toolUseId: string) =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: turnId,
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+        },
+      });
+
+    // The live turn's hooks keep binding the original claimant's policy.
+    await expect(invokeForTurn("turn-live", "call-after-steer")).resolves.toMatchObject({
+      exitCode: 0,
+    });
+    expect(runPolicyFirst).toHaveBeenCalledTimes(1);
+    expect(runPolicySecond).not.toHaveBeenCalled();
+    expect(getOnlyNativeHookRelayInvocation()).toMatchObject({ runId: "run-1" });
+
+    // The refusal is claim-scoped: run-2's own later turn still claims and
+    // routes normally.
+    second.claimTurn("turn-own");
+    await expect(invokeForTurn("turn-own", "call-own-turn")).resolves.toMatchObject({
+      exitCode: 0,
+    });
+    expect(runPolicyFirst).toHaveBeenCalledTimes(1);
+    expect(runPolicySecond).toHaveBeenCalledTimes(1);
+
+    first.unregister();
+    second.unregister();
+  });
+
+  it("fails closed when two live registrations hold the same turn claim", async () => {
+    // claimTurn refuses steer duplicates, but shared module-copy state could
+    // still carry a double claim. That state has no provable owner and must
+    // fail closed instead of resolving to the newest claimant.
+    const runPolicyFirst = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const runPolicySecond = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-double-turn-claim",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicyFirst,
+    });
+    first.claimTurn("turn-dup");
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: runPolicySecond,
+    });
+    // Simulate a claim written by a module copy without steer-duplicate
+    // refusal directly on the shared registration object.
+    const secondRegistration = testing.getNativeHookRelayLiveRegistrationForTests(
+      first.relayId,
+      second.generation,
+    ) as ActiveNativeHookRelayRegistration | undefined;
+    if (secondRegistration?.runId !== "run-2") {
+      throw new Error("Expected the sibling registration to be live");
+    }
+    secondRegistration.claimedTurnIds.add("turn-dup");
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "turn-dup",
+          tool_name: "Bash",
+          tool_use_id: "call-double-claim",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+    expect(runPolicyFirst).not.toHaveBeenCalled();
+    expect(runPolicySecond).not.toHaveBeenCalled();
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+
+    first.unregister();
+    second.unregister();
+  });
+
+  it("routes retained direct-child hooks to their claiming registration during same-generation overlap", async () => {
+    // A retained parent registration owns its claimed child threads even after
+    // a same-generation sibling registers on the relayId; the child's hooks
+    // must bind the claimant, not the newest sibling.
+    const retainedPolicy = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const siblingPolicy = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const retained = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-retained-child-overlap",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-retained",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: retainedPolicy,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => true,
+        allowPreToolUse: (claim) => claim === "child-thread-1",
+        onDispose: () => undefined,
+      },
+    });
+    const sibling = registerNativeHookRelay({
+      provider: "codex",
+      relayId: retained.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-sibling",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: siblingPolicy,
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: retained.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          agent_id: "child-thread-1",
+          turn_id: "child-turn-1",
+          tool_name: "Bash",
+          tool_use_id: "call-child",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    expect(retainedPolicy).toHaveBeenCalledTimes(1);
+    expect(siblingPolicy).not.toHaveBeenCalled();
+    expect(getOnlyNativeHookRelayInvocation()).toMatchObject({ runId: "run-retained" });
+
+    retained.unregister();
+    sibling.unregister();
+  });
+
+  it("holds an open-foreground unclaimed child hook in admission-wait until the child is claimed", async () => {
+    // Regression: subagent-monitor child claims arrive asynchronously, so a
+    // racing child hook can beat its own claim. With a single live retained
+    // registration the hook must reach admission-wait and resolve when the
+    // claim lands — not fail closed as contested.
+    const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-parent",
+    });
+    const relayId = uniqueNativeHookRelayIdForTests("child-admission-wait");
+    const claims = new Map<string, symbol>();
+    const pendingAdmissions = new Map<string, (claim: symbol) => void>();
+    const relay = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-parent",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: hostCapabilities.runBeforeToolCall,
+      assertActive: hostCapabilities.assertActive,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: (claim) => claims.has(claim),
+        // Mirrors the Codex plugin's deferral: unclaimed children wait for
+        // the asynchronous claim instead of failing immediately.
+        awaitForegroundAdmission: (childThreadId) =>
+          new Promise((resolve) => {
+            const existing = claims.get(childThreadId);
+            if (existing) {
+              resolve(() => claims.get(childThreadId) === existing);
+              return;
+            }
+            pendingAdmissions.set(childThreadId, (claim) => {
+              resolve(() => claims.get(childThreadId) === claim);
+            });
+          }),
+        onDispose: () => undefined,
+      },
+    });
+
+    const invocation = invokeNativeHookRelay({
+      provider: "codex",
+      relayId,
+      event: "pre_tool_use",
+      // Real child payloads carry the child's own (unclaimed) turn id; the
+      // child subject must take precedence over turn-selector routing.
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        agent_id: "child-thread-1",
+        turn_id: "child-turn-1",
+        tool_name: "Bash",
+        tool_use_id: "call-child-admission",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(pendingAdmissions.has("child-thread-1")).toBe(true);
+    });
+    // Still in admission-wait: nothing dispatched, nothing recorded.
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+
+    // claimDirectChild equivalent: the monitor claims the child, which
+    // resolves the pending admission.
+    const claim = Symbol("child-thread-1");
+    claims.set("child-thread-1", claim);
+    pendingAdmissions.get("child-thread-1")?.(claim);
+    pendingAdmissions.delete("child-thread-1");
+
+    await expect(invocation).resolves.toMatchObject({ exitCode: 0 });
+    expect(getOnlyNativeHookRelayInvocation()).toMatchObject({ runId: "run-parent" });
+
+    relay.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
+  });
+
+  it("fails closed for an unclaimed child while two retained registrations overlap", async () => {
+    // With two live retained candidates the racing child has no provable
+    // parent; admission-wait would guess, so the hook fails closed instead.
+    const firstPolicy = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const secondPolicy = vi.fn(async () => ({ blocked: false as const, params: {} }));
+    const first = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-contested-child",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: firstPolicy,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: () => undefined,
+      },
+    });
+    const second = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: secondPolicy,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: () => undefined,
+      },
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          agent_id: "child-unclaimed",
+          turn_id: "child-turn-1",
+          tool_name: "Bash",
+          tool_use_id: "call-contested-child",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+    expect(firstPolicy).not.toHaveBeenCalled();
+    expect(secondPolicy).not.toHaveBeenCalled();
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+
+    first.unregister();
+    second.unregister();
+  });
+
+  it("keeps a shared-generation registration live until the last sibling unregisters", async () => {
+    // Bound-thread resumes persist the relay generation, so overlapping runs
+    // of one thread share (relayId, generation). The earlier run's deferred
+    // unregister must not tear down the generation while the newer run needs it.
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-shared-generation",
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: "generation-thread-1",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+    expect(second.generation).toBe(first.generation);
+
+    first.unregister();
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: "generation-thread-1",
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-shared-generation",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(getOnlyNativeHookRelayInvocation()).toMatchObject({
+      relayId: first.relayId,
+      runId: "run-2",
+      toolUseId: "call-shared-generation",
+    });
+
+    second.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(first.relayId)).toBeUndefined();
+  });
+
+  it("fails closed for a generation that unregistered while siblings remain", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-dead-generation",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    first.unregister();
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: first.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-dead-generation",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: second.relayId,
+        generation: second.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-live-generation",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    second.unregister();
+  });
+
+  it("shares one direct bridge across overlapping registrations and cleans up after the last unregister", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-shared-bridge-lifetime",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const before = await waitForNativeHookRelayBridgeRecord(first.relayId);
+
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const during = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    // Re-registration reuses the live bridge: no port/token churn that would
+    // interrupt in-flight hook subprocesses from sibling runs.
+    expect(during.port).toBe(before.port);
+    expect(during.token).toBe(before.token);
+
+    first.unregister();
+    const afterFirstUnregister = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    expect(afterFirstUnregister.port).toBe(before.port);
+    expect(afterFirstUnregister.token).toBe(before.token);
+
+    second.unregister();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(first.relayId)).toBeUndefined();
+  });
+
+  it("renews a non-current registration and extends the shared bridge record", async () => {
+    // Regression: renew previously no-oped once any sibling re-registered the
+    // stable id, so long-running turns lost their relay at the original TTL.
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-sibling-renewal",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      ttlMs: 10_000,
+    });
+    const before = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+      ttlMs: 10_000,
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    first.renew(60_000);
+
+    const after = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    expect(after.port).toBe(before.port);
+    expect(after.token).toBe(before.token);
+    expect(after.expiresAtMs).toBeGreaterThan(before.expiresAtMs);
+    const renewed = testing.getNativeHookRelayLiveRegistrationForTests(
+      first.relayId,
+      first.generation,
+    );
+    expect(renewed?.expiresAtMs).toBe(first.expiresAtMs);
+    expect(first.expiresAtMs).toBeGreaterThan(second.expiresAtMs);
+
+    first.unregister();
+    second.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+  });
+
+  it("rejects registrations at the concurrent cap without evicting live siblings", async () => {
+    const relayId = "codex-registration-cap";
+    const cap = testing.getNativeHookRelayConcurrentRegistrationCapForTests();
+    const handles = Array.from({ length: cap }, (_, index) =>
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId,
+        sessionId: "session-1",
+        runId: `run-${index}`,
+        allowedEvents: ["pre_tool_use"],
+      }),
+    );
+
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toHaveLength(cap);
+    expect(() =>
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId,
+        sessionId: "session-1",
+        runId: "run-over-cap",
+        allowedEvents: ["pre_tool_use"],
+      }),
+    ).toThrow("native hook relay concurrent registration limit reached");
+
+    // The cap rejects the newcomer; it must never evict a live sibling. The
+    // oldest registration stays registered and routable mid-turn.
+    const generations = testing.getNativeHookRelayRegistrationGenerationsForTests(relayId);
+    expect(generations).toHaveLength(cap);
+    expect(generations[0]).toBe(handles[0]?.generation);
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: handles[0]?.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-oldest-live",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    // Releasing one slot makes registration succeed again.
+    handles[0]?.unregister();
+    const replacement = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-after-free",
+      allowedEvents: ["pre_tool_use"],
+    });
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toHaveLength(cap);
+
+    replacement.unregister();
+    for (const handle of handles) {
+      handle.unregister();
+    }
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toEqual([]);
+  });
+
+  it("frees cap slots held by expired registrations instead of rejecting new ones", async () => {
+    const relayId = "codex-registration-cap-expiry";
+    const cap = testing.getNativeHookRelayConcurrentRegistrationCapForTests();
+    const shortLived = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-short",
+      ttlMs: 1,
+      allowedEvents: ["pre_tool_use"],
+    });
+    const longLived = Array.from({ length: cap - 1 }, (_, index) =>
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId,
+        sessionId: "session-1",
+        runId: `run-long-${index}`,
+        allowedEvents: ["pre_tool_use"],
+      }),
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(shortLived.expiresAtMs + 1));
+
+    // Registration-time pruning frees the expired slot, so the cap does not
+    // reject a legitimate new registration.
+    const replacement = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-replacement",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const generations = testing.getNativeHookRelayRegistrationGenerationsForTests(relayId);
+    expect(generations).toHaveLength(cap);
+    expect(generations).not.toContain(shortLived.generation);
+
+    // The expired generation stays fail-closed.
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: shortLived.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-expired",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+
+    vi.useRealTimers();
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: longLived[0]?.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-surviving",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    replacement.unregister();
+    shortLived.unregister();
+    for (const handle of longLived) {
+      handle.unregister();
+    }
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relayId)).toEqual([]);
+  });
+
+  it("keeps a legacy shared-state registration routable and expires it cleanly", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-legacy-shared-state",
+      sessionId: "session-1",
+      runId: "run-legacy",
+      allowedEvents: ["pre_tool_use"],
+    });
+    await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    // Simulate a registration written by an older module copy that predates
+    // the registration slot map: it exists only in the shared `relays` map.
+    testing.simulateLegacyModuleNativeHookRelayRegistrationForTests(relay.relayId);
+    expect(testing.getNativeHookRelayRegistrationGenerationsForTests(relay.relayId)).toEqual([]);
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-legacy-generationless",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: relay.generation,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-legacy-generation",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    // Real Codex payloads always carry a turn id, and a legacy registration
+    // can never claim one; the selector must not strand the compat path.
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "legacy-turn-1",
+          tool_name: "Bash",
+          tool_use_id: "call-legacy-turn-selector",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(relay.expiresAtMs + 1));
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {},
+      }),
+    ).rejects.toThrow("expired");
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
+  });
+
+  it("sweeps an expired legacy shared-state registration during unrelated registration", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-legacy-sweep",
+      sessionId: "session-1",
+      runId: "run-legacy-sweep",
+      ttlMs: 1,
+      allowedEvents: ["pre_tool_use"],
+    });
+    testing.simulateLegacyModuleNativeHookRelayRegistrationForTests(relay.relayId);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(relay.expiresAtMs + 1));
+    const other = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-legacy-sweep-other",
+      sessionId: "session-1",
+      runId: "run-other",
+      allowedEvents: ["pre_tool_use"],
+    });
+    vi.useRealTimers();
+
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationForTests(other.relayId)).toBeDefined();
+    other.unregister();
   });
 
   it("exposes registered relays through the direct hook bridge", async () => {
@@ -1560,7 +2567,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("rejects stale direct bridge requests after stable relay id replacement", async () => {
+  it("rejects stale direct bridge requests after a generation unregisters", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-stale-bridge-request",
@@ -1592,6 +2599,9 @@ describe("native hook relay registry", () => {
       runId: "run-2",
       allowedEvents: ["pre_tool_use"],
     });
+    // Overlapping registrations keep both generations live; staleness begins
+    // when a generation's own registration unregisters.
+    first.unregister();
     staleRequest.sendBody();
 
     await expect(staleRequest.response).resolves.toMatchObject({
@@ -1616,7 +2626,7 @@ describe("native hook relay registry", () => {
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
-  it("rejects late stale direct bridge commands after stable relay id replacement", async () => {
+  it("rejects late stale direct bridge commands after a generation unregisters", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-late-stale-bridge-command",
@@ -1636,6 +2646,7 @@ describe("native hook relay registry", () => {
       runId: "run-2",
       allowedEvents: ["pre_tool_use"],
     });
+    first.unregister();
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -2786,7 +3797,6 @@ describe("native hook relay registry", () => {
       runId: "run-1",
       channelId: "telegram",
     });
-
     const response = await invokeNativeHookRelay({
       provider: "codex",
       relayId: relay.relayId,
@@ -3746,6 +4756,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
       channelId: "telegram",
     });
+    relay.claimTurn("turn-1");
 
     const response = await invokeNativeHookRelay({
       provider: "codex",

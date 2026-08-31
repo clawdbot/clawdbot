@@ -97,6 +97,16 @@ export type NativeHookRelayRegistration = {
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
+  /**
+   * Binds a provider-minted turn id to this registration. Overlapping runs of
+   * one bound thread share (relayId, generation) and their persisted hook
+   * commands are byte-identical, so the payload turn id is the only
+   * run-exact routing key; claiming it keeps this run's hooks from binding a
+   * same-generation sibling's policy context. A turn id already claimed by a
+   * live sibling is refused: a steered turn/start returns the sibling's
+   * ACTIVE turn id, and claiming it would silently transfer hook ownership.
+   */
+  claimTurn: (turnId: string) => void;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
   commandForEvent: (
@@ -202,6 +212,10 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  // Provider turn ids claimed by this registration's run, insertion-ordered
+  // for bounded FIFO eviction. Consulted before generation routing so
+  // same-generation siblings never consume each other's turn hooks.
+  claimedTurnIds: Set<string>;
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
@@ -249,6 +263,9 @@ export type NativeHookRelayBridgeRegistration = {
   stateDbPath: string;
   token: string;
   server: Server;
+  // True from listen() until the server reports listening or errors. Guards
+  // bridge reuse against replacing a server that is still starting up.
+  pendingListen: boolean;
 };
 
 export type NativeHookRelaySharedState = {
@@ -259,4 +276,11 @@ export type NativeHookRelaySharedState = {
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
   permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  // relayId -> live registrations in registration order (oldest first).
+  // Multiple runs on the same agent/session share one stable relayId, and
+  // overlapping runs may even share one generation (bound-thread resume
+  // persists the generation), so every live registration keeps its own slot.
+  // Kept optional-at-runtime so a shared-state object created by an older
+  // module copy under the same global symbol can be upgraded in place.
+  relayRegistrationsById?: Map<string, Set<ActiveNativeHookRelayRegistration>>;
 };

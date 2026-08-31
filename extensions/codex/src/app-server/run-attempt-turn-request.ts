@@ -148,6 +148,14 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      // Bind this turn's native hook traffic to this run's relay registration
+      // immediately: an overlapping same-generation sibling (bound-thread
+      // resume) must never consume this turn's hooks or policy context, and
+      // unclaimed hooks on a contested generation fail closed. Codex
+      // turn/start is start-or-steer — when it steered a sibling's live turn
+      // it returns THAT turn's id, and the relay refuses the duplicate claim
+      // so hook ownership stays with the original claimant.
+      resourceState.nativeHookRelay?.claimTurn(acceptedTurnId);
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
