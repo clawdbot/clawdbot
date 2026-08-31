@@ -59,6 +59,7 @@ describe("Doctor report process output", () => {
     const configPath = path.join(root, "openclaw.json");
     const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
     const tuiSource = path.join(stateDir, "tui", "last-session.json");
+    const agentSource = path.join(stateDir, "agent", "auth.json");
     const loaderPath = path.join(root, "doctor-test-loader.mjs");
     fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -91,7 +92,14 @@ registerHooks({
         mode: "remote",
         remote: { url: "ws://127.0.0.1:1", token: "fixture-token" },
       },
-      agents: { defaults: { workspace: workspaceDir, heartbeat: { every: 5 } } },
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { every: 5 } },
+        entries: {
+          primary: { workspace: workspaceDir },
+          secondary: {},
+        },
+      },
     };
     fs.writeFileSync(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`);
     fs.writeFileSync(
@@ -102,9 +110,12 @@ registerHooks({
       tuiSource,
       `${JSON.stringify({ global: { sessionKey: "agent:main:main", updatedAt: 1 } })}\n`,
     );
+    fs.mkdirSync(path.dirname(agentSource), { recursive: true });
+    fs.writeFileSync(agentSource, "{}\n");
     const configBefore = fs.readFileSync(configPath);
     const workspaceBefore = fs.readFileSync(workspaceSource);
     const tuiBefore = fs.readFileSync(tuiSource);
+    const agentBefore = fs.readFileSync(agentSource);
 
     const refused = runDoctorFix({ root, configPath, loaderPath });
     const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
@@ -115,11 +126,15 @@ registerHooks({
     expect(refusedOutput.match(/Legacy state deferred/g) ?? [], refusedOutput).toHaveLength(1);
     expect(refusedOutput).toContain("Workspace setup and attestations");
     expect(refusedOutput).toContain("TUI last-session pointers");
+    expect(refusedOutput).toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
     expect(refusedOutput).toContain("No listed legacy source was removed.");
     expect(refusedOutput).toContain('rerun "openclaw doctor --fix"');
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
     expect(fs.readFileSync(workspaceSource)).toEqual(workspaceBefore);
     expect(fs.readFileSync(tuiSource)).toEqual(tuiBefore);
+    expect(fs.readFileSync(agentSource)).toEqual(agentBefore);
     expect(fs.readdirSync(workspaceDir)).toEqual(["openclaw-workspace-state.json"]);
     expect(fs.readdirSync(path.dirname(tuiSource))).toEqual(["last-session.json"]);
 
@@ -129,7 +144,11 @@ registerHooks({
         {
           ...invalidConfig,
           agents: {
-            defaults: { workspace: workspaceDir, heartbeat: { every: "30m" } },
+            ...invalidConfig.agents,
+            defaults: {
+              heartbeat: { every: "30m" },
+              systemAgent: { agentId: "primary" },
+            },
           },
         },
         null,
@@ -143,6 +162,10 @@ registerHooks({
     expect(repaired.status, repairedOutput).toBe(0);
     expect(fs.existsSync(workspaceSource)).toBe(false);
     expect(fs.existsSync(tuiSource)).toBe(false);
+    expect(fs.existsSync(agentSource)).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "agents", "primary", "agent", "auth.json"))).toBe(
+      true,
+    );
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
 
     const clean = runDoctorFix({ root, configPath, loaderPath });

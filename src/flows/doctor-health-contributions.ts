@@ -31,7 +31,7 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
 const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
-const MAX_DEFERRED_LEGACY_STATE_OWNERS = 20;
+const MAX_DEFERRED_LEGACY_STATE_DETAILS = 20;
 
 async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<void> {
   if (ctx.options.repair !== true && ctx.options.yes !== true) {
@@ -47,23 +47,29 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
     ...(ctx.env ? { env: ctx.env } : {}),
     legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
   });
-  if (legacyState.preview.length === 0) {
+  const pendingDetails = [
+    ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
+    ...legacyState.preview,
+  ];
+  if (pendingDetails.length === 0) {
     return;
   }
   const { note } = await loadNoteModule();
-  const displayedOwners = legacyState.preview.slice(0, MAX_DEFERRED_LEGACY_STATE_OWNERS);
-  const omittedOwnerCount = legacyState.preview.length - displayedOwners.length;
+  const displayedDetails = pendingDetails.slice(0, MAX_DEFERRED_LEGACY_STATE_DETAILS);
+  const omittedDetailCount = pendingDetails.length - displayedDetails.length;
+  const remediation =
+    ctx.configWriteRefusal === "validation"
+      ? 'Fix the config errors above, then rerun "openclaw doctor --fix".'
+      : 'Resolve the Gateway or cron-store condition above, then rerun "openclaw doctor --fix".';
   note(
     [
-      "Pending owners:",
-      ...displayedOwners,
-      ...(omittedOwnerCount > 0
-        ? [
-            `${omittedOwnerCount} additional pending ${omittedOwnerCount === 1 ? "owner was" : "owners were"} omitted from this bounded report.`,
-          ]
+      "Pending owners and blockers:",
+      ...displayedDetails,
+      ...(omittedDetailCount > 0
+        ? [`${omittedDetailCount} additional pending entries were omitted from this report.`]
         : []),
       "No listed legacy source was removed.",
-      'Fix the config errors above, then rerun "openclaw doctor --fix".',
+      remediation,
     ].join("\n"),
     "Legacy state deferred",
   );
