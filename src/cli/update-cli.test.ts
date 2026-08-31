@@ -185,6 +185,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../infra/update-check.js", () => ({
   checkUpdateStatus: vi.fn(),
+  resolveUpdateInstallKind: vi.fn(),
   compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
     const parse = (value: string | null) => {
       if (!value) {
@@ -503,6 +504,7 @@ const {
   fetchNpmTagVersion,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
+  resolveUpdateInstallKind,
 } = await import("../infra/update-check.js");
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
@@ -520,13 +522,11 @@ const runPostCorePluginConvergenceSpy = vi.spyOn(
   postCorePluginConvergence,
   "runPostCorePluginConvergence",
 );
-const {
-  registerUpdateCli,
-  updateCommand,
-  updateFinalizeCommand,
-  updateStatusCommand,
-  updateWizardCommand,
-} = await import("./update-cli.js");
+const { registerUpdateCli } = await import("./update-cli.js");
+const { updateCommand } = await import("./update-cli/update-command.js");
+const { updateFinalizeCommand } = await import("./update-cli/update-command-finalize.js");
+const { updateStatusCommand } = await import("./update-cli/status.js");
+const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
@@ -611,6 +611,7 @@ describe("update-cli", () => {
 
   const mockPackageInstallStatus = (root: string) => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("package");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root,
       installKind: "package",
@@ -1579,6 +1580,7 @@ describe("update-cli", () => {
     });
     primeNpmChannelTag("latest", "9999.0.0");
     nodeVersionSatisfiesEngine.mockReturnValue(true);
+    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/test/path",
       installKind: "git",
@@ -6386,6 +6388,7 @@ describe("update-cli", () => {
 
     await updateCommand({ dryRun: true });
 
+    expect(serviceReadCommand).toHaveBeenCalledOnce();
     const logs = getLogOutput();
     expect(logs).toContain(`Targeting managed gateway service package root: ${serviceRoot}`);
     expect(logs).toContain(
@@ -6465,19 +6468,30 @@ describe("update-cli", () => {
   });
 
   it.each([
-    { command: "gateway", selected: true },
-    { command: "agent", selected: false },
+    { scenario: "different Node", command: "gateway", sameNode: false, selected: true },
+    { scenario: "non-Gateway command", command: "agent", sameNode: false, selected: false },
+    { scenario: "symlink to current Node", command: "gateway", sameNode: true, selected: false },
   ])(
-    "selects service Node only for a Gateway command ($command)",
-    async ({ command, selected }) => {
+    "plans service Node selection from one inspection ($scenario)",
+    async ({ command, sameNode, selected }) => {
       const root = createCaseDir("openclaw-same-root");
-      const serviceNode = "/opt/other-node/bin/node";
-      const entrypoint = path.join(root, "dist", "index.js");
+      const entrypoint = await writeOpenClawPackageFixture(root, "2026.5.18");
+      let serviceNode = "/opt/other-node/bin/node";
+      if (sameNode) {
+        const nodeAliasDir = path.join(root, "node-bin");
+        await fs.symlink(
+          path.dirname(process.execPath),
+          nodeAliasDir,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        serviceNode = path.join(nodeAliasDir, path.basename(process.execPath));
+      }
       mockPackageInstallStatus(root);
       primeServiceCommand([serviceNode, "--import", "tsx", entrypoint, command]);
 
       await updateCommand({ dryRun: true });
 
+      expect(serviceReadCommand).toHaveBeenCalledOnce();
       const logs = getLogOutput();
       expect(logs).not.toContain("Targeting managed gateway service package root");
       if (selected) {

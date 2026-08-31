@@ -1,10 +1,7 @@
 // Managed gateway service lifecycle before and after an update.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -31,7 +28,6 @@ import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -41,9 +37,7 @@ import { readGatewayServiceState, resolveGatewayService } from "../../daemon/ser
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
-import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -71,14 +65,18 @@ import {
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
 import {
+  assertGatewayServiceManagementAllowedForUpdate,
+  gatewayServiceCommandUsesRoot,
+  GatewayServiceUpdateOwnershipError,
+  resolveGatewayServiceManagementBlockMessageForUpdate,
+} from "./update-command-service-plan.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   isPackageManagerUpdateMode,
   recoverLaunchAgentAndRecheckGatewayHealth,
   shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service-recovery.js";
-
-export { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
@@ -248,41 +246,6 @@ export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
-export class GatewayServiceUpdateOwnershipError extends Error {
-  constructor(message: string, cause: unknown) {
-    super(message, { cause });
-    this.name = "GatewayServiceUpdateOwnershipError";
-  }
-}
-
-export function resolveGatewayServiceManagementBlockMessageForUpdate(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  try {
-    assertGatewayServiceManagementAllowedForUpdate(env);
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
-}
-
-export function assertGatewayServiceManagementAllowedForUpdate(
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  try {
-    assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
-  }
-}
-
-export function isGatewayServiceManagementAllowedForUpdate(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return resolveGatewayServiceManagementBlockMessageForUpdate(env) === undefined;
-}
-
 export class UpdateCommandAbort extends Error {
   constructor() {
     super("openclaw-update-abort");
@@ -297,12 +260,6 @@ export function createAggregateErrorWithCause(
 ): AggregateError {
   return new AggregateError(errors, message, { cause });
 }
-
-export type ManagedServiceRootRedirect = {
-  root: string;
-  previousRoot: string;
-  nodeRunner?: string;
-};
 
 function parsePositivePid(value: unknown): number | null {
   if (typeof value === "number") {
@@ -649,106 +606,6 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
-export function tryResolveInvocationCwd(): string | undefined {
-  try {
-    return process.cwd();
-  } catch {
-    return undefined;
-  }
-}
-
-type PackageRuntimePreflight = {
-  nodeRunner?: string;
-  replacedNodeRunner?: string;
-  targetVersion?: string;
-};
-
-export async function resolvePackageRuntimePreflight(params: {
-  target?: { version: string; nodeEngine: string | null };
-  timeoutMs?: number;
-  nodeRunner?: string;
-  fallbackNodeRunner?: string;
-}): Promise<Result<PackageRuntimePreflight, string>> {
-  const nodeRunner = normalizeOptionalString(params.nodeRunner);
-  const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
-  const target = params.target;
-  if (!target) {
-    return ok(unchanged());
-  }
-  const runtime = await resolvePackageRuntimeForPreflight({
-    nodeRunner,
-    timeoutMs: params.timeoutMs,
-  });
-  const satisfies = nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
-  const targetVersion = target.version;
-  const unchangedRuntime = { ...unchanged(), targetVersion };
-  if (satisfies === true) {
-    return ok(unchangedRuntime);
-  }
-  const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
-  if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
-    const fallbackRuntime = await resolvePackageRuntimeForPreflight({
-      nodeRunner: fallbackNodeRunner,
-      timeoutMs: params.timeoutMs,
-    });
-    const fallbackSatisfies = nodeVersionSatisfiesEngine(
-      fallbackRuntime.version,
-      target.nodeEngine,
-    );
-    if (fallbackSatisfies === true) {
-      return ok({
-        nodeRunner: fallbackNodeRunner,
-        replacedNodeRunner: nodeRunner,
-        targetVersion,
-      });
-    }
-  }
-  if (satisfies !== false) {
-    return ok(unchangedRuntime);
-  }
-  const runtimeLabel = runtime.nodeRunner
-    ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
-    : `Node ${runtime.version ?? "unknown"}`;
-  return resultError(
-    [
-      `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
-      `The requested package requires ${target.nodeEngine}.`,
-      runtime.nodeRunner
-        ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-        : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
-      "Bare `npm i -g openclaw` can silently install an older compatible release.",
-      "After upgrading Node, use `npm i -g openclaw@latest`.",
-    ].join("\n"),
-  );
-}
-
-async function resolvePackageRuntimeForPreflight(params: {
-  nodeRunner?: string;
-  timeoutMs?: number;
-}): Promise<{ version: string | null; nodeRunner?: string }> {
-  const nodeRunner = normalizeOptionalString(params.nodeRunner);
-  if (!nodeRunner) {
-    return { version: process.versions.node ?? null };
-  }
-  const res = await runCommandWithTimeout([nodeRunner, "--version"], {
-    timeoutMs: Math.min(params.timeoutMs ?? 10_000, 10_000),
-  }).catch(() => null);
-  return {
-    version: res?.code === 0 ? res.stdout.trim().replace(/^v/u, "") || null : null,
-    nodeRunner,
-  };
-}
-
-export { disableUpdatedPackageCompileCacheEnv } from "./update-command-service-env.js";
-
-export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const resolvedEnv = { ...env };
-  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
-  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
-  delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-  return resolvedEnv;
-}
-
 export async function resolveUpdatedGatewayRestartPort(params: {
   config?: OpenClawConfig;
   processEnv?: NodeJS.ProcessEnv;
@@ -898,153 +755,6 @@ export async function tryInstallShellCompletion(opts: {
       ),
     );
   }
-}
-
-async function tryRealpathOrResolve(value: string): Promise<string> {
-  return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
-}
-
-function resolveManagedServiceNodeRunner(
-  command: GatewayServiceCommandConfig | null,
-): string | undefined {
-  const args = command?.programArguments ?? [];
-  // Native heap flags and dev loaders separate the executable from the entrypoint.
-  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
-  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
-  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
-}
-
-/**
- * Resolve the node binary baked into the managed gateway service unit,
- * independent of any package root redirect. This detects when the user's
- * current PATH-resolved node differs from the service's baked node even
- * when the package root is the same.
- */
-export async function resolveManagedServiceNodeRunnerOverride(): Promise<string | undefined> {
-  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
-    return undefined;
-  }
-  const command = await resolveGatewayService()
-    .readCommand(process.env, { requireEffective: true })
-    .catch(() => null);
-  const serviceNode = resolveManagedServiceNodeRunner(command);
-  if (!serviceNode) {
-    return undefined;
-  }
-  const currentNode = resolveNodeRunner();
-  const [serviceNodeReal, currentNodeReal] = await Promise.all([
-    tryRealpathOrResolve(serviceNode),
-    tryRealpathOrResolve(currentNode),
-  ]);
-  return serviceNodeReal === currentNodeReal ? undefined : serviceNode;
-}
-
-export async function resolveManagedServicePackageUpdateRoot(params: {
-  root: string;
-}): Promise<ManagedServiceRootRedirect | null> {
-  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
-    return null;
-  }
-  const command = await resolveGatewayService()
-    .readCommand(process.env, { requireEffective: true })
-    .catch(() => null);
-  const layout = await summarizeGatewayServiceLayout(command);
-  const serviceRoot = layout?.packageRoot;
-  if (!serviceRoot || layout.entrypointSourceCheckout === true) {
-    return null;
-  }
-  const [currentRootReal, serviceRootReal] = await Promise.all([
-    tryRealpathOrResolve(params.root),
-    tryRealpathOrResolve(serviceRoot),
-  ]);
-  if (currentRootReal === serviceRootReal) {
-    return null;
-  }
-  const nodeRunner = resolveManagedServiceNodeRunner(command);
-  return {
-    root: serviceRoot,
-    previousRoot: params.root,
-    ...(nodeRunner ? { nodeRunner } : {}),
-  };
-}
-
-export async function gatewayServiceCommandUsesRoot(params: {
-  root: string | undefined;
-  env?: NodeJS.ProcessEnv;
-  command?: GatewayServiceCommandConfig | null;
-}): Promise<boolean | null> {
-  const expectedRoot = normalizeOptionalString(params.root);
-  if (!expectedRoot) {
-    return null;
-  }
-  const command =
-    params.command === undefined
-      ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
-        ? await resolveGatewayService()
-            .readCommand(params.env ?? process.env, { requireEffective: true })
-            .catch(() => null)
-        : null
-      : params.command;
-  const layout = await summarizeGatewayServiceLayout(command);
-  const serviceRoot = layout?.packageRoot;
-  const serviceEntrypoint = layout?.entrypoint;
-  if (
-    !serviceRoot ||
-    !serviceEntrypoint ||
-    (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
-  ) {
-    return null;
-  }
-  const [expectedRootReal, serviceRootReal] = await Promise.all([
-    tryRealpathOrResolve(expectedRoot),
-    tryRealpathOrResolve(serviceRoot),
-  ]);
-  if (expectedRootReal === serviceRootReal) {
-    return true;
-  }
-  // Paired read-only release mounts have different paths but the same directory
-  // identity. Copies of another release must remain foreign.
-  const [expected, actual] = await Promise.all(
-    [expectedRootReal, serviceRootReal].map((root) => fs.stat(root).catch(() => null)),
-  );
-  if (expected && actual && expected.dev === actual.dev && expected.ino === actual.ino) {
-    return true;
-  }
-  const managed = command?.managedDefinition;
-  if (
-    !managed ||
-    (await gatewayServiceCommandUsesRoot({ root: expectedRoot, command: managed })) !== true
-  ) {
-    return false;
-  }
-  const namespace = path.dirname(expectedRootReal);
-  const managedLayout = await summarizeGatewayServiceLayout(managed);
-  const stableEntry = path.join(
-    namespace,
-    "current",
-    "dist",
-    path.basename(managedLayout?.entrypoint ?? ""),
-  );
-  if (serviceEntrypoint !== stableEntry) {
-    return false;
-  }
-  // Deployment-owned current points into this installation's releases, either
-  // by symlink or by a paired bind mount. Unrelated namespaces remain foreign.
-  const releases = path.join(namespace, "releases");
-  if (serviceRootReal.startsWith(`${releases}${path.sep}`)) {
-    return true;
-  }
-  try {
-    for await (const entry of await fs.opendir(releases)) {
-      const candidate = await fs.lstat(path.join(releases, entry.name));
-      if (actual && candidate.dev === actual.dev && candidate.ino === actual.ino) {
-        return true;
-      }
-    }
-  } catch {
-    // Without directory identity proof, the override cannot authorize lifecycle actions.
-  }
-  return false;
 }
 
 export async function maybeRestartService(params: {

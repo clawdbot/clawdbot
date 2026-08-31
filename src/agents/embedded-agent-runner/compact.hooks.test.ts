@@ -1857,7 +1857,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           "## Exact identifiers",
           "None.",
         ].join("\n");
-        const expectedSummaryRequest = `## Latest user request context\n${JSON.stringify("Compare the remaining options.")}`;
+        const expectedSummaryRequest = `Latest user request context: ${JSON.stringify("Keep the rollout notes.")}`;
         const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
         for (const content of [
           "Review the deployment checklist.",
@@ -1949,7 +1949,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const configBefore = structuredClone(config);
 
         const result = await compactEmbeddedAgentSessionDirect(
-          wrappedCompactionArgs({ provider: "openai", model: primary, config }),
+          wrappedCompactionArgs({
+            provider: "openai",
+            model: primary,
+            trigger: "overflow",
+            config,
+          }),
         );
 
         expect([...new Set(requestedModels)], JSON.stringify(result)).toEqual(
@@ -1972,6 +1977,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
           ).toMatchObject({
             summary: expect.stringContaining(expectedSummaryRequest),
+            details: {
+              latestUnresolvedUserRequest: "Keep the rollout notes.",
+            },
           });
         } else {
           expect(result).toMatchObject({ ok: false, compacted: false });
@@ -3045,13 +3053,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       );
 
       expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(sessionAutomaticCompactionMock).toHaveBeenCalledOnce();
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+        TEST_CUSTOM_INSTRUCTIONS,
+        trigger === "overflow" ? "unresolved" : undefined,
+        undefined,
+      );
       expect(sessionManualCompactionMock).not.toHaveBeenCalled();
       expect(buildEmbeddedExtensionFactoriesMock).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
       expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
     },
   );
+
+  it("carries unresolved request state into safeguard overflow compaction", async () => {
+    resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ trigger: "overflow" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+      TEST_CUSTOM_INSTRUCTIONS,
+      "unresolved",
+      "none",
+    );
+    expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+  });
 
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [

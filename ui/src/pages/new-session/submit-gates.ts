@@ -59,7 +59,7 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
   if (place.repository.kind === "checking") {
     return t("newSession.checkingGit");
   }
-  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+  if (place.repository.kind === "unavailable") {
     return t("newSession.gitCheckUnavailable");
   }
   return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");

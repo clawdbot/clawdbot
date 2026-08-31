@@ -63,6 +63,11 @@ are labeled explicitly. The final total includes plugin updates and requested
 Gateway restart checks. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+For source checkouts, `--dry-run` previews the update flow without fetching Git
+refs or checking working-tree changes. The real update checks for uncommitted
+changes before modifying the checkout. Use `openclaw update status` to inspect
+the current branch, version, and update availability.
+
 <Note>
 In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` and `openclaw update --dry-run` remain read-only.
 </Note>
