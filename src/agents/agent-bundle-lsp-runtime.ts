@@ -257,6 +257,7 @@ function sendRequest(
   params?: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  // Disposal closes tool requests before the child finishes its shutdown handshake.
   if (session.disposed && method !== "shutdown") {
     return Promise.reject(lspSessionDisposedError());
   }
@@ -387,6 +388,8 @@ async function disposeSession(session: LspSession) {
     return;
   }
   session.disposed = true;
+  // Release abort listeners before shutdown forbids cancellation notifications.
+  session.pendingRequests.rejectAll(lspSessionDisposedError());
   activeBundleLspSessions.delete(session);
 
   if (session.initialized) {
