@@ -29,8 +29,7 @@ import {
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -54,16 +53,18 @@ import {
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
-  renderExpandedToolCardContent,
-  renderRawOutputToggle,
   renderToolApprovalReviews,
   renderToolCard,
-  renderToolOutcome,
   renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
+import {
+  renderExpandedToolCardContent,
+  renderRawOutputToggle,
+  renderToolOutcome,
+} from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 
 function renderChatIcon(name: string) {

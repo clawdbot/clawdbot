@@ -1,6 +1,7 @@
 import { vi } from "vitest";
-import type { ChatHistoryResult, ChatState } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { handleAgentEvent, ToolStreamEntry } from "./tool-stream.ts";
 
 export type TestState = ChatState & Parameters<typeof handleAgentEvent>[0];

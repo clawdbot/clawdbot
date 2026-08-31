@@ -2,15 +2,12 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  loadChatHistory,
-  rewindChatHistory,
-  syncSelectedSessionMessageSubscription,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
-  type ChatState,
-} from "./chat-history.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,

@@ -5,12 +5,13 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory,
   createState,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitInitialUserMessageHandoff,
