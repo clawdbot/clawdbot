@@ -397,14 +397,14 @@ describe("Hermes migration config mapping", () => {
     expect(itemById(plan.items, "config:mcp-server:utilities_only")?.details?.value).toEqual({
       utilities_only: {
         command: "utilities-only",
-        toolFilter: { exclude: ["resources_list", "resources_read"] },
+        toolFilter: { include: ["prompts_list", "prompts_get"] },
       },
     });
     expect(itemById(plan.items, "config:mcp-server:no_tools")?.details?.value).toEqual({
       no_tools: {
         command: "no-tools",
         toolFilter: {
-          exclude: ["resources_list", "resources_read", "prompts_list", "prompts_get"],
+          exclude: ["*"],
         },
       },
     });

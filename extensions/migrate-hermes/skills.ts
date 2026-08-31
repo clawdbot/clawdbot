@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { exists, sanitizeName } from "./helpers.js";
+import { exists, readText, sanitizeName } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
@@ -33,20 +33,30 @@ const EXCLUDED_SKILL_DIRS = new Set([
 const SKILL_SUPPORT_DIRS = new Set(["references", "templates", "assets", "scripts"]);
 
 async function discoverSkillRoots(root: string): Promise<string[]> {
-  const hasSkill = await exists(path.join(root, "SKILL.md"));
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const roots: string[] = hasSkill ? [root] : [];
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (
-      !entry.isDirectory() ||
-      EXCLUDED_SKILL_DIRS.has(entry.name) ||
-      (hasSkill && SKILL_SUPPORT_DIRS.has(entry.name))
-    ) {
-      continue;
+  const orgRoot = path.join(root, "_org");
+  const activeOrg = (await readText(path.join(orgRoot, ".active_org")))?.trim();
+  async function visit(dir: string): Promise<string[]> {
+    const hasSkill = await exists(path.join(dir, "SKILL.md"));
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const roots: string[] = hasSkill ? [dir] : [];
+    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+      const child = path.join(dir, entry.name);
+      // Hermes retains old org mirrors on disk, but only the marked org is active.
+      const inactiveOrg =
+        (child === orgRoot && !activeOrg) || (dir === orgRoot && entry.name !== activeOrg);
+      if (
+        !entry.isDirectory() ||
+        EXCLUDED_SKILL_DIRS.has(entry.name) ||
+        (hasSkill && SKILL_SUPPORT_DIRS.has(entry.name)) ||
+        inactiveOrg
+      ) {
+        continue;
+      }
+      roots.push(...(await visit(child)));
     }
-    roots.push(...(await discoverSkillRoots(path.join(root, entry.name))));
+    return roots;
   }
-  return roots;
+  return await visit(root);
 }
 
 export async function buildSkillItems(params: {

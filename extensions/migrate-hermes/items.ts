@@ -21,6 +21,7 @@ export const HERMES_REASON_AUTH_PROFILE_WRITE_FAILED = "failed to write auth pro
 export function createHermesModelItem(params: {
   model: string;
   currentModel?: string;
+  targetAgentId?: string;
   overwrite?: boolean;
 }): MigrationItem {
   const alreadyConfigured = params.currentModel === params.model;
@@ -29,7 +30,7 @@ export function createHermesModelItem(params: {
     id: "config:default-model",
     kind: "config",
     action: alreadyConfigured ? "skip" : "update",
-    target: "agents.defaults.model",
+    target: params.targetAgentId ? `agent:${params.targetAgentId}:model` : "agents.defaults.model",
     status: alreadyConfigured ? "skipped" : conflict ? "conflict" : "planned",
     reason: alreadyConfigured
       ? HERMES_REASON_ALREADY_CONFIGURED

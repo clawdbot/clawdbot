@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseYaml } from "yaml";
 import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
 import { providerConfig } from "./config-provider-contract.js";
 import {
@@ -15,18 +16,34 @@ import {
   collectHermesProviders,
   providerManualItems,
 } from "./config-providers.js";
-import { childRecord, sanitizeName } from "./helpers.js";
+import { childRecord, readStringArray, sanitizeName } from "./helpers.js";
 
 function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> | undefined {
-  const entries: Record<string, unknown> = {};
-  for (const [skillKey, value] of Object.entries(
-    childRecord(childRecord(config, "skills"), "config"),
-  )) {
+  const skills = childRecord(config, "skills");
+  const entries = new Map<string, { config?: Record<string, unknown>; enabled?: false }>();
+  for (const [skillKey, value] of Object.entries(childRecord(skills, "config"))) {
     if (isRecord(value)) {
-      entries[skillKey] = { config: value };
+      entries.set(skillKey, { config: value });
     }
   }
-  return Object.keys(entries).length > 0 ? entries : undefined;
+  let disabled = skills.disabled;
+  // Hermes config commands also persist JSON/Python array strings. YAML accepts
+  // both list forms without evaluating source code; malformed strings stay names.
+  if (typeof disabled === "string" && disabled.trimStart().startsWith("[")) {
+    try {
+      disabled = parseYaml(disabled);
+    } catch {
+      // Hermes treats a malformed list string as a single skill name.
+    }
+  }
+  for (const value of readStringArray(Array.isArray(disabled) ? disabled : [disabled])) {
+    const skillKey = value.trim();
+    // Hermes always keeps its operating manual active, even in skills.disabled.
+    if (skillKey !== "hermes-agent") {
+      entries.set(skillKey, { ...entries.get(skillKey), enabled: false });
+    }
+  }
+  return entries.size > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 export function buildConfigItems(params: {
@@ -190,7 +207,7 @@ export function buildConfigItems(params: {
         target: "skills.entries",
         path: ["skills", "entries"],
         value: skillEntries,
-        message: "Import Hermes skill config values.",
+        message: "Import Hermes skill config values and global disabled state.",
         conflict:
           !params.ctx.overwrite &&
           hasMigrationConfigPatchConflict(params.ctx.config, ["skills", "entries"], skillEntries),
