@@ -1275,6 +1275,16 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     {
+      name: "selects compiler-owned graphs for core test leaf changes",
+      path: "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+      expected: {
+        lanes: { coreTests: true },
+        includes: ["tsgo:core:test"],
+        excludes: ["tsgo:core"],
+        coreTestChecks: ["checkBoundary", "checkTypes"],
+      },
+    },
+    {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",
       expected: {
@@ -1303,9 +1313,13 @@ describe("scripts/changed-lanes", () => {
     },
   ])("$name", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
-    const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
+    const plan = createChangedCheckPlan(result);
+    const commands = plan.commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, expected.lanes);
+    expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
+      "coreTestChecks" in expected ? expected.coreTestChecks : [],
+    );
     for (const command of expected.includes) {
       expect(commands).toContain(command);
     }
@@ -2277,11 +2291,11 @@ describe("scripts/changed-lanes", () => {
         platform: "linux",
         swiftlintAvailable,
       });
-      const commands = plan.commands.map((command) => command.args[0]);
+      const commands = new Set(plan.commands.map((command) => command.args[0]));
 
-      expect(commands.includes("android:lint")).toBe(androidLint);
-      expect(commands.includes("lint:apps")).toBe(swiftlintAvailable);
-      expect(commands.includes("test:macos:ci")).toBe(macosCi);
+      expect(commands.has("android:lint")).toBe(androidLint);
+      expect(commands.has("lint:apps")).toBe(swiftlintAvailable);
+      expect(commands.has("test:macos:ci")).toBe(macosCi);
       expect(
         plan.commands.some(
           (command) => command.name === "lint apps (swiftlint unavailable on this host)",
