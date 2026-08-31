@@ -808,7 +808,7 @@ install_baseline() {
   fi
 }
 
-seed_state() {
+initialize_state() {
   local account_home=""
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
   if [ "$ROOT_MANAGED_VPS" = "1" ]; then
@@ -834,6 +834,9 @@ seed_state() {
     export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
+}
+
+seed_state() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
 
@@ -1001,7 +1004,6 @@ prepare_update_restart_probe() {
   if [ "$probe_status" -ne 0 ]; then
     return "$probe_status"
   fi
-  assert_baseline_state
 }
 
 assert_baseline_state() {
@@ -1368,14 +1370,15 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
-phase seed-state seed_state
+phase initialize-state initialize_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 phase validate-baseline-config validate_baseline_config
-if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
-  # Published 8.1 refuses roster changes with ownerless legacy cron jobs. Seed
-  # these migration specimens after config authoring without repairing their ownership.
-  phase seed-cron-scheduled-authority node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron-scheduled-authority
-fi
+phase resolve-candidate resolve_candidate_version
+phase configure-clawhub-fixture configure_clawhub_fixture
+phase prepare-update-restart-probe prepare_update_restart_probe
+# Finish baseline config/service setup before injecting migration specimens.
+# Only candidate update/Doctor may repair them; baseline startup must see clean state.
+phase seed-state seed_state
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
@@ -1391,7 +1394,6 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase seed-recovery-state node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs seed
 fi
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
-phase resolve-candidate resolve_candidate_version
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   if [ "$CANDIDATE_KIND" != "tarball" ]; then
     echo "recovery-cleanup requires one packed candidate tarball" >&2
@@ -1399,8 +1401,6 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
   fi
   phase recovery-package-evidence node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs packages "$baseline_spec" "$CANDIDATE_SPEC"
 fi
-phase configure-clawhub-fixture configure_clawhub_fixture
-phase prepare-update-restart-probe prepare_update_restart_probe
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
 if [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; then

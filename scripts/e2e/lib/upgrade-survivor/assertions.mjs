@@ -376,6 +376,9 @@ function seedState() {
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
+  if (scenario === "cron-scheduled-authority") {
+    seedLegacyCronScheduledAuthority(stateDir);
+  }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
       path.join(
@@ -1530,12 +1533,6 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
-} else if (command === "seed-cron-scheduled-authority") {
-  assert(
-    getScenario() === "cron-scheduled-authority",
-    "cron seed requires the cron-scheduled-authority scenario",
-  );
-  seedLegacyCronScheduledAuthority(requireEnv("OPENCLAW_STATE_DIR"));
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
