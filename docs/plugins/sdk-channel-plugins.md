@@ -434,6 +434,12 @@ metadata. Replacing either starts fresh target metadata, so a new session cannot
 inherit the previous plugin owner, agent, or label. Keep conversation transport
 details and explicit lifecycle settings separate from target metadata.
 
+Preserve opaque plugin ownership metadata when projecting binding records.
+Plugin-owned targets do not require an OpenClaw agent id; use
+`isPluginOwnedSessionBindingRecord(...)` from
+`openclaw/plugin-sdk/conversation-binding-runtime` to distinguish them from
+agent-owned targets before resolving an agent.
+
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code. Core owns same-chat

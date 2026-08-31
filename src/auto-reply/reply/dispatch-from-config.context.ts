@@ -4,7 +4,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";

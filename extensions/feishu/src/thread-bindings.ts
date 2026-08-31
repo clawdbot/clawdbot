@@ -1,6 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Feishu plugin module implements thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -30,6 +31,7 @@ type FeishuThreadBindingRecord = {
   boundBy?: string;
   boundAt: number;
   lastActivityAt: number;
+  metadata?: Record<string, unknown>;
 };
 
 type FeishuThreadBindingManager = {
@@ -111,6 +113,7 @@ function toSessionBindingRecord(
     boundAt: record.boundAt,
     expiresAt,
     metadata: {
+      ...record.metadata,
       agentId: record.agentId,
       label: record.label,
       boundBy: record.boundBy,
@@ -200,6 +203,8 @@ export function createFeishuThreadBindingManager(params: {
         existingLocal.targetKind === storedTargetKind
           ? existingLocal
           : undefined;
+      // A plugin's opaque target has no agent owner, including on metadata-omitting refreshes.
+      const targetMetadata = { ...previous?.metadata, ...metadata };
       const now = Date.now();
       const record: FeishuThreadBindingRecord = {
         accountId,
@@ -219,14 +224,17 @@ export function createFeishuThreadBindingManager(params: {
         agentId:
           normalizeOptionalString(metadata?.agentId) ??
           previous?.agentId ??
-          resolveSessionAgentIdStrict({
-            config: params.cfg,
-            sessionKey: normalizedTargetSessionKey,
-          }),
+          (isPluginOwnedSessionBindingRecord({ metadata: targetMetadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({
+                config: params.cfg,
+                sessionKey: normalizedTargetSessionKey,
+              })),
         label: normalizeOptionalString(metadata?.label) ?? previous?.label,
         boundBy: normalizeOptionalString(metadata?.boundBy) ?? previous?.boundBy,
         boundAt: now,
         lastActivityAt: now,
+        metadata: targetMetadata,
       };
       getState().bindingsByAccountConversation.set(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
