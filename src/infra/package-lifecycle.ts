@@ -7,8 +7,9 @@ import {
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
-const PACKAGE_LIFECYCLE_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS = 20 * 60_000;
 const PACKAGE_LIFECYCLE_LOCK_POLL_MS = 100;
+const PACKAGE_LIFECYCLE_LOCK_RECOVERY_GRACE_MS = 20 * 60_000;
 
 export type PackageLifecycleScript = Readonly<{
   name: "preinstall" | "postinstall";
@@ -25,10 +26,9 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
-// Each script can consume its full timeout. Keep one extra window so scheduler and
-// filesystem overhead cannot make a live owner look stale between scripts.
-const PACKAGE_LIFECYCLE_LOCK_STALE_MS =
-  PACKAGE_LIFECYCLE_TIMEOUT_MS * (PACKAGE_LIFECYCLE_SCRIPTS.length + 1);
+function resolveLifecycleBudgetMs(scriptTimeoutMs: number): number {
+  return scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length;
+}
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
@@ -68,23 +68,41 @@ async function ensurePendingMarker(markerPath: string): Promise<void> {
   }
 }
 
-async function acquireLifecycleLock(paths: ReturnType<typeof resolveLifecyclePaths>) {
-  const deadline = Date.now() + PACKAGE_LIFECYCLE_TIMEOUT_MS;
+async function acquireLifecycleLock(
+  paths: ReturnType<typeof resolveLifecyclePaths>,
+  scriptTimeoutMs: number,
+) {
+  let waitDeadline =
+    Date.now() +
+    resolveLifecycleBudgetMs(scriptTimeoutMs) +
+    PACKAGE_LIFECYCLE_LOCK_RECOVERY_GRACE_MS;
   while (await isPackageLifecyclePending(paths)) {
     try {
       await fs.mkdir(paths.lock);
+      const ownerDeadline = new Date(Date.now() + resolveLifecycleBudgetMs(scriptTimeoutMs));
+      try {
+        // The directory mtime carries the owner's full script budget across processes.
+        // Recovery grace also protects the short mkdir-to-utimes ownership window.
+        await fs.utimes(paths.lock, ownerDeadline, ownerDeadline);
+      } catch (error) {
+        await fs.rmdir(paths.lock).catch(() => undefined);
+        throw error;
+      }
       return async () => await fs.rmdir(paths.lock).catch(() => undefined);
     } catch (error) {
       if (!hasErrorCode(error, "EEXIST")) {
         throw error;
       }
       const stat = await fs.stat(paths.lock).catch(() => null);
-      // Lifecycle subprocesses share this deadline. An older lock cannot still own live work.
-      if (stat && Date.now() - stat.mtimeMs >= PACKAGE_LIFECYCLE_LOCK_STALE_MS) {
-        await fs.rmdir(paths.lock).catch(() => undefined);
-        continue;
+      if (stat) {
+        const staleAt = stat.mtimeMs + PACKAGE_LIFECYCLE_LOCK_RECOVERY_GRACE_MS;
+        waitDeadline = Math.max(waitDeadline, staleAt);
+        if (Date.now() >= staleAt) {
+          await fs.rmdir(paths.lock).catch(() => undefined);
+          continue;
+        }
       }
-      if (Date.now() >= deadline) {
+      if (Date.now() >= waitDeadline) {
         throw new Error("timed out waiting for another OpenClaw package lifecycle", {
           cause: error,
         });
@@ -97,13 +115,17 @@ async function acquireLifecycleLock(paths: ReturnType<typeof resolveLifecyclePat
   return null;
 }
 
-function runPackageLifecycleScript(packageRoot: string, script: PackageLifecycleScript): void {
+function runPackageLifecycleScript(
+  packageRoot: string,
+  script: PackageLifecycleScript,
+  timeoutMs: number,
+): void {
   const scriptPath = path.join(packageRoot, script.relativePath);
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd: packageRoot,
     env: process.env,
     stdio: "inherit",
-    timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
   if (result.error) {
     throw result.error;
@@ -118,14 +140,16 @@ function runPackageLifecycleScript(packageRoot: string, script: PackageLifecycle
 export async function completePendingPackageLifecycle(params: {
   packageRoot: string;
   runScript?: (script: PackageLifecycleScript) => void | Promise<void>;
+  timeoutMs?: number;
 }): Promise<boolean> {
   const packageRoot = path.resolve(params.packageRoot);
+  const scriptTimeoutMs = params.timeoutMs ?? DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS;
   const paths = resolveLifecyclePaths(packageRoot);
   if (!(await isPackageLifecyclePending(paths))) {
     return false;
   }
 
-  const releaseLock = await acquireLifecycleLock(paths);
+  const releaseLock = await acquireLifecycleLock(paths, scriptTimeoutMs);
   if (!releaseLock) {
     return false;
   }
@@ -137,7 +161,8 @@ export async function completePendingPackageLifecycle(params: {
     // Postinstall alone clears the canonical marker after all lifecycle work succeeds.
     await ensurePendingMarker(paths.pending);
     const runScript =
-      params.runScript ?? ((script) => runPackageLifecycleScript(packageRoot, script));
+      params.runScript ??
+      ((script) => runPackageLifecycleScript(packageRoot, script, scriptTimeoutMs));
     for (const script of PACKAGE_LIFECYCLE_SCRIPTS) {
       await runScript(script);
     }

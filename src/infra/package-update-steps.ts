@@ -1111,6 +1111,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       try {
         await completePendingPackageLifecycle({
           packageRoot: verificationPackageRoot,
+          timeoutMs: params.timeoutMs,
           runScript: async (script) => {
             const lifecycleStep = await params.runStep({
               name: `pnpm package ${script.name}`,

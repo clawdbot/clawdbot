@@ -63,7 +63,11 @@ describe("package lifecycle completion", () => {
     });
   });
 
-  it("does not expire a live lock within the full lifecycle script budget", async () => {
+  it.each([
+    ["default update", 30 * 60_000],
+    ["automatic update", 45 * 60_000],
+    ["explicit longer update", 75 * 60_000],
+  ])("records the %s lifecycle budget on its lock", async (_name, scriptTimeoutMs) => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-lock-" }, async (packageRoot) => {
       const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
       await fs.writeFile(markerPath, "pending\n");
@@ -89,15 +93,20 @@ describe("package lifecycle completion", () => {
         }
       };
 
-      const first = completePendingPackageLifecycle({ packageRoot, runScript });
+      const startedAt = Date.now();
+      const first = completePendingPackageLifecycle({
+        packageRoot,
+        runScript,
+        timeoutMs: scriptTimeoutMs,
+      });
       await firstPreinstall;
-      const staleAtOldThreshold = new Date(Date.now() - 20 * 60_000);
-      await fs.utimes(
-        path.join(packageRoot, ".openclaw-lifecycle-lock"),
-        staleAtOldThreshold,
-        staleAtOldThreshold,
-      );
-      const second = completePendingPackageLifecycle({ packageRoot, runScript });
+      const lockStat = await fs.stat(path.join(packageRoot, ".openclaw-lifecycle-lock"));
+      expect(lockStat.mtimeMs).toBeGreaterThanOrEqual(startedAt + scriptTimeoutMs * 2 - 1_000);
+      const second = completePendingPackageLifecycle({
+        packageRoot,
+        runScript,
+        timeoutMs: scriptTimeoutMs,
+      });
       const secondResult = second.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
