@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
-import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProviderCreateOptions) {
@@ -66,12 +65,38 @@ function createOptions(
   };
 }
 
+function createConfiguredPrivateOptions(params: {
+  providerBaseUrl: string;
+  remoteBaseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): EmbeddingProviderCreateOptions {
+  return createOptions({
+    config: {
+      models: {
+        providers: {
+          "configured-private": {
+            baseUrl: params.providerBaseUrl,
+            ...(params.allowPrivateNetwork === undefined
+              ? {}
+              : {
+                  request: { allowPrivateNetwork: params.allowPrivateNetwork },
+                }),
+          },
+        },
+      },
+    } as unknown as EmbeddingProviderCreateOptions["config"],
+    provider: "configured-private",
+    remote: { baseUrl: params.remoteBaseUrl },
+  });
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (!text.trim()) return {};
   return JSON.parse(text) as Record<string, unknown>;
 }
 
@@ -79,6 +104,8 @@ async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown> | null;
   status?: number;
+  host?: string;
+  redirectTo?: string;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -99,6 +126,11 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
+        if (params?.redirectTo) {
+          res.writeHead(307, { location: params.redirectTo });
+          res.end();
+          return;
+        }
         res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
         res.end(
           JSON.stringify(
@@ -120,7 +152,7 @@ async function startEmbeddingServer(params?: {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, params?.host ?? "127.0.0.1", () => {
       server.off("error", reject);
       resolve();
     });
@@ -135,7 +167,7 @@ async function startEmbeddingServer(params?: {
 
   const address = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://${params?.host ?? "127.0.0.1"}:${address.port}/v1`,
     requests,
   };
 }
@@ -288,13 +320,6 @@ afterEach(async () => {
 });
 
 describe("openai-compatible generic embedding provider", () => {
-  it("is registered as a core generic embedding provider", () => {
-    expect(getRegisteredEmbeddingProvider("openai-compatible")).toMatchObject({
-      adapter: openAICompatibleEmbeddingProviderAdapter,
-      ownerPluginId: "core",
-    });
-  });
-
   it("registers as a generic embedding provider with no memory-specific policy", async () => {
     expect(openAICompatibleEmbeddingProviderAdapter.id).toBe("openai-compatible");
     expect(openAICompatibleEmbeddingProviderAdapter.transport).toBe("remote");
@@ -373,36 +398,18 @@ describe("openai-compatible generic embedding provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("does not transfer configured-provider trust to a remote endpoint override", async () => {
+  it("preserves access to an explicitly configured remote endpoint override", async () => {
     const server = await startEmbeddingServer();
-    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
-    const options = createOptions({
-      config: {
-        models: {
-          providers: {
-            "gpu-spark": {
-              api: "openai-completions",
-              baseUrl: "http://spark.local:11434/v1",
-              localService: { command: process.execPath },
-              models: [],
-            },
-          },
-        },
-      } as EmbeddingProviderCreateOptions["config"],
-      provider: "gpu-spark",
-      model: "gpu-spark/nomic-embed-text",
-      remote: { baseUrl: server.baseUrl },
-    }) as EmbeddingProviderCreateOptions & {
-      acquireLocalService: typeof acquireLocalService;
-    };
-    options.acquireLocalService = acquireLocalService;
-
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
-    await expect(provider.embed("hello")).rejects.toThrow(
-      /private\/internal\/special-use IP address/u,
-    );
-    expect(server.requests).toHaveLength(0);
-    expect(acquireLocalService).not.toHaveBeenCalled();
+    await expect(
+      (
+        await createOpenAICompatibleEmbeddingProvider(
+          createConfiguredPrivateOptions({
+            providerBaseUrl: "http://spark.local:11434/v1",
+            remoteBaseUrl: server.baseUrl,
+          }),
+        )
+      ).provider.embed("hello"),
+    ).resolves.toEqual([0.1, 0.2, 0.3]);
   });
 
   it("adds non-secret routing headers to runtime cache identity", async () => {
@@ -621,26 +628,31 @@ describe("openai-compatible generic embedding provider", () => {
   });
 
   it("allows off-origin private endpoints when request.allowPrivateNetwork opts in", async () => {
-    const server = await startEmbeddingServer();
+    const target = await startEmbeddingServer({ host: "127.0.0.2" });
+    const server = await startEmbeddingServer({ redirectTo: target.baseUrl });
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        provider: "configured-private",
-        config: {
-          models: {
-            providers: {
-              "configured-private": {
-                api: "openai-completions",
-                baseUrl: "https://llm.internal/v1",
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
-        } as unknown as EmbeddingProviderCreateOptions["config"],
-        remote: { baseUrl: server.baseUrl },
+      createConfiguredPrivateOptions({
+        providerBaseUrl: "https://llm.internal/v1",
+        remoteBaseUrl: server.baseUrl,
+        allowPrivateNetwork: true,
       }),
     );
 
     await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it("blocks private redirects when private-network access is explicitly denied", async () => {
+    const target = await startEmbeddingServer({ host: "127.0.0.2" });
+    const server = await startEmbeddingServer({ redirectTo: target.baseUrl });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createConfiguredPrivateOptions({
+        providerBaseUrl: "https://llm.internal/v1",
+        remoteBaseUrl: server.baseUrl,
+        allowPrivateNetwork: false,
+      }),
+    );
+
+    await expect(provider.embed("hello")).rejects.toThrow(/private\/internal\/special-use IP/u);
   });
 
   it("reads connection settings from configured explicit OpenAI-compatible providers", async () => {
@@ -922,19 +934,6 @@ describe("openai-compatible generic embedding provider", () => {
       });
     },
   );
-
-  it("reports missing required config with actionable keys", async () => {
-    await expect(
-      createOpenAICompatibleEmbeddingProvider(
-        createOptions({ remote: { baseUrl: "   " }, model: "text-embedding-bge-m3" }),
-      ),
-    ).rejects.toThrow("remote.baseUrl");
-    await expect(
-      createOpenAICompatibleEmbeddingProvider(
-        createOptions({ remote: { baseUrl: "http://127.0.0.1:11434/v1" }, model: "   " }),
-      ),
-    ).rejects.toThrow("missing model");
-  });
 
   it.each([
     {

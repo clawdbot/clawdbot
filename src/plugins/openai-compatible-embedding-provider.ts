@@ -14,7 +14,7 @@ import type { ModelApi, ModelProviderLocalServiceConfig } from "../config/types.
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { mergeSsrFPolicies, type SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -357,21 +357,14 @@ async function createOpenAICompatibleEmbeddingClient(
         : { allowPrivateNetwork: configuredProvider.request.allowPrivateNetwork },
   });
   const privateNetworkExplicitlyDenied = configuredProvider?.request?.allowPrivateNetwork === false;
-  const trustConfiguredBaseUrlOrigin = requestPolicy.trustConfiguredBaseUrlOrigin;
   const configuredEndpointSsrFPolicy = resolveProviderTransportSsrFPolicy({
-    baseUrl: configuredProvider?.baseUrl ?? baseUrl,
+    baseUrl,
     url: baseUrl,
     allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
-    trustConfiguredBaseUrlOrigin,
+    // Keep explicitly configured custom/local origins reachable by default;
+    // an explicit false still removes that trust and blocks private egress.
+    trustConfiguredBaseUrlOrigin: requestPolicy.trustConfiguredBaseUrlOrigin,
   });
-  const remoteOverrideFakeIpPolicy =
-    remoteBaseUrl && configuredProvider?.baseUrl
-      ? resolveProviderTransportSsrFPolicy({
-          baseUrl,
-          url: baseUrl,
-          trustConfiguredBaseUrlOrigin: false,
-        })
-      : undefined;
   const model = normalizeModel(options.model, options.provider);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
@@ -396,7 +389,7 @@ async function createOpenAICompatibleEmbeddingClient(
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: mergeSsrFPolicies(configuredEndpointSsrFPolicy, remoteOverrideFakeIpPolicy),
+    ssrfPolicy: configuredEndpointSsrFPolicy,
     model,
     ...(configuredProvider?.localService && !privateNetworkExplicitlyDenied && !remoteBaseUrl
       ? {
