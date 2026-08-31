@@ -647,6 +647,11 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // PR run 33360253877: keep the process proofs apart instead of pricing each
   // at 3s. Git-owner's serial baseline remains a conservative packing weight.
   ["test/scripts/ci-git-owner.test.ts", 367],
+  // Successful hosted run 33388762505: these serial lifecycle suites cost
+  // 305s/204s/159s, but the 3s default packed all three into one tooling stripe.
+  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 305],
+  ["test/scripts/ci-linux-git.test.ts", 204],
+  ["test/scripts/pr-merge-outcome.test.ts", 159],
   ["test/scripts/ci-workflow-guards.test.ts", 12],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
   ["test/scripts/find-reusable-release-validation.test.ts", 8],

@@ -175,8 +175,12 @@
   stroke-linejoin: round;
 }
 
-.shell:has(.shell-chrome-controls__custodian) {
+.shell:has(.shell-chrome-controls__custodian, .shell-chrome-controls__home) {
   --shell-controls-width: 140px;
+}
+
+.shell:has(.shell-chrome-controls__custodian):has(.shell-chrome-controls__home) {
+  --shell-controls-width: 176px;
 }
 
 .shell--mobile-nav .shell-chrome-controls {
@@ -3348,6 +3352,10 @@ a:is(
 
 .sidebar-footer-bar--one-action {
   padding-inline-end: 44px;
+}
+
+.sidebar-footer-bar:has(.sidebar-footer-bar__home) {
+  padding-inline-end: 84px;
 }
 
 .sidebar-footer-actions {

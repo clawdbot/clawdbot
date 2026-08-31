@@ -236,6 +236,31 @@ extension OnboardingAISetupModel {
         self.startProviderWizard(option, kind: .auth)
     }
 
+    func continueProviderAuth() {
+        guard let step = authStep else { return }
+        let value: AnyCodable? = switch wizardStepType(step) {
+        case "text": AnyCodable(self.authText)
+        case "select": self.selectedAuthWizardOption?.value
+        case "confirm": AnyCodable(self.authConfirmation)
+        default: nil
+        }
+        self.advanceProviderAuth(stepID: step.id, value: value)
+    }
+
+    /// Candidates the automatic ladder may try: skip definitively logged-out
+    /// installs and anything already attempted.
+    func autoCandidateAfter(kind: String?) -> Candidate? {
+        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
+            index + 1
+        } else {
+            0
+        }
+        guard startIndex <= self.candidates.count else { return nil }
+        return self.candidates[startIndex...].first { candidate in
+            candidate.credentials != false && self.statuses[candidate.kind] == .untried
+        }
+    }
+
     func startProviderPrepare(_ option: PrepareOption) {
         self.startProviderWizard(
             AuthOption(

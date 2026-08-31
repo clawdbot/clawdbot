@@ -10,47 +10,12 @@ import {
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
+import { createSkillsWatcherMock } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
-type WatchCallback = (...args: unknown[]) => void;
-type WatchOptions = {
-  depth: number;
-  followSymlinks: boolean;
-  usePolling: boolean;
-  ignored: (
-    watchPath: string,
-    stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-  ) => boolean;
-};
+const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
 
-function createMockWatcher() {
-  const handlers = new Map<WatchEvent, WatchCallback[]>();
-  const watcher = {
-    closed: false,
-    on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), callback]);
-      return watcher;
-    }),
-    close: vi.fn(async () => {
-      watcher.closed = true;
-    }),
-    emit: (event: WatchEvent, ...args: unknown[]) => {
-      for (const callback of handlers.get(event) ?? []) {
-        callback(...args);
-      }
-    },
-  };
-  return watcher;
-}
-
-const createdWatchers: Array<ReturnType<typeof createMockWatcher>> = [];
-const watchMock = vi.fn((_watchRoot: string, _options: WatchOptions) => {
-  const watcher = createMockWatcher();
-  createdWatchers.push(watcher);
-  return watcher;
-});
 const pluginSkillsMocks = vi.hoisted(() => ({
   resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
   resolvePluginSkillRootsFromMetadata: vi.fn(
@@ -67,19 +32,6 @@ async function createFixtureDirectory(relativePath: string): Promise<string> {
   const directory = path.join(fixtureRoot, relativePath);
   await fs.mkdir(directory, { recursive: true });
   return directory;
-}
-
-function watchForSkillRoot(root: string) {
-  // Distinguish logical subscriptions that share one physical ancestor by
-  // their public traversal filter, rather than depending on watcher order.
-  const index = watchMock.mock.calls.findLastIndex(
-    ([, options]) =>
-      !options.ignored(path.join(root, "SKILL.md")) &&
-      options.ignored(path.join(path.dirname(root), "SKILL.md")),
-  );
-  expect(index, `watch subscription for ${root}`).toBeGreaterThanOrEqual(0);
-  const [watchRoot, options] = watchMock.mock.calls[index]!;
-  return { watchRoot, options, watcher: createdWatchers[index]! };
 }
 
 vi.mock("chokidar", () => ({

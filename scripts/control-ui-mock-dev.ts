@@ -2037,6 +2037,8 @@ async function createChatPickerScenario(
     featureMethods: [
       "browser.request",
       "chat.abort",
+      "chat.history",
+      "chat.send",
       "config.schema",
       "chat.metadata",
       "chat.startup",
@@ -2200,7 +2202,6 @@ async function createChatPickerScenario(
                 "gpt-realtime-2.1-mini",
                 "gpt-realtime-2",
                 "gpt-live-1-codex",
-                "gpt-live-1-boulder-alpha",
               ],
               voices: [
                 "alloy",

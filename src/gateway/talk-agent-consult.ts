@@ -101,6 +101,7 @@ export async function startTalkRealtimeAgentConsult(params: {
         sessionKey: params.sessionKey,
         message,
         idempotencyKey,
+        suppressCommandInterpretation: true,
         systemInputProvenance: {
           kind: "internal_system",
           sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,

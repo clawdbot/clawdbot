@@ -74,6 +74,20 @@ describe("command-path-policy", () => {
     });
   });
 
+  it.each([
+    { commandPath: ["database"], hideBanner: true },
+    { commandPath: ["audit"], hideBanner: false },
+    { commandPath: ["update", "cleanup"], hideBanner: true },
+  ])("keeps passive startup for $commandPath", ({ commandPath, hideBanner }) => {
+    expectResolvedPolicy(commandPath, {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+      hideBanner,
+    });
+  });
+
   it("keeps built-in node RPCs off the config guard", () => {
     for (const subcommand of ["status", "list"]) {
       expectResolvedPolicy(["nodes", subcommand], {

@@ -83,6 +83,29 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Retained helper contracts
+
+Retained compatibility entrypoints keep their shipped caller names:
+`inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
+`resolvePluginProviders`, and `agent-runtime`'s
+`resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
+
+### Harness attempt result migration
+
+In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
+`openclaw/plugin-sdk/agent-harness-runtime` requires the canonical `terminal`
+field. Source written against the 2026.7 direct alias must migrate when it
+constructs results with legacy fields such as `aborted`, `timedOut`, and
+`promptError`; retaining the alias name does not make those old constructors
+source-compatible.
+
+Use `AgentHarnessAttemptResult` from the same subpath while migrating a
+legacy result producer. That union accepts both the legacy fields and the
+canonical result, and the host lifecycle normalizes legacy results before
+core consumes them. New producers should construct `terminal`; consumers of
+the union must narrow the result before reading it. The current
+`EmbeddedRunAttemptResult` contract keeps `terminal` required.
+
 ### Model-provider result compatibility
 
 `openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`
@@ -142,9 +165,10 @@ reader sweep finds no remaining users.
 
 ### AuthStorage SQLite migration
 
-`AuthStorage.forAgent(agentDir)` is the canonical provider-keyed session SDK
-facade. It persists provider-default credentials through the agent's
+`AuthStorage.forAgent(agentDir)` is the canonical constructor for host session
+storage. It persists provider-default credentials through the agent's
 `openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
+Harness plugins receive the prepared storage instance as `params.authStorage`.
 
 `AuthStorage.create(authPath)` remains as a named deprecated adapter for
 existing plugins. The path is used only to derive the owning agent directory;
@@ -153,11 +177,13 @@ the adapter reads and writes SQLite, not the named JSON file. Migrate to
 `AUTH_STORAGE_CREATE_DEPRECATED` and is eligible for removal after
 2026-10-01, provided the published-plugin reader sweep is clean.
 
-Direct `FileAuthStorageBackend` imports remain available through the same
-window as a SQLite-backed compatibility adapter. They emit
-`FILE_AUTH_STORAGE_BACKEND_DEPRECATED`; replace backend construction with
-`AuthStorage.forAgent(agentDir)`. Neither deprecated path reads or writes the
-legacy file.
+`FileAuthStorageBackend` is an internal SQLite-backed adapter, not an exported
+Plugin SDK backend. It is not available as a named import from
+`openclaw/plugin-sdk/agent-sessions`. Harness plugins should use the
+host-prepared `params.authStorage`; host code that constructs storage should
+use `AuthStorage.forAgent(agentDir)`. The internal adapter emits
+`FILE_AUTH_STORAGE_BACKEND_DEPRECATED` and never reads or writes the legacy
+file. Its internal deprecation window does not preserve the former SDK import.
 
 If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;

@@ -3049,17 +3049,16 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # A few real-CLI E2E tests need a current dist tree. Build it before
-      # Vitest starts so the shard's worker processes cannot consume the
-      # cgroup memory that the build admission check must reserve. Reuse the
-      # CI artifact profile: these runtime readers do not need global declarations.
+      # Build the CLI runtime before Vitest workers consume memory or import dist.
+      # qaRuntime supplies the shared JavaScript, assets, and freshness stamps;
+      # build-artifacts owns SDK declaration and Control UI validation.
       - name: Build Node test runtime
         if: matrix.pretest_build_mode != null
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
           VITEST: "1"
-        run: pnpm build:ci-artifacts
+        run: pnpm build qaRuntime
 
       - name: Install ripgrep for native grep tests
         if: matrix.requires_ripgrep == true && runner.os == 'Linux'
@@ -3341,11 +3340,15 @@ jobs:
                   lint_args=(--only=scripts --threads=1)
                 fi
                 export GOMAXPROCS=2
+                # Match local Go GC policy; thread limits alone leave the
+                # extension semantic graph too large for a 16GB runner.
+                export GOGC=30 GOMEMLIMIT=3GiB
               elif [ "$(nproc)" -lt 8 ]; then
                 # Fork PRs build each semantic Program once. Bound both oxlint
                 # and its Go helper within the 4-core/16GB hosted runner.
                 lint_args=(--threads=1)
                 export GOMAXPROCS=2
+                export GOGC=30 GOMEMLIMIT=3GiB
               fi
               if [[ ! -f scripts/run-oxlint-shards.mts ]]; then
                 # The candidate's older shard runner owns all three source
@@ -4105,7 +4108,6 @@ jobs:
     timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
-      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -4311,17 +4313,21 @@ jobs:
           swift build "${swift_test_args[@]}" --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
           swift_test_args+=(--skip-build)
-          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
-            swift_test_args+=(--parallel)
-          else
-            swift_test_args+=(--no-parallel)
-          fi
           if [[ -f scripts/test-macos-native.mts ]]; then
+            logical_cpu="$(sysctl -n hw.logicalcpu)"
+            if [[ ! "$logical_cpu" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Invalid macOS logical CPU count: $logical_cpu" >&2
+              exit 1
+            fi
+            swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
+            echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
+            swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
             node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
             node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
+            swift_test_args+=(--no-parallel)
             swift test "${swift_test_args[@]}"
           else
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2

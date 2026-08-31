@@ -24,6 +24,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
+import { resolveSkillsWatchPath, toWatchRoot } from "./refresh-watch-path.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
@@ -220,13 +221,8 @@ function resolveWatchTargets(
   return sortedTargets;
 }
 
-function toWatchRoot(raw: string): string {
-  const normalized = raw.replaceAll("\\", "/");
-  return normalized.replace(/\/+$/, "") || normalized;
-}
-
 function makeWatchTarget(raw: string, depth: number): WatchTarget {
-  const watchPath = toWatchRoot(raw);
+  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
   let watchRoot = watchPath;
   while (!fs.existsSync(watchRoot)) {
     const parent = path.dirname(watchRoot);

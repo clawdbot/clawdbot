@@ -517,8 +517,8 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  const finalizedResult: EmbeddedRunAttemptResult = {
-    ...result,
+  // Preserve the exact result identity carrying host-issued TTS delivery provenance.
+  const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),
@@ -540,7 +540,7 @@ export async function finalizeCodexAttempt(
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
-  };
+  });
   if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
     resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
   }

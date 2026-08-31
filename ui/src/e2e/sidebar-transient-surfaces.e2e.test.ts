@@ -15,7 +15,6 @@ const suite = createSidebarCustomizationSuite(
   "Control UI transient surface tokens mocked Gateway E2E",
 );
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/transient-surfaces");
 
 const themes = [
   { colorScheme: "light", resolvedTheme: "light", theme: "claw" },
@@ -86,11 +85,14 @@ suite.define(() => {
         await menuSurface.waitFor({ state: "visible" });
         const menuTokens = await surfaceTokens(menuSurface);
         if (captureProof && theme === "claw") {
-          await mkdir(proofDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "transient-surfaces"), { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, `session-menu-${colorScheme}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "transient-surfaces"),
+              `session-menu-${colorScheme}.png`,
+            ),
           });
         }
 
@@ -104,7 +106,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, `settings-listbox-${colorScheme}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "transient-surfaces"),
+              `settings-listbox-${colorScheme}.png`,
+            ),
           });
         }
 

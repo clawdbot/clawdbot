@@ -130,6 +130,9 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
         disableLoginShell: true,
       };
@@ -159,11 +162,14 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
       expect(request.config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
-      expect(includeOnly).toHaveLength(5);
+      expect(includeOnly).toHaveLength(8);
       expect(includeOnly).toEqual(
         expect.arrayContaining([
           "PATH",
@@ -171,6 +177,9 @@ describe("Codex managed shell environment", () => {
           "GITHUB_TOKEN",
           "GH_TOKEN",
           "PREVIEW_SERVICE_TOKEN",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WORKSPACE_DIR",
         ]),
       );
       expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
@@ -2615,7 +2624,11 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map()),
+      },
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2665,7 +2678,13 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const bindingStore = Object.assign(
       createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
-      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+      {
+        managedThreads: {
+          has: vi.fn(async () => false),
+          mark,
+          snapshot: vi.fn(async () => new Map()),
+        },
+      },
     );
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2709,6 +2728,7 @@ describe("Codex plugin binding recovery", () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => {
           throw new Error("managed ownership unavailable");
         }),

@@ -250,6 +250,12 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
+
+For malformed legacy `exec-approvals.json`, Doctor preserves the original bytes and reports the first validation problem, for example `agents entry #2.allowlist[1].lastUsedAt: expected a finite number`. Agent entries are numbered from 1 in JavaScript `Object.keys` order; allowlist indices start at 0. This can differ from JSON text order, especially for numeric keys. To locate entry #2 locally, use `Object.keys(JSON.parse(raw).agents)[1]`, where `raw` is the file contents. Diagnostics omit agent keys and policy values, and migration receipts contain no diagnostic detail. JSON syntax and invalid UTF-8 receive separate reasons.
+
+Repair the preserved file locally, then rerun `openclaw doctor --fix` with the same `OPENCLAW_STATE_DIR` setting (leave it unset if it was unset before). Exec approvals remain blocked until migration succeeds. Do not delete the file or broaden its policy to bypass validation.
+
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
 
 Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
@@ -332,13 +338,25 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
-The import stages transcript payloads in a private, temporary SQLite database
-instead of retaining complete batches of histories in memory. Keep free space
-on the system temporary volume as well as the volume holding OpenClaw state.
+The public Doctor migration path stages transcript payloads and performs branch
+and provider repairs in a private, temporary SQLite database instead of retaining
+complete histories in memory. It keeps the raw transcript untouched until archiving it through an
+exclusive same-filesystem move, avoiding both an extra full `.pre-doctor` raw
+copy and a rewritten intermediate file. Standalone transcript repair retains
+its original backup behavior.
+
+For large histories, plan space for the original JSON/JSONL files, the temporary
+SQLite spool, and the destination database and WAL at the same time. Keep free
+space on both the system temporary volume and the volume holding OpenClaw state;
+the resulting SQLite database can be larger than the original JSONL. Streaming
+reduces whole-history memory pressure, but individual records are still parsed
+in memory and SQLite also uses native memory. Do not size a host from the JSONL
+byte count or JavaScript heap limit alone; there is no fixed disk, RAM, or
+migration-time guarantee.
+
 Staging is removed when the operation finishes and is never used as a runtime
 store or resumed after an interruption; retries use the original sources and
-committed session data. Individual transcript records are still parsed in memory.
-After import, Doctor checkpoints and incrementally vacuums databases that already
+committed session data. After import, Doctor checkpoints and incrementally vacuums databases that already
 support auto-vacuum, retaining full integrity and foreign-key checks before and
 after cleanup. Databases without auto-vacuum still need a full `VACUUM` to enable
 it. Incremental cleanup frees unused pages but does not repack partially filled
@@ -416,8 +434,11 @@ checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
-into the archive. If an explicit import fails after artifacts moved, keep the
-Gateway stopped and run recovery:
+into the archive. Recovery references stay in the current sessions directory,
+including for backups with old-machine absolute transcript paths. Retrying an
+interrupted import keeps the index and previously archived transcripts restorable.
+If an explicit import fails after artifacts moved, keep the Gateway stopped and
+run recovery:
 
 ```bash
 openclaw doctor --session-sqlite recover --github-issue
@@ -447,18 +468,36 @@ it writes the local support report and prints a prefilled issue URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
-original path is missing, reports conflicts when both paths exist, and leaves
-the SQLite database in place. When several manifests recorded the same original
-path, restore plans all candidates before moving any of them. Identical archives
+original path is missing, reports conflicts for independently existing originals,
+and leaves the SQLite database in place. Publication is exclusive: a file or
+symbolic link created during verification is not replaced. Restore moves the
+original without copying its contents, and fails without consuming the archive
+if the filesystem cannot publish it safely. Recorded interrupted publications
+can be retried, including with older manifests or after the replacement SQLite
+database has been removed. If restore recreates a missing sessions directory,
+retries repeat its parent-directory durability check before consuming the archive.
+When several manifests recorded the same original path, restore plans all
+candidates before moving any of them. Identical archives
 are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
 copies created by older writers. Distinct nonempty indexes, distinct transcript
 archives, invalid archives, and archives missing without a recorded prior
 restore fail closed so restore cannot silently replace or hide recoverable data.
 
+After verifying the migration and current history, use
+`openclaw update cleanup --dry-run` to inspect retained recovery data without
+stopping the Gateway. Apply with `openclaw update cleanup` or
+`openclaw update cleanup --yes --json` only after stopping the Gateway and other
+SQLite maintenance for the same profile/state directory. This permanently
+retires eligible rollback originals; it does not remove current SQLite history
+or operator backups. Manifests remain while retained or pending artifacts need
+them, so interrupted cleanup can be resumed. Restore distinguishes intentional
+disposal, pending cleanup, and unexpected missing files. See
+[Update cleanup](/cli/update#update-cleanup).
+
 ### Downgrading After Session SQLite Migration
 
-Before starting an older file-backed OpenClaw version, restore the archived
-legacy transcript artifacts:
+With the Gateway stopped, use the current CLI to restore archived legacy
+transcript artifacts before starting an older file-backed OpenClaw version:
 
 ```bash
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
@@ -469,6 +508,11 @@ in those entries. After the SQLite migration, successful imports move hot JSONL
 transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
 see that history until restore moves those manifest-recorded artifacts back to
 their original paths.
+
+If `openclaw update cleanup` already disposed of the originals, restore reports
+that outcome and cannot recreate them. You need an independent backup containing
+those legacy files; see [Pre-update backups](/install/updating#before-updating-create-a-verified-backup)
+for portable-archive exclusions.
 
 Restore does not delete SQLite data. Sessions created after the SQLite flip
 exist only in SQLite and will not appear to the older runtime. If you later

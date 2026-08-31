@@ -392,11 +392,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
 
       const result = spawnSync(
         process.execPath,
-        [
-          path.resolve("scripts/run-oxlint.mjs"),
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-        ],
+        [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "extensions/tsconfig.json"],
         { cwd, encoding: "utf8", env },
       );
 
@@ -413,7 +409,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
           goEnv: lintGoEnv,
           args: [
             "--tsconfig",
-            "config/tsconfig/oxlint.extensions.json",
+            "extensions/tsconfig.json",
             "--type-aware",
             "--report-unused-disable-directives-severity",
             "error",

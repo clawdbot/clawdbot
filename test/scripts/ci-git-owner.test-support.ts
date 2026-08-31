@@ -117,6 +117,7 @@ export async function runCiGitStep(options: {
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
+  stepOutputs?: Record<string, Record<string, string>>;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
   cloneResults?: FetchResult[];
@@ -411,6 +412,11 @@ def main():`,
         }),
       );
       let run = renderGitTestClock(step.run, clock);
+      for (const [stepId, outputs] of Object.entries(options.stepOutputs ?? {})) {
+        for (const [name, value] of Object.entries(outputs)) {
+          run = run.replaceAll(`\${{ steps.${stepId}.outputs.${name} }}`, value);
+        }
+      }
       if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };
