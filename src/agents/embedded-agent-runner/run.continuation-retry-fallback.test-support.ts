@@ -75,9 +75,14 @@ describe("runEmbeddedAgent retry and fallback continuation", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message: "unsupported reasoning mode",
+      fallbackSafe: false,
+      terminalPresentation: false,
+    });
     expect(result.meta.replayInvalid).toBe(true);
-    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.livenessState).toBe("abandoned");
     expect(result.payloads).toEqual([{ text: "ok" }]);
   });
 

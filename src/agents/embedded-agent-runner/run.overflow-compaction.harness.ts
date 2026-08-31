@@ -4,7 +4,7 @@
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
@@ -189,6 +189,7 @@ export const mockedContextEngine = {
     compacted: false as const,
     reason: "nothing to compact",
   })),
+  maintain: undefined as ContextEngine["maintain"],
 };
 
 type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
@@ -529,6 +530,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   mockedContextEngine.info.ownsCompaction = false;
+  mockedContextEngine.maintain = undefined;
   mockedResolveContextEngine.mockReset();
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();

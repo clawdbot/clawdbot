@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -35,12 +34,15 @@ import {
   resetRunOverflowCompactionHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
+let fixture: Awaited<ReturnType<typeof createSharedRunIntegrationSession>> | undefined;
 
 function mockOverflowRetrySuccess(params: {
   runEmbeddedAttempt: {
@@ -93,13 +95,20 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
-    overflowBaseRunParams = createOverflowRunParams({
-      workspaceDir: tempDirs.make("openclaw-continuation-overflow-recovery-"),
-    });
+  beforeEach(async () => {
+    fixture = await createSharedRunIntegrationSession();
+    overflowBaseRunParams = fixture.runParams;
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+  });
+
+  afterEach(async () => {
+    try {
+      await fixture?.cleanup();
+    } finally {
+      fixture = undefined;
+    }
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
@@ -135,7 +144,7 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
 
     expectLogIncludes(
       mockedLog.warn,
-      "[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=agent:main:test-session",
+      `[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=${overflowBaseRunParams.sessionTarget.sessionKey}`,
     );
     expectLogExcludes(mockedLog.warn, "[session-key:missing] site=pi-runner.overflow-compaction");
   });
@@ -316,6 +325,10 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
     try {
       const result = await runEmbeddedAgent({
         ...overflowBaseRunParams,
+        sessionTarget: {
+          ...overflowBaseRunParams.sessionTarget,
+          storePath,
+        },
         config: {
           session: {
             store: storePath,
@@ -406,7 +419,7 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
       );
 
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+    mockedTruncateOversizedToolResultsInSession.mockReturnValueOnce({
       truncated: true,
       truncatedCount: 1,
     });
@@ -420,7 +433,16 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
   });
 
   it("retries overflow recovery against the rotated compacted transcript", async () => {
+    const successorTarget = {
+      ...overflowBaseRunParams.sessionTarget,
+      sessionId: "rotated-session",
+    };
     mockedContextEngine.info.ownsCompaction = true;
+    mockedContextEngine.maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
     );
@@ -430,7 +452,7 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
         makeAttemptResult({
           promptError: null,
           sessionIdUsed: "rotated-session",
-          sessionFileUsed: "/tmp/rotated-session.json",
+          sessionFileUsed: successorTarget.sessionKey,
         }),
       );
     mockedCompactDirect.mockResolvedValueOnce(
@@ -438,7 +460,8 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
         summary: "rotated overflow compaction",
         tokensAfter: 50,
         sessionId: "rotated-session",
-        sessionFile: "/tmp/rotated-session.json",
+        sessionFile: successorTarget.sessionKey,
+        sessionTarget: successorTarget,
       }),
     );
 
@@ -461,13 +484,13 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
         mockedRunEmbeddedAttempt,
         {
           sessionId: "rotated-session",
-          sessionFile: "/tmp/rotated-session.json",
+          sessionFile: successorTarget.sessionKey,
         },
         1,
       );
       const maintenanceParams = expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
-        sessionFile: "/tmp/rotated-session.json",
+        sessionFile: successorTarget.sessionKey,
       });
       expect(maintenanceParams.runtimeSettings).toBe(compactParams.runtimeSettings);
       const runtimeSettings = expectRecordFields(maintenanceParams.runtimeSettings, {});
@@ -481,7 +504,7 @@ describe("runEmbeddedAgent overflow recovery continuation", () => {
       expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");
       expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction), {
         previousSessionId: "test-session",
-        sessionFile: "/tmp/rotated-session.json",
+        sessionFile: successorTarget.sessionKey,
       });
       expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
         sessionId: "rotated-session",

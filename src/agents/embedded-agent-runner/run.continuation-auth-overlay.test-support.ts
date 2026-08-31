@@ -404,7 +404,7 @@ describe("runEmbeddedAgent continuation auth overlays", () => {
     });
   });
 
-  it("keeps non-Codex plugin harnesses on the lightweight auth profile store", async () => {
+  it("keeps harness-owned auth on the lightweight auth profile store", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({ assistantTexts: ["ok"] }),
@@ -420,6 +420,7 @@ describe("runEmbeddedAgent continuation auth overlays", () => {
     registerAgentHarness({
       id: "anthropic-plugin",
       label: "Anthropic plugin",
+      authBootstrap: "harness",
       supports: (ctx) =>
         ctx.provider === "anthropic" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt: pluginRunAttempt,
