@@ -80,6 +80,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   stopNodeEnrollmentWaits?: () => void;
   closeNodeBootstrapArtifacts?: () => Promise<void>;
   stopNodeWorkerBundleTransfers?: () => void;
+  maintainProviders?: (signal: AbortSignal) => Promise<void>;
   reconcileIntervalMs?: number;
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
@@ -183,6 +184,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
+  const maintenanceAbort = new AbortController();
+  let maintenanceInFlight: Promise<void> | undefined;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
     states.includes(record.state);
@@ -448,6 +451,25 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (stopping) {
       return Promise.resolve();
     }
+    if (options.maintainProviders && !maintenanceInFlight) {
+      // Keep cleanup off the placement/reconcile wait path, but retain the actual promise
+      // until shutdown has aborted and drained every provider-owned command.
+      maintenanceInFlight = trackOperation(
+        Promise.resolve()
+          .then(() => {
+            maintenanceAbort.signal.throwIfAborted();
+            return options.maintainProviders!(maintenanceAbort.signal);
+          })
+          .catch(() => {
+            if (!stopping) {
+              warn("Worker provider maintenance sweep failed; cleanup will retry");
+            }
+          })
+          .finally(() => {
+            maintenanceInFlight = undefined;
+          }),
+      );
+    }
     return (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;
     }));
@@ -474,6 +496,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    maintenanceAbort.abort();
     options.stopNodeEnrollmentWaits?.();
     clearInterval(interval);
     interval = undefined;
