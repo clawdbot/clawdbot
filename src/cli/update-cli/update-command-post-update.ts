@@ -36,25 +36,31 @@ import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   didCoreUpdateChangeInstall,
-  markControlPlaneUpdateRestartSentinelFailureBestEffort,
   shouldResumePostCoreUpdateInFreshProcess,
-  writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
 import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
-import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import {
+  markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  writeControlPlaneUpdateRestartSentinelBestEffort,
+} from "./update-command-result.js";
+import {
+  resolveServiceRefreshEnv,
+  stripGatewayServiceMarkerEnv,
+} from "./update-command-service-env.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
   isGatewayServiceManagementAllowedForUpdate,
+  resolveGatewayServiceManagementBlockMessageForUpdate,
+} from "./update-command-service-plan.js";
+import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  resolveGatewayServiceManagementBlockMessageForUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   shouldPrepareUpdatedInstallRestart,
-  stripGatewayServiceMarkerEnv,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
