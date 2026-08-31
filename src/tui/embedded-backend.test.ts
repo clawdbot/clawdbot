@@ -40,7 +40,9 @@ const updateSessionGoalStatusMock = vi.fn();
 const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
 const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
-const runSessionStartupMigrationMock = vi.fn(async (..._args: unknown[]) => undefined);
+const runSessionStartupMigrationMock = vi.fn<(...args: unknown[]) => Promise<void>>(
+  async () => undefined,
+);
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
   (_config: unknown, _options?: unknown) => Promise<void>
 >(async () => undefined);
