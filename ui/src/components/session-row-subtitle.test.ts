@@ -40,7 +40,7 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
   });
 
-  it("explains when admitted work is waiting for a concurrency slot", () => {
+  it("does not replace the work subtitle for queued sessions", () => {
     expect(
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
@@ -50,7 +50,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         showPreview: true,
         narrationLine: undefined,
       }),
-    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
+    ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
   });
 
   it.each(["stuck", "waiting-on-user"] as const)(
@@ -108,8 +108,7 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: undefined, narration: undefined });
   });
 
-  it("keeps the concurrency-slot explanation when previews are hidden", () => {
-    // Without it a queued run reads as an idle session: a visible non-outcome.
+  it("does not force a queued subtitle when previews are hidden", () => {
     expect(
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
@@ -119,7 +118,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         showPreview: false,
         narrationLine: undefined,
       }),
-    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
+    ).toEqual({ subtitle: undefined, narration: undefined });
   });
 
   it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
@@ -327,11 +326,11 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(
       hidden({
         ...workSession(),
-        attention: { kind: "error", reason: "Deployment failed" },
+        attention: { kind: "error", reason: "⚠️ ✉️ Message failed: deployment unavailable" },
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed: Deployment failed");
+    ).toBe("Run failed:   Message failed: deployment unavailable");
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

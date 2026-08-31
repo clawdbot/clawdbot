@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -84,6 +85,7 @@ export type SlackMonitorContext = {
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   buildContext?: BuildChannelInboundContext;
+  dispatchReplyFromConfig?: ChannelInboundTurnPlan["dispatchReplyFromConfig"];
 
   botUserId: string;
   botId?: string;
@@ -557,6 +559,7 @@ export function createSlackMonitorContext(params: {
     return false;
   };
 
+  const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
   const ctx: SlackMonitorContext = {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -564,8 +567,8 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
-    buildContext: (params.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-      .buildContext,
+    buildContext: channelRuntime?.inbound.buildContext,
+    dispatchReplyFromConfig: channelRuntime?.reply?.dispatchReplyFromConfig,
     botUserId: params.botUserId,
     botId: params.botId,
     identityHealth: params.identityHealth,

@@ -232,6 +232,7 @@ describe("zalo send", () => {
       },
       undefined,
     );
+    expect(resolveZaloProxyFetchMock).toHaveBeenCalledOnce();
     const successful = requireSuccessfulSend(result, "z-photo-2");
     expect(successful.receipt.platformMessageIds).toEqual(["z-photo-2"]);
   });

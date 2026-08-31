@@ -32,6 +32,9 @@ describe("secrets configure plan helpers", () => {
         telegram: {
           botToken: "token", // pragma: allowlist secret
         },
+        nostr: {
+          privateKey: "nostr-private-key", // pragma: allowlist secret
+        },
       },
     } as OpenClawConfig;
 
@@ -39,6 +42,15 @@ describe("secrets configure plan helpers", () => {
     const paths = candidates.map((entry) => entry.path);
     expect(paths).toContain(TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(paths).toContain("channels.telegram.botToken");
+    expect(paths).toContain("channels.nostr.privateKey");
+    expect(resolveConfigSecretTargetByPath(["channels", "nostr", "privateKey"])).toMatchObject({
+      entry: {
+        id: "channels.nostr.privateKey",
+        includeInPlan: true,
+        includeInConfigure: true,
+        includeInAudit: true,
+      },
+    });
   });
 
   it("collects provider upserts and deletes", () => {

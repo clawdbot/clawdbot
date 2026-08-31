@@ -92,7 +92,6 @@ struct WatchExecApprovalSnapshotRequestToken: Hashable, Sendable {
 }
 
 final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
-    private typealias MessageSendContinuation = CheckedContinuation<Void, Error>
     private static let maxAcceptedExecApprovalSnapshotRequests = 32
 
     private let store: WatchInboxStore
@@ -165,7 +164,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let payload = Self.encodeSnapshotRequestPayload(request)
         if session.isReachable {
             do {
-                try await Self.sendMessage(payload, through: session)
+                try await sendReachableWatchMessage(payload, with: session)
                 return token
             } catch {
                 // Fall through to queued delivery.
@@ -261,7 +260,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         var requiresCanonicalReadback = false
         if session.isReachable {
             do {
-                try await Self.sendMessage(payload, through: session)
+                try await sendReachableWatchMessage(payload, with: session)
                 return WatchReplySendResult(
                     delivery: .delivered,
                     transport: "sendMessage",
@@ -281,22 +280,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             transport: "transferUserInfo",
             errorMessage: nil,
             requiresCanonicalReadback: requiresCanonicalReadback)
-    }
-
-    private static func sendMessage(_ payload: [String: Any], through session: WCSession) async throws {
-        try await withCheckedThrowingContinuation(isolation: nil) { (continuation: MessageSendContinuation) in
-            session.sendMessage(
-                payload,
-                replyHandler: { reply in
-                    do {
-                        try requireAcceptedWatchMessageReply(reply)
-                        continuation.resume(returning: ())
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                },
-                errorHandler: { error in continuation.resume(throwing: error) })
-        }
     }
 
     private static func unavailableResult(_ error: any Error) -> WatchReplySendResult {

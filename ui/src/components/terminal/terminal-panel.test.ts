@@ -56,6 +56,10 @@ describe("OpenClawTerminalPanel", () => {
 
   afterEach(async () => {
     document.body.replaceChildren();
+    for (const property of ["--bg", "--text", "--accent"]) {
+      document.documentElement.style.removeProperty(property);
+    }
+    document.documentElement.removeAttribute("data-theme");
     localStorage.clear();
     sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
@@ -280,7 +284,11 @@ describe("OpenClawTerminalPanel", () => {
     );
   });
 
-  it("answers live OSC default-color queries with the terminal theme", async () => {
+  it("keeps terminal rendering and OSC default-color replies in sync with theme tokens", async () => {
+    const root = document.documentElement;
+    root.style.setProperty("--bg", "#0e1015");
+    root.style.setProperty("--text", "#d7dae0");
+    root.style.setProperty("--accent", "#ff5c5c");
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -305,7 +313,7 @@ describe("OpenClawTerminalPanel", () => {
       expect(requests.some(({ method }) => method === "terminal.resize")).toBe(true);
     });
 
-    const query = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+    const query = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b]12;?\u001b\\";
     listener?.({
       event: "terminal.data",
       payload: { sessionId: "session-1", seq: query.length, data: query },
@@ -326,8 +334,54 @@ describe("OpenClawTerminalPanel", () => {
           data: "\u001b]11;rgb:0e0e/1010/1515\u001b\\",
         },
       });
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: {
+          sessionId: "session-1",
+          data: "\u001b]12;rgb:ffff/5c5c/5c5c\u001b\\",
+        },
+      });
     });
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe(query);
+
+    controller.terminal.renderer.setTheme.mockClear();
+    controller.terminal.renderer.render.mockClear();
+    root.dataset.theme = "knot";
+    root.style.setProperty("--bg", "#080808");
+    root.style.setProperty("--text", "#e0e0e2");
+    root.style.setProperty("--accent", "#14b8a6");
+
+    await waitForFast(() => {
+      expect(controller.terminal.renderer.setTheme).toHaveBeenCalledWith(
+        expect.objectContaining({
+          background: "#080808",
+          foreground: "#e0e0e2",
+          cursor: "#14b8a6",
+          cursorAccent: "#080808",
+          selectionBackground: "#14b8a652",
+        }),
+      );
+      expect(controller.terminal.renderer.render).toHaveBeenCalled();
+    });
+
+    listener?.({
+      event: "terminal.data",
+      payload: { sessionId: "session-1", seq: query.length * 2, data: query },
+    });
+    await waitForFast(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: { sessionId: "session-1", data: "\u001b]10;rgb:e0e0/e0e0/e2e2\u001b\\" },
+      });
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: { sessionId: "session-1", data: "\u001b]11;rgb:0808/0808/0808\u001b\\" },
+      });
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: { sessionId: "session-1", data: "\u001b]12;rgb:1414/b8b8/a6a6\u001b\\" },
+      });
+    });
   });
 
   it("flushes keystrokes entered while open is in flight after resize resync", async () => {

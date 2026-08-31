@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import { writeWorkspaceSkills } from "../skills/test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillEntry } from "../skills/types.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -110,6 +111,55 @@ describe("skills-cli (e2e)", () => {
     const output = formatSkillInfo(report, "peekaboo", {});
     expect(output).toContain("peekaboo");
     expect(output).toContain("Details:");
+  });
+
+  it("reports missing prerequisites for discovered agent-excluded skills", async () => {
+    const missingBin = "qa35-fixture-absent-binary";
+    await writeWorkspaceSkills(tempWorkspaceDir, [
+      { name: "ready", description: "Allowed ready control" },
+      { name: "excluded-ready", description: "Excluded ready control" },
+      ...["missing", "excluded-missing"].map((name) => ({
+        name,
+        description: "Missing prerequisite fixture",
+        metadata: JSON.stringify({ openclaw: { requires: { bins: [missingBin] } } }),
+      })),
+    ]);
+    const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
+      managedSkillsDir: path.join(tempWorkspaceDir, "managed"),
+      agentId: "qa",
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { qa: { workspace: tempWorkspaceDir, skills: ["ready", "missing"] } } },
+      },
+    });
+    expect(report.skills).toHaveLength(4);
+    expect(report.skills.find((skill) => skill.name === "excluded-missing")).toMatchObject({
+      eligible: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: true,
+      modelVisible: false,
+      commandVisible: false,
+      missing: { bins: [missingBin] },
+    });
+    const parsed = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(parsed.missingRequirements.map((skill: { name: string }) => skill.name)).toEqual([
+      "excluded-missing",
+      "missing",
+    ]);
+    expect(parsed.agentFiltered).toEqual(["excluded-missing", "excluded-ready"]);
+    expect(parsed.eligible).toEqual(["excluded-ready", "ready"]);
+    expect(parsed.modelVisible).toEqual(["ready"]);
+    expect(parsed.commandVisible).toEqual(["ready"]);
+    const human = formatSkillsCheck(report, {});
+    expect(human).toContain(`excluded-missing (bins: ${missingBin})`);
+    expect(human).toContain("excluded-ready (loaded, but this agent is not allowed to see/use it)");
+
+    const readyList = JSON.parse(formatSkillsList(report, { eligible: true, json: true }));
+    expect(readyList.skills.map((skill: { name: string }) => skill.name)).toEqual(["ready"]);
+    const info = formatSkillInfo(report, "excluded-missing", {});
+    expect(info).toContain("Excluded by agent allowlist");
+    expect(info).toContain(`✗ ${missingBin}`);
   });
 });
 

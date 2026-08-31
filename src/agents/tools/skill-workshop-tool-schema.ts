@@ -10,6 +10,7 @@ import {
 
 export const SKILL_WORKSHOP_ACTIONS = [
   "create",
+  "prepare_patch",
   "patch",
   "update",
   "read",
@@ -22,6 +23,7 @@ export const SKILL_WORKSHOP_ACTIONS = [
   "quarantine",
   "history",
   "restore_collection",
+  "complete",
 ] as const;
 
 export const SKILL_PROPOSAL_STATUSES = [
@@ -35,7 +37,7 @@ export const SKILL_PROPOSAL_STATUSES = [
 export function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
   return [
     "create",
-    ...(updateProposals ? ["patch", "update", "read"] : []),
+    ...(updateProposals ? ["prepare_patch", "patch", "update", "read"] : []),
     "revise",
     "list",
     "inspect",
@@ -43,14 +45,7 @@ export function resolveProposalOnlyActions(updateProposals: boolean, supportsCom
   ];
 }
 
-export function buildSkillWorkshopToolSchema(
-  proposalOnly: boolean,
-  supportsCompletion: boolean,
-  updateProposals: boolean,
-  collectionOnly: boolean,
-  proposalRevision = false,
-) {
-  const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
+export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRevision = false) {
   return Type.Object(
     {
       action: stringEnum(
@@ -58,17 +53,13 @@ export function buildSkillWorkshopToolSchema(
           ? ["inspect", "revise"]
           : collectionOnly
             ? ["read", "reconcile"]
-            : proposalOnly
-              ? proposalActions
-              : [...SKILL_WORKSHOP_ACTIONS],
+            : [...SKILL_WORKSHOP_ACTIONS],
         {
           description: proposalRevision
             ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-            : proposalOnly
-              ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = complete existing live skill when it fits the selected-model budget, otherwise metadata without a partial body (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-              : collectionOnly
-                ? SKILL_COLLECTION_ACTION_DESCRIPTION
-                : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+            : collectionOnly
+              ? SKILL_COLLECTION_ACTION_DESCRIPTION
+              : "create = new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
         },
       ),
       proposal_id: Type.Optional(
@@ -104,7 +95,6 @@ export function buildSkillWorkshopToolSchema(
       ),
       description: Type.Optional(
         Type.String({
-          maxLength: 160,
           description:
             "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
         }),
@@ -112,13 +102,13 @@ export function buildSkillWorkshopToolSchema(
       skill_name: Type.Optional(
         Type.String({
           description:
-            "Existing skill name or key for action=update, action=patch, or action=read.",
+            "Existing skill name or key for action=update, action=prepare_patch, action=patch, or action=read.",
         }),
       ),
       old_string: Type.Optional(
         Type.String({
           description:
-            "For action=patch: the exact current skill text to replace, quoted from read. Must match exactly once. Empty string appends new_string at the end of the skill.",
+            "For action=prepare_patch or action=patch: the exact current skill text to replace. Must match exactly once. For patch only, an empty string appends new_string after a complete read.",
         }),
       ),
       new_string: Type.Optional(
@@ -158,7 +148,7 @@ export function buildSkillWorkshopToolSchema(
       expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
+            "Optional exact recorded proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if the stored proposal record changed. Revise, evaluate, and apply verify proposal artifacts. Reject and quarantine run interrupted-apply recovery first, then use only the stored record.",
         }),
       ),
       correlation_id: Type.Optional(

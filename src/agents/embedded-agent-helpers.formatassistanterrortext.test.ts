@@ -3,20 +3,21 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   classifyAssistantFailoverReason,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
-  isRawApiErrorPayload,
 } from "./embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
+import { isRawApiErrorPayload } from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
+  const BILLING_ERROR_USER_MESSAGE =
+    "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
     makeAssistantMessageFixture({
       errorMessage,
@@ -195,6 +196,59 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+  it("surfaces allowlisted token limits from structured provider messages", () => {
+    const msg = makeAssistantError(
+      JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
+        },
+      }),
+    );
+
+    const userFacing = formatUserFacingAssistantErrorText(msg);
+    expect(userFacing).toBe(
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+    );
+    expect(userFacing).not.toContain("deepseek-v4-flash:0731");
+  });
+
+  it("surfaces token limits from structured error bodies", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody: JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
+        },
+      }),
+      content: [],
+    });
+
+    const userFacing = formatUserFacingAssistantErrorText(msg);
+    expect(userFacing).toBe(
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+    );
+    expect(userFacing).not.toContain("deepseek-v4-flash:0731");
+  });
+
+  it.each([
+    "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "Error: OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+  ])("surfaces token limits from provider-wrapped HTTP error %s", (raw) => {
+    const msg = makeAssistantError(raw);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {

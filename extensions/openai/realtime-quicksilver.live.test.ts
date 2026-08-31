@@ -21,6 +21,7 @@ import {
   type OpenAIQuicksilverAuth,
 } from "./realtime-quicksilver-wire.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+import { OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL } from "./realtime-voice-session-policy.js";
 
 const LIVE_ENABLED =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_GPT_LIVE === "1";
@@ -223,7 +224,7 @@ describeLive("GPT-Live Platform WebSocket", () => {
       const bridge = new OpenAIQuicksilverVoiceBridge({
         providerConfig: {},
         model: "gpt-live-1-codex",
-        voice: "marin",
+        voice: "spruce",
         instructions: "Keep this transport verification session silent.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
         resolveAuth: async () => ({ type: "api-key", token: apiKey }),
@@ -458,7 +459,7 @@ describeLive("OpenAI OAuth WebRTC", () => {
           session: buildOpenAIQuicksilverSession({
             model: "gpt-live-1-codex",
             instructions: "Keep this transport verification session silent.",
-            voice: "marin",
+            voice: "spruce",
           }),
         });
 
@@ -526,7 +527,30 @@ describeLive("OpenAI OAuth WebRTC", () => {
         for (const model of ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"]) {
           try {
             const reservation = await realtime.broker.createBrowserSession(
-              { providerConfig: {}, model, voice: "marin" },
+              {
+                providerConfig: {},
+                model,
+                voice: "marin",
+                gaSession: {
+                  type: "realtime",
+                  model,
+                  instructions: "Keep this transport verification session silent.",
+                  audio: {
+                    input: {
+                      noise_reduction: { type: "near_field" },
+                      turn_detection: {
+                        type: "server_vad",
+                        create_response: true,
+                        interrupt_response: true,
+                      },
+                      transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+                    },
+                    output: { voice: "marin" },
+                  },
+                  tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+                  tool_choice: "auto",
+                },
+              },
               auth,
             );
             if (reservation.transport !== "webrtc") {

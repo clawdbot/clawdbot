@@ -2,11 +2,10 @@ import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -19,7 +18,6 @@ import {
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
@@ -28,93 +26,39 @@ import {
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveReadPath } from "./path-utils.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import {
-  ReadToolContinuationSchema,
-  type ReadToolContinuation,
-  type ReadToolDetails,
-} from "./tool-contracts.js";
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeysResolution,
+} from "./file-mutation-queue.js";
+import { normalizePositiveLimit } from "./limits.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
+import { createBoundedReadTextPage } from "./read-page.js";
+import {
+  createReadToolDetails,
+  readToolInputSchema,
+  readToolOutputSchema,
+} from "./read-tool-contract.js";
+import {
+  getTextOutput,
+  invalidArgText,
+  replaceTabs,
+  shortenPath,
+  str,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
-
-const readSchema = Type.Object({
-  path: Type.String({ description: "File path; relative/absolute." }),
-  offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines." })),
-  cursor: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
-  ),
-});
-
-const ReadTruncationOutputSchema = Type.Object(
-  {
-    truncated: Type.Literal(true),
-    truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
-    totalLines: Type.Integer({ minimum: 0 }),
-    totalBytes: Type.Integer({ minimum: 0 }),
-    outputLines: Type.Integer({ minimum: 0 }),
-    outputBytes: Type.Integer({ minimum: 0 }),
-    lastLinePartial: Type.Boolean(),
-    firstLineExceedsLimit: Type.Boolean(),
-    maxLines: Type.Integer({ minimum: 1 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
-  },
-  { additionalProperties: false },
-);
-
-const ReadToolOutputSchema = Type.Union([
-  Type.Object(
-    { kind: Type.Literal("text"), content: Type.String() },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("image"),
-      content: Type.String(),
-      mimeType: Type.String(),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("truncated"),
-      content: Type.String(),
-      truncation: ReadTruncationOutputSchema,
-      continuation: ReadToolContinuationSchema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("not_found"),
-      status: Type.Literal("not_found"),
-      path: Type.String(),
-      optional: Type.Literal(true),
-    },
-    { additionalProperties: false },
-  ),
-]);
-
-function createReadDetails(
-  content: (TextContent | ImageContent)[],
-  truncated?: Extract<ReadToolDetails, { kind: "truncated" }>,
-): ReadToolDetails {
-  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
-  const image = content.find((part): part is ImageContent => part.type === "image");
-  if (image) {
-    return { kind: "image", content: text, mimeType: image.mimeType };
-  }
-  if (truncated) {
-    return { ...truncated, content: text };
-  }
-  return { kind: "text", content: text };
-}
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -174,6 +118,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Override these to delegate file reading to remote systems (for example SSH).
  */
 export interface ReadOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
@@ -214,6 +160,10 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
+  /** Prepared text budget; standalone readers retain their byte-only allowance. */
+  modelBudget?: ToolResultBudget;
+  /** Prepared capability for embedded calls, which carry no extension model context. */
+  modelHasVision?: boolean;
 }
 
 type ReadRenderArgs = {
@@ -242,21 +192,6 @@ function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string 
   const pathDisplay =
     path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
-}
-
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
-    return undefined;
-  }
-  return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
 function getOpenClawDocsClassification(
@@ -289,7 +224,7 @@ function getCompactReadClassification(
     return undefined;
   }
 
-  const absolutePath = resolveReadPath(rawPath, cwd);
+  const absolutePath = resolveToCwd(rawPath, cwd);
   const fileName = basename(absolutePath);
   if (fileName === "SKILL.md") {
     return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
@@ -312,15 +247,21 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveReadPath(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
-async function resolveReadToolPath(
+async function resolveReadToolInputPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };
@@ -430,119 +371,10 @@ function formatReadResult(
   return text;
 }
 
-type BoundedReadTextPage = Extract<ReadToolDetails, { kind: "text" | "truncated" }>;
-
-/** Format model-visible pagination guidance from its exact structured continuation. */
-export function formatReadContinuationNotice(
-  continuation: ReadToolContinuation,
-  maxBytes: number,
-  range?: { startLine: number; totalLines: number },
-): string {
-  const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
-  const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
-  if (!range) {
-    const budget = formatSize(maxBytes).replace(/\.0(?=KB)/, "");
-    return `\n\n[Read output capped at ${budget} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
-  }
-  const label =
-    continuation.kind === "cursor"
-      ? `part of line ${range.startLine}`
-      : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
-  const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  return `\n\n[Showing ${label} (${formatSize(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
-}
-
-/** Bound a selected text page once; legacy injected readers reuse this owner decision. */
-export function createBoundedReadTextPage(params: {
-  content: string;
-  startLine: number;
-  endLine: number;
-  totalLines: number;
-  cursor?: number;
-  limit?: number;
-  maxBytes: number;
-  pageMaxBytes?: number;
-  adaptive?: boolean;
-}): BoundedReadTextPage {
-  const maxBytes = params.pageMaxBytes ?? Math.min(DEFAULT_MAX_BYTES, params.maxBytes);
-  const remainingLines = params.totalLines - params.endLine;
-  const limitNotice =
-    params.limit !== undefined && remainingLines > 0
-      ? `\n\n[${remainingLines} more lines in file. Use offset=${params.endLine + 1} to continue.]`
-      : "";
-  const contentBytes = Buffer.byteLength(params.content, "utf8");
-  if (
-    params.endLine - params.startLine < DEFAULT_MAX_LINES &&
-    contentBytes + Buffer.byteLength(limitNotice, "utf8") <= maxBytes
-  ) {
-    return { kind: "text", content: `${params.content}${limitNotice}` };
-  }
-
-  const range = params.adaptive
-    ? undefined
-    : { startLine: params.startLine, totalLines: params.totalLines };
-  const boundedLimit = params.limit === undefined ? {} : { limit: params.limit };
-  const firstLine = params.content.split("\n", 1)[0] ?? "";
-  const cursorEstimate: ReadToolContinuation = {
-    kind: "cursor",
-    offset: params.startLine,
-    cursor: (params.cursor ?? 0) + firstLine.length,
-    ...boundedLimit,
-  };
-  const lineEstimate: ReadToolContinuation = {
-    kind: "line",
-    offset: params.totalLines + 1,
-    ...boundedLimit,
-  };
-  const reservedBytes = Math.max(
-    Buffer.byteLength(formatReadContinuationNotice(cursorEstimate, params.maxBytes, range), "utf8"),
-    Buffer.byteLength(formatReadContinuationNotice(lineEstimate, params.maxBytes, range), "utf8"),
-  );
-  const truncation = truncateHead(params.content, { maxBytes: maxBytes - reservedBytes });
-  if (!truncation.truncated) {
-    return { kind: "text", content: `${truncation.content}${limitNotice}` };
-  }
-
-  let continuation: ReadToolContinuation;
-  let content = truncation.content;
-  if (truncation.firstLineExceedsLimit) {
-    content = truncateUtf8Prefix(firstLine, maxBytes - reservedBytes);
-    continuation = {
-      kind: "cursor",
-      offset: params.startLine,
-      cursor: (params.cursor ?? 0) + content.length,
-      ...boundedLimit,
-    };
-  } else {
-    const nextOffset = params.startLine + truncation.outputLines;
-    continuation = {
-      kind: "line",
-      offset: nextOffset,
-      ...(params.limit === undefined
-        ? {}
-        : { limit: Math.max(1, params.endLine - nextOffset + 1) }),
-    };
-  }
-
-  const { content: _content, ...truncationDetails } = truncation;
-  return {
-    kind: "truncated",
-    content: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
-    truncation: {
-      ...truncationDetails,
-      outputBytes: Buffer.byteLength(content, "utf8"),
-      firstLineExceedsLimit: false,
-      lastLinePartial: continuation.kind === "cursor",
-      totalLines: params.totalLines,
-    },
-    continuation,
-  };
-}
-
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
-): ToolDefinition<typeof readSchema, ReadToolDetails> {
+): ToolDefinition<typeof readToolInputSchema, ReadToolDetails> {
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -552,8 +384,8 @@ export function createReadToolDefinition(
     description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
-    parameters: readSchema,
-    outputSchema: ReadToolOutputSchema,
+    parameters: readToolInputSchema,
+    outputSchema: readToolOutputSchema,
     async execute(
       toolCallId,
       {
@@ -561,7 +393,8 @@ export function createReadToolDefinition(
         offset,
         limit,
         cursor,
-      }: { path: string; offset?: number; limit?: number; cursor?: number },
+        optional,
+      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -591,15 +424,70 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
-            const { absolutePath, note } = await resolveReadToolPath(ops, path, cwd);
-            if (aborted) {
+            let absolutePath: string;
+            let note: string | undefined;
+            let buffer: Buffer;
+            try {
+              // Share write/edit ordering through byte capture only. Decode the
+              // immutable snapshot below after releasing the path queue.
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
+              );
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  if (aborted) {
+                    return undefined;
+                  }
+                  return {
+                    ...resolved,
+                    buffer: await ops.readFile(resolved.absolutePath),
+                  };
+                },
+              );
+              if (!snapshot) {
+                return;
+              }
+              ({ absolutePath, note, buffer } = snapshot);
+            } catch (error) {
+              if (aborted) {
+                return;
+              }
+              if (
+                optional !== true ||
+                (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
+              ) {
+                throw error;
+              }
+              signal?.removeEventListener("abort", onAbort);
+              resolve({
+                content: [{ type: "text", text: `Optional file not found: ${path}.` }],
+                details: {
+                  kind: "not_found",
+                  status: "not_found",
+                  path,
+                  optional: true,
+                },
+              });
               return;
             }
-            const buffer = await ops.readFile(absolutePath);
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
-            let truncated: Parameters<typeof createReadDetails>[1];
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            let truncated: Parameters<typeof createReadToolDetails>[1];
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
@@ -620,7 +508,10 @@ export function createReadToolDefinition(
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
                 }
-                content = [{ type: "text", text: textNote }, processed.image];
+                content = [{ type: "text", text: textNote }];
+                if (!nonVisionImageNote) {
+                  content.push(processed.image);
+                }
               }
             } else {
               const decodedText =
@@ -696,6 +587,8 @@ export function createReadToolDefinition(
                     cursor,
                     limit: userLimitedLines,
                     maxBytes,
+                    modelBudget: options?.modelBudget,
+                    prefix: note ? `${note}\n` : undefined,
                     pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
                     adaptive: options?.maxBytes !== undefined,
                   });
@@ -719,7 +612,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadDetails(content, truncated) });
+            resolve({ content, details: createReadToolDetails(content, truncated) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
@@ -762,6 +655,6 @@ export function createReadToolDefinition(
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readSchema> {
+): AgentTool<typeof readToolInputSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

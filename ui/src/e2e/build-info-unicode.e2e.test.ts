@@ -115,9 +115,11 @@ suite.define(() => {
         const identityCard = page.locator(".sidebar-identity-card");
         await expect
           .poll(async () => {
-            const subtitle =
-              (await identityCard.locator(".sidebar-identity-card__subtitle").textContent()) ?? "";
-            const [gitIdentity, relativeAge] = subtitle.trim().split(" · ", 2);
+            // The compact build identity lives in the identity button's
+            // aria-label; the visible subtitle span was removed as dead markup.
+            const ariaLabel = (await identityCard.getAttribute("aria-label")) ?? "";
+            const detail = ariaLabel.split(": ").slice(1).join(": ");
+            const [gitIdentity, relativeAge] = detail.trim().split(" · ", 2);
             return { gitIdentity, hasRelativeAge: Boolean(relativeAge?.trim()) };
           })
           .toEqual({

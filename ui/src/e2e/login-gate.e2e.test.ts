@@ -255,18 +255,72 @@ suite.define(() => {
     try {
       await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
       await page.locator("openclaw-app-shell").waitFor();
+      await page.locator("openclaw-connection-page .content-header").waitFor();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      await page.getByText("Actions are unavailable while the Gateway reconnects.").waitFor();
+      const notice = page.locator('.connection-action-block[role="status"]');
+      await notice.waitFor();
+      expect((await notice.textContent())?.trim()).toBe(
+        "Changes to settings are disabled while the Gateway is reconnecting.",
+      );
+      expect(await notice.locator("svg").count()).toBe(1);
       const outlet = page.locator("openclaw-router-outlet");
       expect(await outlet.getAttribute("inert")).not.toBeNull();
       expect(await outlet.getAttribute("aria-disabled")).toBe("true");
+      const bounds = await page.evaluate(() => {
+        const noticeRect = document
+          .querySelector(".connection-action-block")
+          ?.getBoundingClientRect();
+        const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
+        const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
+        const headerRect = document
+          .querySelector("openclaw-connection-page .content-header")
+          ?.getBoundingClientRect();
+        return {
+          headerTop: headerRect?.top,
+          noticeBottom: noticeRect?.bottom,
+          noticeTop: noticeRect?.top,
+          noticeLeft: noticeRect?.left,
+          noticeRight: noticeRect?.right,
+          mainTop: mainRect?.top,
+          navRight: navRect?.right,
+          mainRight: mainRect?.right,
+        };
+      });
+      expect(bounds.noticeTop).toBe(bounds.mainTop);
+      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
+      expect(bounds.noticeLeft).toBe(bounds.navRight);
+      expect(bounds.noticeRight).toBe(bounds.mainRight);
       await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
         fullPage: true,
       });
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it.each([
+    { name: "tablet", width: 1024 },
+    { name: "phone", width: 390 },
+  ])("spans the $name settings viewport while reconnecting", async ({ width }) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
+      await page.locator("openclaw-app-shell").waitFor();
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "test reconnect");
+
+      const notice = page.locator('.connection-action-block[role="status"]');
+      await notice.waitFor();
+      const bounds = await notice.boundingBox();
+      expect(bounds?.x).toBe(0);
+      expect(bounds?.width).toBe(width);
     } finally {
       await closeContext(context);
     }
@@ -317,6 +371,39 @@ suite.define(() => {
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
         fixture.expectedTitle,
       );
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("copies an exact recovery command from the application gateway snapshot", async () => {
+    const context = await suite.browser.newContext({
+      permissions: ["clipboard-read", "clipboard-write"],
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+
+      const failure = page.locator('.login-gate__failure[data-kind="auth-required"]');
+      await failure.waitFor({ timeout: 10_000 });
+      const command = failure
+        .locator(".login-gate__command")
+        .filter({ hasText: "openclaw gateway auth-token --show" });
+      await command.click();
+
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe("openclaw gateway auth-token --show");
+      expect(await command.locator(".chat-copy-btn").getAttribute("aria-label")).toBe("Copied!");
     } finally {
       await closeContext(context);
     }
@@ -391,6 +478,9 @@ suite.define(() => {
           document.querySelectorAll<HTMLElement>(".login-gate__form .settings-secret__toggle"),
         );
         const connect = document.querySelector<HTMLElement>(".login-gate__connect");
+        const commands = Array.from(
+          document.querySelectorAll<HTMLElement>(".login-gate__failure-steps .login-gate__command"),
+        );
         if (!gate || !card || !connect) {
           throw new Error("Missing login gate elements");
         }
@@ -399,7 +489,16 @@ suite.define(() => {
         return {
           cardPadding: cardStyle.padding,
           cardTop: card.getBoundingClientRect().top,
+          commandBounds: commands.map((command) => {
+            const bounds = command.getBoundingClientRect();
+            return {
+              left: bounds.left,
+              right: bounds.right,
+            };
+          }),
           connectMinHeight: getComputedStyle(connect).minHeight,
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
           gateClientHeight: gate.clientHeight,
           gateOverflowY: gateStyle.overflowY,
           gatePadding: gateStyle.padding,
@@ -415,6 +514,11 @@ suite.define(() => {
       expect(metrics.gatePadding).toBe("16px 12px");
       expect(metrics.cardPadding).toBe("24px 20px");
       expect(metrics.cardTop).toBeGreaterThanOrEqual(0);
+      expect(metrics.documentScrollWidth).toBe(metrics.documentClientWidth);
+      expect(metrics.commandBounds.length).toBeGreaterThan(0);
+      expect(metrics.commandBounds.every(({ left, right }) => left >= 0 && right <= 375)).toBe(
+        true,
+      );
       expect(metrics.connectMinHeight).toBe("44px");
       expect(metrics.gateOverflowY).toBe("auto");
       expect(metrics.gateScrollHeight).toBeGreaterThan(metrics.gateClientHeight);

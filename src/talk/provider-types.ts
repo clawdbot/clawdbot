@@ -79,6 +79,13 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
+export type RealtimeVoiceCloseDisposition = "abort" | "detach";
+
+export type RealtimeVoiceCloseOptions = {
+  /** Whether closing the transport also cancels work already accepted by the host. */
+  disposition?: RealtimeVoiceCloseDisposition;
+};
+
 export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
@@ -264,6 +271,7 @@ type RealtimeVoiceBrowserWebRtcSdpSession = {
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
@@ -333,7 +341,7 @@ export type RealtimeVoiceBridge = {
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
   acknowledgeMark(markName?: string): void;
-  close(): void;
+  close(options?: RealtimeVoiceCloseOptions): void;
   isConnected(): boolean;
 };
 

@@ -155,6 +155,8 @@ describe("worker session placement gate", () => {
 
     expect(gate.validateWorkerTurn(firstBinding)).toBe(false);
     expect(gate.validateWorkerTurn(secondBinding)).toBe(true);
+    expect(() => gate.readWorkerTurnLiveAckCursor(firstBinding)).toThrow("stale worker turn");
+    expect(gate.readWorkerTurnLiveAckCursor(secondBinding)).toBe(0);
     expect(gate.isWorkerTurnToolAuthorized(firstBinding, "sessions_send")).toBe(false);
     expect(gate.isWorkerTurnToolAuthorized(secondBinding, "sessions_send")).toBe(true);
     expect(() => gate.updateAckCursors({ claim: firstBinding, transcriptSeq: 3 })).toThrow(
@@ -176,6 +178,7 @@ describe("worker session placement gate", () => {
       lastTranscriptAckCursor: 4,
       lastLiveEventAckCursor: 9,
     });
+    expect(gate.readWorkerTurnLiveAckCursor(binding)).toBe(9);
     expect(store.listPendingWorkspaceResults()).toMatchObject([
       { sessionId: SESSION.sessionId, runId },
     ]);

@@ -4,9 +4,10 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
+import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
@@ -39,6 +40,7 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
+import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
 
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -46,7 +48,8 @@ const TRACE_REQUIRED_PARAM_GROUPS = {
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
 
-function buildAskUserPromptPayload(
+function reserveQuestionPromptDelivery(
+  toolName: "ask_user" | "secrets",
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
@@ -54,7 +57,8 @@ function buildAskUserPromptPayload(
   args: unknown,
 ) {
   try {
-    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const { questions, timeoutSeconds } =
+      toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
     const reservation = reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
@@ -320,13 +324,25 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
-  const askUserPromptReservation =
-    startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(
+  const isQuestionTool =
+    startToolName === "ask_user" ||
+    (startToolName === "secrets" &&
+      evt.args !== null &&
+      typeof evt.args === "object" &&
+      "action" in evt.args &&
+      evt.args.action === "request");
+  const questionPromptReservation =
+    isQuestionTool &&
+    ctx.params.onToolResult &&
+    // Native credential cards arrive through question.requested, not a public link.
+    (startToolName === "ask_user" || isDeliverableMessageChannel(ctx.params.messageChannel ?? ""))
+      ? reserveQuestionPromptDelivery(
+          startToolName === "ask_user" ? "ask_user" : "secrets",
           evt.toolCallId,
           ctx.params.sessionKey,
           ctx.params.runId,
@@ -334,8 +350,8 @@ export function handleToolExecutionStart(
           evt.args,
         )
       : undefined;
-  const cancelAskUserPromptReservation = () => {
-    if (askUserPromptReservation) {
+  const cancelQuestionPromptReservation = () => {
+    if (questionPromptReservation) {
       cancelAskUserPromptDelivery(
         evt.toolCallId,
         ctx.params.sessionKey,
@@ -352,14 +368,14 @@ export function handleToolExecutionStart(
         assistantMessageIndex: ctx.state.assistantMessageIndex,
       });
     } catch (error) {
-      cancelAskUserPromptReservation();
+      cancelQuestionPromptReservation();
       throw error;
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
         () => continueToolExecutionStart(),
         (error: unknown) => {
-          cancelAskUserPromptReservation();
+          cancelQuestionPromptReservation();
           throw error;
         },
       );
@@ -560,9 +576,7 @@ export function handleToolExecutionStart(
           config: ctx.params.config,
           currentChannelId: ctx.params.currentChannelId,
           currentMessagingTarget: ctx.params.currentMessagingTarget,
-          currentThreadId:
-            ctx.params.currentThreadId ??
-            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentThreadId: ctx.params.currentThreadId,
           currentMessageId: ctx.params.currentMessageId,
           replyToMode: ctx.params.replyToMode,
           hasRepliedRef: ctx.params.hasRepliedRef,
@@ -585,50 +599,67 @@ export function handleToolExecutionStart(
       }
     }
 
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
-      const payload = askUserPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
+    if (questionPromptReservation) {
+      const questionId = questionPromptReservation.questionId;
+      void waitForAskUserPromptReady(questionId)
+        .then(async (questions) => {
+          if (!questions) {
+            return;
+          }
+          if (toolName === "secrets") {
+            const binding = questions[0]?.secretStore;
+            if (!binding) {
               return;
             }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
-            },
+            const controlUiBase = resolveControlUiSessionLinkBase(ctx.params.config);
+            const text = controlUiBase
+              ? `🔑 Agent requests credential ${binding.name} (${binding.kind}). Reply is disabled for secrets — open to provide it: ${controlUiBase}/ask/${encodeURIComponent(questionId)}`
+              : "Credential request unavailable here: no reachable Control UI link. Open a trusted Control UI or native app and retry, or ask the operator to enable Control UI and configure gateway.publicOrigin. Never send credentials in chat.";
+            // Correlation keeps this durable without adding answer controls or a plaintext claim.
+            await ctx.params.onToolResult?.({ text, channelData: { askUser: { questionId } } });
+            if (!controlUiBase) {
+              // A visible blocker is not a delivered entry form; cancel the pending wait.
+              throw new Error(text);
+            }
+            return;
+          }
+          return ctx.params.onToolResult?.(
+            buildAgentHarnessQuestionPromptPayload({
+              questionId,
+              questions: questions.map(({ questionId: id, ...question }) => ({
+                ...question,
+                id,
+              })),
+              options: { intro: "Question for you:" },
+            }),
           );
-      }
+        })
+        .then(
+          () => settleAskUserPromptDelivery(questionId),
+          (error: unknown) => {
+            settleAskUserPromptDelivery(questionId, error);
+            ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
+          },
+        );
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   } catch (error) {
-    cancelAskUserPromptReservation();
+    cancelQuestionPromptReservation();
     throw error;
   }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
     return flushBlockReplyBufferResult.then(
       () => continueAfterBlockReplyFlush(),
       (error: unknown) => {
-        cancelAskUserPromptReservation();
+        cancelQuestionPromptReservation();
         throw error;
       },
     );

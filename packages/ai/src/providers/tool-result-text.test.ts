@@ -3,9 +3,43 @@ import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
+  formatToolResultText,
   hasMediaPayload,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
+
+describe("formatToolResultText", () => {
+  it("preserves significant boundary whitespace in nonblank tool output", () => {
+    expect(formatToolResultText({ text: "  indented\n", isError: false })).toBe("  indented\n");
+    expect(formatToolResultText({ text: "row1   \nrow2\n", isError: false })).toBe(
+      "row1   \nrow2\n",
+    );
+  });
+
+  it("falls back to placeholders only for blank tool output", () => {
+    expect(formatToolResultText({ text: "   \n\t", isError: false })).toBe("(no tool output)");
+    expect(
+      formatToolResultText({ text: "", mediaPlaceholder: "(see attached image)", isError: false }),
+    ).toBe("(see attached image)");
+  });
+
+  it("keeps the error prefix on unmodified output", () => {
+    expect(formatToolResultText({ text: "  failed  ", isError: true })).toBe(
+      "[tool error]   failed  ",
+    );
+  });
+
+  it("appends the omitted-media suffix after unmodified output", () => {
+    const text = "line with trailing spaces   ";
+    expect(
+      formatToolResultText({
+        text,
+        omittedMediaPlaceholder: "[tool image omitted]",
+        isError: false,
+      }),
+    ).toBe(`${text}\n[tool image omitted]`);
+  });
+});
 
 describe("hasMediaPayload", () => {
   it("requires non-empty inline data instead of media metadata", () => {

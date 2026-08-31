@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatDurationCompact } from "../../../lib/format.ts";
+import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { replaceComposerPopoverAnchor } from "./chat-composer-dom.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
@@ -12,48 +17,30 @@ type SwarmDot = {
   key: string;
   label: string;
   status: SwarmDotStatus;
+  duration: string;
 };
 
 type SwarmPhase = {
   title?: string;
   dots: SwarmDot[];
-  hidden: number;
 };
 
 type SwarmGroup = {
   groupId: string;
   label: string;
-  running: number;
-  done: number;
-  failed: number;
-  narrator?: string;
   phases: SwarmPhase[];
 };
 
 type SwarmPhaseCarrier = {
-  swarmLog?: unknown;
   swarmPhase?: unknown;
   swarmPhaseRank?: unknown;
 };
-
-function swarmStatusLabel(status: SwarmDotStatus): string {
-  if (status === "queued") {
-    return t("tasksPage.status.queued");
-  }
-  if (status === "running") {
-    return t("tasksPage.status.running");
-  }
-  if (status === "done") {
-    return t("activity.status.done");
-  }
-  return t("tasksPage.status.failed");
-}
 
 function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
   if (row.status === "queued") {
     return "queued";
   }
-  if (row.status === "running" || row.hasActiveRun === true) {
+  if (isSessionRunActive(row)) {
     return "running";
   }
   if (row.status === "done") {
@@ -79,11 +66,6 @@ function swarmPhase(row: GatewaySessionRow): string | undefined {
   return typeof phase === "string" && phase.trim() ? phase.trim() : undefined;
 }
 
-function swarmLog(row: GatewaySessionRow): string | undefined {
-  const log = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmLog;
-  return typeof log === "string" && log.trim() ? log.trim() : undefined;
-}
-
 function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boolean {
   if (
     (row.parentSessionKey && areUiSessionKeysEquivalent(row.parentSessionKey, sessionKey)) ||
@@ -95,14 +77,27 @@ function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boo
   return Boolean(owner && areUiSessionKeysEquivalent(owner, sessionKey));
 }
 
+function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
+  if (status === "queued") {
+    return "—";
+  }
+  let durationMs = row.runtimeMs;
+  if (durationMs != null && status === "running" && row.runtimeSampledAt != null) {
+    durationMs += Math.max(0, Date.now() - row.runtimeSampledAt);
+  } else if (durationMs == null && row.startedAt != null) {
+    const endAt = row.endedAt ?? (status === "running" ? Date.now() : undefined);
+    if (endAt != null) {
+      durationMs = Math.max(0, endAt - row.startedAt);
+    }
+  }
+  return formatDurationCompact(durationMs) ?? "—";
+}
+
 function collectActiveSwarmGroups(
   sessions: readonly GatewaySessionRow[],
   sessionKey: string,
 ): SwarmGroup[] {
-  const byGroup = new Map<
-    string,
-    Array<{ phase?: string; phaseRank: number; log?: string; dot: SwarmDot }>
-  >();
+  const byGroup = new Map<string, Array<{ phase?: string; phaseRank: number; dot: SwarmDot }>>();
   for (const row of sessions) {
     const groupId = row.swarmGroupId?.trim();
     if (!groupId || !isSwarmChildForSession(row, sessionKey)) {
@@ -116,11 +111,11 @@ function collectActiveSwarmGroups(
     entries.push({
       phase: swarmPhase(row),
       phaseRank: swarmPhaseRank(row),
-      log: swarmLog(row),
       dot: {
         key: row.key,
         label: row.label?.trim() || row.displayName?.trim() || row.derivedTitle?.trim() || row.key,
         status,
+        duration: swarmDuration(row, status),
       },
     });
     byGroup.set(groupId, entries);
@@ -128,7 +123,6 @@ function collectActiveSwarmGroups(
 
   return [...byGroup.entries()]
     .map(([groupId, entries]) => {
-      const dots = entries.map((entry) => entry.dot);
       const phases = new Map<string | undefined, { rank: number; dots: SwarmDot[] }>();
       for (const entry of entries) {
         const bucket = phases.get(entry.phase) ?? { rank: entry.phaseRank, dots: [] };
@@ -139,10 +133,6 @@ function collectActiveSwarmGroups(
       return {
         groupId,
         label: groupTail(groupId),
-        running: dots.filter((dot) => dot.status === "running").length,
-        done: dots.filter((dot) => dot.status === "done").length,
-        failed: dots.filter((dot) => dot.status === "failed").length,
-        narrator: entries.map((entry) => entry.log).find(Boolean),
         phases: [...phases.entries()]
           .toSorted((left, right) => left[1].rank - right[1].rank)
           .map(([title, bucket]) => {
@@ -155,8 +145,7 @@ function collectActiveSwarmGroups(
                 : bucket.dots;
             return {
               title,
-              dots: visibleFirst.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
-              hidden: Math.max(0, visibleFirst.length - MAX_RENDERED_DOTS_PER_PHASE),
+              dots: visibleFirst,
             };
           }),
       } satisfies SwarmGroup;
@@ -188,46 +177,77 @@ export function renderChatSwarmProgress({
       aria-live="off"
       aria-label=${t("labsPage.swarm.title")}
     >
-      ${groups.map(
-        (group) => html`
-          <div class="chat-swarm__group" data-swarm-group=${group.groupId}>
+      ${groups.map((group) => {
+        const allTasks = group.phases.flatMap((phase) => phase.dots);
+        const tasks = group.phases.flatMap((phase) =>
+          phase.dots.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
+        );
+        const complete = allTasks.filter(
+          (task) => task.status === "done" || task.status === "failed",
+        ).length;
+        const hasFailure = allTasks.some((task) => task.status === "failed");
+        let popoverAnchor: HTMLElement | null = null;
+        return html`
+          <div
+            class="chat-swarm__group ${hasFailure ? "chat-swarm__group--failed" : ""}"
+            data-swarm-group=${group.groupId}
+            tabindex="0"
+            ${ref((element) => {
+              popoverAnchor = replaceComposerPopoverAnchor(popoverAnchor, element);
+            })}
+          >
             <div class="chat-swarm__header">
               <strong title=${group.groupId}>${group.label}</strong>
               <span
-                >${group.running} ${swarmStatusLabel("running")} · ${group.done}
-                ${swarmStatusLabel("done")} · ${group.failed} ${swarmStatusLabel("failed")}</span
+                >${t("labsPage.swarm.progress", {
+                  complete: String(complete),
+                  total: String(allTasks.length),
+                })}</span
               >
             </div>
-            ${group.narrator
-              ? html`<div class="chat-swarm__narrator">${group.narrator}</div>`
-              : nothing}
-            ${group.phases.map(
-              (phase) => html`
-                <div class="chat-swarm__phase-row">
-                  <div class="chat-swarm__phase">
-                    ${phase.title ?? t("labsPage.swarm.defaultPhase")}
+            <div class="chat-swarm__progress" aria-hidden="true">
+              ${group.phases.map((phase) => {
+                const phaseProgress =
+                  phase.dots.length === 0
+                    ? 0
+                    : Math.round(
+                        (phase.dots.filter(
+                          (task) => task.status === "done" || task.status === "failed",
+                        ).length /
+                          phase.dots.length) *
+                          100,
+                      );
+                const phaseFailed = phase.dots.some((task) => task.status === "failed");
+                return html`<span class="chat-swarm__progress-segment">
+                  <span
+                    class=${phaseFailed ? "chat-swarm__progress-fill--failed" : ""}
+                    style=${`width:${phaseProgress}%`}
+                  ></span>
+                </span>`;
+              })}
+            </div>
+            <div class="chat-swarm__tasks" role="list">
+              ${tasks.map(
+                (task) => html`
+                  <div class="chat-swarm__task" role="listitem">
+                    <span class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}>
+                      ${task.status === "done"
+                        ? icons.check
+                        : task.status === "failed"
+                          ? icons.alertTriangle
+                          : task.status === "running"
+                            ? icons.loader
+                            : icons.clock}
+                    </span>
+                    <span class="chat-swarm__task-name">${task.label}</span>
+                    <span class="chat-swarm__task-duration">${task.duration}</span>
                   </div>
-                  <div class="chat-swarm__dots" role="list">
-                    ${phase.dots.map(
-                      (dot) => html`
-                        <span
-                          class=${`chat-swarm__dot chat-swarm__dot--${dot.status}`}
-                          role="listitem"
-                          title=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                          aria-label=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                        ></span>
-                      `,
-                    )}
-                    ${phase.hidden > 0
-                      ? html`<span class="chat-swarm__more" role="listitem">+${phase.hidden}</span>`
-                      : nothing}
-                  </div>
-                </div>
-              `,
-            )}
+                `,
+              )}
+            </div>
           </div>
-        `,
-      )}
+        `;
+      })}
     </aside>
   `;
 }

@@ -101,8 +101,9 @@ openclaw_e2e_maybe_timeout() {
           set -- "$resolved_command" "${@:2}"
         fi
       fi
-      node - "$timeout_value" "$@" <<'NODE'
-const [, , timeoutValue, command, ...args] = process.argv;
+      # Keep stdin attached to the child instead of consuming it as watchdog source.
+      node --input-type=module -e '
+const [, timeoutValue, command, ...args] = process.argv;
 const parseTimeoutMs = (value) => {
   const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
   if (!match) {
@@ -202,7 +203,7 @@ child.on("error", (error) => {
   console.error(error.message);
   process.exit(127);
 });
-NODE
+      ' -- "$timeout_value" "$@"
       return
     fi
     echo "timeout command not found and Node is unavailable; cannot bound OpenClaw E2E command after $timeout_value" >&2
@@ -237,6 +238,13 @@ openclaw_e2e_print_log() {
     echo "[failure log omitted: canonical redaction failed]"
   fi
 }
+openclaw_e2e_enable_failure_diagnostics() {
+  # Keep diagnostics outside command log redirections, including inherited traps.
+  # Scenarios reserve fd 4 and provide dump_debug_logs before enabling this handler.
+  exec 4>&2
+  set -E
+  trap 'status=$?; dump_debug_logs "$status" "$BASH_COMMAND" >&4 2>&4; exit "$status"' ERR
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
@@ -248,19 +256,10 @@ openclaw_e2e_install_package() {
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  local had_errexit=0
-  case "$-" in
-    *e*) had_errexit=1 ;;
-  esac
-  set +e
-  openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1
-  local install_status=$?
-  if [ "$had_errexit" -eq 1 ]; then
-    set -e
+  if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+    return 0
   else
-    set +e
-  fi
-  if [ "$install_status" -ne 0 ]; then
+    local install_status=$?
     if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
       echo "npm install timed out after $timeout_value for $label" >&2
     fi
@@ -422,6 +421,11 @@ openclaw_e2e_gateway_log_port_from_text() {
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
+  local ready_log_pattern='\[gateway\] ready'
+  # Published baselines logged their listener before the modern ready marker existed.
+  if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+    ready_log_pattern='\[gateway\] (ready|listening on)'
+  fi
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
@@ -451,7 +455,7 @@ openclaw_e2e_wait_gateway_ready() {
           ready_scan_carry="$scan_text"
         fi
         local ready_log_lines
-        ready_log_lines="$(printf "%s" "$scan_text" | grep '\[gateway\] ready' || true)"
+        ready_log_lines="$(printf "%s" "$scan_text" | grep -E "$ready_log_pattern" || true)"
         if [ -n "$ready_log_lines" ]; then
           saw_ready_log=true
           [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
@@ -459,14 +463,21 @@ openclaw_e2e_wait_gateway_ready() {
       fi
     fi
     if [ "$saw_ready_log" = "true" ]; then
-      [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
-      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+      if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+        openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
+      else
+        openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+      fi
     fi
     sleep 0.25
   done
   if [ "$saw_ready_log" = "true" ]; then
-    echo "Gateway log reported ready, but /readyz probe never succeeded"
+    if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+      echo "Gateway startup log was found, but TCP listener probe never succeeded"
+    else
+      echo "Gateway log reported ready, but /readyz probe never succeeded"
+    fi
   else
     echo "Gateway did not become ready"
   fi
@@ -525,6 +536,32 @@ openclaw_e2e_run_logged() {
 openclaw_e2e_run_command() {
   local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   openclaw_e2e_maybe_timeout "$timeout_value" "$@"
+}
+openclaw_e2e_fixture_plugin_command() {
+  local runner=()
+  while [[ "${1:-}" != "--" && "$#" -gt 0 ]]; do
+    runner+=("$1")
+    shift
+  done
+  shift
+  local help consent
+  # Preserve the successful candidate help result for evidence checks after mutation.
+  # Clear it first so a failed replacement probe cannot expose stale capabilities.
+  OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=
+  # Use the caller's bounded runner for both calls; never cache across package replacement.
+  help="$("${runner[@]}" "$1" "$2" --help)" || {
+    local probe_status=$?
+    printf '%s\nPlugin fixture help probe failed with status %s: %s %s\n' "$help" "$probe_status" "$1" "$2" >&2
+    return "$probe_status"
+  }
+  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return $?
+  if [[ -n "$consent" ]]; then
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=1
+    set -- "$@" "$consent"
+  else
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=0
+  fi
+  "${runner[@]}" "$@"
 }
 openclaw_e2e_enable_openclaw_cli_timeout() {
   OPENCLAW_E2E_CLI_BIN="$(type -P openclaw)"

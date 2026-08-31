@@ -23,6 +23,8 @@ export async function loadControlUiLocaleCatalog(
 export async function loadControlUiSourceCatalog(
   sourceLocalePath: string,
   activitySourceLocalePath: string,
+  sessionPlacementSourceLocalePath: string,
+  pluginConsentSourceLocalePath: string,
 ): Promise<TranslationMap> {
   const source = await loadControlUiLocaleCatalog(sourceLocalePath, "en");
   const activitySource = (
@@ -30,18 +32,40 @@ export async function loadControlUiSourceCatalog(
       registerActivityEnglish: { catalog: TranslationMap };
     }>(activitySourceLocalePath)
   ).registerActivityEnglish.catalog;
-  if (!source || !activitySource) {
+  const sessionPlacementSource = (
+    await importControlUiLocaleModule<{
+      registerSessionPlacementEnglish: { catalog: TranslationMap };
+    }>(sessionPlacementSourceLocalePath)
+  ).registerSessionPlacementEnglish.catalog;
+  const pluginConsentSource = (
+    await importControlUiLocaleModule<{
+      registerPluginConsentEnglish: { catalog: TranslationMap };
+    }>(pluginConsentSourceLocalePath)
+  ).registerPluginConsentEnglish.catalog;
+  if (!source || !activitySource || !sessionPlacementSource || !pluginConsentSource) {
     throw new Error("Control UI English source catalogs are incomplete");
   }
-  return mergeControlUiTranslationMaps(source, activitySource);
+  return mergeControlUiTranslationMaps(
+    source,
+    activitySource,
+    sessionPlacementSource,
+    pluginConsentSource,
+  );
 }
 
 export async function readControlUiSourceCatalog(
   sourceLocalePath: string,
   activitySourceLocalePath: string,
+  sessionPlacementSourceLocalePath: string,
+  pluginConsentSourceLocalePath: string,
 ): Promise<string> {
   const sources = await Promise.all(
-    [sourceLocalePath, activitySourceLocalePath].map((filePath) => readFile(filePath, "utf8")),
+    [
+      sourceLocalePath,
+      activitySourceLocalePath,
+      sessionPlacementSourceLocalePath,
+      pluginConsentSourceLocalePath,
+    ].map((filePath) => readFile(filePath, "utf8")),
   );
   return sources.join("\n");
 }

@@ -102,8 +102,10 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // The lobster footer button renders only while openclaw.chat is advertised.
-      const footerToggle = page.locator(".sidebar-footer-bar__custodian");
+      // Ask OpenClaw lives in the Inbox header and renders only while
+      // openclaw.chat is advertised.
+      await page.locator(".sidebar-issues-button").click();
+      const footerToggle = page.locator(".sidebar-issues-panel__ask");
       await footerToggle.waitFor();
       await page.screenshot({
         animations: "disabled",
@@ -122,14 +124,14 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
         path: path.join(artifactDir, "02-panel-open-history.png"),
       });
 
-      // The same button closes it again.
+      // The same Inbox action closes it again.
       await footerToggle.click();
       await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
       // The command palette exposes the same toggle from anywhere. Its action
-      // dispatches the identical toggle event the footer button uses (pinned by
+      // dispatches the identical toggle event the Inbox action uses (pinned by
       // the palette unit test), so this asserts the gated entry exists and
-      // reopens through the footer path — the palette click-through composition
+      // reopens through the Inbox path — the palette click-through composition
       // proved timing-flaky on loaded CI runners without adding coverage.
       await page.locator(".shell-chrome-controls__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
@@ -140,7 +142,8 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
         path: path.join(artifactDir, "03-palette-item.png"),
       });
       await page.keyboard.press("Escape");
-      await footerToggle.click();
+      await page.locator(".sidebar-issues-button").click();
+      await page.locator(".sidebar-issues-panel__ask").click();
       await panel.getByText("Channel repaired.").waitFor();
 
       // The server-confirmed session id persists and is reused after a full reload.

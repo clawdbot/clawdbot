@@ -20,9 +20,7 @@ export function registerMessageReadEditDeleteCommands(
     .option("--around <id>", "Read around id")
     .option("--thread-id <id>", "Thread id (Slack thread timestamp)")
     .option("--include-thread", "Include thread replies (Discord)", false)
-    .action(async (opts) => {
-      await helpers.runMessageAction("read", opts);
-    });
+    .action((opts) => helpers.runMessageAction("read", opts));
 
   helpers
     .withMessageBase(
@@ -35,9 +33,7 @@ export function registerMessageReadEditDeleteCommands(
       ),
     )
     .option("--thread-id <id>", "Thread id (Telegram forum thread)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("edit", opts);
-    });
+    .action((opts) => helpers.runMessageAction("edit", opts));
 
   helpers
     .withMessageBase(
@@ -48,7 +44,5 @@ export function registerMessageReadEditDeleteCommands(
           .requiredOption("--message-id <id>", "Message id"),
       ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("delete", opts);
-    });
+    .action((opts) => helpers.runMessageAction("delete", opts));
 }

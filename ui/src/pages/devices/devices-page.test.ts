@@ -439,6 +439,167 @@ describe("DevicesPage gateway lifecycle", () => {
     page.remove();
   });
 
+  it.each([
+    {
+      name: "node disconnects while its operator stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "node reconnects while its operator stays connected",
+      role: "node",
+      previousReason: "disconnect",
+      nextReason: "connect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "merged node-role presence disconnects while its operator stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      nodeRoles: ["operator", "node"],
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "operator disconnects while its node stays connected",
+      role: "operator",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "operator reconnects while its node stays connected",
+      role: "operator",
+      previousReason: "disconnect",
+      nextReason: "connect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "node disconnects while a roleless device stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: undefined,
+    },
+    {
+      name: "node disconnects while a device with empty roles stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: [],
+    },
+  ])("reloads mixed-role inventory when $name", async (scenario) => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read", "operator.pairing"] },
+        features: { methods: ["node.list", "device.pair.list"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    const nodePresence: PresenceEntry = {
+      deviceId: "mixed-role-device",
+      instanceId: "mixed-role-device",
+      roles: "nodeRoles" in scenario ? scenario.nodeRoles : ["node"],
+      reason: scenario.role === "node" ? scenario.previousReason : "connect",
+      ts: 2_000,
+    };
+    const operatorPresence: PresenceEntry = {
+      deviceId: "mixed-role-device",
+      instanceId: "operator-session",
+      ...(scenario.operatorRoles ? { roles: scenario.operatorRoles } : {}),
+      reason: scenario.role === "operator" ? scenario.previousReason : "connect",
+      ts: 1_000,
+    };
+    page.presence = [nodePresence, operatorPresence];
+    request.mockClear();
+
+    onEvent?.({
+      event: "presence",
+      payload: {
+        presence: [
+          scenario.role === "node"
+            ? { ...nodePresence, reason: scenario.nextReason }
+            : nodePresence,
+          scenario.role === "operator"
+            ? { ...operatorPresence, reason: scenario.nextReason }
+            : operatorPresence,
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    expect(request).toHaveBeenCalledWith("device.pair.list", {});
+    page.remove();
+  });
+
+  it("does not reload mixed-role inventory for presence activity updates", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, gatewaySnapshot(client, true));
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    const presence: PresenceEntry[] = [
+      { deviceId: "mixed-role-device", roles: ["node"], reason: "connect", ts: 2_000 },
+      { deviceId: "mixed-role-device", roles: ["operator"], reason: "connect", ts: 1_000 },
+    ];
+    page.presence = presence;
+    request.mockClear();
+
+    onEvent?.({
+      event: "presence",
+      payload: {
+        presence: presence.map((entry) =>
+          Object.assign({}, entry, { lastInputSeconds: 3, ts: entry.ts + 100 }),
+        ),
+      },
+    });
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+    page.remove();
+  });
+
   it("retries a node load after a same-client disconnect", async () => {
     const first = deferred<{ nodes: Array<Record<string, unknown>> }>();
     const second = deferred<{ nodes: Array<Record<string, unknown>> }>();

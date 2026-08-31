@@ -71,6 +71,8 @@ export type AcpRunTurnInput = {
   requestId: string;
   signal?: AbortSignal;
   onElicitation?: AcpElicitationHandler;
+  /** Throwable host admission fence immediately before runtime prompt submission. */
+  onBeforePrompt?: () => Promise<void> | void;
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
 };
@@ -138,6 +140,8 @@ export type AcpStartupIdentityReconcileResult = {
 };
 
 export type ActiveTurnState = {
+  requestId: string;
+  instanceId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   abortController: AbortController;
@@ -180,6 +184,7 @@ export type EnsureManagerRuntimeHandle = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   meta: SessionAcpMeta;
+  selectedBackend?: string;
 }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 export type ReconcileManagerRuntimeSessionIdentifiers = (params: {

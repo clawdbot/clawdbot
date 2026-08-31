@@ -2027,6 +2027,8 @@ describe("callGateway error details", () => {
         error = caught;
       });
       expect(isGatewayTransportError(error)).toBe(true);
+      expect(error).toMatchObject({ kind: "closed" });
+      expect(error).not.toHaveProperty("code");
       const message = (error as Error).message;
       expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
       expect(message).toContain(
@@ -2537,6 +2539,27 @@ describe("callGateway error details", () => {
       },
     ]);
     expect(stopStarted).toBe(true);
+  });
+
+  it("does not dispatch a request when its hello observer aborts the connection", async () => {
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn();
+    const stop = vi.fn(async () => {});
+    gatewayClientStopAndWait = stop;
+
+    await expect(
+      callGateway({
+        method: "agent",
+        signal: controller.signal,
+        onHelloOk: () => controller.abort(),
+        onSignalAbort,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(lastRequestOptions).toBeNull();
+    expect(onSignalAbort).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("skips the signal abort hook before the primary request starts", async () => {

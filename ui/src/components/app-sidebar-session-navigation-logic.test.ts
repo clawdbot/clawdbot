@@ -1,12 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
+import { t } from "../i18n/index.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
   compareSidebarSessionRowsByMode,
+  resolveSidebarAgentChipSubtitle,
+  resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+
+it.each([
+  ["global before hello", "global", undefined, "global"],
+  ["advertised global casing", "global", " GLOBAL ", "GLOBAL"],
+  ["advertised key in global scope", "global", "agent:other:legacy", "agent:other:legacy"],
+  ["global advertised without a roster", undefined, " GLOBAL ", "GLOBAL"],
+  ["explicit per-sender scope", "per-sender", "global", "agent:ops:workspace"],
+  ["per-agent key without a roster", undefined, "agent:other:legacy", "agent:ops:workspace"],
+] as const)(
+  "preserves the sidebar main destination for %s",
+  (_name, scope, advertised, expected) => {
+    expect(
+      resolveSidebarMainSessionKey({
+        agentId: "ops",
+        agentsList: scope
+          ? { defaultId: "main", mainKey: "workspace", scope, agents: [] }
+          : undefined,
+        hello: advertised
+          ? {
+              ...gatewayHelloForMethods([]),
+              snapshot: {
+                sessionDefaults: {
+                  defaultAgentId: "main",
+                  mainKey: "workspace",
+                  mainSessionKey: advertised,
+                },
+              },
+            }
+          : null,
+      }),
+    ).toBe(expected);
+  },
+);
 
 function projectSidebarSession(
   row: Partial<GatewaySessionRow>,
@@ -153,11 +191,13 @@ describe("sidebar session sort modes", () => {
 });
 
 describe("sidebar session live-run projection", () => {
-  it("projects the durable last-message preview", () => {
+  it("projects durable message and execution-owner facts", () => {
     expect(
-      projectSidebarSession({ lastMessagePreview: "The final reply is durable." })
-        .lastMessagePreview,
-    ).toBe("The final reply is durable.");
+      projectSidebarSession({
+        lastMessagePreview: "The final reply is durable.",
+        execNode: "build-mac",
+      }),
+    ).toMatchObject({ lastMessagePreview: "The final reply is durable.", execNode: "build-mac" });
   });
 
   it.each([
@@ -175,6 +215,22 @@ describe("sidebar session live-run projection", () => {
       expect(projected.gatewayHasActiveRun).toBe(gatewayHasActiveRun);
     },
   );
+
+  it("stops calling a completed registry-active agent Working", () => {
+    const session = {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+    } satisfies GatewaySessionRow;
+
+    expect(resolveSidebarAgentChipSubtitle({ ...session, status: "done" })).not.toBe(
+      t("agentChip.working"),
+    );
+    expect(resolveSidebarAgentChipSubtitle({ ...session, status: "running" })).toBe(
+      t("agentChip.working"),
+    );
+  });
 
   it("carries active cloud disk pressure into the existing sidebar badge model", () => {
     const projected = projectSidebarSession({
@@ -260,6 +316,74 @@ describe("sidebar navigation lineage ownership", () => {
     parentSessionKey: navigationParent.key,
     spawnedBy: controlParent.key,
   };
+
+  it.each([
+    { name: "exact", rootKey: child.key, cachedKey: child.key },
+    { name: "equivalent", rootKey: child.key.toUpperCase(), cachedKey: child.key },
+    { name: "main alias", rootKey: "main", cachedKey: "agent:main:main" },
+    {
+      name: "case-preserving Matrix alias",
+      rootKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org",
+      cachedKey: "agent:ops:matrix:channel:!Room:Example.Org",
+    },
+  ])(
+    "keeps the canonical root authoritative over an $name cached child key",
+    async ({ rootKey, cachedKey }) => {
+      const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
+        ...child,
+        key,
+        placement: {
+          state: "active",
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+          environmentId: "worker:device",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "manifest",
+          remoteWorkspaceDir: "/workspace",
+          runner: { kind: "device", status },
+        },
+      });
+      const canonical = {
+        ...row(rootKey, "offline"),
+        parentSessionKey: undefined,
+        spawnedBy: undefined,
+      };
+      const cached = row(cachedKey, "available");
+      const hidden = row("agent:main:subagent:hidden", "available");
+
+      const known = collectKnownSessionRows([canonical], {
+        [navigationParent.key]: [cached, hidden],
+      });
+
+      expect(known.get(canonical.key)).toBe(canonical);
+      expect(known.get(hidden.key)).toBe(hidden);
+      expect(known).toHaveLength(2);
+      const request = vi.fn();
+      const lineage = await fetchSessionLineage({
+        client: createTestGatewayClient(request),
+        sessionKey: cached.key,
+        knownRows: known,
+        isCurrent: () => true,
+      });
+      expect(lineage?.topmostRow).toBe(canonical);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps case-sensitive Matrix and Signal session identifiers distinct", () => {
+    const keys = [
+      "agent:ops:matrix:channel:!Room:Example.Org",
+      "agent:ops:matrix:channel:!room:example.org",
+      "agent:ops:signal:group:AbC123=",
+      "agent:ops:signal:group:abc123=",
+    ];
+    const rows = keys.map((key) => ({ ...child, key }));
+
+    expect([...collectKnownSessionRows(rows, {}).keys()]).toEqual(keys);
+  });
 
   it("projects a known child exactly once under its explicit navigation parent", () => {
     const projected = projectSessionTree({

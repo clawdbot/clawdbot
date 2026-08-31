@@ -258,23 +258,27 @@ suite.define(() => {
         cols: expect.any(Number),
         rows: expect.any(Number),
       });
-      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b]12;?\u001b\\";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "terminal-e2e",
         seq: colorQueries.length,
         data: colorQueries,
       });
-      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(2);
-      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual([
-        {
+      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+      const themeColors = await page.evaluate(() => {
+        const styles = getComputedStyle(document.documentElement);
+        return ["--text", "--bg", "--accent"].map((property) =>
+          styles.getPropertyValue(property).trim(),
+        );
+      });
+      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual(
+        themeColors.map((color, index) => ({
           sessionId: "terminal-e2e",
-          data: "\u001b]10;rgb:1b1b/1e1e/2626\u001b\\",
-        },
-        {
-          sessionId: "terminal-e2e",
-          data: "\u001b]11;rgb:f7f7/f8f8/fafa\u001b\\",
-        },
-      ]);
+          data: `\u001b]${index + 10};rgb:${[1, 3, 5]
+            .map((offset) => color.slice(offset, offset + 2).repeat(2))
+            .join("/")}\u001b\\`,
+        })),
+      );
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
       const closeControlMetrics = await page

@@ -5,6 +5,17 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputConsumptions,
+  listSessionPendingInputs,
+  readSessionPendingInput,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+  type SessionPendingInput,
+  type SessionPendingInputPage,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-inputs.js";
 export type {
   BranchSessionFromCompactionCheckpointParams,
   DeleteSessionEntryLifecycleParams,
@@ -269,9 +280,6 @@ export {
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptMessageAnchorPage,
-  readSessionTranscriptMessageEventById,
-  readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDeltaCore,

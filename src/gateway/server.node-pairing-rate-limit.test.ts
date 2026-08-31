@@ -130,10 +130,11 @@ describe("node pairing rate limit", () => {
             caps: [],
             commands: [],
             deviceIdentityPath: identityPath,
+            prePairDevice: false,
           });
 
-          expect(response.ok).toBe(true);
-          expect(response.payload).toMatchObject({ type: "hello-ok" });
+          expect(response.ok, JSON.stringify(response)).toBe(true);
+          expect(response.payload).toMatchObject({ type: "hello-ok", auth: { role: "node" } });
           expect(nodeRegistry?.get(identity.deviceId)).toMatchObject({
             nodeId: identity.deviceId,
           });

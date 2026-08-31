@@ -18,12 +18,12 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
-  uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
-import { moveChatPanePlacement, reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
@@ -37,26 +37,30 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import {
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
+import { maybeResetToolStream } from "./stream-reconciliation.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
+  private outboxRecoveryReady = false;
 
   override disconnectedCallback() {
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
+    this.outboxRecoveryReady = false;
     super.disconnectedCallback();
   }
 
@@ -70,7 +74,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.headerPlacementMovingKey = movingKey;
       }
     };
-    await moveChatPanePlacement({
+    const params = {
       client: scope.client,
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
@@ -78,10 +82,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onMovingChange,
-      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
-      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
-    });
+    };
+    const { moveChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await moveChatPanePlacement(params);
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
@@ -96,18 +102,21 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.headerPlacementReclaimingKey = reclaimingKey;
       }
     };
-    await reclaimChatPanePlacement({
+    const params = {
       client: scope.client,
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
+      placementStartup: scope.context.placementStartup,
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
-      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
-    });
+    };
+    const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await reclaimChatPanePlacement(params);
   }
 
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -115,22 +124,21 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
-    const selectedSessionDeleted = stateValue.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-          sessionKey: state.sessionKey,
-        },
-        key,
-        agentId,
-      ),
+    const selectedSessionDeleted = this.context.sessions.deletionState(
+      state.sessionKey,
+      resolveChatAgentId(state),
     );
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
-    state.sessionsResult = stateValue.result;
-    state.sessionsResultAgentId = stateValue.agentId;
+    // A list for another agent must not overwrite this pane's global history.
+    if (
+      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      stateValue.agentId === resolveChatAgentId(state)
+    ) {
+      state.sessionsResult = stateValue.result;
+      state.sessionsResultAgentId = stateValue.agentId;
+    }
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();
@@ -161,13 +169,18 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
             hello: this.context.gateway.snapshot.hello,
           }),
         }),
+        selectedSessionDeleted === "pending",
       );
       return;
     }
-    const reconciledLocalCompletion = reconcileStaleChatRunAfterSessionStatePublication(state);
+    const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
     this.reconcileWaitingApprovalSnapshot();
-    if (!reconciledLocalCompletion) {
-      state.requestUpdate?.();
+    if (reconciledLocalCompletion) {
+      void retryReconnectableQueuedChatSends(state);
+    } else if (this.presented) {
+      // Share the event handler's frame; synchronous roster publication must
+      // not force a transcript redraw for every incoming session update.
+      requestChatPageUpdate(state, "animation-frame");
     }
   }
 
@@ -225,6 +238,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
     const previousAssistantAgentId = state.assistantAgentId;
+    // Gateway identity is its default, while each retained pane owns its routed agent.
+    const assistantAgentId =
+      parseAgentSessionKey(state.sessionKey)?.agentId ??
+      this.context.agentSelection.state.selectedId ??
+      snapshot.assistantAgentId;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const connectionLifecycle = (this.gatewayConnectionLifecycle ??=
       createGatewayConnectionLifecycle({
@@ -253,13 +271,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         state.chatSending = false;
         state.chatSendingScopeKey = null;
+        invalidateAssistantIdentityCache(state.client);
       }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
       this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
-      invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
       retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();
@@ -282,21 +300,34 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
       this.sessionSharingStates = new Map();
+      state.guardianNotices = [];
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
     if (
       sourceChanged ||
-      (previousAssistantAgentId !== snapshot.assistantAgentId &&
+      (previousAssistantAgentId !== assistantAgentId &&
         isUiSelectedGlobalSessionKey(state, state.sessionKey))
     ) {
       retireChatModelSelectionOwnership(state);
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
+    const recoveryReady = state.connected && Boolean(state.client?.recoveryScopeReady);
+    const resumeOutboxes = recoveryReady && (clientChanged || !this.outboxRecoveryReady);
+    this.outboxRecoveryReady = recoveryReady;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    state.selfUser = snapshot.selfUser ?? null;
+    state.assistantAgentId = assistantAgentId;
+    if (wasConnected && !state.connected) {
+      // Only the connected->disconnected transition may reshape loading state;
+      // repeated disconnected snapshots must stay no-ops for pane ownership.
+      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+    }
+    const resumedHistory =
+      !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state);
     }
@@ -341,7 +372,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (state.connected && state.pendingAbort) {
       void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
     }
-    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey && !clientChanged) {
+    const routeSessionKey = this.sessionKey.trim();
+    const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
+    if (
+      sourceChanged &&
+      snapshot.phase === "connected" &&
+      state.sessionKey &&
+      !clientChanged &&
+      !catalogRouteKey
+    ) {
       // A logical reconnect can retain the browser client and skip full startup.
       // Disconnect cleanup drops transient tool rows, so reload this pane's
       // active-run snapshot before secondary session surfaces hydrate.
@@ -349,12 +388,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        state.sessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
     }
-    state.assistantAgentId = snapshot.assistantAgentId;
-    const routeSessionKey = this.sessionKey.trim();
-    const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     const canonicalRouteSessionKey =
       routeSessionKey && !catalogRouteKey
         ? resolveSessionKey(routeSessionKey, snapshot.hello)
@@ -393,36 +433,25 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
-      state.resetToolStream();
+      maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
       state.requestUpdate?.();
       return;
     }
     this.refreshSwarmRoster();
-    if (clientChanged && snapshot.client) {
+    if ((clientChanged || (sourceChanged && catalogRouteKey)) && snapshot.client) {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
-      const agentsListBeforeStartup = this.context.agents.state.agentsList;
-      const rosterRevisionBeforeStartup = this.context.agents.state.listRevision;
       const clientIsCurrent = () =>
         this.connectionGeneration === startupGeneration &&
         this.connectedClient === startupClient &&
         state.client === startupClient &&
         state.connected;
-      state.onAgentsList = (agentsList, client) => {
-        const ownsRoster =
-          clientIsCurrent() &&
-          this.context.agents.adoptList(agentsList, client, rosterRevisionBeforeStartup);
-        return ownsRoster;
-      };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
           return;
         }
-        let agentsList = this.context.agents.state.agentsList;
-        if (agentsList === agentsListBeforeStartup) {
-          agentsList = await this.context.agents.ensureList();
-        }
+        const agentsList = await this.context.agents.ensureList();
         if (!clientIsCurrent()) {
           return;
         }
@@ -444,23 +473,28 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         return;
       }
       void syncSelectedSessionMessageSubscription(state, { force: true });
-      void retryReconnectableQueuedChatSends(state);
       const historyRefresh = refreshPageChat(state, {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        startupSessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
       void historyRefresh.finally(() => {
-        if (clientIsCurrent()) {
-          state.onAgentsList = undefined;
-        }
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
       void this.refreshSessionSuggestions();
+    }
+    // Hello precedes recovery readiness. Wake parked outboxes on that publication;
+    // the shared admission check still holds any recovered initial turn.
+    if (resumeOutboxes && !catalogRouteKey) {
+      void retryReconnectableQueuedChatSends(state);
     }
     this.reconcileWaitingApprovalSnapshot();
     state.requestUpdate?.();

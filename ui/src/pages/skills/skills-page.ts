@@ -18,6 +18,7 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -74,9 +75,6 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeRef?: string;
-    acknowledgeVersion?: string;
-    acknowledgeLabel?: string;
   } | null = null;
   @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
   @state() clawhubVerdictsLoading = false;
@@ -211,6 +209,9 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    if (data.report) {
+      void loadClawHubSecurityVerdicts(this, data.report);
+    }
   }
 
   private ensureInitialData() {
@@ -431,9 +432,9 @@ class SkillsPage extends OpenClawLightDomElement {
             onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
             onClawHubDetailOpen: (ref) => void loadClawHubDetail(this, ref),
             onClawHubDetailClose: () => closeClawHubDetail(this),
-            onClawHubInstall: (ref, acknowledgeClawHubRisk, version) => {
+            onClawHubInstall: (ref, version) => {
               if (this.canInstallSkills()) {
-                void installFromClawHub(this, ref, acknowledgeClawHubRisk, version);
+                void installFromClawHub(this, ref, version);
               }
             },
           })}

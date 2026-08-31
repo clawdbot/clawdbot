@@ -75,4 +75,27 @@ describe("session suggestions protocol", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts optional bounded typing previews without requiring them", () => {
+    const params = {
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      typing: true,
+    };
+    const event = {
+      ...params,
+      agentId: "main",
+      actor: { type: "human", id: "alice", label: "Alice" },
+      ts: 1,
+    };
+
+    expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "draft" })).toBe(true);
+    expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "draft" })).toBe(true);
+    expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "x".repeat(401) })).toBe(
+      false,
+    );
+    expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "x".repeat(401) })).toBe(
+      false,
+    );
+  });
 });

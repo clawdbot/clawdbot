@@ -126,6 +126,18 @@ struct AppLaunchRuntimePlanTests {
             hasVisibleWindows: true) == .accessory)
     }
 
+    @Test func `elevation host derives pause and Peekaboo roles in memory`() {
+        let interactive = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
+        let elevation = AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])
+
+        for storedValue in [false, true] {
+            #expect(interactive.resolvePaused(storedValue) == storedValue)
+            #expect(interactive.resolvePeekabooBridgeEnabled(storedValue) == storedValue)
+        }
+        #expect(!elevation.resolvePaused(true))
+        #expect(elevation.resolvePeekabooBridgeEnabled(false))
+    }
+
     @Test func `attach-only does not change presentation behavior`() {
         let arguments = ["OpenClaw", "--attach-only", "--dashboard"]
         let policy = AppLaunchRuntimePlan(arguments: arguments)

@@ -35,6 +35,8 @@ struct ComputerControlSettingsTests {
         let suiteName = "ComputerControlElevationHostTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        let interactivePlan = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
+        let elevationPlan = AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])
         defaults.set(true, forKey: computerControlEnabledKey)
         defaults.set(ComputerControlProvider.cua.rawValue, forKey: computerControlProviderKey)
 
@@ -42,11 +44,15 @@ struct ComputerControlSettingsTests {
         #expect(ComputerControlProvider.current(
             defaults: defaults,
             cuaAvailable: true,
-            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw"])) == .cua)
+            launchPlan: interactivePlan) == .cua)
         #expect(ComputerControlProvider.current(
             defaults: defaults,
             cuaAvailable: true,
-            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])) == .peekaboo)
+            launchPlan: elevationPlan) == .peekaboo)
+
+        defaults.set(false, forKey: computerControlEnabledKey)
+        #expect(!isComputerControlEnabled(defaults: defaults, launchPlan: interactivePlan))
+        #expect(isComputerControlEnabled(defaults: defaults, launchPlan: elevationPlan))
     }
 
     @Test func `bundled CUA locator accepts only a regular executable and never follows a symlink`() throws {

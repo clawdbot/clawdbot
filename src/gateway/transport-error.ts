@@ -48,3 +48,17 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
     value.connectionDetails !== null
   );
 }
+
+/** Transport uncertainty permits read recovery or an exclusively ownership-locked mutation. */
+export function isGatewayRpcUnavailableError(error: unknown): boolean {
+  if (isGatewayTransportError(error)) {
+    return error.kind === "timeout" || [undefined, 1006, 1012].includes(error.code);
+  }
+  // Pending protocol requests still surface these exact transport failures as plain Errors.
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    (/^gateway closed \((?:1006|1012)\): [^\r\n]*$/u.test(error.message) ||
+      /^gateway timeout after \d+ms(?:\n[\s\S]*)?$/u.test(error.message))
+  );
+}

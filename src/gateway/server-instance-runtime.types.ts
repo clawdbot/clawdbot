@@ -2,6 +2,7 @@ import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import type { InternalAgentTurnFacadeFactory } from "./agent-turn/internal-facade.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
@@ -15,6 +16,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   scopes?: string[];
   signal?: AbortSignal;
@@ -27,6 +29,10 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
+  abortAgent: (
+    params: { agentId: string; runId: string; sessionKey: string },
+    timeoutMs?: number,
+  ) => Promise<{ aborted?: boolean; runIds?: string[] }>;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,
@@ -47,6 +53,7 @@ export type GatewayRecoveryRuntime = {
 };
 
 export type GatewayInstanceRuntime = {
+  createAgentTurnFacade: InternalAgentTurnFacadeFactory;
   approvalEvents: GatewayApprovalEventPublisher;
   nativeApprovals: GatewayNativeApprovalRuntime;
   recovery: GatewayRecoveryRuntime;

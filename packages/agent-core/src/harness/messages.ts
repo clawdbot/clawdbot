@@ -143,6 +143,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             timestamp: message.timestamp,
           };
         case "custom": {
+          if (message.excludeFromContext) {
+            return undefined;
+          }
           const content =
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]

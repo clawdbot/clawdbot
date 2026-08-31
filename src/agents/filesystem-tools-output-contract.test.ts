@@ -40,7 +40,10 @@ describe("filesystem tool output contracts", () => {
     const text = await tool.execute("read-text", { path: "notes.txt", limit: 10 });
     const image = await tool.execute("read-image", { path: "pixel.png", limit: 10 });
     const truncated = await tool.execute("read-truncated", { path: "long.txt", limit: 10 });
-    const notFound = await tool.execute("read-not-found", { path: "memory/2026-07-17.md" });
+    const notFound = await tool.execute("read-not-found", {
+      path: "memory/2026-07-17.md",
+      optional: true,
+    });
 
     for (const result of [text, image, truncated, notFound]) {
       expectContract(tool, result.details);

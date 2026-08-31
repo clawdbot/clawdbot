@@ -16,11 +16,15 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Run with an exact empty tool surface. */
+  disableTools?: boolean;
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Use the bounded subagent prompt instead of the full conversation prompt. */
+  promptMode?: "minimal";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
@@ -103,6 +107,14 @@ type RuntimeNodeInvokeParams = {
   scopes?: OperatorScope[];
 };
 
+/** A lifecycle-bound, complete-message binary channel for one node invocation. */
+type RuntimeNodeDuplexChannel = {
+  send: (message: Uint8Array) => Promise<void>;
+  onMessage: (listener: (message: Uint8Array) => void | Promise<void>) => () => void;
+  closed: Promise<unknown>;
+  close: () => void;
+};
+
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
@@ -132,6 +144,13 @@ export type PluginRuntime = PluginRuntimeCore & {
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+    /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
+    openDuplex: (
+      params: RuntimeNodeInvokeParams & {
+        maxMessageBytes?: number;
+        maxOutstandingDeliveryBytes?: number;
+      },
+    ) => Promise<RuntimeNodeDuplexChannel>;
   };
   sandbox: {
     resolveWorkspaceAuthority: (params: {
@@ -185,7 +204,14 @@ export type PluginRuntime = PluginRuntimeCore & {
 export type CreatePluginRuntimeOptions = {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   gateway?: PluginRuntime["gateway"];
+  hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
 };
+
+/** Checked contract for both the path-loaded factory and its implementation. */
+export type PluginRuntimeFactory = (
+  options?: CreatePluginRuntimeOptions,
+  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+) => PluginRuntime;

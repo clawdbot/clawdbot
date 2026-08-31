@@ -76,6 +76,12 @@ export function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),
+    ...(existingEntry.pendingProjectGitUrl !== undefined
+      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
+      : {}),
+    ...(existingEntry.transcriptByteCompactionLatch
+      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
+      : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),

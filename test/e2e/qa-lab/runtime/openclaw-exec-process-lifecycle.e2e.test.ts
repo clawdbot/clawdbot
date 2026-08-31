@@ -1,10 +1,13 @@
-import { expect, test } from "vitest";
+import { ChildProcess } from "node:child_process";
+import { constants } from "node:os";
+import { expect, test, vi } from "vitest";
 import {
   getActiveBackgroundExecSessionCount,
   listRunningSessions,
 } from "../../../../src/agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../../../../src/agents/bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "../../../../src/agents/bash-tools.js";
+import { getProcessSupervisor } from "../../../../src/process/supervisor/index.js";
 
 type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
@@ -102,6 +105,22 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
   const cleanupPids = new Set<number>();
 
   try {
+    const missingRunId = `missing-command-${process.pid}`;
+    await expect(
+      getProcessSupervisor().spawn({
+        mode: "child",
+        argv: ["/definitely/not/a/real-openclaw-command"],
+        env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
+        runId: missingRunId,
+        sessionId: missingRunId,
+        backendId: "qa-process-lifecycle",
+      }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(getProcessSupervisor().getRecord(missingRunId)).toMatchObject({
+      state: "exited",
+      terminationReason: "spawn-error",
+    });
+
     const shellMarker = `shell-route-${process.pid}`;
     const foregroundCommand =
       process.platform === "win32"
@@ -191,23 +210,83 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     expect(textOf(pty)).toContain(`${ptyMarker}:true:exec`);
 
     const killMarker = `kill-target-${process.pid}`;
-    const killTarget = await execTool.execute("kill-background", {
-      command: nodeEvalCommand(
-        `process.stdout.write(${JSON.stringify(killMarker + "\n")});setInterval(() => {}, 1000);`,
-      ),
-      background: true,
+    const spawnedChildren = new Map<number, ChildProcess>();
+    const originalEmit = ChildProcess.prototype.emit;
+    const captureSpawn = vi.spyOn(ChildProcess.prototype, "emit").mockImplementation(function (
+      this: ChildProcess,
+      event,
+      ...args
+    ) {
+      if (event === "spawn" && this.pid !== undefined) {
+        spawnedChildren.set(this.pid, this);
+      }
+      return originalEmit.call(this, event, ...args);
     });
+    let killTarget: ToolResult;
+    try {
+      const childCommand = nodeEvalCommand(
+        `process.stdout.write(${JSON.stringify(killMarker + "\n")});setInterval(() => {}, 1000);`,
+      );
+      killTarget = await execTool.execute("kill-background", {
+        command: process.platform === "win32" ? childCommand : `exec ${childCommand}`,
+        background: true,
+      });
+    } finally {
+      captureSpawn.mockRestore();
+    }
     const killedSession = requireSession(killTarget);
     cleanupPids.add(killedSession.pid);
+    const child = spawnedChildren.get(killedSession.pid);
+    if (!child) {
+      throw new Error(`missing spawned child ${killedSession.pid}`);
+    }
+    const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
+      ._handle;
+    const originalKill = handle.kill;
+    const observedErrors: Array<NodeJS.ErrnoException> = [];
+    child.on("error", (error) => {
+      observedErrors.push(error);
+    });
+    const errorListenerCount = child.listenerCount("error");
+
+    try {
+      handle.kill = () => -constants.errno.EPERM;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(child.kill("SIGTERM")).toBe(false);
+        expect(child.listenerCount("error")).toBe(errorListenerCount);
+        expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
+        await Promise.resolve();
+        expect(getProcessSupervisor().getRecord(killedSession.sessionId)).toMatchObject({
+          state: "running",
+          pid: killedSession.pid,
+        });
+        expect(listRunningSessions()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: killedSession.sessionId, exited: false }),
+          ]),
+        );
+        expect(getActiveBackgroundExecSessionCount()).toBe(1);
+        expect(pidExists(killedSession.pid)).toBe(true);
+      }
+    } finally {
+      handle.kill = originalKill;
+    }
+
     const killed = await processTool.execute("kill-session", {
       action: "kill",
       sessionId: killedSession.sessionId,
     });
-    expect(killed.details).toMatchObject({ status: "failed" });
+    expect(killed.details).toMatchObject({ status: "completed" });
     const killedTerminal = await pollTerminal(processTool, killedSession.sessionId);
-    expect(killedTerminal.details).toMatchObject({ status: "failed" });
+    expect(killedTerminal.details).toMatchObject({
+      status: "failed",
+      exitReason: "manual-cancel",
+    });
     await clearFinished(processTool, killedSession.sessionId);
     await expect.poll(() => pidExists(killedSession.pid), POLL_OPTIONS).toBe(false);
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("close")).toBe(0);
     cleanupPids.delete(killedSession.pid);
 
     const finalList = await processTool.execute("list-final", { action: "list" });
@@ -220,6 +299,11 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
         action: "remove",
         sessionId: session.id,
       });
+    }
+    for (const pid of cleanupPids) {
+      if (pidExists(pid)) {
+        process.kill(pid, "SIGKILL");
+      }
     }
     await expect.poll(() => [...cleanupPids].filter(pidExists).length, POLL_OPTIONS).toBe(0);
     resetProcessRegistryForTests();

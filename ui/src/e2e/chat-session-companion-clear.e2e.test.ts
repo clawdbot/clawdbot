@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
   type MockGatewayControls,
@@ -72,7 +73,7 @@ async function withCompanion(run: (surface: CompanionSurface) => Promise<void>):
         sessionKey: initiatingSessionKey,
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initiatingSessionKey));
       const stateRequest = await gateway.waitForRequest("sessions.companion.state");
       expect(stateRequest.params).toEqual({
         agentId: "main",

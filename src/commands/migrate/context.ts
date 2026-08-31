@@ -40,6 +40,9 @@ export function resolveMigrationTargetAgentId(
   rawAgentId: string | undefined,
 ): string | undefined {
   const raw = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !raw) {
+    throw new Error("--agent must not be blank");
+  }
   if (!raw) {
     return undefined;
   }

@@ -4,9 +4,11 @@ import type { ReefMessageFlow } from "./flow.js";
 import type { ReefFriendManager } from "./friends.js";
 import type { ReviewApprovalStore } from "./state.js";
 
-type ActiveReef =
-  | { flow: ReefMessageFlow; friends: ReefFriendManager; reviews: ReviewApprovalStore }
-  | undefined;
+type ActiveReef = {
+  flow: ReefMessageFlow;
+  friends: ReefFriendManager;
+  reviews: ReviewApprovalStore;
+};
 
 const {
   setRuntime: setReefRuntime,
@@ -17,21 +19,46 @@ const {
   errorMessage: "Reef runtime unavailable",
 });
 
-// Keep the live channel handle in a second named slot: duplicate bundled-plugin
-// module instances must observe the same running Reef instance for outbound sends.
-const activeReefStore = createPluginRuntimeStore<Exclude<ActiveReef, undefined>>({
+const activeReefStore = createPluginRuntimeStore<{
+  value: ActiveReef;
+  controller: AbortController;
+  signal: AbortSignal;
+}>({
   key: "plugin-runtime:reef:active",
   errorMessage: "Reef channel is not running",
 });
 
 export { getOptionalReefRuntime, getReefRuntime, setReefRuntime };
 
-export function setActiveReef(value: ActiveReef): void {
-  if (value) {
-    activeReefStore.setRuntime(value);
-  } else {
-    activeReefStore.clearRuntime();
-  }
+export function createReefRuntimeAuthority(parentSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
+  let registration: ReturnType<typeof activeReefStore.tryGetRuntime> = null;
+  return {
+    signal,
+    activate(value: ActiveReef): void {
+      signal.throwIfAborted();
+      const predecessor = activeReefStore.tryGetRuntime();
+      registration = { value, controller, signal };
+      activeReefStore.setRuntime(registration);
+      predecessor?.controller.abort();
+    },
+    release(): void {
+      controller.abort();
+      // A stopped generation must never clear its replacement, even across module instances.
+      if (activeReefStore.tryGetRuntime() === registration) {
+        activeReefStore.clearRuntime();
+      }
+    },
+  };
 }
 
-export const getActiveReef = activeReefStore.getRuntime;
+export function getActiveReef(): ActiveReef {
+  const registration = activeReefStore.getRuntime();
+  if (registration.signal.aborted) {
+    throw new Error("Reef channel is not running");
+  }
+  return registration.value;
+}

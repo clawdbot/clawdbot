@@ -390,38 +390,6 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
   });
 
-  it("renders ClawHub acknowledgement retry actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubInstallMessage: {
-            kind: "error",
-            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeRef: "github",
-            acknowledgeVersion: "1.2.3",
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-
-    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
-    expect(normalizeText(container.querySelector(".callout")!)).toBe(
-      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
-    );
-    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
-
-    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
-  });
-
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -538,6 +506,61 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
+
+  it.each([
+    { loading: true, label: "Refreshing…", warning: false },
+    { loading: false, label: "Unavailable", warning: true },
+  ])(
+    "shows $label consistently for a missing ClawHub verdict while loading=$loading",
+    async ({ loading, label, warning }) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+
+      const linkedSkill = createSkill({
+        skillKey: "agentreceipt",
+        name: "AgentReceipt",
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          installedVersion: "1.2.3",
+          installedAt: 123,
+        },
+      });
+      render(
+        renderSkills(
+          createProps({
+            report: {
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [linkedSkill],
+            },
+            detailKey: "agentreceipt",
+            clawhubVerdictsLoading: loading,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const rowVerdict = Array.from(container.querySelectorAll(".settings-status")).find(
+        (element) => normalizeText(element) === label,
+      );
+      const detailVerdict = Array.from(container.querySelectorAll(".chip")).find(
+        (element) => normalizeText(element) === label,
+      );
+      expect(rowVerdict).toBeDefined();
+      expect(detailVerdict).toBeDefined();
+      expect(rowVerdict?.classList.contains("settings-status--warn")).toBe(warning);
+      expect(detailVerdict?.classList.contains("chip-warn")).toBe(warning);
+      expect(normalizeText(container).match(new RegExp(label, "gu")) ?? []).toHaveLength(2);
+    },
+  );
 
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");

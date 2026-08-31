@@ -53,35 +53,46 @@ export function createAudioAsVoiceBuffer(params: {
   };
 }
 
-/** Creates a stable duplicate key for a complete outbound payload. */
-function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyContentIdentity(payload: ReplyPayload) {
   const reply = resolveSendableOutboundReplyParts(payload);
-  return JSON.stringify({
-    statusNotice: isReplyPayloadStatusNotice(payload),
+  return {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
     presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
+    location: payload.location ?? null,
+    videoAsNote: payload.videoAsNote === true,
+  };
+}
+
+/** Creates a stable duplicate key for a complete outbound payload. */
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+  return JSON.stringify({
+    ...createBlockReplyContentIdentity(payload),
+    statusNotice: isReplyPayloadStatusNotice(payload),
+    reasoning: payload.isReasoning === true,
+    commentary: payload.isCommentary === true,
+    assistantMessageIndex: getReplyPayloadMetadata(payload)?.assistantMessageIndex ?? null,
     replyToId: payload.replyToId ?? null,
   });
 }
 
 /** Creates a duplicate key that ignores reply target for final suppression. */
 export function createBlockReplyContentKey(payload: ReplyPayload): string {
-  const reply = resolveSendableOutboundReplyParts(payload);
   // Content-only key used for final-payload suppression after block streaming.
   // This intentionally ignores replyToId so a streamed threaded payload and the
   // later final payload still collapse when they carry the same content.
-  return JSON.stringify({
-    text: reply.trimmedText,
-    mediaList: reply.mediaUrls,
-    presentation: payload.presentation ?? null,
-    presentationTextMode: payload.presentationTextMode ?? null,
-    interactive: payload.interactive ?? null,
-    channelData: payload.channelData ?? null,
-  });
+  return JSON.stringify(createBlockReplyContentIdentity(payload));
+}
+
+function createIndexedBlockReplyContentKey(payload: ReplyPayload): string {
+  const contentKey = createBlockReplyContentKey(payload);
+  const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+  return assistantMessageIndex === undefined
+    ? contentKey
+    : `${assistantMessageIndex}:${contentKey}`;
 }
 
 function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
@@ -168,14 +179,16 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         const isStatusNotice = isReplyPayloadStatusNotice(payload);
-        if (!isStatusNotice) {
+        const isTerminalContent = isReplyPayloadTerminalContent(payload);
+        if (isTerminalContent) {
           sentContentKeys.add(contentKey);
+          sentContentKeys.add(createIndexedBlockReplyContentKey(payload));
         }
         const reply = resolveSendableOutboundReplyParts(payload);
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
         }
-        if (!isStatusNotice && reply.trimmedText) {
+        if (isTerminalContent && reply.trimmedText) {
           const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
           const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
           fragments.push(reply.trimmedText);
@@ -183,10 +196,7 @@ export function createBlockReplyPipeline(params: {
         }
         if (!isStatusNotice) {
           didStream = true;
-          if (
-            isReplyPayloadTerminalContent(payload) &&
-            hasOutboundReplyContent(payload, { trimText: true })
-          ) {
+          if (isTerminalContent && hasOutboundReplyContent(payload, { trimText: true })) {
             didStreamTerminalReply = true;
           }
         }
@@ -279,8 +289,11 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     if (bufferPayload(payload)) {
+      flushBufferedAssistantBlock();
       return;
     }
+    // Buffered audio is an ordering boundary, even when voice metadata arrives later.
+    flushBuffered();
     const reply = resolveSendableOutboundReplyParts(payload);
     const hasNonTextContent = hasOutboundReplyContent(
       { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
@@ -321,9 +334,10 @@ export function createBlockReplyPipeline(params: {
     didStream: () => didStream,
     didStreamTerminalReply: () => didStreamTerminalReply,
     isAborted: () => aborted,
-    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
+    hasSentExactPayload: (payload) =>
+      sentContentKeys.has(createIndexedBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
-      const payloadKey = createBlockReplyContentKey(payload);
+      const payloadKey = createIndexedBlockReplyContentKey(payload);
       if (sentContentKeys.has(payloadKey)) {
         return true;
       }
@@ -336,7 +350,12 @@ export function createBlockReplyPipeline(params: {
       }
       const normalize = (text: string) => text.replace(/\s+/g, "");
       const target = normalize(reply.trimmedText);
-      for (const fragments of streamedTextFragmentsByMessage.values()) {
+      const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+      const streamedFragments =
+        assistantMessageIndex === undefined
+          ? streamedTextFragmentsByMessage.values()
+          : [streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? []];
+      for (const fragments of streamedFragments) {
         if (fragments.length > 0 && normalize(fragments.join("")) === target) {
           return true;
         }

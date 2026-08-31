@@ -19,6 +19,27 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { activatePanel, openSlot } from "./sidebar-layout.ts";
 
+const swarmModuleImport = vi.hoisted(() => {
+  let markStarted!: () => void;
+  let release!: () => void;
+  return {
+    started: new Promise<void>((resolve) => {
+      markStarted = resolve;
+    }),
+    pending: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    markStarted,
+    release,
+  };
+});
+
+vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
+  swarmModuleImport.markStarted();
+  await swarmModuleImport.pending;
+  return importOriginal();
+});
+
 type TestChatPane = HTMLElement & {
   boardChatDockSize: { height: number };
   boardProvider?: BoardProvider;
@@ -35,6 +56,7 @@ type TestChatPane = HTMLElement & {
   routeFace: "chat" | "dashboard";
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
+  commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
@@ -47,6 +69,8 @@ type TestChatPane = HTMLElement & {
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
+  refreshSwarmRoster: () => void;
+  requestUpdate: () => void;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -151,6 +175,106 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("couples explicit side-panel visibility to the Board dock", () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:current");
+    const applyOps = vi.spyOn(provider, "applyOps");
+    pane.boardProvider = provider;
+    pane.routeFace = "dashboard";
+    pane.handleBoardDockChange("hidden");
+    applyOps.mockClear();
+
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "right" },
+    ]);
+
+    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "hidden" },
+    ]);
+  });
+
+  it("does not hydrate the swarm after becoming hidden during module loading", async () => {
+    vi.useFakeTimers();
+    const list = vi.fn().mockResolvedValue({ sessions: [] });
+    const sessions = { canonicalListRevision: 0, list } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    pane.context = {
+      ...pane.context,
+      runtimeConfig: {
+        state: { configSnapshot: { config: { tools: { swarm: { enabled: true } } } } },
+      },
+    } as unknown as ApplicationContext;
+    pane.presentedChanged = () => undefined;
+
+    try {
+      pane.refreshSwarmRoster();
+      await swarmModuleImport.started;
+      pane.presented = false;
+      swarmModuleImport.release();
+      await import("../../lib/sessions/swarm-roster.ts");
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["disabled", "disposed", "enabled"] as const)(
+    "coalesces swarm roster redraws while %s",
+    async (mode) => {
+      swarmModuleImport.release();
+      const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
+      const pane = createTestPane({
+        canonicalListRevision: 0,
+        list: vi.fn(async () => ({ sessions: [] })),
+      } as unknown as SessionCapability);
+      pane.context = {
+        ...pane.context,
+        runtimeConfig: {
+          state: {
+            configSnapshot: { config: { tools: { swarm: { enabled: mode === "enabled" } } } },
+          },
+        },
+      } as unknown as ApplicationContext;
+      const previous = mode === "disposed" ? new SwarmRosterHydrator() : null;
+      const dispose = previous ? vi.spyOn(previous, "dispose") : undefined;
+      Reflect.set(pane, "swarmHydrator", previous);
+      await vi.dynamicImportSettled();
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal("requestAnimationFrame", requestFrame);
+      const requestUpdate = vi.spyOn(pane, "requestUpdate");
+
+      try {
+        for (let index = 0; index < 3; index += 1) {
+          pane.refreshSwarmRoster();
+        }
+        await vi.dynamicImportSettled();
+
+        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(pane.state.requestUpdate).not.toHaveBeenCalled();
+        expect(requestFrame).toHaveBeenCalledTimes(mode === "disabled" ? 0 : 1);
+        if (mode !== "disabled") {
+          frames[0]?.(0);
+          expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
+        }
+        if (dispose) {
+          expect(dispose).toHaveBeenCalledOnce();
+          expect(Reflect.get(pane, "swarmHydrator")).toBeNull();
+        }
+      } finally {
+        const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
+          typeof SwarmRosterHydrator
+        > | null;
+        hydrator?.dispose();
+      }
+    },
+  );
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),

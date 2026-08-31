@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -60,6 +63,34 @@ function selectStoredGitHubIdentities(
   );
 }
 
+export function resolveCachedGitHubIdentity(
+  params: { accountId: number; email: string },
+  options: OpenClawStateDatabaseOptions = {},
+): { profileId: string; updatedAt: number } | undefined {
+  const email = params.email.trim().toLowerCase();
+  if (!email || !Number.isSafeInteger(params.accountId) || params.accountId <= 0) {
+    return undefined;
+  }
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  const { db } = database;
+  const alias = executeSqliteQueryTakeFirstSync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_emails")
+      .select("profile_id")
+      .where("email", "=", email),
+  );
+  const profile = alias ? selectResolvedUserProfileById(db, alias.profile_id) : undefined;
+  if (!profile) {
+    return undefined;
+  }
+  const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
+  return identity?.accountId === params.accountId
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
+}
+
 function deleteProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds: readonly string[],
@@ -100,7 +131,7 @@ export function selectUserProfileGitHubIdentities(
   );
 }
 
-/** Resolves bounded participants only when verified identity and public credit opt-in agree. */
+/** Resolves bounded participants for verified identities that have not opted out of public credit. */
 export function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
@@ -127,7 +158,9 @@ export function resolveUserProfileGitHubAttribution(
   return new Map(
     [...canonicalBySource].map(([sourceId, canonicalId]) => [
       sourceId,
-      preferences.get(canonicalId) === true ? (identities.get(canonicalId) ?? null) : null,
+      isGitCoauthorCreditEnabled(preferences.get(canonicalId))
+        ? (identities.get(canonicalId) ?? null)
+        : null,
     ]),
   );
 }

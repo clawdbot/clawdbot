@@ -128,6 +128,7 @@ async function resetAcpTargetInPlace(params: {
   }
   const result = await performGatewaySessionReset({
     key: params.sessionKey,
+    operatorRoleActor: { kind: "system" },
     reason: params.reason,
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
     armSessionDiffBaselineCapture: true,

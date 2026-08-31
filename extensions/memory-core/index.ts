@@ -1,8 +1,8 @@
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
-  resolveSessionAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -99,7 +99,6 @@ function createLazyStandingIntentTool(
   reportUnavailable: (reason: string) => void,
 ): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
-    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
@@ -109,7 +108,7 @@ function createLazyStandingIntentTool(
     reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
     sessionKey: ctx.sessionKey,
     config: cfg,
     agentId: ctx.agentId,
@@ -132,7 +131,7 @@ function createLazyStandingIntentTool(
     label: "Standing Intent",
     name: "intent",
     description:
-      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use cron or scheduled tasks for time-based reminders.",
+      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use scheduled tasks for time-based reminders.",
     parameters: {
       type: "object",
       properties: {
@@ -201,6 +200,16 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
         throw new Error("memory-core runtime search authorization is unavailable");
       }
       return await runtime.authorizeSearchHits(params);
+    },
+    async classifyWorkspaceMemoryPaths(params) {
+      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
+        import("./src/workspace-path-classifier.js"),
+        import("./src/dreaming-state.js"),
+      ]);
+      if (host.openKeyedStore) {
+        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
+      }
+      return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
@@ -286,7 +295,7 @@ export default definePluginEntry({
           return undefined;
         }
         const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIds({
+        const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
           sessionKey: ctx.sessionKey,
           config,
           agentId: ctx.agentId,
@@ -322,7 +331,7 @@ export default definePluginEntry({
         try {
           const module = await loadStandingIntentsModule();
           const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const { sessionAgentId: agentId } = resolveSessionAgentIds({
+          const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
             sessionKey: ctx.sessionKey,
             config,
             agentId: ctx.agentId,

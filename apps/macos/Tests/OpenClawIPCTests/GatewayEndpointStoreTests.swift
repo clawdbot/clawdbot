@@ -151,6 +151,7 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
+@Suite(.gatewayTLSStoreIsolated)
 struct GatewayEndpointStoreTests {
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
@@ -312,6 +313,60 @@ struct GatewayEndpointStoreTests {
         guard case .ready = await store.currentState() else {
             Issue.record("Expected local endpoint to recover after conflict clears")
             return
+        }
+    }
+
+    @Test func `stale local conflict cannot replace a healthy remote endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let remoteURL = try #require(URL(string: "ws://192.168.1.20:18789"))
+            let localSource = self.source(mode: .local, token: "local-token")
+            let remoteSource = self.source(
+                mode: .remote,
+                token: "remote-token",
+                transport: .direct,
+                directURL: remoteURL)
+            let sourceGate = GatewayEndpointSourceGate(localSource)
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
+            _ = try await store.requireEndpoint()
+
+            await sourceGate.update(remoteSource)
+            let remote = try await store.requireEndpoint()
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(try await store.currentState() == .ready(
+                mode: .remote,
+                url: remoteURL,
+                token: "remote-token",
+                password: nil,
+                routeRevision: #require(remote.revision)))
+            #expect(try await store.requireEndpoint().revision == remote.revision)
+
+            await sourceGate.update(localSource)
+            await store.refresh()
+            #expect(await store.currentState() == .unavailable(
+                mode: .local,
+                reason: "Profile port conflict"))
+
+            await store.setLocalUnavailableReason(nil)
+            #expect(try await store.currentState() == .ready(
+                mode: .local,
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "local-token",
+                password: nil,
+                routeRevision: #require(try await store.requireEndpoint().revision)))
+        }
+    }
+
+    @Test func `local conflict does not claim an unconfigured endpoint`() async {
+        await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .unconfigured)
+            let store = self.makeStore(sourceSnapshot: { source })
+
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(await store.currentState() == .unavailable(
+                mode: .unconfigured,
+                reason: "Gateway not configured"))
         }
     }
 
@@ -664,26 +719,24 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `persisting active first use pin keeps endpoint revision stable`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
-                let url = try #require(URL(string: "wss://gateway.example.invalid"))
-                let storeKey = GatewayTLSRoute.storeKey(for: url)
-                let source = self.source(
-                    mode: .remote,
-                    transport: .direct,
-                    directURL: url)
-                let store = self.makeStore(sourceSnapshot: { source })
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway.example.invalid"))
+            let storeKey = GatewayTLSRoute.storeKey(for: url)
+            let source = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: url)
+            let store = self.makeStore(sourceSnapshot: { source })
 
-                let first = try await store.requireEndpoint()
-                let fingerprint = String(repeating: "a", count: 64)
-                _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
-                let second = try await store.requireEndpoint()
+            let first = try await store.requireEndpoint()
+            let fingerprint = String(repeating: "a", count: 64)
+            _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
+            let second = try await store.requireEndpoint()
 
-                #expect(first.revision == second.revision)
-                #expect(second.tls?.params.allowTOFU == false)
-                #expect(second.tls?.params.expectedFingerprint == fingerprint)
-                #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
-            }
+            #expect(first.revision == second.revision)
+            #expect(second.tls?.params.allowTOFU == false)
+            #expect(second.tls?.params.expectedFingerprint == fingerprint)
+            #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
         }
     }
 

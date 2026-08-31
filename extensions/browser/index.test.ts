@@ -223,6 +223,14 @@ describe("browser plugin", () => {
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
+    const properties = (
+      tool.parameters as {
+        properties: Record<string, { description?: string }>;
+      }
+    ).properties;
+    expect(properties.actions?.description).toContain("batch");
+    expect(properties.doubleClick?.description).toContain("clickCoords");
+    expect(properties.labels?.description).toContain("snapshot");
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -261,6 +269,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
@@ -332,6 +341,10 @@ describe("browser plugin", () => {
       "act",
       "close",
       "console",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
       "dialog",
       "download",
       "focus",
@@ -390,9 +403,21 @@ describe("browser plugin", () => {
     const actions = (properties.action as { enum?: string[] }).enum;
     const actKinds = (properties.kind as { enum?: string[] }).enum;
 
-    expect(actions).not.toEqual(expect.arrayContaining(["pdf", "download", "waitfordownload"]));
+    for (const action of [
+      "pdf",
+      "download",
+      "waitfordownload",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+    ]) {
+      expect(actions).not.toContain(action);
+    }
     expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot"]));
     expect(actKinds).not.toContain("batch");
+    expect((properties.actions as { description?: string }).description).toBeUndefined();
+    expect((properties.stopOnError as { description?: string }).description).toBeUndefined();
   });
 
   it("rejects malformed run bindings before creating the lazy browser tool", () => {

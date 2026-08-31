@@ -30,18 +30,6 @@ enum AppNavigationActions {
         }
     }
 
-    static func toggleCanvas() {
-        NSApp.activate(ignoringOtherApps: true)
-        Task { @MainActor in
-            if AppStateStore.shared.canvasPanelVisible {
-                CanvasManager.shared.hideAll()
-            } else {
-                let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
-            }
-        }
-    }
-
     static func openSettings(tab: SettingsTab = .general) {
         SettingsTabRouter.request(tab)
         SettingsWindowOpener.shared.open()

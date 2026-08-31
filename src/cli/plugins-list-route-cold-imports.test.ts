@@ -48,6 +48,10 @@ vi.mock("../plugins/loader-module-runtime.js", () => {
   return {};
 });
 
+vi.mock("../plugins/capability-consent.js", () => {
+  throw new Error("metadata inventory must not load the capability consent mutation owner");
+});
+
 import { tryRouteCli } from "./route.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugins-list-route-"));

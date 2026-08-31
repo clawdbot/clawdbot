@@ -5,7 +5,7 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   loadPluginMetadataSnapshot,
@@ -18,7 +18,6 @@ import {
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
-import { maybeMigrateExternalCliProfileMetadata } from "../doctor-external-cli-profiles.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
@@ -64,6 +63,7 @@ export async function runDoctorRepairSequence(params: {
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   state: DoctorConfigMutationState;
   /** Notes for repairs already committed to durable state (SQLite/filesystem). */
@@ -203,6 +203,7 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       ...(staleManagedNpmBundledPluginRepair
         ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }
         : {}),
@@ -321,12 +322,6 @@ export async function runDoctorRepairSequence(params: {
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
-  appendRepairNotes(
-    migrateLegacyOnboardingRecommendationsScope({
-      cfg: state.candidate,
-      env,
-    }),
-  );
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -339,21 +334,6 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(staleOAuthShadowRepair);
-  const externalCliProfileMigration = maybeMigrateExternalCliProfileMetadata({
-    cfg: state.candidate,
-    env,
-  });
-  if (externalCliProfileMigration.configChanged) {
-    state = applyDoctorConfigMutation({
-      state,
-      mutation: {
-        config: state.candidate,
-        changes: ["External CLI OAuth migration updated auth.profiles."],
-      },
-      shouldRepair: true,
-    });
-  }
-  appendRepairNotes(externalCliProfileMigration);
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -379,7 +359,6 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
-    externalCliProfileMigration.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
   return {

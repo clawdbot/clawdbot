@@ -10,6 +10,7 @@ struct MacGatewayChatTransportMappingTests {
         #expect(GatewayConnection.operatorClientCaps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.usageRefreshing,
         ])
     }
 
@@ -39,6 +40,21 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "global") == .init(
             sessionKey: "global",
             agentID: nil))
+    }
+
+    @Test func `session list request follows the current routing agent`() {
+        let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
+
+        let first = transport.sessionsListRequest(limit: 50, search: nil, archived: false)
+        #expect(first.params["agentId"]?.value as? String == "agent-a")
+
+        transport.updateDefaultGlobalAgentID("Agent-B")
+        let second = transport.sessionsListRequest(limit: nil, search: "recent", archived: true)
+        #expect(second.params["agentId"]?.value as? String == "agent-b")
+
+        let unowned = MacGatewayChatTransport()
+            .sessionsListRequest(limit: nil, search: nil, archived: false)
+        #expect(unowned.params["agentId"] == nil)
     }
 
     @Test func `fixed connection does not inherit app wide cache routing`() async throws {

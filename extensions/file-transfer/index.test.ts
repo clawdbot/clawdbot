@@ -35,8 +35,10 @@ describe("file-transfer plugin entry", () => {
   it("registers static command and tool descriptors without importing runtime handlers", () => {
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
+    const registerCli = vi.fn();
 
     pluginEntry.register({
+      registerCli,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
@@ -48,6 +50,13 @@ describe("file-transfer plugin entry", () => {
       "file.write",
     ]);
     expect(registerNodeInvokePolicy).toHaveBeenCalledTimes(1);
+    expect(registerCli.mock.calls[0]?.[1]?.descriptors).toEqual([
+      {
+        name: "file-transfer",
+        description: "Review file-transfer standing approvals",
+        hasSubcommands: true,
+      },
+    ]);
     expect(registerNodeInvokePolicy.mock.calls[0]?.[0].commands).toEqual([
       "file.fetch",
       "dir.list",
@@ -60,14 +69,22 @@ describe("file-transfer plugin entry", () => {
       "dir_fetch",
       "file_write",
     ]);
+    const directoryTool = registerTool.mock.calls.find(([tool]) => tool.name === "dir_fetch")?.[0];
+    expect(directoryTool?.parameters).toMatchObject({
+      type: "object",
+      required: ["node", "path"],
+    });
+    expect(directoryTool.parameters).not.toHaveProperty("properties.includeDotfiles");
   });
 
   it("fails closed if the lazy policy module cannot load", async () => {
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
+    const registerCli = vi.fn();
     const invokeNode = vi.fn();
 
     pluginEntry.register({
+      registerCli,
       registerNodeInvokePolicy,
       registerTool,
     } as never);

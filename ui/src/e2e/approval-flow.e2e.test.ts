@@ -4,11 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  waitForConfirmModal,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -32,8 +28,12 @@ function approval(id: string, command: string, createdAtMs: number, sessionKey =
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
-function approvalAttentionChip(currentPage: Page) {
-  return currentPage.locator("openclaw-sidebar-attention .sidebar-attention__open");
+function approvalInboxButton(currentPage: Page) {
+  return currentPage.locator("openclaw-sidebar-attention .sidebar-issues-button");
+}
+
+function approvalInboxPanel(currentPage: Page) {
+  return currentPage.locator("openclaw-sidebar-attention #sidebar-issues-panel");
 }
 
 suite.define(() => {
@@ -71,7 +71,7 @@ suite.define(() => {
       "exec.approval.requested",
       approval("approval-newer", "echo newer", 2_000),
     );
-    await approvalAttentionChip(currentPage).waitFor();
+    await approvalInboxButton(currentPage).waitFor();
     await gateway.rejectDeferred("exec.approval.resolve", {
       code: "UNAVAILABLE",
       message: "gateway unavailable",
@@ -85,20 +85,16 @@ suite.define(() => {
       )
       .toBe("Approval failed: gateway unavailable");
 
-    await approvalAttentionChip(currentPage).click();
-    await currentPage.getByRole("dialog", { name: "Exec approval needed" }).waitFor();
-    const approvalModal = await waitForConfirmModal(currentPage);
-    await approvalModal.getByText("echo newer", { exact: true }).click();
+    await approvalInboxButton(currentPage).click();
+    const newerRow = approvalInboxPanel(currentPage).locator('[data-approval-id="approval-newer"]');
     await expect
-      .poll(() => approvalModal.locator(".exec-approval-card").getAttribute("data-approval-id"))
-      .toBe("approval-newer");
-    await expect.poll(() => approvalModal.locator(".exec-approval-error").count()).toBe(0);
-    await expect
-      .poll(() => approvalModal.getByRole("button", { name: "Deny" }).isEnabled())
-      .toBe(true);
+      .poll(() => newerRow.locator(".sidebar-approval-row__command").textContent())
+      .toContain("echo newer");
+    await expect.poll(() => newerRow.locator('[role="alert"]').count()).toBe(0);
+    await expect.poll(() => newerRow.getByRole("button", { name: /Deny/ }).isEnabled()).toBe(true);
   });
 
-  it("keeps approvals passive until the sidebar attention chip opens the full queue", async () => {
+  it("keeps approvals passive until the Inbox opens the full queue", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });
     }
@@ -129,27 +125,25 @@ suite.define(() => {
       approval("approval-other", "echo other", 2_000, "agent:main:other"),
     );
 
-    await approvalAttentionChip(currentPage).waitFor();
+    await approvalInboxButton(currentPage).waitFor();
     expect(await currentPage.locator("openclaw-modal-dialog").count()).toBe(0);
     expect(await currentPage.getByText("echo other", { exact: true }).count()).toBe(0);
     if (captureUiProof) {
       await currentPage.screenshot({ path: path.join(proofDir, "01-passive-attention.png") });
     }
 
-    await approvalAttentionChip(currentPage).click();
-    const approvalModal = await waitForConfirmModal(currentPage);
-
-    await approvalModal.locator('[data-approval-id="approval-inline"]').waitFor();
-    await approvalModal.getByText("echo other", { exact: true }).waitFor();
-    await expect
-      .poll(() => approvalModal.locator(".exec-approval-queue").textContent())
-      .toContain("2 pending");
+    await approvalInboxButton(currentPage).click();
+    const inboxPanel = approvalInboxPanel(currentPage);
+    await inboxPanel.locator('[data-approval-id="approval-inline"]').waitFor();
+    await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
+    await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
+    await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
     if (captureUiProof) {
       await currentPage.screenshot({ path: path.join(proofDir, "02-open-queue.png") });
     }
   });
 
-  it("keeps no-auth inline and modal approvals readable while blocking decisions and shortcuts", async () => {
+  it("keeps no-auth inline and Inbox approvals readable while blocking decisions", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });
     }
@@ -189,32 +183,27 @@ suite.define(() => {
       await currentPage.screenshot({ path: path.join(proofDir, "review-only-inline.png") });
     }
 
-    await approvalAttentionChip(currentPage).click();
-    const approvalModal = await waitForConfirmModal(currentPage);
-    const modalCard = approvalModal.locator('[data-approval-id="approval-review-only"]');
-    await modalCard.getByText("echo review only", { exact: true }).waitFor();
-    await modalCard
+    await approvalInboxButton(currentPage).click();
+    const inboxPanel = approvalInboxPanel(currentPage);
+    const inboxRow = inboxPanel.locator('[data-approval-id="approval-review-only"]');
+    await expect
+      .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
+      .toContain("echo review only");
+    await inboxRow
       .getByText("Review only. Sign in with approval access to record a decision.", {
         exact: true,
       })
       .waitFor();
-    const modalDecisionButtons = modalCard.locator(".exec-approval-actions button");
-    expect(await modalDecisionButtons.count()).toBe(3);
+    const inboxDecisionButtons = inboxRow.locator(".sidebar-approval-row__actions button");
+    expect(await inboxDecisionButtons.count()).toBe(3);
     expect(
-      await modalDecisionButtons.evaluateAll((buttons) =>
+      await inboxDecisionButtons.evaluateAll((buttons) =>
         buttons.every((button) => (button as HTMLButtonElement).disabled),
       ),
     ).toBe(true);
 
-    await approvalModal.dispatchEvent("keydown", {
-      bubbles: true,
-      ctrlKey: true,
-      key: "Enter",
-    });
-    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
-
     if (captureUiProof) {
-      await currentPage.screenshot({ path: path.join(proofDir, "review-only-modal.png") });
+      await currentPage.screenshot({ path: path.join(proofDir, "review-only-inbox.png") });
     }
   });
 

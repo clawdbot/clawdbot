@@ -1,7 +1,7 @@
 {
   "id": "openai",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
   "providers": ["openai"],
@@ -217,7 +217,6 @@
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
-      "assistantVisibility": "manual-only",
       "groupId": "openai",
       "groupLabel": "OpenAI",
       "groupHint": "ChatGPT/Codex sign-in or API key"

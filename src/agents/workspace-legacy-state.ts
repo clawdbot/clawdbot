@@ -3,10 +3,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
 export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
 const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
@@ -152,6 +153,38 @@ function siblingPathIsOwnedMarker(filePath: string): boolean {
   }
 }
 
+function hasUnmigratedWorkspaceSources(sources: LegacyWorkspaceSourcePaths): boolean {
+  return (
+    sources.setupStatePaths.some(pathOrClaimExists) ||
+    sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
+    sources.siblingAttestationPaths.some(
+      (sourcePath) =>
+        siblingPathIsOwnedMarker(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
+        siblingPathIsOwnedMarker(sourcePath),
+    )
+  );
+}
+
+function workspaceMigrationError(workspaceDirs: string[], env?: NodeJS.ProcessEnv): Error {
+  return new Error(
+    `Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+  );
+}
+
+/** Recheck lifecycle readiness without reusing a running turn's verified-absence cache. */
+export function assertWorkspaceStateMigrationReady(params: {
+  workspaceDirs: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): void {
+  const blocked = params.workspaceDirs.filter((workspaceDir) =>
+    hasUnmigratedWorkspaceSources(resolveLegacyWorkspaceSourcePaths(workspaceDir, params)),
+  );
+  if (blocked.length > 0) {
+    throw workspaceMigrationError(blocked, params.env);
+  }
+}
+
 /** Fail closed on unmigrated owned state without reading it as runtime data. */
 export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string }): void {
   const identity = resolveWorkspaceStateIdentity(params.workspaceDir);
@@ -165,18 +198,8 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
   if (checkedWorkspaceSourceSets.has(sourceSetKey)) {
     return;
   }
-  const hasLegacy =
-    sources.setupStatePaths.some(pathOrClaimExists) ||
-    sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
-    sources.siblingAttestationPaths.some(
-      (sourcePath) =>
-        siblingPathIsOwnedMarker(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
-        siblingPathIsOwnedMarker(sourcePath),
-    );
-  if (hasLegacy) {
-    throw new Error(
-      `Legacy workspace setup state requires migration for ${identity.workspacePath}; run openclaw doctor --fix.`,
-    );
+  if (hasUnmigratedWorkspaceSources(sources)) {
+    throw workspaceMigrationError([identity.workspacePath]);
   }
   checkedWorkspaceSourceSets.add(sourceSetKey);
 }

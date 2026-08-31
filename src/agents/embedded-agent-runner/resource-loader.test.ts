@@ -1,46 +1,44 @@
-// Coverage for embedded resource loader discovery restrictions.
-import { describe, expect, it, vi } from "vitest";
-import { DefaultResourceLoader } from "../sessions/index.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 
-vi.mock("../sessions/index.js", () => ({
-  // Constructor mock captures options so tests can assert discovery policy
-  // without touching filesystem-backed session resources.
-  DefaultResourceLoader: vi.fn(function DefaultResourceLoaderLocal(
-    this: Record<string, unknown>,
-    options: unknown,
-  ) {
-    Object.assign(this, {
-      options,
-      reload: vi.fn(async () => undefined),
-    });
-  }),
-}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("createEmbeddedAgentResourceLoader", () => {
-  it("keeps inline extensions but disables filesystem discovery", () => {
-    // Embedded runs pass explicit extension factories; filesystem discovery is
-    // disabled to avoid loading ambient workspace extensions.
-    const settingsManager = {};
-    const extensionFactories = [vi.fn()];
+  it.each(["workspace", "agent"])(
+    "keeps inline extensions without discovering %s instructions or prompts",
+    async (location) => {
+      const cwd = tempDirs.make("openclaw-embedded-resources-");
+      const agentDir = join(cwd, "agent");
+      const resourceDir = location === "workspace" ? join(cwd, ".openclaw") : agentDir;
+      await mkdir(resourceDir, { recursive: true });
+      await writeFile(join(cwd, "AGENTS.md"), "ambient context");
+      await writeFile(join(resourceDir, "SYSTEM.md"), "ambient system prompt");
+      await writeFile(join(resourceDir, "APPEND_SYSTEM.md"), "ambient appended prompt");
+      const loader = createEmbeddedAgentResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager: SettingsManager.inMemory(),
+        extensionFactories: [
+          (api) => {
+            api.registerCommand("inline-command", {
+              description: "inline",
+              handler: async () => {},
+            });
+          },
+        ],
+      });
 
-    createEmbeddedAgentResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager: settingsManager as never,
-      extensionFactories: extensionFactories as never,
-    });
+      await loader.reload();
 
-    expect(DefaultResourceLoader).toHaveBeenCalledWith({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager,
-      extensionFactories,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-    });
-  });
+      expect(loader.getExtensions().errors).toEqual([]);
+      expect(loader.getExtensions().extensions[0]?.commands.has("inline-command")).toBe(true);
+      expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+      expect.soft(loader.getSystemPrompt()).toBeUndefined();
+      expect.soft(loader.getAppendSystemPrompt()).toEqual([]);
+    },
+  );
 });

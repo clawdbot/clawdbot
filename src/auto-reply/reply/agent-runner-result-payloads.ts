@@ -8,7 +8,7 @@ import {
   hasDeliberateSilentTerminalReply,
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
-import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,
@@ -46,7 +46,6 @@ import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -217,10 +216,7 @@ export async function prepareReplyAgentPayloads(state: {
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         messagingToolSentTexts: runResult.messagingToolSentTexts,
         messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
+        originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
         originatingThreadId: replyRouteThreadId,
         accountId: sessionCtx.AccountId,
       }));
@@ -247,6 +243,7 @@ export async function prepareReplyAgentPayloads(state: {
     buildReplyPayloads({
       config: cfg,
       payloads,
+      conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
@@ -265,10 +262,7 @@ export async function prepareReplyAgentPayloads(state: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingChatType: sessionCtx.ChatType,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: sessionCtx.OriginatingTo,
-        to: sessionCtx.To,
-      }),
+      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
       originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
@@ -504,7 +498,7 @@ export async function prepareReplyAgentPayloads(state: {
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
   const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(diagnosticUsage)) {
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
     const input = diagnosticUsage.input ?? 0;
     const output = diagnosticUsage.output ?? 0;
     const cacheRead = diagnosticUsage.cacheRead ?? 0;
@@ -522,14 +516,7 @@ export async function prepareReplyAgentPayloads(state: {
       config: cfg,
       agentDir: followupRun.run.agentDir,
     });
-    const hasDiagnosticBillableUsageBuckets =
-      diagnosticUsage.input !== undefined ||
-      diagnosticUsage.output !== undefined ||
-      diagnosticUsage.cacheRead !== undefined ||
-      diagnosticUsage.cacheWrite !== undefined;
-    const costUsd = hasDiagnosticBillableUsageBuckets
-      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
-      : undefined;
+    const costUsd = estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
       ...(runResult.diagnosticTrace

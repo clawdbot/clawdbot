@@ -15,8 +15,14 @@ describe("isChannelConfigured", () => {
     expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
   });
 
-  it("detects Slack env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+  it("requires both Slack identity and transport tokens through the package metadata seam", () => {
+    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(false);
+    expect(
+      isChannelConfigured({}, "slack", {
+        SLACK_BOT_TOKEN: "xoxb-test",
+        SLACK_APP_TOKEN: "xapp-test",
+      }),
+    ).toBe(true);
   });
 
   it("requires both IRC host and nick env vars through the package metadata seam", () => {

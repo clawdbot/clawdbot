@@ -15,8 +15,8 @@ const describeFileLinkPresentation = canRunPlaywrightChromium(chromiumExecutable
   ? describe
   : describe.skip;
 
-// The declarations the inline-code chip paints. A file link must match its
-// plain-text sibling on every one of them, whichever syntax produced it.
+// The declarations the inline-code chip paints. File-link labels match across
+// authoring syntax except for glyph spacing owned by the outer anchor.
 const CHIP_PROPERTIES = [
   "backgroundColor",
   "borderTopWidth",
@@ -246,13 +246,21 @@ async function probeWrap(
 }
 
 type StyleSnapshot = Record<(typeof CHIP_PROPERTIES)[number], string>;
+type GlyphSnapshot = {
+  readonly fontSize: string;
+  readonly height: string;
+  readonly maskImage: string;
+  readonly paddingInlineStart: string;
+  readonly position: string;
+  readonly width: string;
+};
 type PresentationProbe = {
-  readonly chatGlyph: { readonly maskImage: string };
+  readonly chatGlyph: GlyphSnapshot;
   readonly fromCode: StyleSnapshot;
   readonly fromText: StyleSnapshot;
   readonly panelFromCode: StyleSnapshot;
   readonly panelFromText: StyleSnapshot;
-  readonly panelGlyph: { readonly maskImage: string };
+  readonly panelGlyph: GlyphSnapshot;
   readonly plainCode: StyleSnapshot;
 };
 
@@ -300,15 +308,24 @@ async function probe(themeMode: "dark" | "light"): Promise<PresentationProbe> {
           properties.map((property) => [property, computed[property as never] as string]),
         );
       };
-      const glyphMask = (selector: string) =>
-        getComputedStyle(resolve(selector), "::before").maskImage;
+      const glyph = (selector: string) => {
+        const computed = getComputedStyle(resolve(selector), "::before");
+        return {
+          fontSize: computed.fontSize,
+          height: computed.height,
+          maskImage: computed.maskImage,
+          paddingInlineStart: computed.paddingInlineStart,
+          position: computed.position,
+          width: computed.width,
+        };
+      };
       return {
-        chatGlyph: { maskImage: glyphMask("#from-text") },
+        chatGlyph: glyph("#from-text"),
         fromCode: read("#from-code > code"),
         fromText: read("#from-text"),
         panelFromCode: read("#panel-from-code > code"),
         panelFromText: read("#panel-from-text"),
-        panelGlyph: { maskImage: glyphMask("#panel-from-text") },
+        panelGlyph: glyph("#panel-from-text"),
         plainCode: read("#plain-code"),
       };
     }, CHIP_PROPERTIES);
@@ -323,7 +340,8 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "renders code-authored and text-authored file links identically in %s",
     async (themeMode) => {
       const { fromCode, fromText } = await probe(themeMode);
-      expect(fromCode).toEqual(fromText);
+      // The anchor reserves glyph space; its nested code label must not reserve it again.
+      expect(fromCode).toEqual({ ...fromText, paddingLeft: "0px" });
     },
   );
 
@@ -350,6 +368,19 @@ describeFileLinkPresentation("chat file link presentation", () => {
       expect(probed.panelFromCode).toEqual(probed.fromCode);
       expect(probed.panelGlyph).toEqual(probed.chatGlyph);
       expect(probed.panelGlyph.maskImage).toContain("svg");
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "gives every masked file glyph a concrete font-sized paint box in %s",
+    async (themeMode) => {
+      const { chatGlyph, panelGlyph } = await probe(themeMode);
+      for (const glyph of [chatGlyph, panelGlyph]) {
+        expect(glyph.position).toBe("absolute");
+        expect(glyph.width).toBe(glyph.fontSize);
+        expect(glyph.height).toBe(glyph.fontSize);
+        expect(glyph.paddingInlineStart).toBe("0px");
+      }
     },
   );
 

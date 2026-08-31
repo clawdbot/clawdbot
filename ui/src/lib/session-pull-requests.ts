@@ -1,5 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
+  ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -17,6 +19,27 @@ import {
   parseAgentSessionKey,
   uiSessionEventMatches,
 } from "./sessions/session-key.ts";
+
+export function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
+): SessionCatalogPullRequestSummary | undefined {
+  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
+  const current =
+    pullRequests.find(({ state }) => state === "open") ??
+    pullRequests.find(({ state }) => state === "draft") ??
+    pullRequests.find(({ state }) => state === "merged") ??
+    pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
+}
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
@@ -303,7 +326,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : watchedKeys();
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    const signature = JSON.stringify(sessionKeys);
+    const signature = JSON.stringify(sessionKeys.toSorted());
     if (
       snapshot.hello === lastHello &&
       signature === lastSignature &&

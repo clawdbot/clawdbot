@@ -22,6 +22,7 @@ describe("node worker bundle installer", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await new Promise<void>((resolve) => {
       if (!server) {
         resolve();
@@ -39,6 +40,7 @@ describe("node worker bundle installer", () => {
       workerSource?: string;
       fixtureName?: string;
       bundlePrewarm?: 1;
+      compileCacheDisabled?: boolean;
     } = {},
   ): Promise<{
     archive: Buffer;
@@ -48,10 +50,12 @@ describe("node worker bundle installer", () => {
     const source = path.join(root, `source-${fixtureName}`);
     const archivePath = path.join(root, `bundle-${fixtureName}.tgz`);
     await fs.mkdir(source, { recursive: true });
+    const compileCacheDisabled =
+      options.compileCacheDisabled ?? process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
     const workerSource =
       options.workerSource ??
       (options.prewarmMarker
-        ? `import fs from "node:fs";\nif (process.argv[2] !== "--internal-worker-prewarm" || !process.env.NODE_COMPILE_CACHE || process.env.NODE_DISABLE_COMPILE_CACHE) throw new Error("worker bundle was not prewarmed with compile cache");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
+        ? `import fs from "node:fs";\nconst cacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE === "1";\nif (process.argv[2] !== "--internal-worker-prewarm" || cacheDisabled !== ${compileCacheDisabled} || (cacheDisabled ? process.env.NODE_COMPILE_CACHE : !process.env.NODE_COMPILE_CACHE)) throw new Error("worker bundle was not prewarmed with the requested compile-cache mode");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
         : "export {};\n");
     await fs.writeFile(path.join(source, "worker.mjs"), workerSource, { mode: 0o700 });
     const archiveEntries = ["worker.mjs"];
@@ -113,9 +117,139 @@ describe("node worker bundle installer", () => {
     return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
   }
 
+  it("does not publish a bundle when cancellation arrives during receipt staging", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const controller = new AbortController();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).endsWith("bootstrap-receipt.json") && args[1] === "wx") {
+        controller.abort(new Error("installer cancelled"));
+      }
+      return handle;
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("installer cancelled");
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(
+      fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
+    ).resolves.toEqual([]);
+  });
+
+  it("restores the prior destination when cancelled between publication renames", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
+    const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "prior-install"), "preserved");
+    const controller = new AbortController();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (args[0] === destination && String(args[1]).includes(".previous-")) {
+        controller.abort(new Error("publication cancelled"));
+      }
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("publication cancelled");
+
+    await expect(fs.readdir(bundlesRoot)).resolves.toEqual([fixture.input.build.bundleHash]);
+    await expect(fs.readdir(destination)).resolves.toEqual(["prior-install"]);
+    await expect(fs.readFile(path.join(destination, "prior-install"), "utf8")).resolves.toBe(
+      "preserved",
+    );
+  });
+
+  it("does not renew retention when cancelled while validating an installed bundle", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    const controller = new AbortController();
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (String(args[0]).endsWith("worker.mjs")) {
+        controller.abort(new Error("cached install cancelled"));
+      }
+      return result;
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("cached install cancelled");
+
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(
+      installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [fixture.input.build.bundleHash],
+      }),
+    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 1 });
+  });
+
+  it("rejects cancellation during final cleanup without renewing retention or removing published bytes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const controller = new AbortController();
+    const rm = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      await rm(...args);
+      if (path.basename(String(args[0])).startsWith(".staging-")) {
+        controller.abort(new Error("install cleanup cancelled"));
+      }
+    });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("install cleanup cancelled");
+
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
+    await expect(
+      installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [fixture.input.build.bundleHash],
+      }),
+    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
+  });
+
   it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed");
-    const fixture = await bundleFixture({ prewarmMarker, bundlePrewarm: 1 });
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: false,
+    });
     const staleBundleHash = "f".repeat(64);
     const staleStaging = path.join(
       root,
@@ -125,7 +259,10 @@ describe("node worker bundle installer", () => {
     );
     await fs.mkdir(staleStaging, { recursive: true });
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: undefined },
+    });
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
@@ -149,6 +286,77 @@ describe("node worker bundle installer", () => {
         "utf8",
       ),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("prewarms bundles while honoring an explicitly disabled compile cache", async () => {
+    const prewarmMarker = path.join(root, "worker-prewarmed-without-cache");
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: true,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: { ...process.env, NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
+    });
+
+    await expect(
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
+  });
+
+  it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
+    const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: false,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: {
+        ...process.env,
+        NODE_COMPILE_CACHE: "/tmp/ambient-host-compile-cache",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+        OPENCLAW_SERVICE_KIND: "node",
+      },
+    });
+
+    await expect(
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
+  });
+
+  it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {

@@ -147,6 +147,12 @@ Plugin skill directories merge at the same low-precedence level as
 skill overrides them. Gate a plugin skill's own eligibility via
 `metadata.openclaw.requires` in its frontmatter, same as any other skill.
 
+For multi-account channel plugins, gate general messaging skills on the channel
+subtree (for example, `channels.discord`), not a root token field: credentials
+may live under a named account. This is a coarse skill-visibility check. The
+plugin still owns credential resolution, account enablement, action availability,
+and authorization; an eligible skill does not grant tool access.
+
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
 ## Reference a skill in a prompt
@@ -392,6 +398,10 @@ metadata:
   At least one binary must exist on `PATH`.
 </ParamField>
 
+Fresh dependency checks detect binaries installed into directories already on
+`PATH`. This does not refresh an existing session's skill snapshot; see
+[Snapshots and refresh](/tools/skills#snapshots-and-refresh).
+
 <ParamField path="requires.env" type="string[]">
   Each env var must exist in the process or be provided via config.
 </ParamField>
@@ -471,9 +481,13 @@ metadata:
       (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
       your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
       env vars are read but never overwritten.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

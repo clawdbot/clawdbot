@@ -59,7 +59,9 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
+  itemId?: string;
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */
@@ -81,6 +83,7 @@ export type EmbeddedAgentSubscribeState = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
@@ -176,6 +179,7 @@ export type EmbeddedAgentSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  retryUsage?: NormalizedUsage;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
@@ -211,7 +215,10 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
+  /** Exact media URLs whose owning built-in tool contract requires source delivery. */
+  toolAutoDeliveryMediaUrls: Set<string>;
   pendingToolAudioAsVoice: boolean;
+  pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
@@ -334,6 +341,7 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentMessagingTarget"
+  | "currentAccountId"
   | "currentThreadId"
   | "currentMessageId"
   | "replyToMode"
@@ -342,6 +350,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "codeModeExecToolNames"
   | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
@@ -367,7 +376,9 @@ type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
+  | "toolAutoDeliveryMediaUrls"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"

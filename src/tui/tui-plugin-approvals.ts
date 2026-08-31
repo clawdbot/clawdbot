@@ -13,6 +13,7 @@ import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
 import type { TuiApprovalDecision, TuiBackend, TuiPluginApproval } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
+import { matchesOwnedTuiSession } from "./tui-session-events.js";
 
 type ApprovalSelector = Component & {
   onSelect?: (item: SelectItem) => void;
@@ -264,17 +265,8 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     }
   };
 
-  const matchesActiveSession = (approval: TuiPluginApproval) => {
-    const sessionKey = approval.request.sessionKey?.trim();
-    if (!sessionKey || sessionKey !== deps.getSessionKey()) {
-      return false;
-    }
-    if (sessionKey !== "global") {
-      return true;
-    }
-    const agentId = approval.request.agentId?.trim();
-    return Boolean(agentId && agentId === deps.getAgentId());
-  };
+  const matchesActiveSession = (approval: TuiPluginApproval) =>
+    matchesOwnedTuiSession(deps.getSessionKey(), deps.getAgentId(), approval.request);
 
   const prune = () => {
     const now = nowMs();

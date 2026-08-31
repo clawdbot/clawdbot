@@ -30,6 +30,7 @@ import {
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
 import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
@@ -109,25 +110,20 @@ export function createResponsesTerminalController(params: {
   stream: ResponsesEventSink;
   model: Model;
   options?: TerminalOptions;
-  reasoningBlocksById: Map<string, ResponsesThinkingBlock>;
-  startedTextBlocksByItemId: Map<string, TextBlockReference>;
-  outputItemContentIndexes: {
-    get: (item: ResponseOutputItem) => number | undefined;
-    set: (item: ResponseOutputItem, contentIndex: number) => void;
-  };
+  outputs: ResponsesOutputTracker;
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
-  markFinalized: () => void;
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
   const backfillReasoning = (items: ResponseOutputItem[]) => {
-    for (const item of items) {
+    for (const [outputIndex, item] of items.entries()) {
       if (item.type !== "reasoning" || !item.encrypted_content) {
         continue;
       }
-      const block = params.reasoningBlocksById.get(item.id);
-      if (!block?.thinkingSignature) {
+      const tracked = params.outputs.get(item, outputIndex);
+      const block = tracked && blocks[tracked.contentIndex];
+      if (block?.type !== "thinking" || !block.thinkingSignature) {
         continue;
       }
       const stored = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
@@ -138,11 +134,13 @@ export function createResponsesTerminalController(params: {
         });
       }
       if (options?.reasoningReplayMetadata) {
-        block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] = options.reasoningReplayMetadata;
+        Object.assign(block, {
+          [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]: options.reasoningReplayMetadata,
+        });
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage): number | undefined => {
+  const appendText = (item: ResponseOutputMessage, contentIndex?: number): number | undefined => {
     const text = (Array.isArray(item.content) ? item.content : [])
       .map((part) => {
         const content = part as { type: string; text?: string; refusal?: string };
@@ -151,30 +149,30 @@ export function createResponsesTerminalController(params: {
           : (content.refusal ?? "");
       })
       .join("");
-    const started = params.startedTextBlocksByItemId.get(item.id);
+    const block = contentIndex === undefined ? undefined : blocks[contentIndex];
+    const started = block?.type === "text" ? block : undefined;
     if (!text && !started) {
       return undefined;
     }
     const phase = item.phase ?? undefined;
-    if (started) {
-      const previousText = started.block.text;
-      started.block.text = text;
-      started.block.textSignature = encodeTextSignatureV1(item.id, phase);
-      params.setLastTextBlock({ block: started.block, index: started.index, phase });
-      params.startedTextBlocksByItemId.delete(item.id);
+    if (started && contentIndex !== undefined) {
+      const previousText = started.text;
+      started.text = text;
+      started.textSignature = encodeTextSignatureV1(item.id, phase);
+      params.setLastTextBlock({ block: started, index: contentIndex, phase });
       if (text.startsWith(previousText)) {
         const delta = text.slice(previousText.length);
         if (delta) {
-          stream.push({ type: "text_delta", contentIndex: started.index, delta });
+          stream.push({ type: "text_delta", contentIndex, delta });
         }
       }
       stream.push({
         type: "text_end",
-        contentIndex: started.index,
+        contentIndex,
         content: text,
         partial: output,
       });
-      return started.index;
+      return contentIndex;
     }
     const previous = params.getLastTextBlock();
     const collapse = resolveResponsesMessageSnapshotCollapse({
@@ -193,70 +191,75 @@ export function createResponsesTerminalController(params: {
       });
       return previous.index;
     }
-    const block: TextContent = {
+    const newBlock: TextContent = {
       type: "text",
       text,
       textSignature: encodeTextSignatureV1(item.id, phase),
     };
-    blocks.push(block);
+    blocks.push(newBlock);
     const index = blocks.length - 1;
-    params.setLastTextBlock({ block, index, phase });
+    params.setLastTextBlock({ block: newBlock, index, phase });
     stream.push({ type: "text_start", contentIndex: index, partial: output });
     stream.push({ type: "text_end", contentIndex: index, content: text, partial: output });
     return index;
   };
-  const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>): number => {
-    const validated = resolveCompletedResponsesToolCall(item);
-    const toolCall: ToolCall = {
-      type: "toolCall",
-      id: resolveResponsesToolCallId(item),
-      name: validated.name,
-      arguments: validated.arguments,
-    };
-    blocks.push(toolCall);
-    const contentIndex = blocks.length - 1;
-    stream.push({ type: "toolcall_start", contentIndex, partial: output });
+  const emitToolCallCompletion = (
+    item: { type: "function_call"; id?: string; call_id?: string },
+    outputIndex: number | undefined,
+    started: { block: ToolCall; contentIndex: number } | undefined,
+    validated: Pick<ToolCall, "name" | "arguments">,
+  ): void => {
+    // Complete the same public block with authoritative identities and arguments;
+    // scratch JSON must never survive into transcript replay.
+    const completed = { id: resolveResponsesToolCallId(item, started?.block.id), ...validated };
+    const toolCall: ToolCall & { partialJson?: string } = started
+      ? Object.assign(started.block, completed)
+      : { type: "toolCall", ...completed };
+    delete toolCall.partialJson;
+    const contentIndex = started?.contentIndex ?? blocks.length;
+    if (!started) {
+      blocks.push(toolCall);
+      stream.push({ type: "toolcall_start", contentIndex, partial: output });
+    }
+    params.outputs.set(item, contentIndex, outputIndex, true);
     stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-    return contentIndex;
   };
-  const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
+  const recoverTerminalOutput = (
+    items: ResponseOutputItem[],
+    completeToolCall?: (outputIndex: number) => void,
+  ) => {
     let hasCompletedLaterOutput = false;
-    for (const item of items.toReversed()) {
+    for (const [outputIndex, item] of [...items.entries()].toReversed()) {
+      const tracked = params.outputs.get(item, outputIndex);
       if (item.type === "reasoning") {
         // Terminal snapshots only backfill streamed reasoning; missing reasoning is never emitted.
-        hasCompletedLaterOutput ||= params.outputItemContentIndexes.get(item) !== undefined;
+        hasCompletedLaterOutput ||= tracked !== undefined;
         continue;
       }
       if (item.type !== "message" && item.type !== "function_call") {
         continue;
       }
-      if (
-        params.outputItemContentIndexes.get(item) !== undefined ||
-        (item.type === "message" && params.startedTextBlocksByItemId.has(item.id))
-      ) {
+      if (tracked) {
         hasCompletedLaterOutput = true;
         continue;
       }
-      if (item.type === "function_call" && !includeToolCalls) {
+      if (item.type === "function_call" && !completeToolCall) {
         continue;
       }
       // Previously emitted content indexes cannot be reordered after a missing earlier item.
       if (hasCompletedLaterOutput) {
         throw new Error("Responses stream omitted an output item before completed output");
       }
-      if (item.type === "function_call") {
-        resolveCompletedResponsesToolCall(item);
-      }
     }
     for (const [terminalIndex, item] of items.entries()) {
       if (item.type === "message") {
-        const contentIndex = params.outputItemContentIndexes.get(item);
-        if (contentIndex !== undefined && !params.startedTextBlocksByItemId.has(item.id)) {
+        const tracked = params.outputs.get(item, terminalIndex);
+        if (tracked?.completed) {
           continue;
         }
-        const appendedIndex = appendText(item);
+        const appendedIndex = appendText(item, tracked?.contentIndex);
         if (appendedIndex !== undefined) {
-          params.outputItemContentIndexes.set(item, appendedIndex);
+          params.outputs.set(item, appendedIndex, terminalIndex, true);
         }
       } else {
         params.setLastTextBlock(null);
@@ -267,8 +270,11 @@ export function createResponsesTerminalController(params: {
           output.providerReplay.data === item.encrypted_content;
         if (item.type === "compaction" && !alreadyCapturedCompaction) {
           let replayIndex = blocks.length;
-          for (const laterItem of items.slice(terminalIndex + 1)) {
-            const laterContentIndex = params.outputItemContentIndexes.get(laterItem);
+          for (const [laterIndex, laterItem] of items.entries()) {
+            if (laterIndex <= terminalIndex) {
+              continue;
+            }
+            const laterContentIndex = params.outputs.get(laterItem, laterIndex)?.contentIndex;
             if (laterContentIndex !== undefined) {
               replayIndex = laterContentIndex;
               break;
@@ -281,11 +287,11 @@ export function createResponsesTerminalController(params: {
             model,
             options?.reasoningReplayMetadata,
           );
-        } else if (includeToolCalls && item.type === "function_call") {
-          if (params.outputItemContentIndexes.get(item) !== undefined) {
+        } else if (completeToolCall && item.type === "function_call") {
+          if (params.outputs.get(item, terminalIndex)?.completed) {
             continue;
           }
-          params.outputItemContentIndexes.set(item, appendToolCall(item));
+          completeToolCall(terminalIndex);
         }
       }
     }
@@ -323,7 +329,6 @@ export function createResponsesTerminalController(params: {
     >["response"],
     terminalEventType: "response.completed" | "response.incomplete",
   ) => {
-    params.markFinalized();
     backfillReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
@@ -335,5 +340,10 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, finalizeFailedResponse: finalizeTerminalFacts, recoverTerminalOutput };
+  return {
+    finalizeResponse,
+    finalizeFailedResponse: finalizeTerminalFacts,
+    recoverTerminalOutput,
+    emitToolCallCompletion,
+  };
 }

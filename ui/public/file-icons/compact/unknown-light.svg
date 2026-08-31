@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" role="img" aria-label="Blank file icon shell, light mode, compact">
+  <path d="M3 2H11L15 6V12Q15 14 13 14H3Q1 14 1 12V4Q1 2 3 2Z" fill="#F7F7F5"/>
+  <path d="M11 2L15 6H13Q11 6 11 4Z" fill="#E1E1DE"/>
+  <path d="M3 2H11L15 6V12Q15 14 13 14H3Q1 14 1 12V4Q1 2 3 2Z" stroke="#000000" stroke-opacity="0.1" stroke-width="0.75"/>
+</svg>

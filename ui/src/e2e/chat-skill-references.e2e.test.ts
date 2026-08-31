@@ -9,7 +9,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("references multiple skills inside a normal prompt and sends the visible tokens", async () => {
+  it("references multiple skills inside a normal prompt and sends their raw names", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     await suite.withPage(
       {
@@ -39,6 +39,16 @@ suite.define(() => {
             source: "skill",
             skillModelVisible: true,
             textAliases: ["/technical_documentation"],
+          },
+          {
+            acceptsArgs: true,
+            description: "Prepare a detailed status report.",
+            name: "status_report",
+            skillDisplayName: "Status Report",
+            scope: "both",
+            source: "skill",
+            skillModelVisible: true,
+            textAliases: ["/status_report"],
           },
           {
             acceptsArgs: false,
@@ -110,9 +120,29 @@ suite.define(() => {
 
         await composer.fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
+        await composer.fill("Review this with /auto");
+        const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
+        await slashPicker.waitFor({ state: "visible" });
+        await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
+        await composer.press("Enter");
+        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+
         await composer.fill("/");
         await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
-        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(1);
+        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
+
+        const slashOptions = page
+          .getByRole("listbox", { name: "Slash commands" })
+          .getByRole("option");
+        await composer.fill("/sta");
+        await expect
+          .poll(async () => {
+            const names = await slashOptions.locator(".slash-menu-name").allTextContents();
+            return { first: names[0], last: names.at(-1) };
+          })
+          .toEqual({ first: "/status", last: "/status_report" });
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/status");
       },
     );
   });

@@ -26,6 +26,7 @@ import type {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -89,7 +90,11 @@ export async function readMirroredSessionHistoryMessages(params: {
   admission?: TranscriptTurnAdmission;
 }): Promise<AgentMessage[] | undefined> {
   const { admission, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
+  const messages = await readCodexMirroredSessionHistoryMessages(
+    target,
+    admission,
+    "model-context",
+  );
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -176,6 +181,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
@@ -244,8 +250,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+    const restrictedProjectDocNeedsOpenClawCarrier =
+      params.params.pluginHarnessToolPolicyRestricted === true &&
+      !params.params.disableTools &&
+      !isMessageOnlyCodexSourceReply(params.params) &&
+      params.params.bootstrapContextMode !== "lightweight";
     const threadDeveloperInstructionFiles =
-      injectOpenClawContext && inheritsAgentWorkspace
+      injectOpenClawContext &&
+      !params.ringZeroActive &&
+      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
         ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
         : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext

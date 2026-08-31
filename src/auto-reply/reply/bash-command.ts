@@ -191,7 +191,9 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey: params.sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg: params.cfg,
         ctx: params.ctx,
@@ -250,7 +252,7 @@ export async function handleBashChatCommand(params: {
       const exitLabel = finished.exitSignal
         ? `signal ${String(finished.exitSignal)}`
         : `code ${String(finished.exitCode ?? 0)}`;
-      const prefix = finished.status === "completed" ? "⚙️" : "⚠️";
+      const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
       return {
         text: [
           `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
@@ -326,6 +328,7 @@ export async function handleBashChatCommand(params: {
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({
       scopeKey: CHAT_BASH_SCOPE_KEY,
+      agentId,
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,

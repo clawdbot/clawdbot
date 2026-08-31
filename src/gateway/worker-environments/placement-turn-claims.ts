@@ -250,15 +250,16 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     cancelWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
+      options?: { reason: "node-disconnect" },
     ): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
-      if (claimId !== runId || !claimId.startsWith("reclaim-")) {
+      const nodeDisconnect = options?.reason === "node-disconnect";
+      if (!nodeDisconnect && (claimId !== runId || !claimId.startsWith("reclaim-"))) {
         throw new Error(`Session ${sessionId} workspace result is not owned by reclaim`);
       }
-      // A failed stop must not expose a claim without its recovery fence (or vice
-      // versa), because either half-state permanently blocks the next reclaim.
+      // Claim and recovery fence disappear together; either surviving half blocks the next attempt.
       const released = write((db) => {
         const current = getRequired(db, sessionId);
         const environment = resolvePlacementTurnEnvironment(current, claim);
@@ -277,7 +278,21 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           pending.placement_generation !== claim.placementGeneration ||
           pending.claim_id !== claimId ||
           pending.run_id !== runId ||
-          pending.workspace_accepted_at_ms !== null
+          pending.workspace_accepted_at_ms !== null ||
+          (nodeDisconnect &&
+            (current.state !== "active" ||
+              current.executionMode !== "remote-exec" ||
+              claim.owner.kind !== "local" ||
+              pending.gateway_instance_id !== instanceId ||
+              pending.recovery_requested_at_ms !== null ||
+              pending.staged_result_ref !== null ||
+              executeSqliteQuerySync(
+                db,
+                workspaceJournalQuery(db)
+                  .selectFrom("worker_workspace_reconciliations")
+                  .select("session_id")
+                  .where("session_id", "=", sessionId),
+              ).rows.length > 0))
         ) {
           throw new Error(
             `Session ${sessionId} workspace result owner changed before cancellation`,

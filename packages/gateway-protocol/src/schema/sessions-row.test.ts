@@ -8,6 +8,7 @@ describe("SessionRowSchema", () => {
     const row = {
       key: "agent:main:main",
       kind: "global",
+      lastRunId: "run-settled",
       activeLeafEntryId: "leaf-rendered",
       createdActor: {
         type: "human",
@@ -21,8 +22,8 @@ describe("SessionRowSchema", () => {
         assignedAt: 42,
       },
       participants: [
-        { type: "human", id: "profile-bob", label: "Bob" },
-        { type: "agent", id: "research", label: "Research" },
+        { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+        { identity: { type: "agent", id: "research" }, label: "Research" },
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
@@ -37,19 +38,20 @@ describe("SessionRowSchema", () => {
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
     expect(
       Value.Check(SessionRowSchema, {
         ...roundTripped,
         participants: Array.from({ length: 5 }, (_, index) => ({
-          type: "human",
-          id: `profile-${index}`,
+          identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
     ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",
+      lastRunId: "run-settled",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
@@ -63,6 +65,7 @@ describe("SessionRowSchema", () => {
     expect(Value.Check(SessionRowSchema, { ...roundTripped, permissionMode: "unrestricted" })).toBe(
       false,
     );
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {
@@ -78,5 +81,25 @@ describe("SessionRowSchema", () => {
 
     expect(accepted.every(validateSessionsAssignOwnerParams)).toBe(true);
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
+  });
+
+  it.each(["user", "auto", null] as const)("accepts model override source %s", (source) => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: source,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an invalid model override source", () => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: "session",
+      }),
+    ).toBe(false);
   });
 });

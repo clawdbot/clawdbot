@@ -112,10 +112,6 @@ export class SystemAgentChatEngine {
     return this.router.propose(operation);
   }
 
-  hasPendingProposal(): boolean {
-    return this.router.hasPendingProposal();
-  }
-
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
     return this.router.getPendingOperatorProposal();
   }

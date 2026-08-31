@@ -288,7 +288,7 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
 
 /** Returns true when auth succeeded enough to connect but lacks the read scope. */
 export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
-  if (probe.ok || probe.connectLatencyMs == null) {
+  if (probe.ok || !probe.gatewayReached) {
     return false;
   }
   if (probe.missingScopeErrorDetails) {
@@ -299,12 +299,12 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
 
 /** Returns true when the gateway connection was established but a later probe failed. */
 export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
-  return !probe.ok && probe.connectLatencyMs != null;
+  return !probe.ok && probe.gatewayReached === true;
 }
 
 /** Returns true when the probe established any gateway connection. */
 export function isProbeReachable(probe: GatewayProbeResult): boolean {
-  return probe.ok || probe.connectLatencyMs != null;
+  return probe.ok || probe.gatewayReached === true;
 }
 
 function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapability {
@@ -380,7 +380,7 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   }
 
   const detail = probe.error ? ` - ${probe.error}` : "";
-  if (probe.connectLatencyMs != null) {
+  if (probe.gatewayReached && probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
     const readStatus = isScopeLimitedProbeFailure(probe)

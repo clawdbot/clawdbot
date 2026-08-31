@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { runPreparedReply } from "./get-reply-run.js";
@@ -50,34 +49,41 @@ describe("runPreparedReply prepared metadata", () => {
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
       pluginRegistry,
-    } as never;
+    };
     const release = vi.fn();
+    const selectedGeneration = { ...pluginGeneration, pluginRegistry: { selected: true } };
     mocks.prepareContext.mockResolvedValue({
       kind: "run",
-      params: { cfg: config },
+      params: { cfg: config, provider: "selected", model: "model" },
+      thinkingRuntime: "selected-harness",
       workspaceDir,
     });
     mocks.acquireRuntime.mockImplementation(async (_input, options) => ({
       snapshot: {
         config,
         metadataSnapshot: options.pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: options.pluginGeneration.pluginRegistry,
+        pluginRegistry: selectedGeneration.pluginRegistry,
         workspaceDir,
       },
       release,
+      pluginGeneration: selectedGeneration,
     }));
     let admissionSnapshot: unknown;
     let admissionRegistry: unknown;
+    let admissionPluginGeneration: unknown;
     mocks.prepareAdmission.mockImplementation(async () => {
       admissionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
       admissionRegistry = getPluginRuntimeGenerationRegistry();
+      admissionPluginGeneration = getPreparedModelRuntimePluginGeneration();
       return { kind: "run" };
     });
     let executionSnapshot: unknown;
     let executionRegistry: unknown;
+    let executionPluginGeneration: unknown;
     mocks.execute.mockImplementation(async () => {
       executionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
       executionRegistry = getPluginRuntimeGenerationRegistry();
+      executionPluginGeneration = getPreparedModelRuntimePluginGeneration();
       return { text: "ok" };
     });
 
@@ -89,7 +95,7 @@ describe("runPreparedReply prepared metadata", () => {
         config,
         pluginGeneration,
       } as never,
-      async () => await runPreparedReply({} as never),
+      async () => await runPreparedReply({ provider: "selected", model: "model" } as never),
     );
 
     await expect(run()).resolves.toEqual({ text: "ok" });
@@ -98,16 +104,23 @@ describe("runPreparedReply prepared metadata", () => {
         config,
         agentId: "main",
         agentDir: "/tmp/openclaw-reply-agent",
+        allowGatewaySubagentBinding: true,
         workspaceDir,
+        runtimePluginSelections: [
+          { provider: "selected", modelId: "model", runtime: "selected-harness" },
+        ],
       },
-      { pluginGeneration },
+      { catalogMode: "static", pluginGeneration },
     );
     expect(admissionSnapshot).toBe(metadataSnapshot);
     expect(executionSnapshot).toBe(metadataSnapshot);
-    expect(admissionRegistry).toBe(pluginRegistry);
-    expect(executionRegistry).toBe(pluginRegistry);
+    expect(admissionRegistry === selectedGeneration.pluginRegistry).toBe(true);
+    expect(executionRegistry === selectedGeneration.pluginRegistry).toBe(true);
+    expect(admissionPluginGeneration === selectedGeneration).toBe(true);
+    expect(executionPluginGeneration === selectedGeneration).toBe(true);
     expect(release).toHaveBeenCalledOnce();
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
     expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+    expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
   });
 });

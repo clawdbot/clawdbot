@@ -12,28 +12,30 @@ async function sleep(ms: number): Promise<void> {
 
 export async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (existsSync(filePath)) {
-      return;
+  // Observe readiness before the deadline: a delayed wake can outlive both.
+  while (!existsSync(filePath)) {
+    if (Date.now() >= deadlineAt) {
+      throw new Error(`timeout waiting for ${filePath}`);
     }
     await sleep(5);
   }
-  throw new Error(`timeout waiting for ${filePath}`);
 }
 
 // writeFileSync can expose an open-truncate window, so wait for valid contents, not existence.
 export async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
   const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
+  while (true) {
     if (existsSync(filePath)) {
       const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
       if (Number.isInteger(pid) && pid > 0) {
         return pid;
       }
     }
+    if (Date.now() >= deadlineAt) {
+      throw new Error(`timeout waiting for pid in ${filePath}`);
+    }
     await sleep(5);
   }
-  throw new Error(`timeout waiting for pid in ${filePath}`);
 }
 
 export async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
@@ -44,7 +46,10 @@ export async function waitForDead(pid: number, timeoutMs: number): Promise<void>
     }
     await sleep(5);
   }
-  throw new Error(`process still alive: ${pid}`);
+  // A delayed worker wake can outlive both the deadline and the process.
+  if (isPidAlive(pid)) {
+    throw new Error(`process still alive: ${pid}`);
+  }
 }
 
 export function waitForChildClose(

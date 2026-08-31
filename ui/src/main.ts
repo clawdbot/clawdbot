@@ -6,7 +6,7 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
 } from "./app/stale-chunk-reload.ts";
-import { CONTROL_UI_BUILD_INFO } from "./build-info.ts";
+import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -25,11 +25,18 @@ if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", currentControlUiBuildId);
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "sw-updated" && event.data.version !== currentControlUiBuildId) {
+    if (controlUiWorkerActivationRetires(event.data)) {
       window.location.reload();
     }
+    if (event.data?.type === "sw-version-probe") {
+      event.ports[0]?.postMessage({ version: currentControlUiBuildId });
+    }
   });
-  void navigator.serviceWorker.register(swUrl, { updateViaCache: "none" });
+  void navigator.serviceWorker
+    .register(swUrl, { updateViaCache: "none" })
+    .catch((error: unknown) => {
+      console.warn("OpenClaw service worker registration failed.", error);
+    });
 } else if (!isProd && "serviceWorker" in navigator) {
   // Unregister any leftover dev SW to avoid stale cache issues.
   void navigator.serviceWorker.getRegistrations().then((registrations) => {

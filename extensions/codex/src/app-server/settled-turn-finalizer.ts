@@ -83,7 +83,7 @@ export async function runCodexSettledTurnFinalization(
     );
   }
   const text = bounded.text.trim();
-  if (!text) {
+  if (!text || isSilentReplyText(text)) {
     return {
       assistant: createAssistantMessage(attempt, "", {
         tokenUsage: bounded.usage,
@@ -92,9 +92,6 @@ export async function runCodexSettledTurnFinalization(
       }),
       ...(bounded.usage ? { usage: bounded.usage } : {}),
     };
-  }
-  if (isSilentReplyText(text)) {
-    throw new Error("Codex settled-turn finalization completed without a visible answer");
   }
 
   const mirrorIdentity = `settled-finalizer:${attempt.runId}`;
@@ -114,6 +111,9 @@ export async function runCodexSettledTurnFinalization(
     cwd: attempt.workspaceDir,
     messages: [assistant],
     idempotencyScope: `codex-settled-finalizer:${attempt.runId}`,
+    runId: attempt.runId,
+    terminalAssistantOwner: { mirrorIdentity, runId: attempt.runId },
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     config: attempt.config,
     skipBeforeMessageWriteHooks: true,
   });

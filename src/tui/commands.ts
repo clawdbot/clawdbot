@@ -8,7 +8,6 @@ import {
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
 import {
-  formatThinkingLevels,
   listThinkingLevelLabels,
   type ReasoningLevel,
   type VerboseLevel,
@@ -17,7 +16,7 @@ import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
-const FAST_LEVELS = ["status", "auto", "on", "off"];
+const FAST_LEVELS = ["status", "auto", "on", "off", "default"];
 const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -46,6 +45,12 @@ type SlashCommandOptions = {
   local?: boolean;
   dynamicCommands?: CommandEntry[];
 };
+
+function resolveThinkingLevelLabels(options: SlashCommandOptions): string[] {
+  return options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+}
 
 function createLevelCompletion(
   levels: string[],
@@ -113,10 +118,10 @@ const TUI_COMMAND_ROWS = [
   ],
   ["session", "Switch session (or open picker)", "/session <key> (or /sessions)"],
   ["sessions", "Open session picker"],
-  ["model", "Set model (or open picker)", "/model <provider/model> (or /models)"],
+  ["model", "Set model (or open picker)", "/model <provider/model|default> (or /models)"],
   ["models", "Open model picker"],
-  ["think", "Set thinking level", "/think <{thinkingLevels}>", "thinking"],
-  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off>", FAST_LEVELS],
+  ["think", "Set thinking level", "/think <{thinkingLevels}|default>", "thinking"],
+  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off|default>", FAST_LEVELS],
   [
     "verbose",
     `Set verbose ${VERBOSE_LEVELS.join("/")}`,
@@ -203,7 +208,7 @@ function normalizeSlashCommandName(value: string): string {
 
 function appendSlashCommand(
   commands: SlashCommand[],
-  seen: Set<string>,
+  seen: Map<string, SlashCommand["getArgumentCompletions"]>,
   name: string,
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
@@ -212,7 +217,7 @@ function appendSlashCommand(
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
-  seen.add(normalizedName);
+  seen.set(normalizedName, getArgumentCompletions);
   commands.push({ name: normalizedName, description, getArgumentCompletions });
 }
 
@@ -243,11 +248,9 @@ export function isSharedTextCommand(input: string): boolean {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = options.thinkingLevels?.length
-    ? options.thinkingLevels.map((level) => level.label)
-    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+  const thinkLevels = resolveThinkingLevelLabels(options);
   const commands: SlashCommand[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, SlashCommand["getArgumentCompletions"]>();
   for (const command of TUI_COMMAND_DESCRIPTORS) {
     if (
       command.shared ||
@@ -258,7 +261,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     }
     const completions =
       command.completions === "thinking"
-        ? createLevelCompletion(thinkLevels)
+        ? createLevelCompletion([...thinkLevels, "default"])
         : command.completions
           ? createLevelCompletion([...command.completions])
           : undefined;
@@ -287,7 +290,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
-      appendSlashCommand(commands, seen, alias, command.description);
+      appendSlashCommand(commands, seen, alias, command.description, seen.get(command.key));
     }
   }
 
@@ -324,13 +327,7 @@ export function shouldSubmitExactArgumentCompletion(
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(
-    options.provider,
-    options.model,
-    "|",
-    undefined,
-    options.agentRuntime,
-  );
+  const thinkLevels = resolveThinkingLevelLabels(options).join("|");
   const commandHelp = TUI_COMMAND_DESCRIPTORS.flatMap((command) => {
     if (!command.help || !commandIsVisible(command, options.local === true)) {
       return [];

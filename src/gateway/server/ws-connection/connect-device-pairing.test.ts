@@ -6,8 +6,13 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
+import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { getPairedDevice } from "../../../infra/device-pairing.js";
+import {
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+} from "../../../shared/device-bootstrap-profile.js";
 import {
   loadDeviceIdentity,
   openTrackedWs,
@@ -42,6 +47,63 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
+  test("rejects identity-less owner bootstrap operators when role policies require a user", async () => {
+    const origin = "https://localhost";
+    const auth = { mode: "token", token: "local-secret" } as const;
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth,
+          controlUi: { allowedOrigins: [origin] },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: ["guest"],
+                scopes: ["operator.read"],
+              },
+            },
+          },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const started = await startServerWithClient(undefined, {
+      auth,
+      controlUiEnabled: true,
+      wsHeaders: { origin },
+    });
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+      });
+      const response = await connectReq(started.ws, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "operator",
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+        client: CONTROL_UI_CLIENT,
+        deviceIdentityPath: loadDeviceIdentity("roles-bootstrap-owner").identityPath,
+      });
+
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "operator role policies require a verified user identity",
+        },
+      });
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test.each([
     {
       name: "local backend self-call",

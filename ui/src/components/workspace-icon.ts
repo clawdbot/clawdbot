@@ -42,7 +42,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
         ? this.loader.resolve(routeUrl, this.authTokens)
         : null;
     if (!blobUrl) {
-      return icons.folder;
+      return html`<span class="workspace-icon-fallback" aria-hidden="true">${icons.folder}</span>`;
     }
     // <img> never executes script, which is what keeps SVG project icons safe
     // to paint; the route's sandbox policy covers direct navigation to them.

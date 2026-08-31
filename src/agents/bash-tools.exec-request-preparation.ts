@@ -26,6 +26,7 @@ import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -37,7 +38,6 @@ export type ExecToolArgs = Record<string, unknown> & {
   pty?: boolean;
   elevated?: boolean;
   host?: string;
-  security?: string;
   ask?: string;
   node?: string;
 };
@@ -65,14 +65,15 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
-  "command",
-  "workdir",
-  "host",
-  "security",
-  "ask",
-  "node",
-] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
+
+export function assertSupportedExecParams(args: unknown): void {
+  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+    throw new ToolInputError(
+      'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
+    );
+  }
+}
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -286,6 +287,7 @@ export function createExecRequestPreparation(params: {
     args: unknown,
     context: { hookContext?: unknown },
   ): Promise<ExecToolArgs> => {
+    assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
     const workdirState = getResolvedExecWorkdirPreparedState(execParams);
     if (workdirState?.resolution.kind === "unavailable") {

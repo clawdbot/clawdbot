@@ -119,6 +119,17 @@ export type AcpRuntimeCapabilities = {
   configOptionKeys?: string[];
 };
 
+/** Complete accepted control snapshot after a successful config-option write. */
+export type AcpRuntimeConfigOptionResult = {
+  configOptions: Array<{
+    id: string;
+    category?: string | null;
+    currentValue: string | boolean;
+    /** Selectable values, flat or grouped as in ACP session config options. */
+    options?: Array<{ value: string }> | Array<{ options: Array<{ value: string }> }>;
+  }>;
+};
+
 export type AcpRuntimeStatus = {
   summary?: string;
   /** Backend-local record identifier, if exposed by adapter/runtime. */
@@ -210,6 +221,8 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /** Resolves when the backend has submitted this prompt; older third-party runtimes may omit it. */
+  readonly promptStarted?: Promise<void>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */
@@ -239,7 +252,12 @@ export interface AcpRuntime {
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
-  setConfigOption?(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
+  /** Older third-party backends may omit the accepted snapshot. Empty options are authoritative. */
+  setConfigOption?(input: {
+    handle: AcpRuntimeHandle;
+    key: string;
+    value: string;
+  }): Promise<AcpRuntimeConfigOptionResult | void>;
 
   doctor?(): Promise<AcpRuntimeDoctorReport>;
 

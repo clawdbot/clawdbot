@@ -1,6 +1,8 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -59,8 +61,11 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
-    await import("../commands/doctor-auth-flat-profiles.js");
+  const {
+    collectOpenAICodexAuthProfileStoreIdMap,
+    maybeMigrateAuthProfileJsonStoresToSqlite,
+    maybeRepairOpenAICodexAuthConfig,
+  } = await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -75,17 +80,44 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  await maybeMigrateAuthProfileJsonStoresToSqlite({
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
     cfg: ctx.cfg,
-    prompter: ctx.prompter,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
+  const authConfigCandidate = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
+    profileIdMap: openAICodexAuthProfileIdMap,
+  }).config;
+  const authProfileMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: authConfigCandidate,
+    prompter: ctx.prompter,
+    openAICodexAuthProfileIdMap,
+    ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  if (authProfileMigration.configOwnerMigrationApplied) {
+    // The candidate is safe only after the migration verifies and archives its source.
+    ctx.cfg = authConfigCandidate;
+  }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
+  const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
+  const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
+  ctx.cfg = legacyOAuthRepair.config;
+  if (legacyOAuthRepair.retiredProfileCleanupPlans.length > 0) {
+    ctx.configResult.retiredAuthProfileCleanupPlans = [
+      ...(ctx.configResult.retiredAuthProfileCleanupPlans ?? []),
+      ...legacyOAuthRepair.retiredProfileCleanupPlans,
+    ];
+  }
+  if (!isDeepStrictEqual(modelsBeforeRepair, ctx.cfg.agents?.defaults?.models)) {
+    ctx.configResult.explicitSetPaths = [
+      ...(ctx.configResult.explicitSetPaths ?? []),
+      ["agents", "defaults", "models"],
+    ];
+  }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
   await maybeMigrateModelCatalogCredentials({
@@ -94,12 +126,24 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
-  ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
-  await noteAuthProfileHealth({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-    allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
-  });
+  let authProfileHealthReady = true;
+  if (ctx.configResult.retiredAuthProfileCleanupPlans?.length) {
+    const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
+      await import("./doctor-health-contribution-runners.config.js");
+    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    authProfileHealthReady =
+      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+    if (authProfileHealthReady) {
+      await runRetiredAuthProfileCleanup(ctx);
+    }
+  }
+  if (authProfileHealthReady) {
+    await noteAuthProfileHealth({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
+    });
+  }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
@@ -165,7 +209,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       cfg: ctx.cfg,
       env: ctx.env ?? process.env,
       unresolvedReasonStyle: "detailed",
-      envFallback: gatewayTokenRef ? "never" : "always",
     });
     if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
       return;
@@ -222,7 +265,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
+    await import("../infra/state-migrations.doctor.js");
   const { note } = await loadNoteModule();
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
@@ -241,44 +284,72 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (legacyState.notices.length > 0) {
     note(legacyState.notices.join("\n"), "Doctor notices");
   }
-  if (legacyState.preview.length === 0) {
+  if (legacyState.preview.length > 0) {
+    note(legacyState.preview.join("\n"), "Legacy state detected");
+    const migrate =
+      ctx.options.nonInteractive === true
+        ? true
+        : await ctx.prompter.confirm({
+            message: "Migrate detected legacy state now?",
+            initialValue: true,
+          });
+    if (migrate) {
+      const migrated = await runLegacyStateMigrations({
+        detected: legacyState,
+        config: ctx.cfg,
+        ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+        legacySessionSurfaces,
+      });
+      if (migrated.changes.length > 0) {
+        note(migrated.changes.join("\n"), "Doctor changes");
+      }
+      const notices = migrated.notices ?? [];
+      if (notices.length > 0) {
+        note(notices.join("\n"), "Doctor notices");
+      }
+      if (migrated.warnings.length > 0) {
+        note(migrated.warnings.join("\n"), "Doctor warnings");
+      }
+    }
+  }
+  if (!doctorOnlyStateMigrations) {
     return;
   }
-  note(legacyState.preview.join("\n"), "Legacy state detected");
-  const migrate =
-    ctx.options.nonInteractive === true
-      ? true
-      : await ctx.prompter.confirm({
-          message: "Migrate detected legacy state now?",
-          initialValue: true,
-        });
-  if (!migrate) {
-    return;
+  const { repairObsoleteGeneratedExecApprovals } =
+    await import("../infra/exec-approvals-generated-migration.js");
+  const { ExecApprovalsMigrationRequiredError } =
+    await import("../infra/exec-approvals-migration-gate.js");
+  let removedExecApprovals: number;
+  try {
+    // The legacy-state owner must import retired JSON before this gated SQLite update.
+    removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      return;
+    }
+    throw error;
   }
-  const migrated = await runLegacyStateMigrations({
-    detected: legacyState,
-    config: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-    recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
-    legacySessionSurfaces,
-  });
-  if (migrated.changes.length > 0) {
-    note(migrated.changes.join("\n"), "Doctor changes");
+  if (removedExecApprovals > 0) {
+    note(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+      "Doctor changes",
+    );
   }
-  const notices = migrated.notices ?? [];
-  if (notices.length > 0) {
-    note(notices.join("\n"), "Doctor notices");
-  }
-  if (migrated.warnings.length > 0) {
-    note(migrated.warnings.join("\n"), "Doctor warnings");
-  }
+}
+
+async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
+  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local"
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return;
   }
@@ -305,7 +376,12 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function detectSystemdLingerFindings(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+  if (
+    process.platform !== "linux" ||
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
+  ) {
     return [];
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");

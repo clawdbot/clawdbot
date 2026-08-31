@@ -107,6 +107,60 @@ async function captureElement(locator: Locator, name: string) {
 }
 
 suite.define(() => {
+  it("drops a pending skill completion after an agent switch", async () => {
+    const context = await suite.browser.newContext(CONTEXT);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "main",
+      deferredMethods: ["commands.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "commands.list",
+        "sessions.create",
+        "sessions.dispatch",
+      ],
+      methodResponses: {
+        "agent.identity.get": agentIdentities,
+        "agents.list": agentsList,
+        "chat.metadata": { models: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await gateway.waitForRequest("agent.identity.get");
+      const composer = page.locator(".new-session-page__composer textarea");
+      await composer.fill("$");
+      await composer.press("End");
+      await composer.dispatchEvent("select");
+      await gateway.waitForRequest("commands.list");
+
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await picker.evaluate((element) => {
+        (element as HTMLElement & { onSelect: (agentId: string) => void }).onSelect("research");
+      });
+      await gateway.resolveDeferred("commands.list", {
+        commands: [
+          {
+            description: "Only available to the previous agent.",
+            name: "main_only",
+            source: "skill",
+            skillModelVisible: true,
+          },
+        ],
+      });
+
+      await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
+      await expect
+        .poll(() => page.getByRole("listbox", { name: "Skill references" }).count())
+        .toBe(0);
+      await expect.poll(() => composer.inputValue()).toBe("$");
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["dark", "light"] as const)(
     "uses resolved identity in the New Session hero and picker in %s mode",
     async (theme) => {

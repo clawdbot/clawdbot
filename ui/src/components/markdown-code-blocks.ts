@@ -157,8 +157,10 @@ const codeBlockResizeObserver =
   typeof ResizeObserver === "undefined"
     ? null
     : new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const wrapper = entry.target.closest<HTMLElement>(".code-block-wrapper");
+        const wrappers = new Set(
+          entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+        );
+        for (const wrapper of wrappers) {
           if (wrapper) {
             updateCodeBlockWidthOverflow(wrapper);
           }
@@ -204,7 +206,10 @@ function scanMarkdownCodeBlocks(root: ParentNode): void {
     }
     observeCodeBlockNode(viewport);
     observeCodeBlockNode(code);
-    updateCodeBlockWidthOverflow(wrapper);
+    // The observer owns initial geometry too, after the browser lays out new blocks.
+    if (!codeBlockResizeObserver) {
+      updateCodeBlockWidthOverflow(wrapper);
+    }
   }
 }
 
@@ -268,12 +273,13 @@ function codeClassAttribute(lang: string, highlighted: string): string {
 function renderCodeElement(
   text: string,
   lang: string,
-  options: { blockArt?: boolean } = {},
+  options: { blockArt?: boolean; highlight?: boolean } = {},
 ): string {
   if (options.blockArt || isMarkdownBlockArtText(text)) {
     return `<pre><code class="markdown-block-art">${escapeMarkdownHtml(text)}</code></pre>`;
   }
-  const highlighted = highlightCodeHtml(text, lang);
+  const highlighted =
+    options.highlight === false ? escapeMarkdownHtml(text) : highlightCodeHtml(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
@@ -301,10 +307,10 @@ export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
   env: unknown,
-  options: { blockArt?: boolean; copyText?: string } = {},
+  options: { blockArt?: boolean; copyText?: string; highlight?: boolean } = {},
 ): string {
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
-  const codeBlock = renderCodeElement(text, lang, { blockArt });
+  const codeBlock = renderCodeElement(text, lang, { blockArt, highlight: options.highlight });
   if (!shouldRenderCodeBlockCopy(env) && !shouldRenderCodeBlockInteraction(env)) {
     return codeBlock;
   }

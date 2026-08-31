@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
     response: new Response(null, { status: 204 }),
     release: vi.fn(async () => {}),
   })),
-  startQaGatewayChild: vi.fn(async () => ({
+  startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
@@ -48,13 +48,19 @@ const mocks = vi.hoisted(() => ({
     getProcessRssBytes: () => null,
     stop: vi.fn(async () => {}),
   })),
-  writeQaSuiteArtifacts: vi.fn(async () => ({
-    evidence: { kind: "test" },
-    evidencePath: "/qa-output/qa-evidence.json",
-    report: "",
-    reportPath: "/qa-output/qa-suite-report.md",
-    summaryPath: "/qa-output/qa-suite-summary.json",
-  })),
+  writeQaSuiteArtifacts: vi.fn(
+    async (_params: {
+      channel?: string | null;
+      channelDriver?: string | null;
+      channelDriverSelection?: unknown;
+    }) => ({
+      evidence: { kind: "test" },
+      evidencePath: "/qa-output/qa-evidence.json",
+      report: "",
+      reportPath: "/qa-output/qa-suite-report.md",
+      summaryPath: "/qa-output/qa-suite-summary.json",
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -63,8 +69,32 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
+vi.mock("./crabline-transport.js", () => ({
+  createQaCrablineTransportAdapter: vi.fn(async () => ({
+    id: "telegram",
+    label: "Crabline Telegram",
+    accountId: "sut",
+    requiredPluginIds: [],
+    supportedActions: [],
+    sendInbound: vi.fn(async () => {}),
+    createGatewayConfig: () => ({}),
+    waitReady: vi.fn(async () => {}),
+    buildAgentDelivery: ({ target }: { target: string }) => ({
+      channel: "telegram",
+      to: target,
+      replyChannel: "telegram",
+      replyTo: target,
+    }),
+    handleAction: vi.fn(async () => {}),
+    createReportNotes: () => [],
+    cleanup: vi.fn(async () => {}),
+  })),
+}));
 vi.mock("./gateway-child.js", () => ({
-  startQaGatewayChild: mocks.startQaGatewayChild,
+  createQaGatewayChild: () => ({
+    start: (params: unknown) => mocks.startQaGatewayChild(params),
+    stop: async () => ({ process: "confirmed-stopped", errors: [] }),
+  }),
 }));
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
@@ -254,7 +284,14 @@ describe("runtime parity suite transport cleanup", () => {
   });
 
   it("prints one generic completion after real nested standard cells and parent cleanup", async () => {
+    mocks.writeQaSuiteArtifacts.mockClear();
     const scenario = makeQaSuiteTestScenario("runtime-cleanup");
+    const selection = {
+      capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channel: "telegram",
+      channelDriver: "crabline",
+      providerReadinessArtifactPath: "crabline-provider-readiness.json",
+    } as const;
     const parentLab = createCleanupTestLab();
     const openClawLab = createCleanupTestLab();
     const codexLab = createCleanupTestLab();
@@ -300,6 +337,8 @@ describe("runtime parity suite transport cleanup", () => {
         startedAt: new Date("2026-08-04T00:00:00.000Z"),
         providerMode: "mock-openai",
         transportId: "qa-channel",
+        channelId: "telegram",
+        channelDriverSelection: selection,
         primaryModel: "mock-openai/test-model",
         alternateModel: "mock-openai/test-model-alt",
         fastMode: true,
@@ -317,6 +356,15 @@ describe("runtime parity suite transport cleanup", () => {
         .filter((line) => line.startsWith("[qa-suite] run complete"));
       expect(completionLines).toEqual(["[qa-suite] run complete"]);
       expect(runScenario).toHaveBeenCalledTimes(2);
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(3);
+      for (const [cellArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
+        expect(cellArtifacts.channelDriverSelection).toBeUndefined();
+      }
+      expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0]).toMatchObject({
+        channel: "telegram",
+        channelDriver: "crabline",
+        channelDriverSelection: selection,
+      });
       expect(openClawLab.stop).toHaveBeenCalledOnce();
       expect(codexLab.stop).toHaveBeenCalledOnce();
       expect(parentLab.stop).toHaveBeenCalledOnce();

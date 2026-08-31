@@ -1,13 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
-  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiSettingsTakeover,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -30,24 +30,8 @@ const SCOPE_UPGRADE_METHODS = [
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
 ] as const;
-const HIDDEN_WEB_CHROME_HOSTS = [
-  { collapsed: false, label: "native web chrome", rootClass: "openclaw-native-web-chrome" },
-  { collapsed: true, label: "collapsed native navigation", rootClass: "openclaw-native-nav" },
-] as const;
 const MANUAL_UPGRADE_GUIDANCE =
   "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
-const BANNER_MODULE_ROUTE = /device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u;
-
-type BoundingBox = { x: number; y: number; width: number; height: number };
-
-function boxesIntersect(left: BoundingBox, right: BoundingBox): boolean {
-  return !(
-    left.x + left.width <= right.x ||
-    right.x + right.width <= left.x ||
-    left.y + left.height <= right.y ||
-    right.y + right.height <= left.y
-  );
-}
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -60,6 +44,15 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function gatewayPhase(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+    };
+    return app.runtime?.context.gateway.snapshot.phase;
+  });
+}
+
 async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
@@ -68,47 +61,61 @@ async function captureProof(page: Page, name: string): Promise<void> {
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
-async function createContext(): Promise<BrowserContext> {
+async function createContext(viewport = { height: 900, width: 1280 }): Promise<BrowserContext> {
   const context = await browser.newContext({
+    colorScheme: "dark",
     locale: "en-US",
+    recordVideo: proofDir ? { dir: path.join(proofDir, "videos"), size: viewport } : undefined,
     serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
+    viewport,
   });
   openContexts.add(context);
   return context;
 }
 
-async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
-  // content-visibility, grid transitions, and lazy styles can defer layout beyond
-  // a fixed rAF pair. Measure the owning geometry until two frames agree.
-  await page.evaluate(
-    async ({ maxFrames, selector: targetSelector }) => {
-      let previousGeometry: string | undefined;
-      let stableFrames = 0;
-      for (let frame = 0; frame < maxFrames; frame += 1) {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
-        if (elements.length === 0) {
-          throw new Error(`No layout elements matched ${targetSelector}`);
-        }
-        const geometry = JSON.stringify(
-          elements.map((element) => {
-            const rect = element.getBoundingClientRect();
-            return [rect.x, rect.y, rect.width, rect.height];
-          }),
-        );
-        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
-        if (stableFrames >= 2) {
-          return;
-        }
-        previousGeometry = geometry;
-      }
-      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
-    },
-    { maxFrames: 60, selector },
-  );
+async function waitForAnimations(locator: Locator): Promise<void> {
+  await locator.evaluate(async (element) => {
+    const animations = element
+      .getAnimations({ subtree: true })
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));
+    await Promise.allSettled(animations.map((animation) => animation.finished));
+  });
+}
+
+async function openInbox(page: Page, mobile = false) {
+  if (mobile) {
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.locator(".nav-drawer").waitFor();
+  }
+  const trigger = page.locator(".sidebar-issues-button:visible");
+  await trigger.waitFor();
+  await trigger.click();
+  const panel = page.locator("#sidebar-issues-panel");
+  await panel.waitFor();
+  return panel;
+}
+
+async function openLimitedAccessItem(panel: Locator) {
+  await panel.getByRole("tab", { name: /System/u }).click();
+  const item = panel.locator('[data-attention-kind="scopeUpgrade"]');
+  await item.waitFor();
+  await item.locator("summary").click();
+  return item;
+}
+
+async function closeInbox(page: Page) {
+  await page.locator(".sidebar-issues-button:visible").click();
+  await page.locator("#sidebar-issues-panel").waitFor({ state: "detached" });
+}
+
+async function waitForPendingUpgradeItem(item: Locator) {
+  await item
+    .locator(".sidebar-issues-panel__body")
+    .getByText(/Approve this browser by running openclaw devices on the Gateway/u)
+    .waitFor();
+  await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
+  await item.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+  expect(await item.getByRole("button", { name: "Dismiss Limited access" }).count()).toBe(0);
 }
 
 describeControlUiE2e("Control UI live device scope upgrade", () => {
@@ -133,24 +140,91 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     openContexts.clear();
   });
 
-  it("requests admin explicitly, shows pending repair guidance, and reconnects approved", async () => {
+  it("moves limited access into the Inbox and persists its dismissal", async () => {
+    const desktopContext = await createContext();
+    const desktop = await desktopContext.newPage();
+    const gateway = await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
+    await desktop.goto(`${server.baseUrl}activity`);
+
+    expect(await desktop.locator(".scope-upgrade-status-trigger").count()).toBe(0);
+    const desktopInbox = desktop.locator(".sidebar-issues-button");
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const desktopPanel = await openInbox(desktop);
+    const desktopItem = await openLimitedAccessItem(desktopPanel);
+    await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
+    await captureProof(desktop, "desktop-inbox-limited-access.png");
+    await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    await expect.poll(() => desktopItem.count()).toBe(0);
+    await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
+    await desktopPanel.getByRole("tab", { name: "System", exact: true }).waitFor();
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png");
+
+    await gateway.setOnline(false);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("reconnecting");
+    await gateway.setOnline(true);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("connected");
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
+
+    await desktop.reload();
+    await desktop.locator("openclaw-app-shell").waitFor();
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    const reloadedPanel = await openInbox(desktop);
+    await reloadedPanel.getByRole("tab", { name: /System/u }).click();
+    expect(await reloadedPanel.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png");
+
+    const mobileContext = await createContext({ width: 390, height: 844 });
+    const mobile = await mobileContext.newPage();
+    await installMockGateway(mobile, { operatorScopes: LIMITED_SCOPES });
+    await mobile.goto(`${server.baseUrl}activity`);
+
+    await mobile.locator(".topbar-search").waitFor();
+    expect(await mobile.locator(".scope-upgrade-status-trigger").count()).toBe(0);
+    await captureProof(mobile, "mobile-activity-clean-header.png");
+    await mobile.getByRole("button", { name: "Expand sidebar" }).click();
+    await waitForAnimations(mobile.locator(".nav-drawer"));
+    const mobileInbox = mobile.locator(".sidebar-issues-button");
+    await expect.poll(() => mobileInbox.getAttribute("aria-label")).toBe("1 inbox item");
+    await captureProof(mobile, "mobile-sidebar-inbox-badge.png");
+    await mobileInbox.click();
+    const mobilePanel = mobile.locator("#sidebar-issues-panel");
+    await mobilePanel.waitFor();
+    await waitForAnimations(mobilePanel);
+    const mobileItem = await openLimitedAccessItem(mobilePanel);
+    await mobileItem.getByRole("button", { name: "Dismiss Limited access" }).waitFor();
+    await captureProof(mobile, "mobile-inbox-limited-access.png");
+  });
+
+  it("resurfaces when manual guidance becomes an actionable upgrade", async () => {
+    const context = await createContext();
+    const guidancePage = await context.newPage();
+    await installMockGateway(guidancePage, {
+      featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
+      operatorScopes: LIMITED_SCOPES,
+    });
+    await guidancePage.goto(`${server.baseUrl}activity`);
+
+    const guidanceInbox = guidancePage.locator(".sidebar-issues-button");
+    const guidanceItem = await openLimitedAccessItem(await openInbox(guidancePage));
+    await guidanceItem.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
+    await guidanceItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await expect.poll(() => guidanceInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    await guidancePage.close();
+
+    const availablePage = await context.newPage();
+    await installMockGateway(availablePage, { operatorScopes: LIMITED_SCOPES });
+    await availablePage.goto(`${server.baseUrl}activity`);
+
+    const availableInbox = availablePage.locator(".sidebar-issues-button");
+    await expect.poll(() => availableInbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const availableItem = await openLimitedAccessItem(await openInbox(availablePage));
+    await availableItem.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
+  it("keeps a pending admin request across Inbox presenters and Settings", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    let releaseBannerModule = () => {};
-    const bannerModuleRelease = new Promise<void>((resolve) => {
-      releaseBannerModule = resolve;
-    });
-    let heldBannerModule = false;
-    let bannerModuleRouteSettled: Promise<void> | undefined;
-    await page.route(BANNER_MODULE_ROUTE, async (route) => {
-      if (!heldBannerModule) {
-        heldBannerModule = true;
-        bannerModuleRouteSettled = bannerModuleRelease.then(() => route.continue());
-        await bannerModuleRouteSettled;
-        return;
-      }
-      await route.continue();
-    });
     const gateway = await installMockGateway(page, {
       deferredMethods: ["device.scopes.waitUpgrade"],
       operatorScopes: LIMITED_SCOPES,
@@ -158,56 +232,45 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
       },
     });
-    const navigation = page.goto(`${server.baseUrl}new`);
+    await page.goto(`${server.baseUrl}new`);
 
-    const limitedBanner = page.getByText("This browser has limited access.", { exact: true });
-    try {
-      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
-      await expect.poll(() => heldBannerModule).toBe(true);
-      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
-      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
-      await captureProof(page, "limited.png");
-    } finally {
-      releaseBannerModule();
-      await bannerModuleRouteSettled;
-    }
-    await navigation;
-    await page.getByRole("button", { name: "Request admin" }).waitFor();
-
-    await page.locator("#new-session-project-trigger").click();
-    const projectPopover = page.locator("wa-popover.new-session-page__project-popover");
-    await expect
-      .poll(() => projectPopover.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-    const browse = page.getByRole("button", { name: "Browse folders" });
-    await expect.poll(() => browse.isDisabled()).toBe(true);
-    await browse.focus();
-    await expect
-      .poll(() => browse.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-    await page
-      .locator(".tooltip-content")
-      .getByText(
-        "To browse outside agent workspaces, request admin in the access banner, then approve in Devices.",
-        { exact: true },
-      )
-      .waitFor();
-    await captureProof(page, "limited-picker.png");
-    await page.keyboard.press("Escape");
-
-    await page.getByRole("button", { name: "Request admin" }).click();
+    const item = await openLimitedAccessItem(await openInbox(page));
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+    await item.getByRole("button", { name: "Request admin" }).click();
     const request = await gateway.waitForRequest("device.scopes.requestUpgrade");
     expect(request.params).toEqual({ scopes: FULL_SCOPES });
     const wait = await gateway.waitForRequest("device.scopes.waitUpgrade");
     expect(wait.params).toEqual({ requestId: "upgrade-1" });
+    await waitForPendingUpgradeItem(item);
+    await captureProof(page, "desktop-inbox-upgrade-pending.png");
+
+    await closeInbox(page);
     await page
-      .getByText(/Approve this browser by running openclaw devices on the Gateway/)
-      .waitFor();
-    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+      .locator(".shell-chrome-controls")
+      .getByRole("button", { name: "Collapse sidebar" })
+      .click();
+    const collapsedItem = await openLimitedAccessItem(await openInbox(page));
+    await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
-    await captureProof(page, "pending.png");
+
+    await closeInbox(page);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    const sidebar = page.locator("openclaw-app-sidebar");
+    const identityCard = sidebar.locator(".sidebar-identity-card");
+    await identityCard.waitFor();
+    await identityCard.click();
+    await sidebar
+      .locator("wa-dropdown.sidebar-identity-menu")
+      .getByRole("menuitem", { exact: true, name: "Settings" })
+      .click();
+    await waitForControlUiSettingsTakeover(page);
+    const settingsItem = await openLimitedAccessItem(await openInbox(page));
+    await waitForPendingUpgradeItem(settingsItem);
+    await waitForAnimations(page.locator("#sidebar-issues-panel"));
+    await captureProof(page, "settings-inbox-upgrade-pending.png");
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
+    expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
     await gateway.setOperatorScopes(FULL_SCOPES);
     await gateway.resolveDeferred("device.scopes.waitUpgrade", {
@@ -225,54 +288,96 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       token: "rotated-device-token",
       deviceToken: "rotated-device-token",
     });
-    await expect.poll(() => limitedBanner.count()).toBe(0);
-    await captureProof(page, "approved.png");
+    await expect.poll(() => page.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
+    await expect.poll(() => page.locator(".sidebar-issues-button__count").count()).toBe(0);
   });
 
-  it("collapses the limited-access banner into a persistent status chip", async () => {
+  it("shows an administrator access request error once", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
-
-    await page.goto(`${server.baseUrl}chat`);
-    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Collapse limited access banner" }).click();
-
-    const statusChip = page.getByRole("button", { name: "Show limited access details" });
-    await statusChip.waitFor();
-    expect(await statusChip.getAttribute("aria-expanded")).toBe("false");
-    await waitForLayoutSettled(page, ".content, .scope-upgrade-chip-row");
-    const chipInset = await statusChip.evaluate((chip) => {
-      const content = document.querySelector<HTMLElement>(".content");
-      if (!content) {
-        throw new Error("Missing content around limited-access status chip");
-      }
-      const contentBox = content.getBoundingClientRect();
-      const chipBox = chip.getBoundingClientRect();
-      return {
-        right: contentBox.right - chipBox.right,
-        top: chipBox.top - contentBox.top,
-      };
+    await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": {
+          __mockError: { code: "INVALID_REQUEST", message: "missing scope: operator.read" },
+        },
+      },
     });
-    await captureProof(page, "collapsed.png");
-    expect(chipInset).toEqual({ right: 20, top: 8 });
-    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
-      0,
-    );
+    await page.goto(`${server.baseUrl}activity`);
 
-    await page.reload();
-    await statusChip.waitFor();
-    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
-      0,
-    );
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).click();
+    const message = "Administrator access request failed: missing scope: operator.read";
+    await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
 
-    await statusChip.click();
-    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Request admin" }).waitFor();
+    expect(await item.getByText(message, { exact: true }).count()).toBe(1);
+    await captureProof(page, "desktop-inbox-upgrade-error.png");
   });
 
   it.each(SCOPE_UPGRADE_METHODS)(
-    "shows manual repair guidance when %s is not advertised",
+    "keeps role denials non-retryable at %s while transient errors can retry",
+    async (method) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        deferredMethods: [method],
+        operatorScopes: LIMITED_SCOPES,
+        methodResponses: {
+          "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
+        },
+      });
+      await page.goto(`${server.baseUrl}activity`);
+      const item = await openLimitedAccessItem(await openInbox(page));
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await gateway.waitForRequest(method);
+      const denial =
+        "Requested scopes exceed your assigned operator role; ask a gateway administrator to change your role.";
+      // Role denials omit retryable on the wire; the request-error contract defaults it to false.
+      await gateway.rejectDeferred(method, { code: "INVALID_REQUEST", message: denial });
+      await item
+        .locator(".sidebar-issues-panel__body")
+        .getByText(denial, { exact: false })
+        .waitFor();
+      await captureProof(page, `${method}-role-denied.png`);
+      expect(await item.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
+
+      await item.getByRole("button", { name: "Cancel", exact: true }).click();
+      await gateway.deferNext(method);
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+      await gateway.rejectDeferred(method, {
+        code: "UNAVAILABLE",
+        message: "Device scope upgrade is temporarily unavailable.",
+        retryable: true,
+      });
+      await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
+      await gateway.deferNext("device.scopes.waitUpgrade");
+      await item.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+        .toBe(3);
+      await waitForPendingUpgradeItem(item);
+      await captureProof(page, `${method}-retry-pending.png`);
+      for (const status of ["rejected", "expired"] as const) {
+        const requestCount = (await gateway.getRequests("device.scopes.requestUpgrade")).length;
+        await gateway.resolveDeferred("device.scopes.waitUpgrade", {
+          status,
+          requestId: "upgrade-1",
+        });
+        await item.locator(".sidebar-issues-panel__body").getByText(new RegExp(status)).waitFor();
+        await gateway.deferNext("device.scopes.waitUpgrade");
+        await item.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+          .toBe(requestCount + 1);
+        await waitForPendingUpgradeItem(item);
+      }
+    },
+  );
+
+  it.each(SCOPE_UPGRADE_METHODS)(
+    "shows manual repair guidance in Inbox when %s is not advertised",
     async (missingMethod) => {
       const context = await createContext();
       const page = await context.newPage();
@@ -284,153 +389,35 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         ],
         operatorScopes: LIMITED_SCOPES,
       });
-
       await page.goto(`${server.baseUrl}chat`);
-      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
-      await scopeUpgradeCallout.waitFor();
-      const guidance = scopeUpgradeCallout.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
-      await guidance.waitFor();
-      await waitForLayoutSettled(
-        page,
-        "openclaw-device-scope-upgrade-banner .callout, .shell-chrome-controls",
-      );
 
-      const guidanceBox = await guidance.boundingBox();
-      const chromeControls = page.locator(".shell-chrome-controls__button");
-      expect(guidanceBox).not.toBeNull();
-      expect(await chromeControls.count()).toBe(2);
-      for (let index = 0; index < (await chromeControls.count()); index += 1) {
-        const control = chromeControls.nth(index);
-        const controlBox = await control.boundingBox();
-        expect(controlBox).not.toBeNull();
-        if (guidanceBox && controlBox) {
-          const label = await control.getAttribute("aria-label");
-          expect(
-            boxesIntersect(guidanceBox, controlBox),
-            `guidance ${JSON.stringify(guidanceBox)} intersects ${label} ${JSON.stringify(controlBox)}`,
-          ).toBe(false);
-        }
-      }
-
-      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+      const item = await openLimitedAccessItem(await openInbox(page));
+      await item
+        .locator(".sidebar-issues-panel__body")
+        .getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true })
+        .waitFor();
+      expect(await item.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
-      await page.getByRole("button", { name: "Collapse limited access banner" }).click();
-      expect(await page.getByRole("button", { name: "Show limited access details" }).count()).toBe(
-        0,
-      );
-      await page.reload();
-      await page.locator("openclaw-app-shell").waitFor();
-      expect(await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).count()).toBe(0);
     },
   );
 
-  it.each(HIDDEN_WEB_CHROME_HOSTS)(
-    "keeps manual guidance at the normal content inset with $label",
-    async ({ collapsed, rootClass }) => {
-      const context = await createContext();
-      await context.addInitScript(
-        ({ hostClass, settingsKey, startCollapsed }) => {
-          localStorage.setItem(settingsKey, JSON.stringify({ navCollapsed: startCollapsed }));
-          const stamp = () =>
-            document.documentElement.classList.add("openclaw-native-macos", hostClass);
-          if (document.documentElement) {
-            stamp();
-          } else {
-            document.addEventListener("DOMContentLoaded", stamp);
-          }
-        },
-        {
-          hostClass: rootClass,
-          settingsKey: controlUiBundledSettingsStorageKey(server.baseUrl),
-          startCollapsed: collapsed,
-        },
-      );
-      const page = await context.newPage();
-      await installMockGateway(page, {
-        featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
-        operatorScopes: LIMITED_SCOPES,
-      });
-
-      await page.goto(`${server.baseUrl}chat`);
-      const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
-      await guidance.waitFor();
-      if (collapsed) {
-        await expect
-          .poll(() => page.locator(".shell").getAttribute("class"))
-          .toContain("shell--nav-collapsed");
-      }
-      await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-
-      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
-      await scopeUpgradeCallout.waitFor();
-      await waitForLayoutSettled(page, ".content, openclaw-device-scope-upgrade-banner .callout");
-      const calloutInsetDelta = await page.evaluate(() => {
-        const content = document.querySelector<HTMLElement>(".content");
-        const callout = document.querySelector<HTMLElement>(
-          "openclaw-device-scope-upgrade-banner .callout",
-        );
-        if (!content || !callout) {
-          throw new Error("Missing content or scope-upgrade callout after layout settled");
-        }
-        return (
-          callout.getBoundingClientRect().x -
-          content.getBoundingClientRect().x -
-          Number.parseFloat(getComputedStyle(content).paddingLeft)
-        );
-      });
-      expect(calloutInsetDelta).toBe(0);
-    },
-  );
-
-  it("does not misreport limited Custodian access as an outdated Gateway", async () => {
+  it("keeps Inbox reachable at the bottom left during onboarding", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", ...SCOPE_UPGRADE_METHODS],
       operatorScopes: LIMITED_SCOPES,
     });
-
-    await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
-    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.goto(`${server.baseUrl}custodian?onboarding=1`);
 
     expect(
       await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
     ).toBe(0);
-    expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-    await captureProof(page, "custodian-limited.png");
-  });
-
-  it("keeps manual repair guidance when the banner module fails to load", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    let bannerModuleRejected = false;
-    const rejectBannerModule = async (route: Route) => {
-      // A network abort intentionally starts whole-document stale-chunk recovery,
-      // which is a different contract and can reload while this test tears down.
-      // Fail module evaluation instead so only the optional-banner fallback owns it.
-      await route.fulfill({
-        body: 'throw new Error("device scope banner module failed to evaluate");',
-        contentType: "application/javascript",
-        status: 200,
-      });
-      bannerModuleRejected = true;
-    };
-    await page.route(BANNER_MODULE_ROUTE, rejectBannerModule);
-    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
-
-    try {
-      const navigation = page.goto(`${server.baseUrl}chat`);
-      await expect.poll(() => bannerModuleRejected).toBe(true);
-      await navigation;
-      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
-
-      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
-    } finally {
-      // A failed dynamic import can be retried by a later shell render. Remove
-      // the route before closing so teardown cannot race a fresh intercepted request.
-      await page.unroute(BANNER_MODULE_ROUTE, rejectBannerModule);
-      await page.close({ runBeforeUnload: false });
-    }
+    const inbox = page.locator(".sidebar-attention--floating .sidebar-issues-button");
+    await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).waitFor();
+    await captureProof(page, "onboarding-inbox-limited-access.png");
   });
 
   it("offers the admin upgrade without crypto.subtle", async () => {
@@ -448,11 +435,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         "device.scopes.requestUpgrade": { requestId: "upgrade-insecure" },
       },
     });
-
     await page.goto(`${server.baseUrl}chat`);
-    // Pure-JS Ed25519 signs the device connect on insecure contexts, so the
-    // explicit upgrade path stays available instead of manual-only guidance.
-    await page.getByRole("button", { name: "Request admin" }).waitFor();
+
+    // Pure-JS Ed25519 keeps signed scope-upgrade requests available when
+    // WebCrypto lacks subtle crypto (for example, an insecure LAN origin).
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).waitFor();
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
   });
 
@@ -460,8 +448,6 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     const context = await createContext();
     const page = await context.newPage();
     await page.addInitScript(() => {
-      // Without a WebCrypto RNG the identity mint fails and the client
-      // degrades to a device-less connect that cannot sign upgrade requests.
       Object.defineProperty(globalThis.crypto, "subtle", {
         configurable: true,
         value: undefined,
@@ -472,26 +458,29 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       });
     });
     const gateway = await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
-
     await page.goto(`${server.baseUrl}chat`);
-    await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
 
-    expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+    // Without a secure RNG the client cannot mint the device identity that
+    // binds an upgrade request, so Inbox must keep manual repair guidance.
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item
+      .locator(".sidebar-issues-panel__body")
+      .getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true })
+      .waitFor();
+    expect(await item.getByRole("button", { name: "Request admin" }).count()).toBe(0);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
   });
 
-  it("never shows the upgrade banner or files a request for admin connections", async () => {
+  it("never adds a limited-access Inbox item for admin connections", async () => {
     const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, { operatorScopes: FULL_SCOPES });
     await page.goto(`${server.baseUrl}chat`);
     await page.locator("openclaw-app-shell").waitFor();
 
-    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
-      0,
-    );
+    expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+    expect(await page.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
     expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
-    await captureProof(page, "admin.png");
   });
 });

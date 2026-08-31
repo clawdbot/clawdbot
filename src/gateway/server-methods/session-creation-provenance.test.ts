@@ -24,7 +24,7 @@ describe("agent run session creation provenance", () => {
 
     expect(resolveWithIngress(localUserIngress, "profile-ada")).toEqual({
       via: "run",
-      actor: { type: "human", id: "profile-ada" },
+      actor: { type: "human", source: "profile", id: "profile-ada" },
     });
     expect(localUserIngress.facts.invoker).toEqual({
       state: "present",
@@ -43,7 +43,7 @@ describe("agent run session creation provenance", () => {
 
     expect(resolveWithIngress(localUserIngress, "profile-after-merge")).toEqual({
       via: "run",
-      actor: { type: "human", id: "profile-after-merge" },
+      actor: { type: "human", source: "profile", id: "profile-after-merge" },
     });
     expect(localUserIngress.facts.invoker).toMatchObject({
       state: "present",
@@ -156,7 +156,7 @@ describe("agent run session creation provenance", () => {
     expect(invoker.displayLabel?.length).toBeLessThanOrEqual(128);
     expect(resolveWithIngress(localUserIngress, "profile-redacted")).toEqual({
       via: "run",
-      actor: { type: "human", id: "profile-redacted" },
+      actor: { type: "human", source: "profile", id: "profile-redacted" },
     });
   });
 });

@@ -69,6 +69,7 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
+  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   qaTransportSupportsModuleFlows,
   type QaTransportId,
@@ -1028,6 +1029,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     return undefined;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
+  // Only isolated live adapters may share the host budget; keep disposable
+  // servers bounded even when a caller requests a larger suite concurrency.
+  const liveConcurrencyLimit =
+    liveAdapterFactory?.isolatesInstances === true
+      ? defaultQaSuiteConcurrencyForTransport(transportId)
+      : undefined;
   const runtimeResult = await runQaSuite({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
@@ -1061,64 +1068,46 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
     ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(liveChannelId
-      ? { concurrency: 1 }
+      ? {
+          concurrency:
+            liveConcurrencyLimit === undefined
+              ? 1
+              : Math.min(
+                  liveConcurrencyLimit,
+                  parseQaPositiveIntegerOption("--concurrency", opts.concurrency) ??
+                    liveConcurrencyLimit,
+                ),
+        }
       : opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
     ...(runtimePair ? { runtimePair } : {}),
   });
-  switch (runtimeResult.executionKind) {
-    case "suite": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
-    case "flow": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
+  const result = runtimeResult.result;
+  if (runtimeResult.executionKind === "flow") {
+    process.stdout.write(`QA suite watch: ${runtimeResult.result.watchUrl}\n`);
   }
-  return undefined;
+  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+  process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    {
+      optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+        scenarioIds,
+        explicitScenarioSelection: opts.explicitScenarioSelection,
+      }),
+      requireExecutedScenario: allowFailures,
+    },
+  );
+  if (!allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
+  }
+  return {
+    ...result,
+    expectedCells: runtimeResult.expectedCells,
+    observedCells: runtimeResult.observedCells,
+  };
 }
 
 export async function runQaParityReportCommand(opts: {

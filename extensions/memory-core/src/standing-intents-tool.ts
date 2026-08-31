@@ -148,7 +148,7 @@ export function createStandingIntentTool(options: {
   return {
     label: "Standing Intent",
     name: "intent",
-    description: `Create, list, or explicitly cancel event-conditioned standing intents. Creating an intent arms it immediately. ${STANDING_INTENT_AUTOMATION_GUIDANCE} ${STANDING_INTENT_SCOPE_GUIDANCE} Use cron or scheduled tasks for time-based reminders; use this tool only for events expressed by trigger keywords.`,
+    description: `Create, list, or explicitly cancel event-conditioned standing intents. Creating an intent arms it immediately. ${STANDING_INTENT_AUTOMATION_GUIDANCE} ${STANDING_INTENT_SCOPE_GUIDANCE} Use scheduled tasks for time-based reminders; use this tool only for events expressed by trigger keywords.`,
     parameters: {
       type: "object",
       properties: {

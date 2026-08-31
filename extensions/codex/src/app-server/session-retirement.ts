@@ -1,3 +1,7 @@
+import type {
+  AgentHarnessSessionDeletionMutation,
+  AgentHarnessSessionDeletionParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -5,14 +9,134 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  hasCodexAppServerLiveThread,
+  isCodexAppServerLiveThreadClaimed,
+  releaseCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
+  CodexAppServerThreadBinding,
   CodexSessionGenerationRetirementResult,
 } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
+import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
+
+async function releaseSessionSubscription(
+  client: NonNullable<ReturnType<typeof retainSharedCodexAppServerClientByInstanceId>>["client"],
+  binding: CodexAppServerThreadBinding,
+  sessionKey: string | undefined,
+  assertCurrent?: () => void,
+): Promise<void> {
+  assertCurrent?.();
+  // End child ownership before the parent subscription, so late completions
+  // cannot deliver into a replacement OpenClaw session generation.
+  codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  const released = await releaseCodexAppServerLiveThread(client, binding.threadId, assertCurrent);
+  assertCurrent?.();
+  if (!released && isIncognitoSessionKey(sessionKey)) {
+    const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
+      threadId: binding.threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent,
+    });
+    assertCurrent?.();
+    if (!unsubscribed) {
+      await closeCodexStartupClientBestEffort(client);
+      throw new CodexAppServerUnsafeSubscriptionError(
+        `Codex retired session subscription could not be released: ${binding.threadId}`,
+      );
+    }
+  }
+}
+
+/** Prepare exact binding deletion before the session owner commits either database. */
+export async function withCodexAppServerSessionDeletion<T>(
+  bindingStore: CodexAppServerBindingStore,
+  params: AgentHarnessSessionDeletionParams,
+  run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+): Promise<T> {
+  const { assertCurrent } = params;
+  const identity = {
+    kind: "session" as const,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  };
+  return await bindingStore.withSessionDeletion(
+    identity,
+    assertCurrent,
+    async (binding, mutation) => {
+      assertCurrent();
+      if (binding?.connectionScope === "supervision") {
+        throw new Error("Cannot delete a session while its Codex binding is owned by supervision");
+      }
+      const clientLease = binding?.clientId
+        ? retainSharedCodexAppServerClientByInstanceId(binding.clientId)
+        : undefined;
+      const assertUnclaimed = () => {
+        assertCurrent();
+        if (
+          clientLease &&
+          binding &&
+          isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId)
+        ) {
+          throw new Error(
+            "Cannot delete a session while its Codex thread is claimed by active work",
+          );
+        }
+      };
+      let committed = false;
+      try {
+        assertUnclaimed();
+        return await run({
+          commit() {
+            assertUnclaimed();
+            mutation.commit();
+            committed = true;
+          },
+          rollback() {
+            mutation.rollback();
+            committed = false;
+          },
+        });
+      } finally {
+        try {
+          // An artifact publication failure after COMMIT still ends this subscription;
+          // only the session owner's transaction rollback may restore the binding.
+          if (committed && binding && clientLease) {
+            await withCodexAppServerThreadMutation(binding.threadId, async () => {
+              assertCurrent();
+              // Most expired bindings no longer have a live subscription. Only
+              // live threads need the persisted-owner check (idle retention is bounded).
+              if (
+                !hasCodexAppServerLiveThread(clientLease.client, binding.threadId) &&
+                !isIncognitoSessionKey(params.sessionKey)
+              ) {
+                return;
+              }
+              // The deleted row is absent now. Any surviving owner, including a
+              // successor at the same key, keeps its connection-scoped subscription.
+              if (await bindingStore.hasOtherThreadOwner(binding.threadId)) {
+                return;
+              }
+              await releaseSessionSubscription(
+                clientLease.client,
+                binding,
+                params.sessionKey,
+                assertUnclaimed,
+              );
+            });
+          }
+        } finally {
+          clientLease?.release();
+        }
+      }
+    },
+  );
+}
 
 /** Retire binding and native subscription under the same generation/physical-client ownership fence. */
 export async function retireCodexAppServerSessionGeneration(params: {
@@ -47,24 +171,7 @@ export async function retireCodexAppServerSessionGeneration(params: {
       return result;
     }
     try {
-      // Reset retires native-child ownership before unsubscribing its parent;
-      // late child completions must never reach a replacement session generation.
-      codexNativeSubagentMonitorRuntime.retireParent(clientLease.client, binding.threadId);
-      const released = await releaseCodexAppServerLiveThread(clientLease.client, binding.threadId);
-      if (!released && isIncognitoSessionKey(params.identity.sessionKey)) {
-        // Ephemeral threads have no rollout to resume, so they intentionally
-        // bypass idle eviction but still end with their owning OpenClaw session.
-        const unsubscribed = await unsubscribeCodexThreadBestEffort(clientLease.client, {
-          threadId: binding.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        if (!unsubscribed) {
-          await closeCodexStartupClientBestEffort(clientLease.client);
-          throw new CodexAppServerUnsafeSubscriptionError(
-            `Codex retired session subscription could not be released: ${binding.threadId}`,
-          );
-        }
-      }
+      await releaseSessionSubscription(clientLease.client, binding, params.identity.sessionKey);
     } finally {
       clientLease.release();
     }

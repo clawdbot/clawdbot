@@ -21,10 +21,6 @@ import {
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
-import {
-  listConfiguredExternalCliProfileMetadataIds,
-  normalizeExternalCliProfileMetadata,
-} from "../../agents/auth-profiles/external-cli-profile-metadata.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
   isNonSecretApiKeyMarker,
@@ -51,7 +47,6 @@ import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
-import { suppressSyntheticAliasRowsCoveredByExternalCli } from "./models-auth-status-projection.js";
 import {
   clearModelAuthStatusUsageCache,
   type ProviderUsageStatus,
@@ -380,11 +375,9 @@ function resolveConfiguredProviders(
 ): {
   providers: string[];
   expectsOAuth: Set<string>;
-  directModelAuthProviders: Set<string>;
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
-  const directModelAuthProviders = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     const normalized = normalizeProviderId(id);
     if (!normalized) {
@@ -399,7 +392,6 @@ function resolveConfiguredProviders(
     if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
-    directModelAuthProviders.add(normalized);
     if (apiKeys.has(normalized)) {
       continue;
     }
@@ -431,44 +423,7 @@ function resolveConfiguredProviders(
       expectsOAuth.add(normalized);
     }
   }
-  return { providers: Array.from(out), expectsOAuth, directModelAuthProviders };
-}
-
-function resolveLegacyExternalCliAliasProfileIds(
-  cfg: OpenClawConfig,
-  directModelAuthProviders: ReadonlySet<string>,
-): Map<string, string> {
-  const profiles = cfg.auth?.profiles;
-  const aliases = new Map<string, string>();
-  for (const profileId of listConfiguredExternalCliProfileMetadataIds(profiles)) {
-    const profile = profiles?.[profileId];
-    const canonical = normalizeExternalCliProfileMetadata(profileId, profile);
-    if (!profile || !canonical) {
-      continue;
-    }
-    const provider = normalizeProviderId(profile.provider);
-    const hasIndependentAuthProfile = Object.entries(profiles ?? {}).some(
-      ([otherProfileId, otherProfile]) =>
-        otherProfileId !== profileId &&
-        normalizeProviderId(otherProfile?.provider) === provider &&
-        (otherProfile?.mode === "oauth" || otherProfile?.mode === "token"),
-    );
-    const hasIndependentAuthOrder = Object.entries(cfg.auth?.order ?? {}).some(
-      ([orderProvider, orderedProfileIds]) =>
-        normalizeProviderId(orderProvider) === provider &&
-        orderedProfileIds.some((orderedProfileId) => orderedProfileId !== profileId),
-    );
-    if (
-      provider &&
-      provider !== canonical.provider &&
-      !directModelAuthProviders.has(provider) &&
-      !hasIndependentAuthProfile &&
-      !hasIndependentAuthOrder
-    ) {
-      aliases.set(provider, profileId);
-    }
-  }
-  return aliases;
+  return { providers: Array.from(out), expectsOAuth };
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
@@ -607,7 +562,19 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           })
         : await readPreparedCatalog(context, scope.agentId);
       if (!preparedSnapshot) {
-        throw new Error(`prepared model auth owner is unavailable (${scope.agentId})`);
+        // A lifecycle replacement may temporarily withdraw this owner. Status must not
+        // rediscover credentials or turn missing preparation into a connection failure.
+        const result: ModelAuthStatusResult = {
+          ts: now,
+          providers: [],
+          unavailable: {
+            code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+            message:
+              "Model authentication status is unavailable. Refresh Models after setup finishes; restart the Gateway if it persists.",
+          },
+        };
+        respond(true, result, undefined);
+        return;
       }
       cfg = preparedSnapshot.config;
       const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
@@ -686,24 +653,16 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
-      const legacyExternalCliAliasProfileIds = resolveLegacyExternalCliAliasProfileIds(
-        cfg,
-        configured.directModelAuthProviders,
-      );
-      const providers = suppressSyntheticAliasRowsCoveredByExternalCli(
-        authHealth.providers.map((prov) =>
-          mapProvider(
-            prov,
-            usageByProvider,
-            configured.expectsOAuth,
-            apiKeys,
-            logoutProfileIds,
-            configBoundProfileIds,
-            externalCliProfileIds,
-          ),
+      const providers = authHealth.providers.map((prov) =>
+        mapProvider(
+          prov,
+          usageByProvider,
+          configured.expectsOAuth,
+          apiKeys,
+          logoutProfileIds,
+          configBoundProfileIds,
+          externalCliProfileIds,
         ),
-        externalCliProfileIds,
-        legacyExternalCliAliasProfileIds,
       );
       const providerCapabilities = buildProviderCapabilities({
         config: cfg,

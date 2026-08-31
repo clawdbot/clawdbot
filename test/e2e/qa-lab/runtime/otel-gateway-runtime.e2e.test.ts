@@ -4,10 +4,14 @@ import { describe, expect, test } from "vitest";
 import {
   createQaBusState,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
+
+const CODE_MODE_RECONCILIATION_NEEDLE =
+  "The previous Code Mode mutation may have partially applied.";
 
 async function startOtlpReceiver(disallowedBodyNeedles: string[] = []) {
   const receiver = startLocalOtlpReceiver(disallowedBodyNeedles);
@@ -38,7 +42,7 @@ async function waitFor<T>(
     }
     await sleep(100);
   }
-  const context = timeoutContext?.();
+  const context = await timeoutContext?.();
   throw new Error(
     `timed out waiting for QA runtime evidence${
       context === undefined ? "" : `: ${JSON.stringify(context)}`
@@ -61,7 +65,7 @@ function expectResolvedParent(
 }
 
 describe("diagnostics-otel gateway runtime", () => {
-  test("exports linked success and failed-tool recovery spans from a real qa-channel run", async () => {
+  test("exports linked success and failed-read recovery spans from a real qa-channel run", async () => {
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const state = createQaBusState();
     const transport = {
@@ -89,14 +93,14 @@ describe("diagnostics-otel gateway runtime", () => {
     let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
     let receiver: Awaited<ReturnType<typeof startOtlpReceiver>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+    const gatewayOwner = createQaGatewayChild();
 
     try {
       bus = await startQaBusServer({ state });
       const activeReceiver = await startOtlpReceiver(["qa-plugin-usage-secret-sentinel"]);
       receiver = activeReceiver;
       mock = await startQaMockOpenAiServer();
-      gateway = await startQaGatewayChild({
+      const gateway = await gatewayOwner.start({
         repoRoot,
         useRepoCli: true,
         providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -148,16 +152,62 @@ describe("diagnostics-otel gateway runtime", () => {
           senderName: "QA User",
           text,
         });
-        return await waitFor(() =>
-          state
-            .getSnapshot()
-            .messages.slice(cursor)
-            .find(
-              (message) =>
-                message.direction === "outbound" &&
-                message.conversation.id === targetConversation.id &&
-                message.text.includes(expectedText),
-            ),
+        return await waitFor(
+          () =>
+            state
+              .getSnapshot()
+              .messages.slice(cursor)
+              .find(
+                (message) =>
+                  message.direction === "outbound" &&
+                  message.conversation.id === targetConversation.id &&
+                  message.text.includes(expectedText),
+              ),
+          30_000,
+          async () => {
+            let requests: unknown;
+            try {
+              const response = await fetch(`${mock!.baseUrl}/debug/requests`, {
+                signal: AbortSignal.timeout(2_000),
+              });
+              const captured = (await response.json()) as Array<Record<string, unknown>>;
+              requests = captured.slice(-8).map((request) => ({
+                cursor: request.cursor,
+                requestKind: request.requestKind,
+                outcome: request.outcome,
+                errorCode: request.errorCode,
+                plannedToolName: request.plannedToolName,
+                plannedWireToolName: request.plannedWireToolName,
+                toolOutputCallId: request.toolOutputCallId,
+                toolOutputStructuredError: request.toolOutputStructuredError,
+                toolOutputLength:
+                  typeof request.toolOutput === "string" ? request.toolOutput.length : undefined,
+                reconciliation: String(request.allInputText ?? "").includes(
+                  CODE_MODE_RECONCILIATION_NEEDLE,
+                ),
+              }));
+            } catch {
+              requests = { unavailable: true };
+            }
+            return {
+              expectedText,
+              targetConversation,
+              messages: state
+                .getSnapshot()
+                .messages.slice(cursor)
+                .slice(-8)
+                .map((message) => ({
+                  id: message.id,
+                  direction: message.direction,
+                  conversation: message.conversation,
+                  isError: message.isError,
+                  deleted: message.deleted,
+                  text: message.text.slice(0, 2_000),
+                })),
+              requests,
+              gatewayLogs: gateway.logs().slice(-12_000),
+            };
+          },
         );
       };
 
@@ -183,41 +233,33 @@ describe("diagnostics-otel gateway runtime", () => {
         `${mock.baseUrl}/debug/requests?after=${requestCursor.cursor}`,
       ).then((response) => response.json())) as Array<{
         allInputText?: string;
-        body?: { input?: Array<Record<string, unknown>>; tools?: unknown[] };
+        body?: { input?: Array<Record<string, unknown>>; tools?: Array<{ name?: string }> };
+        plannedToolCallId?: string;
         plannedToolName?: string;
         plannedWireToolName?: string;
         toolOutputCallId?: string;
+        toolOutput?: string;
       }>;
       const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
-      const finalizations = scenarioRequests.filter((request) =>
-        (request.allInputText ?? "").includes(
-          "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
-        ),
-      );
       expect(readPlans).toHaveLength(1);
+      expect(readPlans[0]?.plannedToolCallId).toBeTruthy();
       expect(readPlans[0]?.plannedWireToolName).toBe("exec");
-      expect(finalizations).toHaveLength(1);
-      expect(finalizations[0]?.body?.tools ?? []).toHaveLength(0);
-      expect(finalizations[0]?.allInputText).toContain(
-        "state that failure plainly and do not claim it succeeded",
+      expect(scenarioRequests).toHaveLength(2);
+      const continuation = scenarioRequests[1]!;
+      expect(continuation.toolOutputCallId).toBe(readPlans[0]?.plannedToolCallId);
+      expect(continuation.toolOutput).toMatch(/ENOENT|no such file/i);
+      expect(continuation.allInputText).not.toContain(CODE_MODE_RECONCILIATION_NEEDLE);
+      expect(continuation.body?.tools?.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["exec", "wait"]),
       );
-      const finalizationInput = finalizations[0]?.body?.input ?? [];
-      const failedExecCalls = finalizationInput.filter(
-        (item) =>
-          item.type === "function_call" &&
-          item.name === "exec" &&
-          JSON.stringify(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
-      );
-      const failedExecOutputs = finalizationInput.filter(
-        (item) =>
-          item.type === "function_call_output" &&
-          item.call_id === failedExecCalls[0]?.call_id &&
-          /ENOENT|no such file/iu.test(JSON.stringify(item.output ?? "")),
-      );
-      expect(failedExecCalls).toHaveLength(1);
-      expect(failedExecOutputs).toHaveLength(1);
-      expect(finalizations[0]?.toolOutputCallId).toBe(failedExecCalls[0]?.call_id);
-
+      const continuationInput = continuation.body?.input ?? [];
+      for (const type of ["function_call", "function_call_output"]) {
+        expect(
+          continuationInput.filter(
+            (item) => item.type === type && item.call_id === readPlans[0]?.plannedToolCallId,
+          ),
+        ).toHaveLength(1);
+      }
       const failureEvidence = await waitFor(
         () => {
           const toolError = activeReceiver.capturedSpans.find(
@@ -244,24 +286,20 @@ describe("diagnostics-otel gateway runtime", () => {
               span.attributes["openclaw.channel"] === "qa-channel" &&
               span.attributes["openclaw.outcome"] === "completed",
           );
-          return runs.length >= 2 && harnesses.length >= 2 && modelCalls.length >= 2 && terminal
+          return runs.length >= 1 && harnesses.length >= 1 && modelCalls.length >= 2 && terminal
             ? { harnesses, modelCalls, runs, sameTrace, terminal, toolError }
             : undefined;
         },
         45_000,
         () => ({
-          requests: activeReceiver.capturedRequests,
-          spans: activeReceiver.capturedSpans.map((span) => ({
-            attributes: span.attributes,
-            name: span.name,
-            parentSpanId: span.parentSpanId,
-            spanId: span.spanId,
-            statusCode: span.statusCode,
-            traceId: span.traceId,
-          })),
+          requests: activeReceiver.capturedRequests.slice(-8),
+          traces: activeReceiver.recentTraceSummary(),
         }),
       );
 
+      expect(failureEvidence.runs).toHaveLength(1);
+      expect(failureEvidence.harnesses).toHaveLength(1);
+      expect(failureEvidence.modelCalls).toHaveLength(2);
       const failureSpansById = indexSpansById(failureEvidence.sameTrace);
       expect(failureEvidence.terminal.parentSpanId).toBeFalsy();
       for (const harness of failureEvidence.harnesses) {
@@ -395,7 +433,7 @@ describe("diagnostics-otel gateway runtime", () => {
     } finally {
       await settleCleanup(
         async () => {
-          await gateway?.stop();
+          await stopQaGatewayFixture(gatewayOwner);
         },
         async () => {
           await mock?.stop();
