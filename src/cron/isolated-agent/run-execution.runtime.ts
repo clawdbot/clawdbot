@@ -2,6 +2,7 @@
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 export {
   resolveEffectiveModelFallbacks,
+  resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";

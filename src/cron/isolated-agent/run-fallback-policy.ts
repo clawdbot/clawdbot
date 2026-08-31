@@ -7,6 +7,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
 import {
   resolveEffectiveModelFallbacks,
+  resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
 import { logWarn } from "./run.runtime.js";
@@ -46,6 +47,9 @@ export function resolveCronFallbacksOverride(params: {
     if (defaultFallbacks.length > 0) {
       return defaultFallbacks;
     }
+  }
+  if (!hasCronPayloadModelOverride) {
+    return resolveRunModelFallbacksOverride({ cfg: params.cfg, agentId: params.agentId });
   }
   return resolveEffectiveModelFallbacks({
     cfg: params.cfg,
