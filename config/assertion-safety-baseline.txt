@@ -3561,8 +3561,8 @@ src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/index.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-channel.ts	1
-src/plugins/runtime/runtime-llm-isolated.ts	4
-src/plugins/runtime/runtime-llm.runtime.ts	5
+src/plugins/runtime/runtime-llm-isolated.ts	3
+src/plugins/runtime/runtime-llm.runtime.ts	4
 src/plugins/runtime/runtime-plugin-boundary.ts	2
 src/plugins/runtime/runtime-taskflow.ts	1
 src/plugins/runtime/runtime-web-channel-plugin.ts	3
