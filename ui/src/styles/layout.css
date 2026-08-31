@@ -3300,11 +3300,20 @@ a:is(
   display: flex;
   align-items: center;
   min-width: 0;
+  max-width: 100%;
   gap: 5px;
 }
 
 .sidebar-brand .control-ui-environment-pill {
+  /* At the 240px sidebar minimum, keep the pill boundary inside the identity
+     column and truncate its label before the fixed header actions. */
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-agent-card__menu-unread {
