@@ -12,6 +12,7 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -29,6 +30,11 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import {
+  appendAssistantMirrorMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity,
+} from "../../plugin-sdk/session-transcript-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
@@ -43,6 +49,7 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
 import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -2072,6 +2079,214 @@ describe("projectChatDisplayMessages", () => {
     ]);
 
     expect(result).toHaveLength(2);
+  });
+
+  it("dedupes a channel-final mirror identified by its source assistant message id, even with thinking content", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "considering the greeting" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+        provider: "openai-completions",
+        model: "deepseek-v4-flash-free",
+        __openclaw: { id: "asst-turn-1" },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Hey! What's up?" }],
+        idempotencyKey: "channel-final:telegram-final:1:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:1",
+          sourceAssistantMessageId: "asst-turn-1",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        content: [
+          { type: "thinking", text: "considering the greeting" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+      }),
+    );
+  });
+
+  it("dedupes a channel-final mirror identified by its source assistant message id when the reply has commentary and final_answer phased text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking like caveman",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Actual final answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+        provider: "openai-completions",
+        model: "deepseek-v4-flash-free",
+        __openclaw: { id: "asst-turn-phased" },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Actual final answer" }],
+        idempotencyKey: "channel-final:telegram-final:phased:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:phased",
+          sourceAssistantMessageId: "asst-turn-phased",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+  });
+
+  it("keeps a channel-final mirror visible when its source assistant message id does not match the preceding reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      assistantHistoryMessage("Repeated reply", {
+        __openclaw: { id: "asst-turn-2" },
+        timestamp: 1,
+      }),
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:telegram-final:2:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:2",
+          sourceAssistantMessageId: "asst-turn-unrelated",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("dedupes only newly tagged channel-final mirrors when read through the real Gateway history reader, leaving a pre-upgrade fieldless mirror untouched (issue #121643)", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-history-mixed-era-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const scope = {
+      agentId: "main",
+      sessionId: "mixed-era-session",
+      sessionKey: "agent:main:mixed-era",
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+      // Pre-upgrade era: a reasoning reply followed by a fieldless mirror,
+      // written in the exact shape Telegram persisted before this fix, with
+      // no source-assistant correlation. This must keep showing two bubbles.
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "checking the old crontab" },
+            { type: "text", text: "All Amazon crons ran fine." },
+          ],
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "All Amazon crons ran fine." }],
+          idempotencyKey: "channel-final:telegram-final:old:1:0",
+          openclawDeliveryMirror: {
+            kind: "channel-final",
+            sourceMessageId: "telegram-final:old:1",
+          },
+        },
+      });
+
+      // Post-fix era: a reasoning reply followed by a mirror appended through
+      // the changed appendAssistantMirrorMessageByIdentity. This must collapse
+      // to one bubble.
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "greeting the user" },
+            { type: "text", text: "Hey! What's up?" },
+          ],
+        },
+      });
+      const mirror = await appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        deliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:new:1" },
+        idempotencyKey: "telegram-final:new:1",
+        text: "Hey! What's up?",
+      });
+      expect(mirror).toMatchObject({ ok: true, messageId: expect.any(String) });
+
+      const { messages: rawMessages } = await readRecentSessionMessagesWithStatsAsync(
+        {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+          storePath,
+        },
+        { maxMessages: 20 },
+      );
+      const displayed = projectRecentChatDisplayMessages(
+        rawMessages as Array<Record<string, unknown>>,
+        {
+          maxMessages: 20,
+        },
+      );
+
+      expect(
+        displayed.map((message) => ({
+          role: message.role,
+          provider: message.provider,
+          model: message.model,
+        })),
+      ).toEqual([
+        { role: "assistant", provider: undefined, model: undefined },
+        { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
+        { role: "assistant", provider: undefined, model: undefined },
+      ]);
+      expect(displayed[0]).toMatchObject({
+        content: [
+          { type: "thinking", text: "checking the old crontab" },
+          { type: "text", text: "All Amazon crons ran fine." },
+        ],
+      });
+      expect(displayed[2]).toMatchObject({
+        content: [
+          { type: "thinking", text: "greeting the user" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps channel-final mirrors after forwarded sessions_send messages", () => {

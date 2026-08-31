@@ -480,6 +480,84 @@ describe("session transcript runtime SDK", () => {
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
+  it("tags a keyed channel-final mirror with the id of the assistant reply it duplicates", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "identified-mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const reply = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "weighing the greeting" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+      },
+    });
+    if (!reply) {
+      throw new Error("expected the real assistant reply to append");
+    }
+
+    const mirror = await appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      deliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:1" },
+      idempotencyKey: "telegram-final:1",
+      text: "Hey! What's up?",
+    });
+    expect(mirror).toMatchObject({ ok: true, messageId: expect.any(String) });
+
+    const events = await readSessionTranscriptEvents(scope);
+    const mirrorEvent = events.find((event) => {
+      const message = (event as { message?: { openclawDeliveryMirror?: unknown } }).message;
+      return message?.openclawDeliveryMirror !== undefined;
+    }) as
+      | { message?: { openclawDeliveryMirror?: { sourceAssistantMessageId?: unknown } } }
+      | undefined;
+    expect(mirrorEvent?.message?.openclawDeliveryMirror?.sourceAssistantMessageId).toBe(
+      reply.messageId,
+    );
+  });
+
+  it("leaves a keyed channel-final mirror untagged when no equivalent reply immediately precedes it", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "unmatched-mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "a different reply" }],
+      },
+    });
+
+    const mirror = await appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      deliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:2" },
+      idempotencyKey: "telegram-final:2",
+      text: "Hey! What's up?",
+    });
+    expect(mirror).toMatchObject({ ok: true, messageId: expect.any(String) });
+
+    const events = await readSessionTranscriptEvents(scope);
+    const mirrorEvent = events.find((event) => {
+      const message = (event as { message?: { openclawDeliveryMirror?: unknown } }).message;
+      return message?.openclawDeliveryMirror !== undefined;
+    }) as
+      | { message?: { openclawDeliveryMirror?: { sourceAssistantMessageId?: unknown } } }
+      | undefined;
+    expect(mirrorEvent?.message?.openclawDeliveryMirror?.sourceAssistantMessageId).toBeUndefined();
+  });
+
   it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
     const scope = {
       agentId: "main",

@@ -316,24 +316,27 @@ export async function appendAssistantMirrorMessageByIdentity(
       sessionId: currentEntry.sessionId,
     };
     const target = await resolveSessionTranscriptRuntimeTarget(scope);
-    const latestEquivalentAssistantId =
-      !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
-        ? findLatestEquivalentAssistantMessageId(
-            selectVisibleTranscriptEvents(await locked.readEvents()),
-            message,
-            params.config,
-          )
-        : undefined;
-    if (latestEquivalentAssistantId) {
+    const latestEquivalentAssistantId = isDeliveryMirrorAssistantMessage(message)
+      ? findLatestEquivalentAssistantMessageId(
+          selectVisibleTranscriptEvents(await locked.readEvents()),
+          message,
+          params.config,
+        )
+      : undefined;
+    if (!params.idempotencyKey && latestEquivalentAssistantId) {
       return {
         ok: true,
         messageId: latestEquivalentAssistantId,
       };
     }
+    const messageToAppend = attachDeliveryMirrorSourceAssistantMessageId(
+      message,
+      latestEquivalentAssistantId,
+    );
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
       ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
-      message,
+      message: messageToAppend,
     });
     if (!appendResult) {
       return { ok: false, reason: "message skipped", code: "blocked" };
@@ -479,6 +482,47 @@ function createAssistantMirrorMessage(params: {
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
   };
+}
+
+// Not part of the public plugin-sdk delivery-mirror contract: only the
+// locked writer below may set this, from its own trusted lookup. Callers
+// never see or supply this field.
+type WriterOwnedChannelFinalMirror = {
+  kind: "channel-final";
+  sourceMessageId?: string;
+  sourceAssistantMessageId?: string;
+};
+
+/**
+ * Records the transcript entry id of the real assistant reply a "channel-final"
+ * mirror duplicates. Identified mirrors (idempotency-keyed appends) always add
+ * a new transcript row for audit purposes, so this only tags that row with the
+ * id of the reply it mirrors; it never rewrites the earlier, already-persisted
+ * message. Rebuilds the delivery-mirror object from only its known public
+ * fields plus this writer-computed id, so a caller cannot smuggle its own
+ * value into a field display projection trusts as authoritative.
+ */
+function attachDeliveryMirrorSourceAssistantMessageId(
+  message: SessionTranscriptAssistantMessage,
+  sourceAssistantMessageId: string | undefined,
+): SessionTranscriptAssistantMessage {
+  const deliveryMirror = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
+    .openclawDeliveryMirror;
+  if (deliveryMirror?.kind !== "channel-final") {
+    return message;
+  }
+  const trusted: WriterOwnedChannelFinalMirror = {
+    kind: "channel-final",
+    ...(deliveryMirror.sourceMessageId !== undefined
+      ? { sourceMessageId: deliveryMirror.sourceMessageId }
+      : {}),
+    ...(sourceAssistantMessageId !== undefined ? { sourceAssistantMessageId } : {}),
+  };
+  const updated: Record<string, unknown> = {
+    ...message,
+    openclawDeliveryMirror: trusted,
+  };
+  return updated as unknown as SessionTranscriptAssistantMessage;
 }
 
 function findLatestEquivalentAssistantMessageId(
