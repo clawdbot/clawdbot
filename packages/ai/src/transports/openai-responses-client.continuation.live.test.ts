@@ -94,13 +94,16 @@ async function run(
   context: Context,
   sessionId: string,
 ): Promise<AssistantMessage> {
+  // No onPayload store override: this test's whole point is proving that a
+  // compat-endpoint model with `compat.supportsResponsesContinuation: true`
+  // gets store:true from the *real* payload policy on its own -- forcing it
+  // here would make the test pass even with a broken/missing policy.
   const stream = await createOpenAIResponsesTransportStreamFn()(model, context, {
     apiKey: OPENAI_KEY,
     sessionId,
     transport: "sse",
     reasoningEffort: "low",
     maxTokens: 256,
-    onPayload: (payload: Record<string, unknown>) => ({ ...payload, store: true }),
   } as never);
   return stream.result();
 }
@@ -177,6 +180,14 @@ describeLive("OpenAI Responses HTTP continuation (real api.openai.com)", () => {
         // fallback (the recovery path for a rejected previous_response_id)
         // would show up as a third captured request here.
         expect(proxy.requests).toHaveLength(2);
+        // The actual thing this test proves: the real payload policy (not a
+        // test-forced override) derived store:true for this compat-endpoint
+        // model from its own resolution of `compat.supportsResponsesContinuation`.
+        // Continuation could not have engaged at all on turn 2 otherwise, but
+        // asserting it directly here makes the proof explicit rather than
+        // merely implied by the rest of the test passing.
+        expect(proxy.requests[0]?.store).toBe(true);
+        expect(proxy.requests[1]?.store).toBe(true);
         expect(proxy.requests[0]).not.toHaveProperty("previous_response_id");
         expect(proxy.requests[1]).toHaveProperty("previous_response_id");
         expect(typeof proxy.requests[1]?.previous_response_id).toBe("string");
