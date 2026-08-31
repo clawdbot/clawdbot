@@ -12,6 +12,10 @@ import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  registerChatAbortController,
+  type ChatAbortControllerEntry,
+} from "../gateway/chat-abort.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -20,11 +24,22 @@ import {
   getGatewayE2ePortBlock,
 } from "../gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
@@ -194,6 +209,156 @@ describe("gateway-hosted exec approvals", () => {
       );
 
       const outcome = await withTimeout(allowedOutcomePromise, 15_000, {
+        message: "timed out waiting for approved exec outcome",
+      });
+      expect(outcome.status).toBe("completed");
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.aggregated).toBe("smoke");
+    },
+    EXEC_APPROVAL_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps manager-owned detached approval work after its agent turn settles",
+    async () => {
+      const envSnapshot = captureEnv(TEST_ENV_KEYS);
+      cleanup.push(() => envSnapshot.restore());
+
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-approval-e2e-"));
+      cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
+
+      const stateDir = path.join(tempHome, ".openclaw");
+      const workspaceDir = path.join(tempHome, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      const port = await getGatewayE2ePortBlock();
+      const token = "exec-approval-e2e-token";
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(stateDir, { recursive: true });
+      const config = {
+        gateway: {
+          port,
+          auth: { mode: "token", token },
+        },
+        tools: {
+          exec: {
+            host: "gateway",
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      } satisfies OpenClawConfig;
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+      setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+      setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+      setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+      setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      clearSessionStoreCacheForTest();
+
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      cleanup.push(() => server.close());
+
+      const operator = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "approval operator",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [ADMIN_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(operator));
+
+      let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const outcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+        resolveOutcome = resolve;
+      });
+      const runId = "exec-approval-e2e";
+      const operationalRunInstance = createOperationalRunInstanceRef(runId);
+      const preparedAdmission = prepareAgentRunAdmission({
+        cfg: {},
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "test", state: "present" },
+        },
+        operationalRunInstance,
+      });
+      const admittedRunContext = await preparedAdmission.admit("embedded");
+      const authority = getAdmittedRunDelegatedAuthority(admittedRunContext)!;
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "session-exec-approval-e2e",
+        sessionKey: "agent:main:exec-approval-e2e",
+        timeoutMs: 60_000,
+        operationalRunInstance,
+      });
+      registration.bindAgentRunDelegatedAuthority(authority);
+      cleanup.push(() => {
+        registration.cleanup();
+        preparedAdmission.close();
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        cwd: workspaceDir,
+        approvalRunningNoticeMs: 0,
+        approvalFollowupMode: "direct",
+        approvalFollowup: ({ outcome }) => {
+          resolveOutcome(outcome);
+          return undefined;
+        },
+      });
+
+      const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext,
+        agentId: "main",
+        sessionKey: "agent:main:exec-approval-e2e",
+      });
+      const pending = await withGatewayToolCallerIdentity(callerIdentity, () =>
+        tool.execute(runId, {
+          command: "printf 'smoke\\n'",
+          workdir: workspaceDir,
+          timeoutSeconds: 5,
+        }),
+      );
+
+      expect(pending.details.status).toBe("approval-pending");
+      if (pending.details.status !== "approval-pending") {
+        throw new Error("expected approval-pending exec result");
+      }
+      registration.cleanup();
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+
+      await operator.request(
+        "exec.approval.resolve",
+        { id: pending.details.approvalId, decision: "allow-once" },
+        { timeoutMs: 10_000 },
+      );
+
+      const outcome = await withTimeout(outcomePromise, 15_000, {
         message: "timed out waiting for approved exec outcome",
       });
       expect(outcome.status).toBe("completed");
