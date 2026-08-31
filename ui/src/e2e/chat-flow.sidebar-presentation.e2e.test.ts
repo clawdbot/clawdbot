@@ -7,6 +7,7 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
@@ -46,6 +47,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
@@ -76,7 +80,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
       await expect
         .poll(async () =>
@@ -138,6 +142,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
     const running = chatSessionListResponse([
@@ -185,7 +192,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {
@@ -248,7 +255,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const recentRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
@@ -335,9 +342,18 @@ suite.define(() => {
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
+    const unreadKey = "agent:main:unread-session";
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
+          {
+            key: unreadKey,
+            kind: "direct",
+            label: "Movies and recommendations for the weekend",
+            icon: "🎬",
+            updatedAt: 3,
+            unread: true,
+          },
           {
             key: busyKey,
             kind: "direct",
@@ -356,6 +372,7 @@ suite.define(() => {
             },
             incognito: true,
             hasAutomation: true,
+            boardFace: "dashboard",
             status: "running",
             unread: true,
           },
@@ -382,20 +399,87 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      // Rotation expands the spinner element's square DOMRect even though its
-      // circular ink is unchanged; freeze it while asserting endcap geometry.
-      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, plainKey));
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
+      expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
+        await page.locator(".shell-nav").screenshot({
+          path: path.join(sessionSecondRowProofDir, "00-default-hidden-preview.png"),
         });
       }
+      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
+      expect(
+        await previewToggle.evaluate(
+          (item) => (item as HTMLElement & { checked: boolean }).checked,
+        ),
+      ).toBe(false);
+      await previewToggle.click();
+      await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
+      const sidebar = page.locator("openclaw-app-sidebar");
+      expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
+      expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
+      const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+      for (const colorScheme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const spinnerColors = await busyRow
+            .locator(".session-run-spinner")
+            .evaluate((element) => {
+              const style = getComputedStyle(element);
+              const accent = document.createElement("span").style;
+              accent.color = style.getPropertyValue("--accent").trim();
+              return { actual: style.borderTopColor, expected: accent.color };
+            });
+          expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
+        }
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        if (captureUiProofEnabled) {
+          await page.locator(".shell-nav").screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `indicators-${colorScheme}.png`),
+          });
+        }
+      }
+      const shellNav = page.locator(".shell-nav");
+      const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+      const badgeSizes = [];
+      for (const sidebarWidth of [258, 240]) {
+        if (sidebarWidth === 240) {
+          await sidebarResizer.focus();
+          await page.keyboard.press("Home");
+        }
+        await expect
+          .poll(async () => Math.round((await shellNav.boundingBox())?.width ?? 0))
+          .toBe(sidebarWidth);
+        await page.mouse.move(900, 400);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(sessionSecondRowProofDir, `01-second-row-endcap-${sidebarWidth}.png`),
+          });
+          await shellNav.screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `01-sidebar-${sidebarWidth}.png`),
+          });
+        }
+        badgeSizes.push(
+          await ordinaryBadge.evaluate((element) => {
+            const { height, width } = element.getBoundingClientRect();
+            return { height, width };
+          }),
+        );
+      }
 
+      // Rotation expands the spinner element's square DOMRect even though its
+      // circular ink is unchanged; freeze it while asserting endcap geometry.
+      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const layout = await busyRow.evaluate((row) => {
         const rect = (selector: string) => {
           const element = row.querySelector<HTMLElement>(selector);
@@ -454,7 +538,7 @@ suite.define(() => {
       expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
       expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
       expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms.length).toBeGreaterThanOrEqual(3);
+      expect(layout.atoms).toHaveLength(2);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -493,6 +577,35 @@ suite.define(() => {
       expect(intrinsicAtomWidth).toBeGreaterThan(0);
       expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
 
+      const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
+      const unreadDot = unreadRow.locator(".session-unread-dot");
+      const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
+      await unreadDot.waitFor({ state: "visible" });
+      const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      await unreadRow.hover();
+      if (captureUiProofEnabled) {
+        await shellNav.screenshot({
+          animations: "disabled",
+          path: path.join(sessionSecondRowProofDir, "03-unread-hover.png"),
+        });
+      }
+      await unreadDot.waitFor({ state: "hidden" });
+      const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      const actionReserve = await unreadRow.evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
+        ),
+      );
+      // Collapsing the unread track gives its width back to the title; merely
+      // making the dot transparent would still squeeze the text by the full reserve.
+      expect(restingWidth - hoverWidth).toBeLessThan(actionReserve);
+      await page.mouse.move(900, 400);
+      await unreadDot.waitFor({ state: "visible" });
+      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadDot.waitFor({ state: "hidden" });
+      await sidebarResizer.focus();
+      await unreadDot.waitFor({ state: "visible" });
+
       await busyRow.hover();
       await expect
         .poll(() =>
@@ -515,6 +628,9 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
+      for (const size of badgeSizes) {
+        expect(size).toEqual({ height: 12, width: 12 });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -546,7 +662,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const documentMarker = await page.evaluate(() => {
         const marker = crypto.randomUUID();
         (window as Window & { __openclawAvatarTestDocument?: string })[

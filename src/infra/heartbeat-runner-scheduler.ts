@@ -371,7 +371,20 @@ export function startHeartbeatRunner(opts: {
     if (agentOutcomes.some((outcome) => outcome.ran)) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    // Preserve per-agent guard results: wake-layer retry/retention keys off
+    // their reason, and the earliest guard deadline owns the next attempt.
+    const firstGuardSkip = agentOutcomes
+      .map((outcome) => outcome.result)
+      .filter((result) => result?.status === "skipped")
+      .filter((result) => result.retryAtMs !== undefined)
+      .toSorted((left, right) => (left.retryAtMs ?? Infinity) - (right.retryAtMs ?? Infinity))[0];
+    return (
+      firstGuardSkip ??
+      agentOutcomes.find((outcome) => outcome.result)?.result ?? {
+        status: "skipped",
+        reason: isInterval ? "not-due" : "disabled",
+      }
+    );
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>

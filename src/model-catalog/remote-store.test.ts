@@ -2,11 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   markRemoteModelCatalogChecked,
   readRemoteModelCatalog,
@@ -22,48 +19,26 @@ afterEach(() => {
 });
 
 describe("remote model catalog store", () => {
-  it("lazily adds the cache table to an existing current-schema database", () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
-    roots.push(root);
-    const options = { path: path.join(root, "state.sqlite") };
-    openOpenClawStateDatabase(options);
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const preCatalog = new DatabaseSync(options.path);
-    preCatalog.exec("DROP TABLE model_catalog_remote;");
-    preCatalog.exec("DROP INDEX idx_task_runs_status;");
-    preCatalog.close();
-
-    const reopened = openOpenClawStateDatabase(options);
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("model_catalog_remote"),
-    ).toBeUndefined();
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
-        .get("idx_task_runs_status"),
-    ).toEqual({ name: "idx_task_runs_status" });
-    closeOpenClawStateDatabaseForTest();
-
-    expect(readRemoteModelCatalog(options)).toBeUndefined();
-    const upgraded = new DatabaseSync(options.path, { readOnly: true });
-    expect(
-      upgraded
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("model_catalog_remote"),
-    ).toEqual({ name: "model_catalog_remote" });
-    upgraded.close();
-  });
-
-  it("lazily ensures twice and upserts the single slot", () => {
+  it("stores one machine-state snapshot and rejects stale refreshes", () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
     roots.push(root);
     const options = { path: path.join(root, "state.sqlite") };
     expect(readRemoteModelCatalog(options)).toBeUndefined();
-    expect(readRemoteModelCatalog(options)).toBeUndefined();
+    expect(
+      markRemoteModelCatalogChecked(
+        1,
+        {
+          expected: {
+            source_url: "https://catalog.test/one",
+            generated_at: 1,
+            etag: null,
+            last_modified: null,
+          },
+        },
+        options,
+      ),
+    ).toBe(false);
+    expect(readConfigMachineState("modelCatalog.remote", options)).toBeUndefined();
     writeRemoteModelCatalog(
       {
         bundle_json: '{"schemaVersion":1}',
@@ -124,7 +99,7 @@ describe("remote model catalog store", () => {
         {
           expected: {
             source_url: "https://catalog.test/two",
-            generated_at: 2,
+            generated_at: 3,
             etag: '"older"',
             last_modified: null,
           },
@@ -150,6 +125,15 @@ describe("remote model catalog store", () => {
       id: 1,
       generated_at: 3,
       source_url: "https://catalog.test/two",
+      checked_at: 6,
+    });
+    expect(readConfigMachineState("modelCatalog.remote", options)).toEqual({
+      bundle_json: '{"schemaVersion":1,"updated":true}',
+      generated_at: 3,
+      min_version: "2026.7.0",
+      source_url: "https://catalog.test/two",
+      etag: '"two"',
+      last_modified: null,
       checked_at: 6,
     });
   });

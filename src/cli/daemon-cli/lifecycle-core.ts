@@ -46,6 +46,7 @@ type DaemonLifecycleOptions = {
   force?: boolean;
   wait?: string;
   restartIntent?: GatewayRestartIntent;
+  preserveDefinition?: boolean;
   disable?: boolean;
 };
 
@@ -212,6 +213,7 @@ export async function runServiceStart(params: {
   expectedPort?: number;
 }) {
   const json = Boolean(params.opts?.json);
+  const serviceCommand = formatCliCommand(`openclaw ${params.serviceNoun.toLowerCase()}`);
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "start", json });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
   const loaded = await resolveServiceLoadedOrFail({
@@ -254,8 +256,7 @@ export async function runServiceStart(params: {
         return;
       }
     } catch (err) {
-      const hints = params.renderStartHints();
-      fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+      fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
       return;
     }
   }
@@ -284,9 +285,11 @@ export async function runServiceStart(params: {
     }
     if (startResult.outcome === "already-running") {
       if (startResult.issues.length > 0) {
+        // Only services with a repair callback can rebuild their definition during restart.
+        const repairAction = params.repairLoadedService ? "restart" : "install --force";
         const warning = `${params.serviceNoun} service already running, but its installed service definition needs repair: ${startResult.issues
           .map((issue) => issue.message)
-          .join("; ")}; run \`openclaw gateway restart\` to apply.`;
+          .join("; ")}; run \`${serviceCommand} ${repairAction}\` to apply.`;
         warnings.push(warning);
         if (!json) {
           defaultRuntime.log(warning);
@@ -330,15 +333,14 @@ export async function runServiceStart(params: {
           return;
         }
       } catch (err) {
-        const hints = params.renderStartHints();
-        fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
+        fail(`${params.serviceNoun} repair failed: ${String(err)}`, params.renderStartHints());
         return;
       }
       fail(
         `${params.serviceNoun} service needs repair before it can start: ${startResult.issues
           .map((issue) => issue.message)
           .join("; ")}`,
-        [formatCliCommand("openclaw gateway install --force")],
+        [`${serviceCommand} install --force`],
       );
       return;
     }
@@ -350,8 +352,7 @@ export async function runServiceStart(params: {
       warnings: warnings.length ? warnings : undefined,
     });
   } catch (err) {
-    const hints = params.renderStartHints();
-    fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+    fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }
 }
 
@@ -659,6 +660,7 @@ export async function runServiceRestart(params: {
       await prepareGatewayRestartIntent();
       try {
         restartResult = await params.service.restart({
+          preserveDefinition: params.opts?.preserveDefinition,
           env: process.env,
           stdout,
           warn,

@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -12,7 +13,8 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -171,7 +173,7 @@ function createGatewayCloseTestDeps(
       startMediaCleanup: vi.fn(),
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       worktreeCleanup: setInterval(() => undefined, 60_000),
-      skillCuratorCleanup: vi.fn(),
+      skillUsageCleanup: vi.fn(),
     },
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     agentUnsub: null,
@@ -326,6 +328,125 @@ describe("createGatewayCloseHandler", () => {
 
     expect(lifecycleSlot.size).toBe(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("rejects close when an ambient lifecycle owner cannot drain", async () => {
+    const drainError = new Error("owner drain failed");
+    let rejectDrain = true;
+    resolveGlobalSingleton(
+      Symbol("openclaw.test.gatewayCloseFailedLifecycleOwner"),
+      () => ({}),
+      () => {
+        if (rejectDrain) {
+          rejectDrain = false;
+          throw drainError;
+        }
+      },
+    );
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }),
+    );
+
+    await expect(close({ reason: "test" })).rejects.toThrow(
+      "Failed to reset global singleton lifecycle state",
+    );
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates supervised process trees before Gateway close returns",
+    async () => {
+      const previousServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+      process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      const supervisor = getProcessSupervisor();
+      let output = "";
+      let run: ManagedRun | undefined;
+
+      try {
+        run = await supervisor.spawn({
+          mode: "child",
+          argv: [
+            "/bin/sh",
+            "-c",
+            'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+          ],
+          stdinMode: "pipe-closed",
+          sessionId: "gateway-close-test",
+          backendId: "gateway-close-test",
+          onStdout: (chunk) => {
+            output += chunk;
+          },
+        });
+        await vi.waitFor(() => expect(output).toMatch(/^\d+ \d+/u));
+        const match = /^(\d+) (\d+)/u.exec(output);
+        const rootPid = Number(match?.[1]);
+        const descendantPid = Number(match?.[2]);
+        expect(isProcessAlive(rootPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+        await close({ reason: "test" });
+
+        expect(isProcessAlive(rootPid)).toBe(false);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+        expect(getProcessSupervisor()).not.toBe(supervisor);
+      } finally {
+        run?.cancel();
+        await run?.waitForExtinction?.().catch(() => undefined);
+        if (previousServiceMarker === undefined) {
+          delete process.env.OPENCLAW_SERVICE_MARKER;
+        } else {
+          process.env.OPENCLAW_SERVICE_MARKER = previousServiceMarker;
+        }
+      }
+    },
+  );
+
+  it("replaces the process supervisor after a concurrent adapter startup failure", async () => {
+    let markEmbeddingDrainStarted!: () => void;
+    const embeddingDrainStarted = new Promise<void>((resolve) => {
+      markEmbeddingDrainStarted = resolve;
+    });
+    let releaseEmbeddingDrain!: () => void;
+    const embeddingDrainReleased = new Promise<void>((resolve) => {
+      releaseEmbeddingDrain = resolve;
+    });
+    const supervisor = getProcessSupervisor();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        drainRetainedOpenAiEmbeddingProviders: async () => {
+          markEmbeddingDrainStarted();
+          await embeddingDrainReleased;
+        },
+      }),
+    );
+    const closing = close({ reason: "test" });
+    await embeddingDrainStarted;
+
+    const failedStart = supervisor.spawn({
+      mode: "child",
+      argv: [`/openclaw-missing-adapter-${process.pid}`],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-startup-failure",
+      backendId: "gateway-close-startup-failure",
+    });
+    releaseEmbeddingDrain();
+
+    await expect(failedStart).rejects.toThrow();
+    await closing;
+    const nextSupervisor = getProcessSupervisor();
+    const run = await nextSupervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", ""],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-fresh-supervisor",
+      backendId: "gateway-close-fresh-supervisor",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+    expect(nextSupervisor).not.toBe(supervisor);
   });
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {
@@ -835,6 +956,30 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("marks pending reply work after its chat run registration is gone", async () => {
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        getPendingReplyCount: () => 1,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [],
+        reason: "gateway restart shutdown",
+      }),
+    );
+  });
+
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -843,7 +988,7 @@ describe("createGatewayCloseHandler", () => {
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
     run.deltaSentAt = Date.now();
-    run.deltaLastBroadcastLen = 3;
+    run.assistantScope = { itemId: "assistant-1", prefix: "" };
     run.deltaLastBroadcastText = "par";
     run.agentText = {
       assistant: {
@@ -906,7 +1051,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
-    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.assistantScope).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
@@ -1196,12 +1341,6 @@ describe("createGatewayCloseHandler", () => {
     expect(events[0]).toBe("marker");
     const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
     expect(markerCall?.[0]?.reason).toBe("gateway restart shutdown");
-    expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
-      new Set(["agent:main:main", "agent:main:test:direct:source"]),
-    );
-    expect(markerCall?.[0]?.sessionIds).toStrictEqual(
-      new Set(["current-session-id-1", "session-id-2"]),
-    );
     expect(markerCall?.[0]?.activeRuns).toEqual([
       {
         runId: "run-1",
@@ -1340,7 +1479,7 @@ describe("createGatewayCloseHandler", () => {
     expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 
-  it("awaits terminal persistence before deciding restart recovery", async () => {
+  it("awaits terminal persistence before deferring restart recovery to its owner", async () => {
     const controller = new AbortController();
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
     const chatAbortControllers = new Map([
@@ -1374,7 +1513,11 @@ describe("createGatewayCloseHandler", () => {
       drainTimeoutMs: 0,
     });
 
-    expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [],
+      }),
+    );
     expect(controller.signal.aborted).toBe(true);
     expect(chatAbortControllers.size).toBe(0);
   });
@@ -1525,6 +1668,7 @@ describe("createGatewayCloseHandler", () => {
           controller,
           sessionId: "session-id-1",
           sessionKey: "agent:main:main",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
         },
@@ -2040,10 +2184,9 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "  upgrade  ", restartExpectedMs: Number.NaN });
 
-    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", {
-      reason: "upgrade",
-      restartExpectedMs: null,
-    });
+    // Non-restart shutdowns omit restartExpectedMs entirely: the schema declares
+    // an optional integer and clients key the restart presentation on presence.
+    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", { reason: "upgrade" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

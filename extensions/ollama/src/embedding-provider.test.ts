@@ -109,7 +109,7 @@ function mockBatchEmbeddingFetch(count: number) {
 async function embedTestQuery(overrides: Partial<EmbeddingProviderOptions> = {}, query = "hello") {
   const fetchMock = mockEmbeddingFetch([1, 0]);
   const { provider } = await createEmbeddingProvider(overrides);
-  await provider.embedQuery(query);
+  await provider.embed(query, { inputType: "query" });
   return { fetchMock, provider };
 }
 
@@ -161,7 +161,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider({ model: "unknown-embedder" });
 
-    const vector = await provider.embedQuery("hi");
+    const vector = await provider.embed("hi", { inputType: "query" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
@@ -177,10 +177,10 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider({
       model: "unknown-embedder",
-      outputDimensionality: 2,
+      dimensions: 2,
     });
 
-    const vector = await provider.embedQuery("hi");
+    const vector = await provider.embed("hi", { inputType: "query" });
 
     expect(vector).toHaveLength(2);
     expect(vector[0]).toBeCloseTo(0.6, 5);
@@ -439,7 +439,7 @@ describe("ollama embedding provider", () => {
 
     let error: unknown;
     try {
-      await provider.embedQuery("hello");
+      await provider.embed("hello", { inputType: "query" });
     } catch (err) {
       error = err;
     }
@@ -461,7 +461,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response: malformed JSON response",
     );
   });
@@ -478,7 +478,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response: JSON response exceeds 16777216 bytes",
     );
 
@@ -497,7 +497,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response contains a non-number embedding value",
     );
   });
@@ -642,7 +642,7 @@ describe("ollama embedding provider", () => {
       acquireLocalService,
     });
 
-    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(acquireLocalService).not.toHaveBeenCalled();
   });
@@ -873,10 +873,10 @@ describe("ollama embedding provider", () => {
   });
 
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
-    const defaultEndpoint = await createMemoryEmbeddingProvider({ outputDimensionality: 2 });
+    const defaultEndpoint = await createMemoryEmbeddingProvider({ dimensions: 2 });
     const customEndpoint = await createMemoryEmbeddingProvider({
       remote: { baseUrl: "http://10.0.0.5:11434" },
-      outputDimensionality: 2,
+      dimensions: 2,
     });
 
     expect(defaultEndpoint.runtime?.cacheKeyData).toEqual({
@@ -912,7 +912,7 @@ describe("ollama embedding provider", () => {
       model: "qwen3-embedding:4b",
     });
 
-    await result.provider!.embedQuery("hello");
+    await result.provider!.embed("hello", { inputType: "query" });
     expectEmbeddingFetch(fetchMock, "https://ollama-cpu.home.lab/api/embed", {
       model: "qwen3-embedding:4b",
       input:

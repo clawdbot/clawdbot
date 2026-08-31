@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type {
   BoardChangedEvent,
   BoardCommandEvent,
@@ -74,12 +75,19 @@ export class GatewayBoardProvider implements BoardProvider {
     if (this.disposed || (client !== this.client && this.retiredClients.has(client))) {
       return;
     }
+    const connectionChanged = connected !== this.connected;
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
     if (!connected) {
       this.wakeRetryDelay?.();
     }
     if (client === this.client) {
+      if (connectionChanged) {
+        this.clientGeneration += 1;
+        this.stateGeneration += 1;
+        this.appViews.clear();
+        this.publishAppViewGeneration();
+      }
       if (connectionActivated) {
         void this.activate();
       }
@@ -108,6 +116,10 @@ export class GatewayBoardProvider implements BoardProvider {
 
   get hasLoadedSnapshot(): boolean {
     return this.snapshotLoaded;
+  }
+
+  get appViewGeneration(): number {
+    return this.clientGeneration;
   }
 
   dispose(): void {
@@ -215,6 +227,9 @@ export class GatewayBoardProvider implements BoardProvider {
     revision: number,
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
+    if (this.disposed || !this.connected) {
+      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+    }
     const widget = this.snapshotSignal.value.widgets.find(
       (candidate) =>
         candidate.name === name &&
@@ -225,7 +240,8 @@ export class GatewayBoardProvider implements BoardProvider {
       return { status: "stale", error: "Dashboard MCP App widget unavailable" };
     }
     const client = this.client;
-    return await this.appViews.resolve(
+    const clientGeneration = this.clientGeneration;
+    const result = await this.appViews.resolve(
       widget,
       async () =>
         await client.request<BoardWidgetAppViewResult>("board.widget.appView", {
@@ -236,6 +252,15 @@ export class GatewayBoardProvider implements BoardProvider {
         }),
       force,
     );
+    if (
+      this.disposed ||
+      !this.connected ||
+      client !== this.client ||
+      clientGeneration !== this.clientGeneration
+    ) {
+      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+    }
+    return result;
   }
 
   private subscribe(client: BoardGatewayClient): void {
@@ -347,6 +372,17 @@ export class GatewayBoardProvider implements BoardProvider {
         this.setLoadError(formatUiError(error));
         for (const name of changedWidgets) {
           this.changedWidgets.add(name);
+        }
+        if (
+          error instanceof GatewayProtocolRequestError &&
+          error.gatewayCode === "UNAVAILABLE" &&
+          !error.retryable
+        ) {
+          // A definitive rejection consumes this refresh. Only a newer event,
+          // connection generation, or explicit refresh can request another one.
+          this.refreshRequested =
+            this.stateGeneration !== stateGeneration || this.userRefreshRequested;
+          continue;
         }
         if (!this.connected) {
           if (this.userRefreshRequested) {
@@ -467,6 +503,20 @@ export class GatewayBoardProvider implements BoardProvider {
   private setLoadError(error: string | null): void {
     if (this.loadErrorSignal.value !== error) {
       this.loadErrorSignal.set(error);
+    }
+  }
+
+  private publishAppViewGeneration(): void {
+    const snapshot = this.snapshotSignal.value;
+    if (snapshot.widgets.some((widget) => widget.contentKind === "mcp-app")) {
+      // Retained cells need a new widget identity to observe the connection
+      // generation and cancel pending loads or renewals from the retired socket.
+      this.snapshotSignal.set({
+        ...snapshot,
+        widgets: snapshot.widgets.map((widget) =>
+          widget.contentKind === "mcp-app" ? Object.assign({}, widget) : widget,
+        ),
+      });
     }
   }
 }

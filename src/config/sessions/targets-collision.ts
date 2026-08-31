@@ -63,9 +63,6 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
     path.resolve(pathname);
   for (const target of targets) {
-    const resolvedUnsuffixedPath = path.resolve(
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
-    );
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
@@ -81,6 +78,13 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
+    // Exact shared locators do not allocate legacy per-agent suffixes.
+    if (resolved.shared) {
+      continue;
+    }
+    const resolvedUnsuffixedPath = path.resolve(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
+    );
     const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({

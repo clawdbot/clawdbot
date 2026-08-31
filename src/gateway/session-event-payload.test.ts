@@ -12,14 +12,14 @@ it("projects session actors and explicitly clears absent attribution", () => {
         kind: "direct",
         updatedAt: 1,
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        participants: [{ type: "human", id: "profile-bob", label: "Bob" }],
+        participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
         participantCount: 1,
       },
     }),
   ).toMatchObject({
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
     archivedBy: null,
-    participants: [{ type: "human", id: "profile-bob", label: "Bob" }],
+    participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
     participantCount: 1,
   });
 
@@ -161,4 +161,70 @@ it("preserves active run id ownership across omitted, liveness, and exact states
     activeRunIds: ["run-1"],
     session: { hasActiveRun: true, activeRunIds: ["run-1"] },
   });
+});
+
+it.each(["user", "auto", null] as const)(
+  "carries model override source %s into session change events",
+  (source) => {
+    expect(
+      buildGatewaySessionEventFields({
+        sessionRow: {
+          key: "agent:main:pinned",
+          kind: "direct",
+          updatedAt: 1,
+          modelOverrideSource: source,
+        },
+      }).modelOverrideSource,
+    ).toBe(source);
+  },
+);
+
+it.each(["user", "auto", null] as const)(
+  "does not mix lifecycle snapshots with model source %s",
+  (modelOverrideSource) => {
+    const snapshot = buildGatewaySessionSnapshot({
+      sessionRow: {
+        key: "agent:main:pinned",
+        kind: "direct",
+        updatedAt: 1,
+        model: "model-a",
+        modelProvider: "provider",
+        modelOverrideSource,
+      },
+      lifecycle: true,
+      includeSession: true,
+    });
+    expect(snapshot.modelOverrideSource).toBeUndefined();
+    expect(snapshot.session).not.toHaveProperty("modelOverrideSource");
+  },
+);
+
+it.each([
+  { aborted: false, status: "done" },
+  { aborted: true, status: "killed" },
+])("keeps terminal $status ahead of retained active cleanup", ({ aborted, status }) => {
+  expect(
+    buildGatewaySessionSnapshot({
+      sessionRow: {
+        key: "agent:main:terminal",
+        sessionId: "terminal-session",
+        kind: "direct",
+        updatedAt: 100,
+        status: "running",
+        startedAt: 100,
+      },
+      includeSession: true,
+      lifecycle: true,
+      lifecycleRunId: "terminal-run",
+      activeRunState: { active: true, status: "queued" },
+      event: {
+        runId: "terminal-run",
+        sessionId: "terminal-session",
+        seq: 1,
+        ts: 200,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
+      },
+    }),
+  ).toMatchObject({ status, hasActiveRun: true, session: { status, hasActiveRun: true } });
 });

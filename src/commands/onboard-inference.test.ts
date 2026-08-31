@@ -486,13 +486,13 @@ describe("detectInferenceBackends", () => {
 
   it("checks login status with the Codex executable discovered in a macOS app", async () => {
     const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
-    const probed: Array<{ command: string; args: string[] }> = [];
+    const probed: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
     const candidates = await detectInferenceBackends({
       env: { HOME: "/Users/tester" },
       platform: "darwin",
       deps: {
-        probeLocalCommand: async (probedCommand, args = ["--version"]) => {
-          probed.push({ command: probedCommand, args });
+        probeLocalCommand: async (probedCommand, args = ["--version"], opts = {}) => {
+          probed.push({ command: probedCommand, args, timeoutMs: opts.timeoutMs });
           return {
             command: probedCommand,
             found: probedCommand === command,
@@ -504,7 +504,42 @@ describe("detectInferenceBackends", () => {
 
     expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
     expect(candidates[0]?.credentials).toBeUndefined();
-    expect(probed).toContainEqual({ command, args: ["login", "status"] });
+    expect(probed).toContainEqual({ command, args: ["--version"], timeoutMs: 3_000 });
+    expect(probed).toContainEqual({ command, args: ["login", "status"], timeoutMs: 3_000 });
+  });
+
+  it("allows a cold ChatGPT app probe more time than generic CLI discovery", async () => {
+    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const candidates = await detectInferenceBackends({
+      env: { HOME: "/Users/tester" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: async (probedCommand, args = ["--version"], opts = {}) => {
+          if (probedCommand !== command) {
+            return { command: probedCommand, found: false };
+          }
+          if (args[0] === "login") {
+            return { command: probedCommand, found: true, version: "Logged in using ChatGPT" };
+          }
+          return opts.timeoutMs === 3_000
+            ? { command: probedCommand, found: true, version: "codex-cli 0.149.0" }
+            : {
+                command: probedCommand,
+                found: true,
+                timedOut: true,
+                error: "timed out after 1500ms",
+              };
+        },
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "codex-cli",
+        credentials: true,
+        detail: "logged in · ChatGPT subscription",
+      },
+    ]);
   });
 
   it.each([

@@ -173,12 +173,11 @@ unrelated files elsewhere in an adopted repository are never staged.
 `src/state/secret-state-tables.ts` is the source of truth for redaction. At this revision, `--exclude-secrets` omits these shared-state tables:
 
 - `audit_identity_keys`
-- `auth_profile_state`
-- `auth_profile_stores`
 - `apns_registrations`
 - `channel_ingress_events`
 - `channel_pairing_requests`
 - `clawhub_promotion_claims`
+- `config_revision_keys`
 - `device_auth_tokens`
 - `device_bootstrap_tokens`
 - `device_identities`
@@ -188,11 +187,12 @@ unrelated files elsewhere in an adopted repository are never staged.
 - `mcp_oauth_pending_authorizations`
 - `mcp_oauth_stores`
 - `native_hook_relay_bridges`
-- `node_host_config`
 - `secret_store_entries`
 - `web_push_subscriptions`
-- `web_push_vapid_keys`
 - `worker_environment_credentials`
+
+It also omits `config_machine_state` rows whose keys begin with `authProfiles.`,
+`nodeHost.`, or `webPush.vapidKeys`, while retaining other machine-state rows.
 
 It omits these per-agent tables:
 
@@ -200,8 +200,10 @@ It omits these per-agent tables:
 - `auth_profile_store`
 - `session_suggestions`
 
-Restore reports the omitted tables so a redacted snapshot cannot be mistaken
-for a complete credential backup.
+The backup manifest records omitted tables in `excludedTables` and omitted
+machine-state prefixes in `excludedConfigStateKeyPrefixes`. Restore reports
+omitted tables and machine-state prefixes so a redacted snapshot cannot be
+mistaken for a complete credential backup.
 </Warning>
 
 Inspect or verify history without changing the live databases:
@@ -228,7 +230,7 @@ Provision one Gateway-owned automation with a fixed name:
 openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
-The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
+The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables and secret-prefixed machine-state rows by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
 
 ## Recorded runs and freshness
 

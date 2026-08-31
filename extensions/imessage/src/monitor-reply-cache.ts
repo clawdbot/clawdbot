@@ -1,5 +1,3 @@
-// Imessage plugin module implements monitor reply cache behavior.
-import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,15 +7,18 @@ import {
   type IMessageChatContext,
 } from "./chat-context.js";
 import { getIMessageRuntime } from "./runtime.js";
+import {
+  IMESSAGE_REPLY_CACHE_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_COUNTER_KEY,
+  IMESSAGE_REPLY_CACHE_TTL_MS,
+  resolveIMessageReplyCacheEntryKey,
+} from "./state-contract.js";
 
 export type { IMessageChatContext } from "./chat-context.js";
 
-export const IMESSAGE_REPLY_CACHE_NAMESPACE = "imessage.reply-cache";
-export const IMESSAGE_REPLY_CACHE_MAX_ENTRIES = 2000;
-export const IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE = "imessage.reply-cache-counter";
-export const IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES = 1;
-export const IMESSAGE_REPLY_CACHE_COUNTER_KEY = "short-id-counter";
-const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /** Recency window for the "react to the latest message" fallback. */
 const LATEST_FALLBACK_MS = 10 * 60 * 1000;
 let persistenceFailureLogged = false;
@@ -60,10 +61,6 @@ const imessageShortIdToUuid = new Map<string, string>();
 const imessageUuidToShortId = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
-export function resolveIMessageReplyCacheEntryKey(messageId: string): string {
-  return createHash("sha256").update(messageId, "utf8").digest("hex").slice(0, 32);
-}
-
 function openReplyCacheStore(): IMessageReplyCacheStore {
   return getIMessageRuntime().state.openSyncKeyedStore<IMessageReplyCacheEntry>({
     namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -79,7 +76,7 @@ function openReplyCacheCounterStore(): PluginStateSyncKeyedStore<IMessageReplyCa
 }
 
 function remainingTtlMs(timestamp: number): number | undefined {
-  const remaining = REPLY_CACHE_TTL_MS - Math.max(0, Date.now() - timestamp);
+  const remaining = IMESSAGE_REPLY_CACHE_TTL_MS - Math.max(0, Date.now() - timestamp);
   return remaining > 0 ? remaining : undefined;
 }
 
@@ -89,7 +86,7 @@ function hydrateFromStoreOnce(): void {
     return;
   }
   hydrated = true;
-  const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
+  const cutoff = Date.now() - IMESSAGE_REPLY_CACHE_TTL_MS;
   let entries: IMessageReplyCacheEntry[];
   try {
     const counter = openReplyCacheCounterStore().lookup(IMESSAGE_REPLY_CACHE_COUNTER_KEY);
@@ -198,7 +195,7 @@ export function rememberIMessageReplyCache(
   imessageReplyCacheByMessageId.delete(messageId);
   imessageReplyCacheByMessageId.set(messageId, fullEntry);
 
-  const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
+  const cutoff = Date.now() - IMESSAGE_REPLY_CACHE_TTL_MS;
   let evicted = false;
   const deletedMessageIds: string[] = [];
   for (const [key, value] of imessageReplyCacheByMessageId) {
@@ -446,7 +443,7 @@ export function resolveIMessageCachedResourceBinding(
   if (!entry) {
     return "unknown";
   }
-  if (Date.now() - entry.timestamp > REPLY_CACHE_TTL_MS) {
+  if (Date.now() - entry.timestamp > IMESSAGE_REPLY_CACHE_TTL_MS) {
     return "unknown";
   }
   if (entry.accountId !== ctx.accountId) {

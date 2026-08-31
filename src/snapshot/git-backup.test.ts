@@ -8,6 +8,7 @@ import { backupGitCreateCommand } from "../commands/backup-git.js";
 import { readBackupFreshness } from "../commands/backup-health.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -29,7 +30,15 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.executeGitCommand>
     ): ReturnType<typeof actual.executeGitCommand> => {
       if (args[1][0] === "push" && mocks.pushDiagnostic) {
-        return { code: 1, stdout: "", stderr: mocks.pushDiagnostic };
+        return {
+          code: 1,
+          stdout: "",
+          stderr: mocks.pushDiagnostic,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
+        };
       }
       return await actual.executeGitCommand(...args);
     },
@@ -682,6 +691,65 @@ describe("Git-backed SQLite snapshots", () => {
     } finally {
       restoredDatabase.close();
     }
+  });
+
+  it("redacts secret machine-state keys while retaining ordinary machine state", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const nodeSecret = "synthetic-node-host-gateway-secret";
+    const pushSecret = "synthetic-web-push-private-key";
+    writeConfigMachineState("nodeHost.config", { gateway: { token: nodeSecret } }, { env });
+    writeConfigMachineState("nodeHost.otherSecret", { token: nodeSecret }, { env });
+    writeConfigMachineState("webPush.vapidKeys", { privateKey: pushSecret }, { env });
+    const authSecret = "synthetic-shared-auth-profile-secret";
+    writeConfigMachineState("authProfiles.store", { profiles: { openai: authSecret } }, { env });
+    writeConfigMachineState("authProfiles.state", { active: authSecret }, { env });
+    writeConfigMachineState("sidebar.sectionOrder", ["first", "second"], { env });
+    closeOpenClawStateDatabaseForTest();
+
+    const outputPath = path.join(root, "dump");
+    const manifest = await dumpGitBackupDatabase({
+      snapshotPath: database.path,
+      outputPath,
+      identity: { role: "global" },
+      excludeSecrets: true,
+    });
+    const rows = await fs.readFile(
+      path.join(outputPath, "tables", "config_machine_state.jsonl"),
+      "utf8",
+    );
+    const manifestJson = await fs.readFile(path.join(outputPath, "manifest.json"), "utf8");
+
+    expect(manifest).toMatchObject({
+      excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
+      tables: { config_machine_state: { rows: 1 } },
+    });
+    expect(rows).toContain("sidebar.sectionOrder");
+    expect(rows).toContain("first");
+    expect(rows).not.toContain("nodeHost.");
+    expect(rows).not.toContain("webPush.vapidKeys");
+    expect(rows).not.toContain(nodeSecret);
+    expect(rows).not.toContain("authProfiles.");
+    expect(rows).not.toContain(authSecret);
+    expect(rows).not.toContain(pushSecret);
+    expect(manifestJson).not.toContain(nodeSecret);
+    expect(manifestJson).not.toContain(pushSecret);
+    expect(manifestJson).not.toContain(authSecret);
+
+    const restoredPath = path.join(root, "restored.sqlite");
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: outputPath,
+      targetPath: restoredPath,
+      expectedIdentity: { role: "global" },
+    });
+    // Restore must disclose the intentionally omitted machine-state prefixes so
+    // operators cannot mistake a redacted restore for a complete one.
+    expect(restored.excludedConfigStateKeyPrefixes).toEqual([
+      "authProfiles.",
+      "nodeHost.",
+      "webPush.vapidKeys",
+    ]);
   });
 
   it("rejects a restored global database without canonical ownership metadata", async () => {

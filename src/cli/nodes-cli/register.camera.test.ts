@@ -1,6 +1,8 @@
 // Node camera command tests cover help text and RPC handling for optional values.
+import fs from "node:fs/promises";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { writeCameraPayloadToFile } from "../nodes-camera.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
 import * as rpc from "./rpc.js";
 
@@ -119,6 +121,60 @@ describe("nodes camera snap CLI option forwarding", () => {
     const forwardedParams = firstInvokeParams.params as Record<string, unknown>;
     expect(forwardedParams.quality).toBe(0.7);
     expect(forwardedParams.delayMs).toBe(500);
+  });
+
+  it.each([
+    {
+      name: "malformed image data",
+      payload: { format: "jpg", base64: "not-base64!", width: 1, height: 1 },
+    },
+    {
+      name: "an unsafe image extension",
+      payload: { format: "../evil", base64: "aGk=", width: 1, height: 1 },
+    },
+  ])(
+    "does not publish the front camera when the back camera returns $name",
+    async ({ payload }) => {
+      vi.mocked(rpc.callNodesGatewayCli)
+        .mockResolvedValueOnce({
+          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+        })
+        .mockResolvedValueOnce({ payload });
+      const actualCamera =
+        await vi.importActual<typeof import("../nodes-camera.js")>("../nodes-camera.js");
+      const writer = vi.mocked(writeCameraPayloadToFile);
+      writer.mockImplementation(actualCamera.writeCameraPayloadToFile);
+      const rename = vi.spyOn(fs, "rename");
+
+      try {
+        await expect(
+          buildRootCommand().parseAsync(
+            cameraSnapArgs(["--node", "test-node", "--facing", "both"]),
+          ),
+        ).rejects.toThrow(/invalid base64|invalid media format/i);
+        expect(rename).not.toHaveBeenCalled();
+        expect(writer).not.toHaveBeenCalled();
+      } finally {
+        const publishedPaths = rename.mock.calls.map(([, destination]) => String(destination));
+        rename.mockRestore();
+        writer.mockImplementation(async () => {});
+        await Promise.all(
+          publishedPaths.map(async (filePath) => fs.unlink(filePath).catch(() => {})),
+        );
+      }
+    },
+  );
+
+  it("does not activate the back camera after the front returns an unsafe extension", async () => {
+    vi.mocked(rpc.callNodesGatewayCli).mockResolvedValueOnce({
+      payload: { format: "../evil", base64: "aGk=", width: 1, height: 1 },
+    });
+
+    await expect(
+      buildRootCommand().parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", "both"])),
+    ).rejects.toThrow(/invalid media format/i);
+    expect(rpc.callNodesGatewayCli).toHaveBeenCalledTimes(1);
+    expect(writeCameraPayloadToFile).not.toHaveBeenCalled();
   });
 
   it("rejects out-of-range --quality", async () => {

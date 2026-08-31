@@ -23,6 +23,7 @@ vi.mock("./ssh-client.js", () => ({
   resolveSshClient: mocks.resolveSshClient,
 }));
 
+import { getFreePort } from "../test-utils/ports.js";
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
@@ -260,10 +261,11 @@ describe("startSshPortForward", () => {
       // Under fake timers neither advances, so a listener that loses the race on the
       // first probe hangs to the suite timeout instead of failing on its own budget.
       spawnFakeSshListening();
+      const localPort = await getFreePort();
 
       const tunnel = await startSshPortForward({
         target: "me@example.com:2222",
-        localPortPreferred: 43210,
+        localPortPreferred: localPort,
         remotePort: 18789,
         timeoutMs: 1000,
       });

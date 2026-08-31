@@ -181,6 +181,7 @@ function randomizeClaudeCodexTie(
 
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
+const CODEX_MACOS_APP_PROBE_TIMEOUT_MS = 3_000;
 
 async function probeCodexCommand(params: {
   probe: typeof probeLocalCommand;
@@ -199,7 +200,12 @@ async function probeCodexCommand(params: {
     ]),
   );
   for (const executable of appExecutables) {
-    const appProbe = await params.probe(executable);
+    // ChatGPT.app's signed Codex binary can spend most of the generic 1.5s
+    // probe budget in macOS cold-start validation. Keep the broader probe
+    // contract tight while giving known desktop-app binaries enough headroom.
+    const appProbe = await params.probe(executable, ["--version"], {
+      timeoutMs: CODEX_MACOS_APP_PROBE_TIMEOUT_MS,
+    });
     if (appProbe.found) {
       return appProbe;
     }

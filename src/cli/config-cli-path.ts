@@ -2,12 +2,26 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import JSON5 from "json5";
 import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { toDotPath } from "../shared/dot-path.js";
+import {
+  formatConcreteConfigPath,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
 
+export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
+
 export type PathSegment = string;
+
+export function formatConfigSetPath(
+  path: readonly PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+  source?: unknown,
+): string {
+  return formatConcreteConfigPath(pathTokens ?? path, source);
+}
 
 export type JsonSchemaRecord = {
   type?: unknown;
@@ -21,6 +35,8 @@ export type JsonSchemaRecord = {
 
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   schema?: JsonSchemaRecord;
 };
 
@@ -30,133 +46,6 @@ function parseIndexSegment(raw: string): number | undefined {
 
 function isIndexSegment(raw: string): boolean {
   return parseIndexSegment(raw) !== undefined;
-}
-
-function parseBracketPathSegment(raw: string, fullPath: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error(`Invalid path (empty "[]"): ${fullPath}`);
-  }
-  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
-    try {
-      const parsed = JSON5.parse(trimmed) as unknown;
-      if (typeof parsed === "string" && parsed.trim()) {
-        return parsed;
-      }
-    } catch (err) {
-      throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`, { cause: err });
-    }
-    throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`);
-  }
-  return trimmed;
-}
-
-function assertNotWhitespaceSegment(current: string, raw: string): void {
-  if (current.length > 0 && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-}
-
-function findBracketPathClose(path: string, open: number): number {
-  let quote: '"' | "'" | undefined;
-  for (let index = open + 1; index < path.length; index += 1) {
-    const character = path[index];
-    if (quote) {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (character === "]") {
-      return index;
-    }
-    if ((character === '"' || character === "'") && !path.slice(open + 1, index).trim()) {
-      quote = character;
-    }
-  }
-  return -1;
-}
-
-function parsePath(raw: string): PathSegment[] {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const parts: string[] = [];
-  let current = "";
-  let segmentEmitted = false;
-  let i = 0;
-  while (i < trimmed.length) {
-    const ch = trimmed[i];
-    if (ch === "\\") {
-      const next = trimmed[i + 1];
-      if (next === undefined) {
-        throw new Error(`Invalid path (trailing escape): ${raw}`);
-      }
-      current += next;
-      i += 2;
-      continue;
-    }
-    if (ch === ".") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!segmentEmitted && !current.trim()) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      segmentEmitted = false;
-      i += 1;
-      continue;
-    }
-    if (ch === "[") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!current.trim() && !segmentEmitted && parts.length > 0) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      const close = findBracketPathClose(trimmed, i);
-      if (close === -1) {
-        throw new Error(`Invalid path (missing "]"): ${raw}`);
-      }
-      const inside = trimmed.slice(i + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
-      parts.push(parseBracketPathSegment(inside, raw));
-      const next = trimmed[close + 1];
-      if (next !== undefined && next !== "." && next !== "[") {
-        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
-      }
-      segmentEmitted = true;
-      i = close + 1;
-      continue;
-    }
-    current += ch;
-    i += 1;
-  }
-  if (!segmentEmitted && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-  if (current) {
-    parts.push(current.trim());
-  }
-  return parts;
-}
-
-export function parseConfigSetPath(path: string): string[] {
-  const parsedPath = parsePath(path);
-  if (parsedPath.length === 0) {
-    throw new Error("Path is empty.");
-  }
-  validatePathSegments(parsedPath);
-  return parsedPath;
 }
 
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
@@ -362,6 +251,13 @@ function shouldCreateArrayForMissingPathSegment(params: {
   options?: SetAtPathOptions;
 }): boolean {
   if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+    return false;
+  }
+  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
+  if (typeof nextToken === "number") {
+    return true;
+  }
+  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
     return false;
   }
   const parentPath = params.path.slice(0, params.segmentIndex + 1);

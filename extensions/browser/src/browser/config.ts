@@ -6,22 +6,26 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import type {
+  BrowserConfig,
+  BrowserProfileConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
+import { isLoopbackHost, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { parseBooleanValue } from "../sdk-config.js";
-import { resolveUserPath } from "../utils.js";
-import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -36,8 +40,6 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { resolveExtensionRelayToken } from "./extension-relay/relay-auth.js";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -47,7 +49,6 @@ export {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-  DEFAULT_UPLOAD_DIR,
   parseBrowserHttpUrl,
   redactCdpUrl,
 };
@@ -97,7 +98,7 @@ export type ResolvedBrowserConfig = {
   };
   /** Per-profile process-only Basic credentials for internal browser clients. */
   extensionRelayInternalTokens: Record<string, string>;
-  /** Persistent relay HMAC key (absent until pairing or relay startup creates it). */
+  /** Host-local HMAC key last adopted by the relay lifecycle, not raw config resolution. */
   extensionRelayToken?: string;
 };
 
@@ -183,7 +184,7 @@ function normalizeExecutablePath(raw: string | undefined): string | undefined {
   if (!/^~(?=$|[\\/])/.test(value)) {
     return value;
   }
-  return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
+  return path.resolve(value.replace(/^~(?=$|[\\/])/, () => os.homedir()));
 }
 
 function normalizeExistingSessionCdpUrl(
@@ -417,9 +418,6 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
-  // Host-local HMAC key (created lazily by relay startup / pairing). Null
-  // here just means the extension driver has not been used on this host yet.
-  const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
@@ -488,7 +486,6 @@ export function resolveBrowserConfig(
       allowLegacyAuth: cfg?.extensionRelay?.allowLegacyAuth ?? true,
     },
     extensionRelayInternalTokens: {},
-    ...(extensionRelayToken ? { extensionRelayToken } : {}),
   };
 }
 

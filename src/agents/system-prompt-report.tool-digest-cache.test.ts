@@ -1,8 +1,11 @@
-// Guards the per-tool summary digest cache against the identity trap that made
-// its predecessor unreachable: finalizeAgentTools rebuilds every tool object on
-// every attempt, so a cache keyed on the tool cannot carry a digest forward.
-// Isolated in its own file because the caches under test are module-level.
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import {
+  createCodeModeExecDescriptionUpdater,
+  markCodeModeControlTool,
+} from "./code-mode-control-tools.js";
+import type { AgentTool } from "./runtime/index.js";
 
 const { createHashCalls } = vi.hoisted(() => ({ createHashCalls: { count: 0 } }));
 
@@ -19,86 +22,91 @@ vi.mock("node:crypto", async () => {
 
 const { buildSystemPromptReport } = await import("./system-prompt-report.js");
 
+function makeTool(name: string, description: string): AgentTool {
+  return {
+    name,
+    label: name,
+    description,
+    parameters: Type.Object({ path: Type.String() }),
+    execute: async () => ({ content: [], details: {} }),
+  };
+}
+
+function finalize(tools: AgentTool[]) {
+  return finalizeAgentTools({ tools, hookContext: {}, wrapBeforeToolCallHook: false });
+}
+
+function buildReport(tools: AgentTool[]) {
+  return buildSystemPromptReport({
+    source: "run",
+    generatedAt: 0,
+    bootstrapMaxChars: 20_000,
+    systemPrompt: "Tool digest cache probe",
+    injectedWorkspaceFiles: [],
+    skillsPrompt: "",
+    tools,
+  });
+}
+
 describe("tool summary digest cache", () => {
-  // The parameters object identity is stable across rebuilds (schema
-  // normalization memoizes on it), which is why only the summary digest is at
-  // stake here; keep these shared between the two tool sets.
-  const parameters = [
-    { type: "object", properties: { path: { type: "string" } } },
-    { type: "object", properties: { pattern: { type: "string" } } },
-    { type: "object", properties: { command: { type: "string" } } },
-  ];
-  const descriptions = [
-    "tool-digest-cache probe: read a file from disk",
-    "tool-digest-cache probe: search file contents",
-    "tool-digest-cache probe: run a shell command",
-  ];
-  const makeTools = () =>
-    descriptions.map((description, index) => ({
-      name: `probe_${index}`,
-      description,
-      parameters: parameters[index],
-    })) as never;
-
-  const buildReport = (promptSuffix: string) =>
-    buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: `tool-digest-cache system prompt ${promptSuffix}`,
-      bootstrapFiles: [],
-      injectedFiles: [],
-      skillsPrompt: `<skill><name>digest-probe-${promptSuffix}</name></skill>`,
-      tools: makeTools(),
-    });
-
-  it("does not rehash unchanged tool summaries when the tool objects are rebuilt", () => {
-    const first = buildReport("a");
-    // 1 system prompt + 1 skills prompt + 3 summaries + 3 schemas.
+  it("reuses unchanged digests across real tool finalization without changing the report", () => {
+    const definitions = ["read", "search", "shell"].map((name) =>
+      makeTool(`probe_${name}`, `Digest probe: ${name}`),
+    );
+    const firstTools = finalize(definitions);
+    createHashCalls.count = 0;
+    const first = buildReport(firstTools);
     expect(createHashCalls.count).toBe(8);
 
+    const secondTools = finalize(definitions);
+    for (const [index, tool] of secondTools.entries()) {
+      expect(tool).not.toBe(firstTools[index]);
+      expect(tool.parameters).toBe(firstTools[index]?.parameters);
+    }
     createHashCalls.count = 0;
-    const second = buildReport("b");
+    const second = buildReport(secondTools);
 
-    // Structurally identical but distinct tool objects: the schema stats cache
-    // hits on the shared parameters identity, and the summary digests must come
-    // from the content-keyed cache. Only the two prompt digests remain.
     expect(createHashCalls.count).toBe(2);
-    expect(second.tools.entries.map((entry) => entry.summaryHash)).toEqual(
-      first.tools.entries.map((entry) => entry.summaryHash),
-    );
-    expect(second.tools.entries.map((entry) => entry.schemaHash)).toEqual(
-      first.tools.entries.map((entry) => entry.schemaHash),
-    );
+    expect(second).toEqual(first);
   });
 
-  it("does not retain oversized tool summaries in the content-keyed cache", () => {
-    // The cache keys are the summary text, so entry count alone would let a few
-    // very large runtime-generated descriptions pin megabytes for the process
-    // lifetime. Over the length cap the digest is computed but never cached.
-    const oversizedParameters = { type: "object", properties: {} };
-    const oversized = `oversized probe ${"x".repeat(5_000)}`;
-    const buildOversized = (promptSuffix: string) =>
-      buildSystemPromptReport({
-        source: "run",
-        generatedAt: 0,
-        bootstrapMaxChars: 20_000,
-        systemPrompt: `oversized system prompt ${promptSuffix}`,
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: `<skill><name>oversized-${promptSuffix}</name></skill>`,
-        tools: [
-          { name: "oversized_probe", description: oversized, parameters: oversizedParameters },
-        ] as never,
-      });
+  it("reports current Code Mode descriptions on retained finalized wrappers", () => {
+    const definition = markCodeModeControlTool(makeTool("exec", "Initial catalog probe"));
+    const updater = createCodeModeExecDescriptionUpdater(definition);
+    try {
+      const tools = finalize([definition]);
+      const first = buildReport(tools).tools.entries[0];
+      updater.update("Updated catalog probe with another capability");
+      const second = buildReport(tools).tools.entries[0];
 
-    const first = buildOversized("a");
+      expect(second?.summaryChars).toBe(definition.description.length);
+      expect(second?.summaryHash).not.toBe(first?.summaryHash);
+      expect(second?.schemaHash).toBe(first?.schemaHash);
+      expect(second).toEqual(buildReport(finalize([definition])).tools.entries[0]);
+    } finally {
+      updater.dispose();
+    }
+  });
+
+  it("keeps schema statistics independent of identical names and summaries", () => {
+    const tool = makeTool("schema_probe", "Shared schema probe summary");
+    const first = buildReport([tool]).tools.entries[0];
+    tool.parameters = Type.Object({ path: Type.String(), limit: Type.Integer() });
+    const second = buildReport([tool]).tools.entries[0];
+
+    expect(second?.summaryHash).toBe(first?.summaryHash);
+    expect(second?.schemaHash).not.toBe(first?.schemaHash);
+    expect(second?.propertiesCount).toBe(2);
+  });
+
+  it("does not retain oversized summary keys", () => {
+    const definition = makeTool("oversized_probe", `Oversized probe ${"x".repeat(5_000)}`);
+    const first = buildReport(finalize([definition]));
+    const tools = finalize([definition]);
     createHashCalls.count = 0;
-    const second = buildOversized("b");
+    const second = buildReport(tools);
 
-    // A cached summary would leave only the 2 prompt digests, as the test above
-    // asserts. The third call is the oversized summary being hashed again.
     expect(createHashCalls.count).toBe(3);
-    expect(second.tools.entries[0]?.summaryHash).toBe(first.tools.entries[0]?.summaryHash);
+    expect(second).toEqual(first);
   });
 });

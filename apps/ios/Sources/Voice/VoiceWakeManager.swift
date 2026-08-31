@@ -119,7 +119,7 @@ final class VoiceWakeManager: NSObject {
     private var audioSessionIsActive = false
 
     private var lastDispatched: String?
-    private var onCommand: (@Sendable (String) async -> Void)?
+    private var onCommand: (@MainActor @Sendable (String) async throws -> Void)?
     private var userDefaultsObserver: NSObjectProtocol?
     private var suppressionReasons: Set<VoiceWakeSuppressionReason> = []
 
@@ -166,7 +166,7 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    func configure(onCommand: @escaping @Sendable (String) async -> Void) {
+    func configure(onCommand: @escaping @MainActor @Sendable (String) async throws -> Void) {
         self.onCommand = onCommand
     }
 
@@ -472,12 +472,21 @@ final class VoiceWakeManager: NSObject {
                     self.commandTask = nil
                 }
             }
-            await self.onCommand?(cmd)
+            do {
+                try await self.onCommand?(cmd)
+            } catch {
+                guard !(error is CancellationError), self.isCurrentCommand(
+                    recognitionGeneration: recognitionGeneration,
+                    commandGeneration: commandGeneration)
+                else { return }
+                self.statusText = error.localizedDescription
+                return
+            }
             guard self.isCurrentCommand(
                 recognitionGeneration: recognitionGeneration,
                 commandGeneration: commandGeneration)
             else { return }
-            await self.startIfEnabled()
+            self.scheduleStart()
         }
     }
 
@@ -496,10 +505,6 @@ final class VoiceWakeManager: NSObject {
         self.commandGeneration &+= 1
         self.commandTask?.cancel()
         self.commandTask = nil
-    }
-
-    private func startIfEnabled() async {
-        self.scheduleStart()
     }
 
     private func extractCommand(from transcript: String, segments: [WakeWordSegment]) -> String? {

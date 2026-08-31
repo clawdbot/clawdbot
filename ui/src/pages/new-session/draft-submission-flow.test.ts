@@ -12,15 +12,9 @@ import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import type { NewSessionRouteData } from "./location.ts";
-import { patchNewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
-
-// The closed list of gates allowed to block without a visible reason: the busy
-// Start button and an empty draft explain themselves. Growing it is a product
-// decision — edit this list and the matching one in submit-gates.ts together.
-const SILENT_SUBMIT_GATES = ["submitting", "empty-draft"];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,147 +22,6 @@ afterEach(() => {
   sessionStorage.clear();
   localStorage.clear();
 });
-
-type FixtureOptions = {
-  phase?: "connected" | "connecting";
-  agents?: unknown[];
-  methods?: string[];
-  scopes?: string[];
-  selfUser?: { id: string };
-  data?: NewSessionRouteData;
-  request?: (method: string) => Promise<unknown>;
-};
-
-function createDraftFixture(options: FixtureOptions = {}) {
-  const request = vi.fn((method: string) => {
-    if (options.request) {
-      return options.request(method);
-    }
-    return Promise.resolve({});
-  });
-  const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
-  const phase = options.phase ?? "connected";
-  const context = {
-    gateway: {
-      connection: { gatewayUrl: "ws://gateway.example" },
-      snapshot: {
-        phase,
-        client: phase === "connected" ? client : null,
-        sessionKey: "",
-        ...(options.selfUser ? { selfUser: options.selfUser } : {}),
-        hello:
-          phase === "connected"
-            ? {
-                server: { bootId: "gateway-boot-a" },
-                auth: {
-                  role: "operator",
-                  scopes: options.scopes ?? ["operator.read", "operator.write"],
-                },
-                features: { methods: options.methods ?? ["sessions.create"] },
-              }
-            : null,
-      },
-      setSessionKey: vi.fn(),
-    },
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          agents: options.agents ?? [
-            {
-              id: "main",
-              workspace: "/workspace",
-              workspaceGit: false,
-              model: { primary: "openai/gpt-5.6-luna" },
-            },
-          ],
-        },
-      },
-    },
-    sessions: { state: { result: null }, createResult: vi.fn() },
-    agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
-    navigateAndWait: vi.fn(async () => undefined),
-    preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
-  vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
-    context.gateway.snapshot.sessionKey = sessionKey;
-  });
-  const host = new TestReactiveControllerHost();
-  const gateway = new DraftGatewayState(
-    host,
-    () => ({
-      context,
-      data: options.data,
-      isConnected: phase === "connected",
-      isAdmin: place?.isAdmin() ?? false,
-      canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
-      visibility: flow?.visibility ?? "normal",
-      cloudProfileId: place?.cloudProfileId ?? "",
-      pendingPlacement: flow?.pendingPlacement ?? {
-        sessionKey: "",
-        gatewayUrl: "",
-        recoveryScope: "",
-      },
-      agentsHydrated: place?.agentsHydrated ?? false,
-    }),
-    {
-      requestUpdate: vi.fn(),
-      updateComplete: () => Promise.resolve(),
-      onInvalidate: vi.fn(),
-      onVisibilityRetired: () => flow?.setVisibility("normal"),
-      onCloudProfileCleared: () => place?.clearCloudProfile(),
-      onCloudState: (error) => flow?.setError(error),
-      onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
-      onRecoveryReady: (gatewayUrl, recoveryScope) =>
-        flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
-      onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
-    },
-  );
-  const browser = new DraftPlaceBrowser(
-    host,
-    gateway,
-    () => ({
-      context,
-      isAdmin: place?.isAdmin() ?? false,
-    }),
-    {
-      requestUpdate: vi.fn(),
-      onProjectMissing: () => place?.clearProjectSelection(),
-      onSelectProject: (projectId) => place?.selectProjectId(projectId),
-      onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
-    },
-  );
-  const place = new DraftPlaceState(
-    gateway,
-    browser,
-    () => ({
-      context,
-      data: options.data,
-      submitting: flow?.submitting ?? false,
-      pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
-    }),
-    {
-      requestUpdate: vi.fn(),
-      onError: (error) => flow?.setError(error),
-      onClearError: (error) => flow?.clearErrorIf(error),
-    },
-  );
-  const requestUpdate = vi.fn();
-  const flow = new DraftSubmissionFlow(
-    gateway,
-    place,
-    () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn() },
-  );
-  gateway.synchronize(context.gateway);
-  place.setAgentsHydrated(true);
-  place.adoptAgentDefaults();
-  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
-}
 
 function registerTextPayload(id: string) {
   return registerChatAttachmentPayload({
@@ -185,178 +38,6 @@ function stubObjectUrls(...urls: string[]) {
   vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
   return revokeObjectURL;
 }
-
-describe("DraftSubmissionFlow submit gates", () => {
-  it("keeps every blocking gate visible: canSubmit and the reason derive from one table", () => {
-    const scenarios: Array<{ name: string; build: () => ReturnType<typeof createDraftFixture> }> = [
-      { name: "empty draft", build: () => createDraftFixture() },
-      {
-        name: "gateway disconnected",
-        build: () => {
-          const fixture = createDraftFixture({ phase: "connecting" });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "attachment reads pending",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.attachmentDraft.updatePending(fixture.flow.attachmentDraft.readSignal, 1);
-          return fixture;
-        },
-      },
-      {
-        name: "no agents on the gateway",
-        build: () => {
-          const fixture = createDraftFixture({ agents: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "sessions.create not advertised",
-        build: () => {
-          const fixture = createDraftFixture({ methods: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "submission outcome unknown",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.markPendingPlacementUnavailable("gateway-changed");
-          return fixture;
-        },
-      },
-    ];
-    for (const scenario of scenarios) {
-      const { flow } = scenario.build();
-      const block = flow.submitBlock();
-      expect(block, scenario.name).toBeDefined();
-      expect(flow.canSubmit(), scenario.name).toBe(false);
-      if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
-        // A reasoned gate must explain itself, and the Start tooltip must
-        // report the same first-gate reason canSubmit blocks on.
-        expect(block?.reason, scenario.name).toBeTruthy();
-        expect(flow.submitDisabledReason(), scenario.name).toBe(block?.reason);
-      }
-    }
-
-    const ready = createDraftFixture();
-    ready.flow.setMessage("hello");
-    expect(ready.flow.submitBlock()).toBeUndefined();
-    expect(ready.flow.canSubmit()).toBe(true);
-    expect(ready.flow.submitDisabledReason()).toBeUndefined();
-  });
-
-  it("surfaces a reason for Enter during worktree preference restore, then clears it", async () => {
-    patchNewSessionPreference("ws://gateway.example", "main", {
-      folder: "/workspace",
-      worktree: true,
-    });
-    let resolveBranches!: (value: unknown) => void;
-    const fixture = createDraftFixture({
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      agents: [
-        {
-          id: "main",
-          workspace: "/workspace",
-          workspaceGit: true,
-          model: { primary: "openai/gpt-5.6-luna" },
-        },
-      ],
-      request: (method) => {
-        if (method === "worktrees.branches") {
-          return new Promise((resolve) => {
-            resolveBranches = resolve;
-          });
-        }
-        return Promise.resolve({});
-      },
-    });
-    const { context, flow } = fixture;
-    flow.setMessage("start something");
-
-    // The async preference restore is still in flight: submission is gated,
-    // but the gate must be visible, not a silent no-op.
-    expect(flow.canSubmit()).toBe(false);
-    expect(flow.submitDisabledReason()).toBeTruthy();
-    expect(flow.blockedSubmitNotice()).toBeUndefined();
-
-    await flow.submit();
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-    expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
-
-    resolveBranches({ repositoryStatus: "git", branches: ["main"], defaultBranch: "main" });
-    await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
-    // The transient gate lifted; the notice retires itself.
-    expect(flow.blockedSubmitNotice()).toBeUndefined();
-    expect(flow.submitDisabledReason()).toBeUndefined();
-  });
-
-  it("does not raise a notice for the silent empty-draft gate", async () => {
-    const fixture = createDraftFixture();
-    await fixture.flow.submit();
-    expect(fixture.flow.canSubmit()).toBe(false);
-    expect(fixture.flow.submitBlock()?.gate).toBe("empty-draft");
-    expect(fixture.flow.blockedSubmitNotice()).toBeUndefined();
-  });
-
-  it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
-    const fixture = createDraftFixture({
-      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      agents: [
-        {
-          id: "main",
-          workspace: "/workspace",
-          workspaceGit: false,
-          model: { primary: "openai/gpt-5.6-sol" },
-          agentRuntime: {
-            id: "cloud-only",
-            cloudPlacementSupported: true,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        },
-      ],
-      request: async (method) =>
-        method === "environments.list"
-          ? {
-              environments: [
-                {
-                  id: "node:build-mac",
-                  type: "node",
-                  label: "Build Mac",
-                  status: "available",
-                  sessionHost: true,
-                  workerSlots: { total: 1, available: 1 },
-                },
-              ],
-              profiles: [],
-            }
-          : {},
-    });
-    await fixture.gateway.refreshCloudProfiles();
-    await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
-    fixture.place.selectDevice("build-mac");
-    fixture.flow.setMessage("run on the device");
-
-    expect(fixture.flow.submitBlock()).toEqual({
-      gate: "device-runtime",
-      reason: "This runtime does not support paired devices",
-    });
-    expect(fixture.flow.canSubmit()).toBe(false);
-    expect(fixture.flow.submitDisabledReason()).toBe(
-      "This runtime does not support paired devices",
-    );
-    expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
-  });
-});
 
 describe("DraftSubmissionFlow", () => {
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
@@ -675,125 +356,123 @@ describe("DraftSubmissionFlow", () => {
     flow.attachmentDraft.reset({ release: true });
   });
 
-  it("deduplicates remote materialization and preserves the draft when cloning fails", async () => {
-    let rejectClone!: (error: Error) => void;
-    const cloneResult = new Promise<never>((_resolve, reject) => {
-      rejectClone = reject;
-    });
-    const request = vi.fn((method: string) => {
-      if (method === "projects.add") {
-        return cloneResult;
-      }
-      return Promise.resolve({});
-    });
-    const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
-    const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://gateway.example" },
-        snapshot: {
-          phase: "connected",
-          client,
-          hello: {
-            auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-            features: { methods: ["projects.add", "sessions.create"] },
-          },
-        },
-      },
-      agents: {
-        state: {
-          agentsList: {
-            defaultId: "main",
-            agents: [
-              {
-                id: "main",
-                workspace: "/workspace",
-                workspaceGit: false,
-                model: { primary: "openai/gpt-5.6-luna" },
-              },
-            ],
-          },
-        },
-      },
-      sessions: { state: { result: null }, createResult: vi.fn() },
-      config: { current: {} },
-    } as unknown as ApplicationContext;
-    const host = new TestReactiveControllerHost();
-    const gateway = new DraftGatewayState(
-      host,
-      () => ({
-        context,
-        data: undefined,
-        isConnected: true,
-        isAdmin: place?.isAdmin() ?? false,
-        canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
-        visibility: flow?.visibility ?? "normal",
-        cloudProfileId: place?.cloudProfileId ?? "",
-        pendingPlacement: flow?.pendingPlacement ?? {
-          sessionKey: "",
-          gatewayUrl: "",
-          recoveryScope: "",
-        },
-        agentsHydrated: place?.agentsHydrated ?? false,
-      }),
-      {
-        requestUpdate: vi.fn(),
-        updateComplete: () => Promise.resolve(),
-        onInvalidate: vi.fn(),
-        onVisibilityRetired: () => flow?.setVisibility("normal"),
-        onCloudProfileCleared: () => place?.clearCloudProfile(),
-        onCloudState: (error) => flow?.setError(error),
-        onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
-        onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
-        onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
-      },
-    );
-    const browser = new DraftPlaceBrowser(
-      host,
-      gateway,
-      () => ({
-        context,
-        isAdmin: place?.isAdmin() ?? false,
-      }),
-      {
-        requestUpdate: vi.fn(),
-        onProjectMissing: () => place?.clearProjectSelection(),
-        onSelectProject: (projectId) => place?.selectProjectId(projectId),
-        onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
-        querySelector: () => null,
-        activeElement: () => null,
-        body: () => null,
-      },
-    );
-    const place = new DraftPlaceState(
-      gateway,
-      browser,
-      () => ({
-        context,
-        data: undefined,
-        submitting: flow?.submitting ?? false,
-        pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
-      }),
-      {
-        requestUpdate: vi.fn(),
-        onError: (error) => flow?.setError(error),
-        onClearError: (error) => flow?.clearErrorIf(error),
-      },
-    );
-    const flow = new DraftSubmissionFlow(
-      gateway,
-      place,
-      () => ({ context, data: undefined, isConnected: true }),
-      { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
-    );
-    gateway.synchronize(context.gateway);
-    place.setAgentsHydrated(true);
-    place.adoptAgentDefaults();
+  it.each([
+    { methods: ["sessions.create"], allowed: false, worktree: false },
+    { methods: ["projects.add"], allowed: false, worktree: false },
+    { methods: ["projects.add", "sessions.create"], allowed: true, worktree: false },
+    { methods: ["sessions.create"], allowed: true, worktree: true },
+  ])("checks remote-project access with worktree=$worktree", ({ methods, allowed, worktree }) => {
+    const { flow, place } = createDraftFixture({ methods });
     place.selectRemoteProject({
       identity: "openclaw/openclaw",
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
-    flow.setMessage("keep this prompt");
+    if (worktree) {
+      place.toggleWorktree();
+      flow.setMessage("start in a worktree");
+    }
+
+    expect(flow.submissionAccess().allowed).toBe(allowed);
+  });
+
+  it.each([
+    { scenario: "an empty session", message: "", worktree: false },
+    { scenario: "an empty worktree session", message: "", worktree: true },
+  ])("materializes a remote project before $scenario", async ({ message, worktree }) => {
+    let materializeProject!: (project: { id: string }) => void;
+    const materializedProject = new Promise<{ id: string }>((resolve) => {
+      materializeProject = resolve;
+    });
+    const { context, flow, place, request } = createDraftFixture({
+      methods: ["projects.add", "sessions.create"],
+      request: async (method) => (method === "projects.add" ? materializedProject : {}),
+    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:empty-remote-project",
+      initialRun: { status: "idle" },
+    });
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    if (worktree) {
+      place.toggleWorktree();
+    }
+    flow.setMessage(message);
+    // Empty-draft button gating is independent from the remote-project submission contract.
+    vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+
+    const submitted = flow.submit();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "projects.add",
+        { gitUrl: "https://github.com/openclaw/openclaw.git" },
+        { timeoutMs: null },
+      ),
+    );
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    materializeProject({ id: "openclaw" });
+    await submitted;
+
+    const createParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(createParams).toMatchObject({ agentId: "main", message, projectId: "openclaw" });
+    expect(createParams?.worktree).toBe(worktree || undefined);
+    expect(createParams).not.toHaveProperty("projectGitUrl");
+    expect(createParams).not.toHaveProperty("cwd");
+    expect(request.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.sessions.createResult).mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("retains an empty remote-project selection when pre-session materialization fails", async () => {
+    const { context, flow, place } = createDraftFixture({
+      methods: ["projects.add", "sessions.create"],
+      request: async () => {
+        throw new Error("clone failed");
+      },
+    });
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+
+    await flow.submit();
+
+    expect(flow.error).toBe("clone failed");
+    expect(place.browser.remoteProject?.identity).toBe("openclaw/openclaw");
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: "an initial prompt and attachments", message: "keep this prompt", worktree: false },
+    { scenario: "attachments without an initial prompt", message: "", worktree: false },
+    { scenario: "a prompted worktree", message: "keep this prompt", worktree: true },
+    { scenario: "an attachment-only worktree", message: "", worktree: true },
+  ])("admits a remote project once with $scenario", async ({ message, worktree }) => {
+    const { context, flow, place, request } = createDraftFixture();
+    let admitSession!: (value: { key: string; initialRun: { status: "idle" } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          admitSession = resolve;
+        }),
+    );
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    if (worktree) {
+      place.toggleWorktree();
+    }
+    flow.setMessage(message);
     flow.attachmentDraft.replace([
       {
         id: "attachment-1",
@@ -803,22 +482,28 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
-    const first = flow.submit();
+    const submitted = flow.submit();
     const duplicate = flow.submit();
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "projects.add")).toHaveLength(1),
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        message,
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        attachments: [expect.objectContaining({ fileName: "note.txt", mimeType: "text/plain" })],
+      }),
+      { reconciliation: "background" },
     );
-    rejectClone(new Error("clone failed"));
-    await Promise.all([first, duplicate]);
+    expect(request).not.toHaveBeenCalledWith("projects.add", expect.anything(), expect.anything());
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]?.worktree).toBe(
+      worktree || undefined,
+    );
 
-    expect(flow.error).toBe("clone failed");
-    expect(flow.message).toBe("keep this prompt");
-    expect(flow.attachmentDraft.attachments).toHaveLength(1);
-    expect(place.browser.remoteProject).toMatchObject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-    });
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    admitSession({ key: "agent:main:remote-project", initialRun: { status: "idle" } });
+    await Promise.all([submitted, duplicate]);
+
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(context.navigateAndWait).toHaveBeenCalledOnce();
   });
 
   it.each([

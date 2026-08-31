@@ -560,14 +560,8 @@ export class GatewayClient {
     this.transportValidated = false;
     let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
-      handlers.open();
-      const tlsError = transport.validateSocket(ws);
-      if (tlsError) {
-        handlers.error(tlsError);
-        ws.close(1008, tlsError.message);
-        return;
-      }
       this.transportValidated = true;
+      handlers.open();
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {

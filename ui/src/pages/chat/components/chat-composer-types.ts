@@ -1,10 +1,19 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { ChatSendShortcut } from "../../../app/settings.ts";
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import type {
+  ChatGoalAction,
+  ChatGoalDraft,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+} from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
@@ -27,10 +36,11 @@ import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
 /** One shape for queued-row edit state and actions. */
-export type ChatQueuedEditProps = {
+type ChatQueuedEditProps = {
   /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
+  source?: ChatQueueItem;
   onEdit?: (id: string) => void;
   onEditChange?: (text: string) => void;
   onEditSubmit?: () => void;
@@ -74,6 +84,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
+  progressCardHasActiveRun?: boolean;
+  collapseTaskProgress?: boolean;
   onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
@@ -83,6 +95,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
   sessions: SessionsListResult | null;
+  /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
+  selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
@@ -110,21 +124,23 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   typingActors?: readonly { id: string; label: string; preview?: string }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
+  anchoredNotices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
-  onCompact?: () => void | Promise<void>;
+  onSlashCommand?: (command: string) => void;
+  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
-  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -132,7 +148,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueMove?: (id: string, toIndex: number) => void;
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
-  onGoalCommand?: (command: string) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
+  onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
+  goalDraftMode?: ChatGoalDraftMode | null;
+  onGoalDraftModeChange?: (mode: ChatGoalDraftMode | null) => void;
+  currentSessionId?: string | null;
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
@@ -155,6 +175,7 @@ export type ChatComposerState = SkillMenuState &
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
     goalExpandedId: string | null;
+    goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeGatewayQuestionId: string | null;
     gatewayQuestionCollapsed: boolean;
     questionTakeoverActive: boolean;
@@ -169,6 +190,7 @@ export type ChatComposerState = SkillMenuState &
     composerInputRef: ((element?: Element) => void) | null;
     textareaRef: ((element?: Element) => void) | null;
     dictation: ComposerDictationController | null;
-    dictationDraftKey: string | null;
-    dictationSelection: { start: number; end: number } | null;
+    composerDraftScopeKey: string | null;
+    dictationError: string | null;
+    dictationSelection: { start: number; end: number; value: string } | null;
   };

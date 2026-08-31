@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -23,7 +24,7 @@ import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -58,6 +59,8 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
+import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
@@ -254,17 +257,24 @@ export function resolveExecTarget(params: {
 }) {
   const sandboxRequired = params.sandboxRequired === true;
   if (sandboxRequired && !params.sandboxAvailable) {
-    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+    throw registerTrustedToolNoStartError(
+      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
+    );
   }
   if (sandboxRequired && params.elevatedRequested) {
-    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+    throw registerTrustedToolNoStartError(
+      new Error("Elevated execution is unavailable because this session requires a sandbox."),
+    );
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget = params.requestedTarget ?? null;
+  const requestedTarget =
+    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+      ),
     );
   }
   if (
@@ -286,10 +296,12 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-        `set tools.exec.host=${allowedConfig} to allow this override).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+          `set tools.exec.host=${allowedConfig} to allow this override).`,
+      ),
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
@@ -642,7 +654,13 @@ function wrapPosixCommandWithPathPrepend(
 }
 
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
-export async function runExecProcess(opts: {
+export async function runExecProcess({
+  startupSignal: initialStartupSignal,
+  onUpdate: initialOnUpdate,
+  beforeSpawn: initialBeforeSpawn,
+  onSettledBeforeNotify: initialOnSettledBeforeNotify,
+  ...opts
+}: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
@@ -676,6 +694,8 @@ export async function runExecProcess(opts: {
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Cancels startup only; background process lifetime belongs to the supervisor. */
+  startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
@@ -725,33 +745,21 @@ export async function runExecProcess(opts: {
     backgrounded: false,
     cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
-  addSession(session);
+  withoutGatewayToolCallerIdentity(() => addSession(session));
 
-  // Tracks whether the exec run's promise has settled (process exited or
-  // spawn failed).  Once settled the agent-loop no longer expects
-  // tool_execution_update events, so emitUpdate must become a no-op to
-  // prevent calling into a disposed agent run (the "Agent listener invoked
-  // outside active run" crash — see #62520).
-  let updatesDisabled = false;
+  // Foreground delivery keeps its caller context only until yield, abort, or exit.
+  // Clearing the callback also releases the completed turn's captured authority.
+  let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
+  let startupSignal = initialStartupSignal;
+  let beforeSpawn = initialBeforeSpawn;
+  let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
   const emitUpdate = () => {
-    if (!opts.onUpdate) {
-      return;
-    }
-    if (session.backgrounded || session.exited || updatesDisabled) {
+    if (!onUpdate || session.backgrounded || session.exited) {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
-    // internally pushes Promise.resolve(emit(event)) into an updateEvents
-    // array.  Because emit → processEvents is async, any failure (e.g.
-    // activeRun cleared) produces a *rejected Promise*, not a synchronous
-    // throw — so a try-catch here would be ineffective.  Instead we rely
-    // on the `updatesDisabled` flag being set proactively: by the promise
-    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
-    // signal (Layer 2) — both of which prevent this call from ever being
-    // reached after the agent run has ended.
-    opts.onUpdate({
+    onUpdate({
       content: [
         { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
       ],
@@ -839,20 +847,42 @@ export async function runExecProcess(opts: {
       // Finalization can release remote process/session resources. Keep the
       // background-work blocker until that owner transition has settled.
       session.finalizing = false;
-      const shouldNotify = !session.exited;
-      if (shouldNotify) {
-        markExited(
-          session,
-          finalOutcome.exitCode,
-          finalOutcome.exitSignal,
-          finalOutcome.status,
-          finalOutcome.exitReason,
-          finalOutcome.noOutputTimedOut,
-        );
-      }
-      opts.onSettledBeforeNotify?.(finalOutcome);
-      if (shouldNotify) {
-        maybeNotifyOnExit(session, finalOutcome.status);
+      try {
+        const shouldNotify = !session.exited;
+        if (shouldNotify) {
+          markExited(
+            session,
+            finalOutcome.exitCode,
+            finalOutcome.exitSignal,
+            finalOutcome.status,
+            finalOutcome.exitReason,
+            finalOutcome.noOutputTimedOut,
+          );
+        }
+        onSettledBeforeNotify?.(finalOutcome);
+        if (shouldNotify) {
+          maybeNotifyOnExit(session, finalOutcome.status);
+        }
+      } catch (error) {
+        // Recover before yielding: scope joins queued by markExited must not
+        // outrun the task's failed outcome or restore its environment state.
+        finalOutcome = buildExecRuntimeErrorOutcome({
+          error,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        });
+        onSettledBeforeNotify?.(finalOutcome);
+      } finally {
+        // Notifications need start-time routing, but completed logs must not
+        // retain it, including when a task callback or notification throws.
+        delete session.sessionKey;
+        delete session.agentId;
+        delete session.mainKey;
+        delete session.sessionScope;
+        delete session.eventRouting;
+        delete session.notifyDeliveryContext;
+        delete session.notifyOnExit;
+        delete session.notifyOnExitEmptySuccess;
       }
     }
     return finalOutcome;
@@ -933,13 +963,21 @@ export async function runExecProcess(opts: {
   };
 
   const assertPreSpawnAuthorized = async () => {
-    const denied = await opts.beforeSpawn?.();
+    startupSignal?.throwIfAborted();
+    const denied = await beforeSpawn?.();
+    startupSignal?.throwIfAborted();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
+  const spawn = (input: SpawnInput) => {
+    // No await between the final cancellation check and supervisor admission.
+    startupSignal?.throwIfAborted();
+    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+  };
 
   try {
+    startupSignal?.throwIfAborted();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
@@ -954,15 +992,16 @@ export async function runExecProcess(opts: {
       onStdout: onSupervisorStdout,
       onStderr: handleStderr,
     };
+    await assertPreSpawnAuthorized();
     if (spawnSpec.mode === "pty") {
       try {
-        await assertPreSpawnAuthorized();
-        managedRun = await supervisor.spawn({
+        managedRun = await spawn({
           ...spawnBase,
           mode: "pty",
           ptyCommand: spawnSpec.ptyCommand,
         });
       } catch (err) {
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -970,7 +1009,7 @@ export async function runExecProcess(opts: {
         opts.warnings.push(warning);
         usingPty = false;
         await assertPreSpawnAuthorized();
-        managedRun = await supervisor.spawn({
+        managedRun = await spawn({
           ...spawnBase,
           mode: "child",
           argv: spawnSpec.childFallbackArgv,
@@ -979,8 +1018,7 @@ export async function runExecProcess(opts: {
         });
       }
     } else {
-      await assertPreSpawnAuthorized();
-      managedRun = await supervisor.spawn({
+      managedRun = await spawn({
         ...spawnBase,
         mode: "child",
         argv: spawnSpec.argv,
@@ -988,13 +1026,16 @@ export async function runExecProcess(opts: {
       });
     }
   } catch (error) {
+    onUpdate = undefined;
     const outcome = await finalizeAndSettleSession(
       buildExecRuntimeErrorOutcome({
         error,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       }),
-    );
+    ).finally(() => {
+      onSettledBeforeNotify = undefined;
+    });
     emitExecProcessCompleted({
       command: opts.command,
       mode: usingPty ? "pty" : "child",
@@ -1003,27 +1044,36 @@ export async function runExecProcess(opts: {
       target: diagnosticTarget,
     });
     throw error;
+  } finally {
+    startupSignal = undefined;
+    beforeSpawn = undefined;
   }
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
 
-  const promise = managedRun
-    .wait()
-    .then(async (exit): Promise<ExecProcessOutcome> => {
-      // Disable updates *before* markExited so that any late stdout/stderr
-      // data events queued in the same event-loop tick cannot sneak through
-      // the `session.exited` guard before it flips to true.
-      updatesDisabled = true;
-
-      const durationMs = Date.now() - startedAt;
-      const outcome = buildExecExitOutcome({
-        exit,
-        aggregated: session.aggregated.trim(),
-        durationMs,
-        timeoutSec: opts.timeoutSec,
-        processContinuationAvailable: opts.processContinuationAvailable !== false,
-      });
-
+  const startedRun = managedRun;
+  const promise = withoutGatewayToolCallerIdentity(async (): Promise<ExecProcessOutcome> => {
+    try {
+      let outcome: ExecProcessOutcome;
+      try {
+        const exit = await startedRun.wait();
+        outcome = buildExecExitOutcome({
+          exit,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+          timeoutSec: opts.timeoutSec,
+          processContinuationAvailable: opts.processContinuationAvailable !== false,
+        });
+      } catch (error) {
+        outcome = buildExecRuntimeErrorOutcome({
+          error,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        });
+      } finally {
+        // Release foreground delivery before finalization marks the record exited.
+        onUpdate = undefined;
+      }
       const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
@@ -1033,24 +1083,10 @@ export async function runExecProcess(opts: {
         target: diagnosticTarget,
       });
       return finalOutcome;
-    })
-    .catch(async (err: unknown): Promise<ExecProcessOutcome> => {
-      updatesDisabled = true;
-      const outcome = buildExecRuntimeErrorOutcome({
-        error: err,
-        aggregated: session.aggregated.trim(),
-        durationMs: Date.now() - startedAt,
-      });
-      const finalOutcome = await finalizeAndSettleSession(outcome);
-      emitExecProcessCompleted({
-        command: opts.command,
-        mode: usingPty ? "pty" : "child",
-        outcome: finalOutcome,
-        sessionKey: opts.sessionKey,
-        target: diagnosticTarget,
-      });
-      return finalOutcome;
-    });
+    } finally {
+      onSettledBeforeNotify = undefined;
+    }
+  });
 
   return {
     session,
@@ -1061,7 +1097,7 @@ export async function runExecProcess(opts: {
       managedRun?.cancel("manual-cancel");
     },
     disableUpdates: () => {
-      updatesDisabled = true;
+      onUpdate = undefined;
     },
   };
 }

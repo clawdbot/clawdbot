@@ -148,6 +148,9 @@ export async function compactNativeCliSession(params: {
       trigger: "manual",
       controlOperation: "compact",
       disableCliLiveSession: true,
+      // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
+      // after the control turn so the next user turn reloads the compacted conversation.
+      cleanupCliLiveSessionOnRunEnd: true,
       allowEmptyAssistantReplyAsSilent: true,
       abortSignal: params.compactParams.abortSignal,
     });
@@ -255,7 +258,16 @@ export async function compactEmbeddedAgentSessionDirect(
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
-    sessionTarget: runSessionTarget,
+    // SQLite resolves storage identity; the request still owns thread routing.
+    sessionTarget: {
+      agentId: runSessionTarget.agentId,
+      sessionId: runSessionTarget.sessionId,
+      sessionKey: runSessionTarget.sessionKey,
+      storePath: runSessionTarget.storePath,
+      ...(paramsBase.sessionTarget?.threadId !== undefined
+        ? { threadId: paramsBase.sessionTarget.threadId }
+        : {}),
+    },
     sessionFile: runSessionTarget.sessionKey,
   };
   const requestedAgentIds = resolveSessionAgentIds({

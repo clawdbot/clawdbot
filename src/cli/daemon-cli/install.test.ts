@@ -1,5 +1,6 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -13,7 +14,6 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const isDefaultInstallIdentityMock = vi.hoisted(() => vi.fn(() => true));
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
@@ -82,6 +82,7 @@ const service = vi.hoisted(() => ({
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
+  readDefinitionMutationCapability: vi.fn(async () => ({ kind: "writable" as const })),
   readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
@@ -102,9 +103,8 @@ vi.mock("../../config/mutate.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: isDefaultInstallIdentityMock,
-  resolveNativeServiceProfileConflict: () => null,
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));
@@ -246,84 +246,8 @@ function mockResolvedGatewayTokenSecretRef() {
   );
 }
 
-const { mergeInstallInvocationEnv, runDaemonInstall } = await import("./install.js");
+const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
-
-describe("mergeInstallInvocationEnv", () => {
-  it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
-    const env = mergeInstallInvocationEnv({
-      env: {
-        Path: "C:\\Windows\\System32",
-        openai_api_key: "service-openai-key",
-        NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
-      },
-      platform: "win32",
-    });
-
-    expectFields(env, {
-      PATH: "C:\\Windows\\System32",
-      OPENAI_API_KEY: "service-openai-key",
-    });
-    expect(env.Path).toBeUndefined();
-    expect(env.openai_api_key).toBeUndefined();
-    expect(env.NODE_OPTIONS).toBeUndefined();
-  });
-
-  it.each([
-    { platform: "darwin" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "linux" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, caKey: "node_extra_ca_certs" },
-  ])(
-    "preserves installed additive Node CA trust without unsafe overrides on $platform",
-    ({ platform, caKey }) => {
-      const env = mergeInstallInvocationEnv({
-        env: { PATH: "/usr/bin" },
-        existingServiceEnv: {
-          [caKey]: " /opt/openclaw/corporate-ca.pem ",
-          NODE_TLS_REJECT_UNAUTHORIZED: "0",
-          HTTPS_PROXY: "https://attacker.invalid",
-          NODE_OPTIONS: "--require /tmp/untrusted.js",
-          BASH_ENV: "/tmp/untrusted.sh",
-          LD_PRELOAD: "/tmp/untrusted.so",
-          OPENAI_API_KEY: "existing-service-key",
-        },
-        platform,
-      });
-
-      expectFields(env, {
-        NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
-        OPENAI_API_KEY: "existing-service-key",
-        PATH: "/usr/bin",
-      });
-      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-      expect(env.HTTPS_PROXY).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.BASH_ENV).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-      if (platform === "win32") {
-        expect(env.node_extra_ca_certs).toBeUndefined();
-      }
-    },
-  );
-
-  it.each([
-    { platform: "darwin" as const, shellKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, shellKey: "node_extra_ca_certs" },
-  ])(
-    "lets the current shell override installed Node CA trust on $platform",
-    ({ platform, shellKey }) => {
-      const env = mergeInstallInvocationEnv({
-        env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
-        existingServiceEnv: {
-          NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
-        },
-        platform,
-      });
-
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");
-    },
-  );
-});
 
 describe("runDaemonInstall", () => {
   beforeEach(() => {
@@ -331,7 +255,7 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
-    isDefaultInstallIdentityMock.mockReturnValue(true);
+    mockSystemAccountHome();
     replaceConfigFileMock.mockReset();
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
@@ -346,6 +270,7 @@ describe("runDaemonInstall", () => {
     service.isLoaded.mockReset();
     service.stage.mockReset();
     service.install.mockReset();
+    service.readDefinitionMutationCapability.mockReset();
     service.readCommand.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
@@ -378,6 +303,7 @@ describe("runDaemonInstall", () => {
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
     service.install.mockResolvedValue(undefined);
+    service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
@@ -387,6 +313,7 @@ describe("runDaemonInstall", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
   });
 
@@ -418,8 +345,17 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("blocks inaccessible definitions before config reads or credential generation", async () => {
+    service.readDefinitionMutationCapability.mockRejectedValueOnce(new Error("secret-canary"));
+    await runDaemonInstall({ json: true, force: true });
+    expect(actionState.failed[0]?.message).toContain("SERVICE_DEFINITION_UNKNOWN");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(service.readCommand).toHaveBeenCalledOnce();
+  });
+
   it("blocks non-default install identities before inspecting host services", async () => {
-    isDefaultInstallIdentityMock.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
 
     await runDaemonInstall({ json: true });
 
@@ -801,17 +737,34 @@ describe("runDaemonInstall", () => {
   });
 
   it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
+    const programArguments = [
+      "/usr/bin/node",
+      "--max-old-space-size=24576",
+      "--require=/tmp/service-preload.js",
+      "/usr/local/bin/openclaw",
+      "gateway",
+    ];
     service.isLoaded.mockResolvedValue(true);
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+    const managedDefinition = {
+      programArguments,
       environment: {
         OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
       },
-    } as never);
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    service.readCommand.mockResolvedValue(existingCommand as never);
 
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    for (const [options] of buildGatewayInstallPlanMock.mock.calls) {
+      expect(options).toEqual(expect.objectContaining({ existingCommand }));
+    }
     expect(actionState.warnings).toContain(
       "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
     );
@@ -883,6 +836,13 @@ describe("runDaemonInstall", () => {
 
   it("preserves generated-service CA trust without unsafe overrides during forced reinstall", async () => {
     const extraCaCerts = "/opt/openclaw/corporate-ca.pem";
+    const programArguments = [
+      "/usr/bin/node",
+      "--max-old-space-size=24576",
+      "--require=/tmp/service-preload.js",
+      "/usr/local/bin/openclaw",
+      "gateway",
+    ];
     for (const key of [
       "NODE_EXTRA_CA_CERTS",
       "NODE_TLS_REJECT_UNAUTHORIZED",
@@ -895,7 +855,7 @@ describe("runDaemonInstall", () => {
     }
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+      programArguments,
       environment: {
         NODE_EXTRA_CA_CERTS: extraCaCerts,
         NODE_TLS_REJECT_UNAUTHORIZED: "0",
@@ -925,6 +885,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true, force: true });
 
     const installPlanArg = readFirstInstallPlanArg();
+    expect(installPlanArg.existingCommand).toEqual(expect.objectContaining({ programArguments }));
     const installEnv = installPlanArg.env as Record<string, string | undefined>;
     expect(installEnv.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
     expect(installEnv.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
@@ -1051,29 +1012,14 @@ describe("runDaemonInstall", () => {
         OPENAI_API_KEY: "service-openai-key",
       },
     } as never);
-    const previous = process.env.OPENAI_API_KEY;
-    const previousNodeOptions = process.env.NODE_OPTIONS;
     delete process.env.OPENAI_API_KEY;
     process.env.NODE_OPTIONS = "--require /tmp/untrusted.js";
-    try {
-      await runDaemonInstall({ json: true, force: true });
+    await runDaemonInstall({ json: true, force: true });
 
-      expectFields(readFirstInstallPlanArg().env, {
-        OPENAI_API_KEY: "service-openai-key",
-      });
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-      if (previousNodeOptions === undefined) {
-        delete process.env.NODE_OPTIONS;
-      } else {
-        process.env.NODE_OPTIONS = previousNodeOptions;
-      }
-    }
+    expectFields(readFirstInstallPlanArg().env, {
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse stale service control env during forced reinstall", async () => {
@@ -1090,27 +1036,18 @@ describe("runDaemonInstall", () => {
       },
     } as never);
 
-    const previous = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
-    try {
-      await runDaemonInstall({ json: true, force: true });
+    await runDaemonInstall({ json: true, force: true });
 
-      expectFields(readFirstInstallPlanArg().env, {
-        OPENAI_API_KEY: "service-openai-key",
-      });
-      const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
-      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.PATH).not.toContain("/tmp/doctor-bin");
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+    expectFields(readFirstInstallPlanArg().env, {
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(env.PATH).not.toContain("/tmp/doctor-bin");
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 });

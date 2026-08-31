@@ -2,8 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -93,31 +96,6 @@ export function pickSummaryFromOutput(text: string | undefined) {
   }
   const limit = 2000;
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
-}
-
-/** Picks the last non-error payload text suitable for cron run summaries. */
-function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
-) {
-  for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
-      continue;
-    }
-    const summary = pickSummaryFromOutput(payloads[i]?.text);
-    if (summary) {
-      return summary;
-    }
-  }
-  for (let i = payloads.length - 1; i >= 0; i--) {
-    if (isNonTerminalToolErrorWarning(payloads[i])) {
-      continue;
-    }
-    const summary = pickSummaryFromOutput(payloads[i]?.text);
-    if (summary) {
-      return summary;
-    }
-  }
-  return undefined;
 }
 
 /** Picks the last non-empty payload text while ignoring terminal error payloads first. */
@@ -264,11 +242,8 @@ export function resolveCronPayloadOutcome(params: {
   finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
-  const firstText =
-    params.payloads.find((payload) => !isNonTerminalToolErrorWarning(payload))?.text ?? "";
-  const fallbackSummary =
-    pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
+  const fallbackSummary = pickSummaryFromOutput(fallbackOutputText);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
   const deliveryPayloadHasStructuredContent = payloadHasStructuredDeliveryContent(deliveryPayload);
@@ -347,8 +322,24 @@ export function resolveCronPayloadOutcome(params: {
     ? normalizedFinalAssistantVisibleText
     : fallbackOutputText;
   const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
-  const resolvedDeliveryPayloads = shouldUseFinalAssistantVisibleText
-    ? [{ text: normalizedFinalAssistantVisibleText }]
+  const finalDeliveryPayload = shouldUseFinalAssistantVisibleText
+    ? { text: normalizedFinalAssistantVisibleText }
+    : undefined;
+  if (
+    finalDeliveryPayload &&
+    deliveryPayload &&
+    deliveryPayload.isError !== true &&
+    deliveryPayload.text === normalizedFinalAssistantVisibleText
+  ) {
+    // A replacement or assembled answer must not inherit another payload's
+    // speech. This fresh text projection never inherits transcript or custody ownership.
+    const tts = getReplyPayloadMetadata(deliveryPayload)?.tts;
+    if (tts) {
+      setReplyPayloadMetadata(finalDeliveryPayload, { tts });
+    }
+  }
+  const resolvedDeliveryPayloads = finalDeliveryPayload
+    ? [finalDeliveryPayload]
     : selectedDeliveryPayloads.length > 0
       ? selectedDeliveryPayloads
       : synthesizedText

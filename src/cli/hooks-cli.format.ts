@@ -174,12 +174,10 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
  * Format detailed info for a single hook
  */
 export function formatHookInfo(
-  report: HookStatusReport,
+  hook: HookStatusEntry | undefined,
   hookName: string,
   opts: HookInfoOptions,
 ): string {
-  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
-
   if (!hook) {
     if (opts.json) {
       const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);

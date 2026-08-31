@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -20,15 +20,17 @@ import {
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObject } from "./validation.js";
 
-vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/configured-state.js")>();
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
   return {
     ...actual,
-    hasBundledChannelConfiguredState: (params: {
-      channelId: string;
-      cfg: OpenClawConfig;
-      env?: NodeJS.ProcessEnv;
-    }) => {
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) => {
+      if (params.metadataKey !== "configuredState") {
+        return actual.hasBundledChannelPackageState(params);
+      }
       if (params.channelId === "cache-channel") {
         return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
       }
@@ -40,7 +42,7 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
           Boolean(params.env?.[key]?.trim()),
         );
       }
-      return actual.hasBundledChannelConfiguredState(params);
+      return actual.hasBundledChannelPackageState(params);
     },
   };
 });

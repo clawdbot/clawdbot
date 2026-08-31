@@ -786,7 +786,7 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps numeric row id and provider GUID separately for action tooling", async () => {
+  it("keeps provider IDs separate and projects from-me identity", async () => {
     const message = {
       id: 12345,
       guid: "p:0/GUID-current",
@@ -801,18 +801,23 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload } = await buildIMessageInboundContext({
+    const contextParams = {
       cfg: {} as OpenClawConfig,
       accountService: undefined,
       decision,
-      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    });
+    } satisfies Omit<Parameters<typeof buildIMessageInboundContext>[0], "message">;
+    const { ctxPayload } = await buildIMessageInboundContext({ ...contextParams, message });
 
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
     expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+    const selfContext = await buildIMessageInboundContext({
+      ...contextParams,
+      message: { ...message, is_from_me: true },
+    });
+    expect(selfContext.ctxPayload.SenderIsSelf).toBe(true);
   });
 
   it("keeps generated media notices out of command input", async () => {

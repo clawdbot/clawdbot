@@ -80,35 +80,6 @@ export function retireChatModelSelectionOwnership(
   host.requestUpdate?.();
 }
 
-export function applySelectedChatAgent(
-  host:
-    | (Pick<
-        ChatModelSettingsHost,
-        | "agentsList"
-        | "chatModelSwitchPromises"
-        | "hello"
-        | "requestUpdate"
-        | "sessionKey"
-        | "sessions"
-      > & {
-        assistantAgentId?: string | null;
-      })
-    | null
-    | undefined,
-  selectedAgentId: string | null,
-): void {
-  if (
-    !host ||
-    !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
-    (host.assistantAgentId ?? null) === selectedAgentId
-  ) {
-    return;
-  }
-  retireChatModelSelectionOwnership(host);
-  host.assistantAgentId = selectedAgentId;
-  host.requestUpdate?.();
-}
-
 function buildChatSessionListOptions(
   state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
@@ -415,6 +386,7 @@ export async function switchChatModel(
     return false;
   }
   const currentOverride = resolveChatModelOverrideValue({
+    activeSession: activeRow,
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: targetSessionKey,

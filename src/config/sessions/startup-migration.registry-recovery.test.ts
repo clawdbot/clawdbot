@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -42,7 +41,6 @@ it("does not create a missing configured agent database during startup maintenan
     env,
   }).path;
   const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
-  const sweepOrphanSessionStoreTemps = vi.fn(async () => 0);
 
   await runSessionStartupMigration({
     cfg,
@@ -60,16 +58,12 @@ it("does not create a missing configured agent database during startup maintenan
         warnings: [],
       })),
       migrateManagedWorktreeCanonicalWorkspaces,
-      migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-      prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
       resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
-      sweepOrphanSessionStoreTemps,
     },
   });
 
   expect(fs.existsSync(sqlitePath)).toBe(false);
   expect(migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
-  expect(sweepOrphanSessionStoreTemps).toHaveBeenCalledWith({ storePath });
 });
 
 it("re-registers durable lineage children before configured-only runtime reads", async () => {
@@ -135,9 +129,6 @@ it("re-registers durable lineage children before configured-only runtime reads",
           outcomes: [{ kind: "not-armed" as const }],
           warnings: [],
         })),
-        migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-        prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
-        sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
       },
     });
     expect(migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalled();

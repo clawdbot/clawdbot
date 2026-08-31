@@ -3,7 +3,20 @@
  * checks.
  */
 import type { Command } from "commander";
+import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
+import type {
+  BrowserCreateProfileResult,
+  BrowserDeleteProfileResult,
+  BrowserImportProfileResult,
+  BrowserResetProfileResult,
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  ProfileStatus,
+  SystemProfileInfo,
+} from "../browser/client.js";
+import type { BrowserDoctorReport } from "../browser/doctor.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -13,22 +26,7 @@ import {
   runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import {
-  danger,
-  defaultRuntime,
-  info,
-  redactCdpUrl,
-  shortenHomePath,
-  type BrowserCreateProfileResult,
-  type BrowserDeleteProfileResult,
-  type BrowserImportProfileResult,
-  type BrowserResetProfileResult,
-  type BrowserStatus,
-  type BrowserTab,
-  type BrowserTransport,
-  type ProfileStatus,
-  type SystemProfileInfo,
-} from "./core-api.js";
+import { danger, defaultRuntime, info, shortenHomePath } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -37,6 +35,7 @@ type BrowserDoctorCheck = {
   ok: boolean;
   detail?: string;
   warning?: boolean;
+  info?: boolean;
 };
 
 function sanitizeTableCell(value: string): string {
@@ -132,7 +131,7 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
+  const prefix = check.warning ? "WARN" : check.info ? "INFO" : check.ok ? "OK" : "FAIL";
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
@@ -156,10 +155,18 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null;
+  let report: BrowserDoctorReport;
 
   try {
-    status = await fetchBrowserStatus(parent, profile);
+    report = await callBrowserRequest<BrowserDoctorReport>(
+      parent,
+      {
+        method: "GET",
+        path: "/doctor",
+        query: resolveProfileQuery(profile),
+      },
+      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+    );
     checks.push({
       name: "gateway",
       ok: true,
@@ -174,6 +181,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     return { ok: false, checks };
   }
 
+  const status = report.status;
   checks.push({
     name: "plugin",
     ok: status.enabled,
@@ -191,6 +199,16 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
       : "not running; run `openclaw browser start`",
   });
+  const extensionVersionCheck = report.checks.find((check) => check.id === "extension-version");
+  if (extensionVersionCheck) {
+    checks.push({
+      name: extensionVersionCheck.id,
+      ok: extensionVersionCheck.status !== "fail",
+      warning: extensionVersionCheck.status === "warn",
+      info: extensionVersionCheck.status === "info",
+      detail: `${extensionVersionCheck.summary}${extensionVersionCheck.fixHint ? `; ${extensionVersionCheck.fixHint}` : ""}`,
+    });
+  }
   if (status.graphics) {
     checks.push({
       name: "graphics",

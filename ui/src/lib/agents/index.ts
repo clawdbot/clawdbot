@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
+  AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
@@ -87,6 +88,7 @@ export type AgentCapability = {
   invalidateFiles: (agentIds: readonly (string | null | undefined)[]) => void;
   ensureFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   refreshFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
+  recordFile: (result: AgentsFilesGetResult) => void;
   subscribe: (listener: (state: AgentCapabilityState) => void) => () => void;
   dispose: () => void;
 };
@@ -420,6 +422,31 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     },
     ensureFiles: (agentId) => loadFiles(agentId, false),
     refreshFiles: (agentId) => loadFiles(agentId, true),
+    recordFile({ agentId, file }) {
+      const status = fileStatus(agentId);
+      if (!status.list) {
+        // Reconnect/config invalidation can clear the list while an editor
+        // remains open. Rebuild the full list after the confirmed operation.
+        void loadFiles(agentId, true);
+        return;
+      }
+      // A confirmed file result supersedes lists already in flight. Retain the
+      // full canonical list so their awaiting callers can still read it.
+      fileRequests.delete(agentId);
+      fileRequestOwners.delete(agentId);
+      const entry = { ...file };
+      delete entry.content;
+      const entries = status.list.files;
+      status.list = {
+        ...status.list,
+        files: entries.some((existing) => existing.name === entry.name)
+          ? entries.map((existing) => (existing.name === entry.name ? entry : existing))
+          : [...entries, entry],
+      };
+      status.loading = false;
+      status.error = null;
+      publish();
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

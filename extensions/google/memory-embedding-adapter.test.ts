@@ -27,8 +27,8 @@ import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 const provider: MemoryEmbeddingProvider = {
   id: "gemini",
   model: "gemini-embedding-2",
-  embedQuery: async () => [1, 0],
-  embedBatch: async (texts) => texts.map(() => [1, 0]),
+  embed: async () => [1, 0],
+  embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
 
 const clientBase = {

@@ -1,6 +1,6 @@
 // Mattermost tests cover slash http plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { PassThrough } from "node:stream";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -35,21 +35,21 @@ function createRequest(params: {
   contentType?: string;
   autoEnd?: boolean;
 }): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = params.method ?? "POST";
-  incoming.headers = {
+  const req = new IncomingMessage(new Socket());
+  req.method = params.method ?? "POST";
+  req.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
     if (params.body) {
-      req.write(params.body);
+      req.push(Buffer.from(params.body));
     }
     if (params.autoEnd !== false) {
-      req.end();
+      req.complete = true;
+      req.push(null);
     }
   });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {

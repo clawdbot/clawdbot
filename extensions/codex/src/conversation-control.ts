@@ -314,9 +314,6 @@ export async function setCodexConversationPermissions(params: {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }
-      if (!entry.sessionRoot?.trim()) {
-        throw new Error("Codex permission mode requires a recorded session root.");
-      }
       entry.permissionMode = params.mode === "yolo" ? "full" : "guarded";
       return entry;
     },
@@ -324,7 +321,7 @@ export async function setCodexConversationPermissions(params: {
   if (!updated) {
     throw new Error("Codex session changed while applying the permission mode.");
   }
-  return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
+  return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "guarded"}.`;
 }
 
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {

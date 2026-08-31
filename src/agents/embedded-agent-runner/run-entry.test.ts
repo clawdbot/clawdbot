@@ -165,7 +165,6 @@ function recordTurnAttempt(
       },
     },
     sessionIdUsed: label,
-    sessionFile: `${label}.jsonl`,
     promptError: false,
     aborted: false,
     yieldAborted: false,

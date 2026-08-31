@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { UI_APPEARANCE_THEME_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
@@ -11,11 +12,33 @@ import {
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
+import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 
-const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "absolutely", "custom"]);
+// Derived from the wire contract so a theme the profile store rejects can never
+// be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
+// "custom" is config-syncable (honored only by browsers with an imported
+// palette) but intentionally not profile-storable, so it is appended here
+// rather than added to the wire contract.
+const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>([
+  ...UI_APPEARANCE_THEME_VALUES,
+  "custom",
+]);
+
+export function isAppearancePref(
+  key: string,
+): key is "theme" | "themeMode" | "accent" | "fontUi" | "fontChat" {
+  return (
+    key === "theme" ||
+    key === "themeMode" ||
+    key === "accent" ||
+    key === "fontUi" ||
+    key === "fontChat"
+  );
+}
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
+  configSync?: boolean;
   extract: (value: unknown) => T | undefined;
   local: (settings: UiSettings) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
@@ -26,8 +49,18 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
+const fontPrefSpec = (key: "fontUi" | "fontChat") =>
+  prefSpec<TypefaceId>({
+    configSync: false,
+    extract: normalizeTypefaceOverride,
+    local: (settings) => normalizeTypefaceOverride(settings[key]),
+    write: (value) => ({ [key]: value }),
+    clearable: true,
+    reset: () => ({ [key]: undefined }),
+  });
+
 /**
- * One descriptor per synced pref: the source of truth for config ui.prefs.
+ * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
  */
 export const SYNCED_PREFS = {
@@ -55,6 +88,8 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ accent: undefined }),
   }),
+  fontUi: fontPrefSpec("fontUi"),
+  fontChat: fontPrefSpec("fontChat"),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
@@ -104,13 +139,15 @@ export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
   | "accent"
+  | "fontUi"
+  | "fontChat"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
 export type SyncedPrefValue<K extends SyncedPrefKey> =
   ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
 export type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
-export type ServerUiPrefProvenance = "default" | "pending" | "synced" | "device-local";
+export type ServerUiPrefProvenance = "default" | "pending" | "synced" | "profile" | "device-local";
 export type ServerUiPrefState<T> = {
   overridden: boolean;
   provenance: ServerUiPrefProvenance;
@@ -149,6 +186,9 @@ export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   }
   const result: ServerUiPrefs = {};
   for (const key of SYNCED_PREF_KEYS) {
+    if (SYNCED_PREFS[key].configSync === false) {
+      continue;
+    }
     const value = SYNCED_PREFS[key].extract(prefs[key]);
     if (value !== undefined) {
       (result as Record<string, unknown>)[key] = value;
@@ -163,6 +203,7 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
   shadowPrefs: ServerUiPrefs | null,
   settings: UiSettings,
   canSync?: boolean | null,
+  profilePrefs?: ServerUiPrefs | null,
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const specification = SYNCED_PREFS[key];
   const localValue = specification.local(settings) as SyncedPrefValue<K> | undefined;
@@ -176,16 +217,28 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     const overridden = !prefValuesEqual(localValue, resetValue);
     return {
       overridden,
-      provenance: overridden ? "device-local" : "default",
+      provenance:
+        overridden || (specification.configSync === false && canSync === false)
+          ? "device-local"
+          : "default",
       resetValue,
       value: localValue,
     };
   };
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
-  const serverValue =
-    prefs && Object.hasOwn(prefs, key)
+  const configValue =
+    specification.configSync !== false && prefs && Object.hasOwn(prefs, key)
       ? (specification.extract(prefs[key]) as SyncedPrefValue<K> | undefined)
       : undefined;
+  const profileValue = profilePrefs?.[key] ?? undefined;
+  const serverValue = profileValue ?? configValue;
+  const isProfileValue = profileValue !== undefined;
+  // With a profile active, reset deletes the profile key (even when none exists
+  // yet), so the reset target is what that deletion falls back to — the gateway
+  // value. Using the product default here misclassifies an explicit selection of
+  // the product default as a reset and silently drops the user's choice.
+  const resetsProfileKey = profilePrefs != null && isAppearancePref(key);
+  const resetValue = resetsProfileKey ? (configValue ?? productDefault) : productDefault;
   const canApplyServerValue =
     serverValue !== undefined &&
     (!specification.canApply ||
@@ -205,16 +258,19 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     }
     const shadowValue = shadowPrefs[key];
     if (shadowValue === null) {
-      return { ...localState(productDefault), provenance: "pending" };
+      return { ...localState(resetValue), provenance: "pending" };
     }
     return {
       overridden: true,
       provenance: "pending",
-      resetValue: productDefault,
+      resetValue,
       value: shadowValue as SyncedPrefValue<K>,
     };
   }
-  if (!prefs || !Object.hasOwn(prefs, key) || serverValue === undefined) {
+  if ((!prefs || !Object.hasOwn(prefs, key)) && !isProfileValue) {
+    return localState(productDefault);
+  }
+  if (serverValue === undefined) {
     return localState(productDefault);
   }
   if (!canApplyServerValue) {
@@ -225,16 +281,16 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     // the value, so Restore default still removes the server override.
     return {
       overridden: true,
-      provenance: "synced",
-      resetValue: productDefault,
+      provenance: isProfileValue ? "profile" : "synced",
+      resetValue,
       value: localValue,
     };
   }
   if (prefValuesEqual(localValue, serverValue)) {
     return {
       overridden: true,
-      provenance: "synced",
-      resetValue: productDefault,
+      provenance: isProfileValue ? "profile" : "synced",
+      resetValue,
       value: serverValue,
     };
   }

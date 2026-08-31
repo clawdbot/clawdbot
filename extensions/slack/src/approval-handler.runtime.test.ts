@@ -394,6 +394,10 @@ describe("slackApprovalNativeRuntime", () => {
       metadata: [
         { label: "Severity", value: "Warning" },
         { label: "Plugin", value: "computer-use" },
+        {
+          label: "Scope",
+          value: "Send to 3 recipients via email (external): alice@example.com, +2 more",
+        },
       ],
       decisions: ["allow-once", "allow-always", "deny"],
     });
@@ -404,6 +408,12 @@ describe("slackApprovalNativeRuntime", () => {
     );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
+    expect(readMrkdwnTexts(payload.blocks)).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
     expect(payload.text).not.toContain("*Command*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,

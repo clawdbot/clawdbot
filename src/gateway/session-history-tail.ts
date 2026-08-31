@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
@@ -159,6 +160,11 @@ export async function readIncrementalChatHistoryTail(params: {
       maxMessages: chunkMessages + 1,
       allowResetArchiveFallback: true,
     });
+    // Separate awaits may cross a destructive rewrite, even when a page is empty.
+    // Let the existing retryable history response request one coherent snapshot.
+    if (page.displaySource !== readPage.displaySource) {
+      throw new SessionTranscriptProjectionUnavailableError(params.readScope.sessionId);
+    }
     if (page.messages.length === 0) {
       break;
     }

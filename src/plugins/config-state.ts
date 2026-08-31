@@ -1,13 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createEffectiveEnableStateResolver,
-  createPluginEnableStateResolver,
   resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
@@ -18,7 +13,6 @@ import {
 import {
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolverCore,
-  type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -44,45 +38,16 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 
-function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
-  const lookup = new Map<string, string>();
-  for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
-    lookup.set(alias, pluginId);
-  }
-  return lookup;
-}
-
-function normalizePluginIdWithLookup(
-  id: string,
-  getAliasLookup: () => ReadonlyMap<string, string>,
-): string {
-  const trimmed = normalizeOptionalString(id) ?? "";
-  const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
-  const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
-  if (builtInAlias) {
-    return builtInAlias;
-  }
-  return getAliasLookup().get(normalized) ?? normalized;
-}
-
-function createScopedPluginIdNormalizer(): NormalizePluginId {
-  let lookup: ReadonlyMap<string, string> | undefined;
-  return (id) =>
-    normalizePluginIdWithLookup(id, () => {
-      lookup ??= getBundledPluginAliasLookup();
-      return lookup;
-    });
-}
-
 /** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
-  return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
+  const normalized = normalizeOptionalLowercaseString(id) ?? "";
+  return BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized) ?? normalized;
 }
 
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolverCore(config, createScopedPluginIdNormalizer());
+  return normalizePluginsConfigWithResolverCore(config, normalizePluginId);
 };
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */
@@ -256,10 +221,17 @@ export function resolvePluginActivationState(params: {
   );
 }
 
-export const resolveEnableState = createPluginEnableStateResolver<
-  NormalizedPluginsConfig,
-  PluginOrigin
->(resolvePluginActivationState);
+function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+}
+
+export const resolveEnableState = (
+  id: string,
+  origin: PluginOrigin,
+  config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolvePluginActivationState({ id, origin, config, enabledByDefault }));
 
 type EffectiveActivationParams = {
   id: string;
@@ -270,10 +242,10 @@ type EffectiveActivationParams = {
   activationSource?: PluginActivationConfigSource;
 };
 
-export const resolveEffectiveEnableState =
-  createEffectiveEnableStateResolver<EffectiveActivationParams>(
-    resolveEffectivePluginActivationState,
-  );
+export const resolveEffectiveEnableState = (
+  params: EffectiveActivationParams,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolveEffectivePluginActivationState(params));
 
 export function resolveEffectivePluginActivationState(params: {
   id: EffectiveActivationParams["id"];

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
@@ -34,6 +35,47 @@ afterAll(() => {
 });
 
 describe("app-tool-stream approval lifecycle", () => {
+  it("carries browser tab details through the completed live result, including empty text", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 1, "tool", {
+        phase: "start",
+        name: "browser",
+        toolCallId: "browser-call",
+        args: { action: "open" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 2, "tool", {
+        phase: "result",
+        name: "browser",
+        toolCallId: "browser-call",
+        result: {
+          content: [],
+          details: {
+            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+          },
+        },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      live: true,
+      preview: {
+        kind: "browser-tab",
+        profile: "managed",
+        target: "host",
+        targetId: "tab-1",
+        title: "Example",
+      },
+    });
+    resetToolStream(host);
+  });
+
   const approval = (runId: string | undefined, sessionKey = "main") => ({
     id: "approval-1",
     kind: "exec" as const,
@@ -579,13 +621,15 @@ describe("app-tool-stream result blocks", () => {
             details: {
               changedModel: true,
               sessionKey: "main",
+              agentId: "main",
               modelOverride: "openai/gpt-5.6-luna",
             },
           },
         }),
       );
 
-      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+      expect(host.sessions.refreshReplacement).toHaveBeenCalledOnce();
+      expect(host.sessions.state.modelOverrides).toEqual({});
     },
   );
 

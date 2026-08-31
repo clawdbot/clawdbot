@@ -24,10 +24,7 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
-import {
-  isMessageActionSuccessful,
-  resolveMessageSendOutcome,
-} from "../infra/outbound/message-action-contracts.js";
+import { resolveMessageActionOutcome } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -53,15 +50,15 @@ function extractMessageId(payload: unknown): string | undefined {
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const messageId = extractMessageId(result.payload);
   const sendResult = result.kind === "send" ? result.sendResult : undefined;
-  const sendOutcome = result.kind === "send" ? resolveMessageSendOutcome(sendResult) : undefined;
+  const outcome = resolveMessageActionOutcome(result);
   return {
     ...(result.kind === "broadcast"
-      ? { ok: isMessageActionSuccessful(result) }
-      : sendOutcome && !sendOutcome.ok && !result.dryRun
+      ? { ok: outcome.ok }
+      : !outcome.ok
         ? {
-            ...formatCliJsonFailure(sendOutcome.error),
-            deliveryStatus: sendResult?.deliveryStatus,
-            ...(sendOutcome.sentBeforeError ? { sentBeforeError: true } : {}),
+            ...formatCliJsonFailure(outcome.error),
+            ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+            ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
           }
         : {}),
     action: result.action,

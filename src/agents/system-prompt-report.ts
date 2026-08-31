@@ -7,24 +7,15 @@
 import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
 import type { AgentTool } from "./runtime/index.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
-const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
-// The entry cache above is keyed on the tool object, but finalizeAgentTools
-// rebuilds every tool on every attempt, so it cannot carry a digest across
-// attempts. This layer is keyed on the exact bytes hashed, so it survives that
-// churn while staying byte-identical by construction. Bounded because tool
-// descriptions vary with runtime context and would otherwise accumulate.
+// Finalization rebuilds tool objects, while Code Mode updates retained descriptions.
+// Cache only the summary digest, with bounded key size and entry count.
 const toolSummaryHashCache = new Map<string, string>();
 const MAX_TOOL_SUMMARY_HASHES = 512;
-// Keys are the summary text itself, so entry count alone does not bound memory:
-// 512 arbitrarily long runtime-generated descriptions would be retained for the
-// process lifetime. Oversized summaries still hash, they just never enter the cache.
 const MAX_CACHED_TOOL_SUMMARY_CHARS = 4_096;
 const toolSchemaStatsCache = new WeakMap<
   object,
@@ -110,17 +101,11 @@ function resolveSummaryHash(summary: string): string {
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
-    const cached = toolReportEntryCache.get(tool);
-    if (cached) {
-      return cached;
-    }
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
-    toolReportEntryCache.set(tool, entry);
-    return entry;
+    return { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
   });
 }
 
@@ -142,8 +127,7 @@ export function buildSystemPromptReport(params: {
   bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
+  injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
   tools: AgentTool[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
@@ -173,10 +157,7 @@ export function buildSystemPromptReport(params: {
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
       hash: sha256(params.skillsPrompt),

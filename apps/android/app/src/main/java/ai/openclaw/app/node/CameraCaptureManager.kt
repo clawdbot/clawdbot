@@ -198,6 +198,7 @@ class CameraCaptureManager(
             initialWidth = scaled.width,
             initialHeight = scaled.height,
             startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
+            minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
             maxBytes = maxEncodedBytes,
             encode = { width, height, q ->
               val bitmap =

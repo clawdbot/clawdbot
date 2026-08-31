@@ -74,9 +74,21 @@ describe("validatePrivateKey", () => {
       expectThrowsError(() => validatePrivateKey(`N${nsec.slice(1)}`));
     });
 
-    it("rejects invalid nsec (wrong checksum)", () => {
-      const badNsec = "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
-      expectThrowsError(() => validatePrivateKey(badNsec));
+    it.each([
+      "nsec1not-a-real-secret",
+      (() => {
+        const nsec = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex"));
+        return `${nsec.slice(0, -1)}${nsec.endsWith("q") ? "p" : "q"}`;
+      })(),
+    ])("rejects invalid nsec without including it in the error", (badNsec) => {
+      let error: unknown;
+      try {
+        validatePrivateKey(badNsec);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain(badNsec);
     });
 
     it("rejects npub (wrong type)", () => {

@@ -12,6 +12,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
@@ -19,7 +20,6 @@ import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-m
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   readPersistedInstalledPluginIndexSync,
-  refreshPersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
@@ -34,7 +34,6 @@ import {
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
-  type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import {
@@ -154,7 +153,10 @@ type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
-function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(params: T): T {
+// Shared with plugin-registry-refresh.ts.
+export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
+  params: T,
+): T {
   if (!params.config) {
     return params;
   }
@@ -427,6 +429,8 @@ function requiresDerivedRegistryValidation(
     params.discovery !== undefined ||
     params.diagnostics !== undefined ||
     params.installRecords !== undefined ||
+    // Persisted source selection cannot encode this process's development checkout preference.
+    resolveOpenClawDevSourceRoot(env) !== null ||
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
     hasMissingInstalledPluginOwnerMetadata(index, env) ||
@@ -534,7 +538,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   } else if (
     params.config &&
-    persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)
+    persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config, params.env)
   ) {
     diagnostics.push({
       level: "warn",
@@ -672,13 +676,4 @@ export async function inspectPluginRegistry(
     persisted,
     current: result.snapshot,
   };
-}
-
-export function refreshPluginRegistry(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): Promise<PluginRegistrySnapshot> {
-  if (!params.config) {
-    return refreshPersistedInstalledPluginIndex(params);
-  }
-  return refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params));
 }

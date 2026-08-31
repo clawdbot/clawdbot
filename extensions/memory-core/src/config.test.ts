@@ -38,6 +38,13 @@ describe("memory-core manifest config schema", () => {
       schema: manifest.configSchema,
       cacheKey: "memory-core.manifest.dreaming-phase-thresholds",
       value: {
+        memoryPolicy: {
+          excludeSessions: {
+            hookExternalContentSources: ["gmail"],
+            channels: ["email"],
+            chatTypes: ["group"],
+          },
+        },
         dreaming: {
           enabled: true,
           timezone: "Europe/London",
@@ -75,5 +82,15 @@ describe("memory-core manifest config schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects unsupported session admission chat types", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.session-admission-chat-types",
+      value: { memoryPolicy: { excludeSessions: { chatTypes: ["broadcast"] } } },
+    });
+
+    expect(result.ok).toBe(false);
   });
 });

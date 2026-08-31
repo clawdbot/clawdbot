@@ -18,7 +18,13 @@ import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpe
 let testWorkspace: TempWorkspace;
 
 function planItemById(
-  items: readonly { id: string; kind?: string; action?: string }[],
+  items: readonly {
+    id: string;
+    kind?: string;
+    action?: string;
+    status?: string;
+    reason?: string;
+  }[],
   id: string,
 ) {
   const item = items.find((candidate) => candidate.id === id);
@@ -47,6 +53,102 @@ describe("Claude migration provider", () => {
     expect(provider.label).toBe("Claude");
   });
 
+  it.each([
+    {
+      name: "project CLAUDE.md",
+      sourceDir: "project-root",
+      sourceFile: "CLAUDE.md",
+      itemId: "workspace:CLAUDE.md",
+      targetFile: "AGENTS.md",
+    },
+    {
+      name: "project .claude/CLAUDE.md",
+      sourceDir: "project-root",
+      sourceFile: path.join(".claude", "CLAUDE.md"),
+      itemId: "workspace:.claude/CLAUDE.md",
+      targetFile: "AGENTS.md",
+    },
+    {
+      name: "user ~/.claude/CLAUDE.md",
+      sourceDir: ".claude",
+      sourceFile: "CLAUDE.md",
+      itemId: "memory:user-CLAUDE.md",
+      targetFile: "USER.md",
+    },
+  ])("keeps repeated $name imports byte-identical", async (testCase) => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, testCase.sourceDir);
+    const sourceFile = path.join(source, testCase.sourceFile);
+    const workspaceDir = path.join(root, "workspace");
+    const context = makeContext({ source, stateDir: path.join(root, "state"), workspaceDir });
+    const provider = buildClaudeMigrationProvider();
+    await writeFile(sourceFile, "Version one.\n");
+
+    const firstPlan = await provider.plan(context);
+    expect(planItemById(firstPlan.items, testCase.itemId).action).toBe("append");
+    const firstResult = await provider.apply(context, firstPlan);
+    expect(planItemById(firstResult.items, testCase.itemId).status).toBe("migrated");
+    const target = path.join(workspaceDir, testCase.targetFile);
+    const firstBytes = await fs.readFile(target, "utf8");
+
+    const secondResult = await provider.apply(context);
+    expect(planItemById(secondResult.items, testCase.itemId)).toMatchObject({
+      status: "skipped",
+      reason: "already imported from Claude",
+    });
+    expect(await fs.readFile(target, "utf8")).toBe(firstBytes);
+
+    await fs.writeFile(sourceFile, "Version two.\n", "utf8");
+    const changedResult = await provider.apply(context);
+    expect(planItemById(changedResult.items, testCase.itemId).status).toBe("migrated");
+    const changedBytes = await fs.readFile(target, "utf8");
+    expect(changedBytes).toContain("Version one.");
+    expect(changedBytes).toContain("Version two.");
+  });
+
+  it("skips empty instructions without creating a target", async () => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "project");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "CLAUDE.md"), "  \n");
+    const provider = buildClaudeMigrationProvider();
+    const result = await provider.apply(
+      makeContext({ source, stateDir: path.join(root, "state"), workspaceDir }),
+    );
+
+    expect(planItemById(result.items, "workspace:CLAUDE.md")).toMatchObject({
+      status: "skipped",
+      reason: "source file is empty",
+    });
+    await expect(fs.access(path.join(workspaceDir, "AGENTS.md"))).rejects.toThrow();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects an instruction target replaced by a symlink after planning",
+    async () => {
+      const root = testWorkspace.dir;
+      const source = path.join(root, "project");
+      const workspaceDir = path.join(root, "workspace");
+      const target = path.join(workspaceDir, "AGENTS.md");
+      const linkedTarget = path.join(root, "outside.md");
+      await writeFile(path.join(source, "CLAUDE.md"), "Protected instruction.\n");
+      await writeFile(target, "Existing instructions.\n");
+      const context = makeContext({ source, stateDir: path.join(root, "state"), workspaceDir });
+      const provider = buildClaudeMigrationProvider();
+      const plan = await provider.plan(context);
+      const linkedContent =
+        "\n\n<!-- Imported from Claude: project CLAUDE.md -->\n\nProtected instruction.\n";
+      await writeFile(linkedTarget, linkedContent);
+      await fs.rm(target);
+      await fs.symlink(linkedTarget, target);
+
+      const result = await provider.apply(context, plan);
+
+      expect(planItemById(result.items, "workspace:CLAUDE.md").status).toBe("error");
+      expect(await fs.readFile(linkedTarget, "utf8")).toBe(linkedContent);
+    },
+  );
+
   it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
     const previous = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
@@ -58,6 +160,15 @@ describe("Claude migration provider", () => {
       } else {
         process.env.OPENCLAW_HOME = previous;
       }
+    }
+  });
+
+  it("keeps literal $ patterns in home when expanding tildes", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
+    try {
+      expect(resolveHomePath("~/.claude")).toBe(path.resolve("/home/$&user/.claude"));
+    } finally {
+      spy.mockRestore();
     }
   });
 

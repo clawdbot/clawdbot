@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  clearNativeRequireJavaScriptModuleCache,
+  clearPluginModuleRequireCache,
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
@@ -207,7 +207,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
 
     fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath);
+    clearPluginModuleRequireCache(modulePath);
 
     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
       ok: true,
@@ -227,12 +227,51 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
 
     fs.writeFileSync(helperPath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: dir });
+    clearPluginModuleRequireCache(modulePath, { dependencyRoot: dir });
 
     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
       ok: true,
       moduleExport: { marker: "after" },
     });
+  });
+
+  it("releases retired native module graphs, including local cycles", () => {
+    const dir = tempDirs.make("openclaw-native-retirement-");
+    const modulePath = path.join(dir, "plugin.cjs");
+    const probePath = path.join(dir, "probe.mjs");
+    fs.writeFileSync(modulePath, 'exports.helper = require("./helper.cjs");\n');
+    fs.writeFileSync(path.join(dir, "helper.cjs"), 'exports.entry = require("./plugin.cjs");\n');
+    const ownerUrl = pathToFileURL(path.resolve("src/plugins/native-module-require.ts")).href;
+    fs.writeFileSync(
+      probePath,
+      `import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
+import { clearPluginModuleRequireCache, tryNativeRequireJavaScriptModule } from ${JSON.stringify(ownerUrl)};
+const modulePath = ${JSON.stringify(modulePath)};
+function loadAndRetire() {
+  const result = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.moduleExport.helper.entry, result.moduleExport);
+  const ref = new WeakRef(result.moduleExport);
+  clearPluginModuleRequireCache(modulePath);
+  return ref;
+}
+const retired = Array.from({ length: 12 }, loadAndRetire);
+await setImmediate();
+for (let index = 0; index < 5; index++) {
+  global.gc();
+  await setImmediate();
+}
+assert.equal(retired.filter(ref => ref.deref() !== undefined).length, 0);
+`,
+    );
+    const result = spawnSync(process.execPath, ["--expose-gc", "--import", "tsx", probePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
   });
 });
 

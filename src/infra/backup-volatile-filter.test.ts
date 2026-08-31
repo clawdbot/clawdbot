@@ -35,6 +35,7 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/user-data/SingletonSocket`, true],
     [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
     [`${stateDir}/sandbox/skills-workspaces/workspace-main/skills/demo`, true],
+    [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
@@ -48,6 +49,7 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/SingletonSocket`, false],
     [`${stateDir}/sandbox/registry.json`, false],
     [`${stateDir}/sandbox/workspaces/workspace-main/README.md`, false],
+    [`${stateDir}/cache/other-product/artifact.bin`, false],
     // non-volatile: plain config
     [`${stateDir}/config.json`, false],
     // non-volatile: workspace files outside state
@@ -147,6 +149,10 @@ describe("isTransientSqliteBackupPath", () => {
   it.each([
     "memory/main.sqlite.reindex-lock.sqlite",
     "memory/main.sqlite.reindex-lock.sqlite-shm",
+    "memory/main.sqlite.generation-writer.sqlite",
+    "memory/main.sqlite.generation-writer.sqlite-wal",
+    "memory/main.sqlite.generation-lock.sqlite",
+    "memory/main.sqlite.generation-lock.sqlite-journal",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
   ])("classifies transient reindex state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(true);

@@ -247,6 +247,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     ((items: SelectItem[]) => new SelectList(items, items.length, selectListTheme));
   const suggestions = new Map<string, TaskSuggestion>();
   const hiddenIds = new Set<string>();
+  const resolvingIds = new Set<string>();
   let activeId: string | null = null;
   let activeOverlay: OverlayHandle | null = null;
   let activeSelector: TaskSelector | null = null;
@@ -305,7 +306,9 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     }
     const suggestion = [...suggestions.values()]
       .toSorted((left, right) => left.createdAt - right.createdAt)
-      .find((entry) => !hiddenIds.has(entry.id) && matchesSession(entry));
+      .find(
+        (entry) => !hiddenIds.has(entry.id) && !resolvingIds.has(entry.id) && matchesSession(entry),
+      );
     if (!suggestion) {
       return;
     }
@@ -328,27 +331,21 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         return;
       }
       closeActive();
-      hiddenIds.add(suggestion.id);
+      // Navigation clears manual dismissals, not ownership of an unfinished action.
+      resolvingIds.add(suggestion.id);
       deps.requestRender();
       try {
+        let acceptedKey: string | undefined;
         if (action.kind === "accept") {
           if (!deps.client.acceptTaskSuggestion) {
             throw new Error("task suggestion acceptance is unavailable");
           }
-          const result = action.cloudProfileId
-            ? await deps.client.acceptTaskSuggestion(
-                suggestion.id,
-                action.mode,
-                action.cloudProfileId,
-              )
-            : action.mode === "worktree"
-              ? await deps.client.acceptTaskSuggestion(suggestion.id)
-              : await deps.client.acceptTaskSuggestion(suggestion.id, action.mode);
-          remove(suggestion.id);
-          deps.chatLog.addSystem(`follow-up task started in ${result.key}`);
-          if (action.mode !== "session" && matchesSession(suggestion)) {
-            await deps.onAccepted(result.key);
-          }
+          const result = await deps.client.acceptTaskSuggestion(
+            suggestion.id,
+            action.mode,
+            action.cloudProfileId,
+          );
+          acceptedKey = result.key;
         } else {
           if (!deps.client.dismissTaskSuggestion) {
             throw new Error("task suggestion dismissal is unavailable");
@@ -357,17 +354,31 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
           if (!result.dismissed) {
             throw new Error("task suggestion is no longer pending");
           }
-          remove(suggestion.id);
-          deps.chatLog.addSystem("follow-up task dismissed");
+        }
+        if (disposed) {
+          return;
+        }
+        remove(suggestion.id);
+        deps.chatLog.addSystem(
+          acceptedKey ? `follow-up task started in ${acceptedKey}` : "follow-up task dismissed",
+        );
+        if (acceptedKey && action.mode !== "session" && matchesSession(suggestion)) {
+          await deps.onAccepted(acceptedKey);
         }
       } catch (error) {
-        hiddenIds.delete(suggestion.id);
+        if (disposed) {
+          return;
+        }
         deps.chatLog.addSystem(`follow-up task failed: ${formatErrorMessage(error)}`);
         void refresh().catch((refreshError: unknown) => {
-          deps.chatLog.addSystem(
-            `task suggestion refresh failed: ${formatErrorMessage(refreshError)}`,
-          );
+          if (!disposed) {
+            deps.chatLog.addSystem(
+              `task suggestion refresh failed: ${formatErrorMessage(refreshError)}`,
+            );
+          }
         });
+      } finally {
+        resolvingIds.delete(suggestion.id);
       }
       presentNext();
       if (!disposed) {

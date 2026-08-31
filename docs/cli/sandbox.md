@@ -15,6 +15,10 @@ Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, 
 
 List sandbox runtimes with status, backend, config match, age, idle time, and associated session/agent.
 
+For configured plugin-provided backends such as OpenShell, the CLI loads the
+owning backend plugin before checking live runtime status. Browser-only
+operations do not require backend plugin activation.
+
 ```bash
 openclaw sandbox list
 openclaw sandbox list --browser  # browser containers only

@@ -1,9 +1,5 @@
-import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import {
-  crabboxCommandError,
-  permanentCrabboxCommandError,
-} from "./crabbox-worker-command-error.js";
+import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -44,56 +40,8 @@ export async function runCrabboxCommand(params: {
   }
 }
 
-export function provisionProfileError(result: SpawnResult): WorkerProviderError | undefined {
-  if (result.termination !== "exit") {
-    return undefined;
-  }
-  const output = `${result.stderr}\n${result.stdout}`;
-  if (
-    /\bprovider=\S+\s+does not support fixed idempotent lease IDs\b/u.test(output) ||
-    /(?:unknown|unrecognized) (?:flag|option)[^\r\n]*--lease-id/iu.test(output) ||
-    /flag provided but not defined:\s*-lease-id/iu.test(output)
-  ) {
-    return new WorkerProviderError(
-      "Crabbox 0.41.1 or newer with fixed lease ID support is required",
-    );
-  }
-  if (
-    /\blease_id_conflict\b/u.test(output) &&
-    !/\bretry after provider inventory converges\b/iu.test(output)
-  ) {
-    return permanentCrabboxCommandError("warmup", result);
-  }
-  if (result.code !== 2) {
-    return undefined;
-  }
-  if (/\bunknown provider\s+"[^"\r\n]+"/u.test(output)) {
-    return new WorkerProviderError(
-      "Crabbox profile provider is not supported by this Crabbox binary",
-    );
-  }
-  if (/\bprovider=\S+\s+does not support warmup\b/u.test(output)) {
-    return new WorkerProviderError("Crabbox profile provider does not support warmup");
-  }
-  if (
-    /\bprovider=\S+.*\bdoes not support status\b/u.test(output) ||
-    /\bprovider=\S+\s+does not expose persistent status\b/u.test(output)
-  ) {
-    return new WorkerProviderError("Crabbox profile provider does not support worker leases");
-  }
-  if (/\bprovider=\S+\s+is one-shot; use crabbox run\b/u.test(output)) {
-    return new WorkerProviderError("Crabbox profile provider is run-only");
-  }
-  if (/\bprovider=\S+\s+requires module source; use crabbox run --script\b/u.test(output)) {
-    return new WorkerProviderError("Crabbox profile provider requires a run script");
-  }
-  if (/--class is not supported for provider=\S+/u.test(output)) {
-    return new WorkerProviderError("Crabbox profile class is not supported by its provider");
-  }
-  return undefined;
-}
-
-export function isAuthoritativeLeaseAbsence(result: SpawnResult, identifier: string): boolean {
+// Recognition failure does not prove resource absence; only the stop owner can confirm cleanup.
+export function isUnrecognizedLease(result: SpawnResult, identifier: string): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
   if (
     !output.includes(identifier) ||
@@ -134,17 +82,6 @@ export async function stopCrabboxLease(params: {
     timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
-    return;
-  }
-  const alreadyStopped =
-    `${result.stderr}\n${result.stdout}`.includes(params.id) &&
-    /\balready (?:destroyed|released|stopped|terminated)\b/iu.test(
-      `${result.stderr}\n${result.stdout}`,
-    );
-  if (
-    result.termination === "exit" &&
-    (isAuthoritativeLeaseAbsence(result, params.id) || alreadyStopped)
-  ) {
     return;
   }
   throw crabboxCommandError("stop", result);

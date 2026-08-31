@@ -521,6 +521,47 @@ describe("opencode provider plugin", () => {
     expectSeedModels(fallback.models);
   });
 
+  it.each(["failed", "filtered"] as const)(
+    "uses refreshed lifecycle on the first fallback after %s model advertising",
+    async (advertising) => {
+      const retiredId = "big-pickle";
+      const provider = await registerSingleProviderPlugin(plugin);
+      const fetchGuard = createCatalogFetchGuard({
+        metadata: [{ id: retiredId, status: "deprecated" }],
+        advertised: () => {
+          if (advertising === "failed") {
+            throw new Error("model advertising unavailable");
+          }
+          return [retiredId];
+        },
+      });
+
+      try {
+        expectSeedModels((await buildOpencodeZenLiveProviderConfig()).models);
+        const fallback = await buildOpencodeZenLiveProviderConfig({
+          apiKey: "runtime-key",
+          discoveryApiKey: "discovery-key",
+          fetchGuard,
+        });
+
+        expect(fallback.apiKey).toBe("runtime-key");
+        expect(fallback.models.map((model) => model.id)).toEqual(
+          OFFLINE_MODEL_IDS.filter((id) => id !== retiredId),
+        );
+        expect(provider.resolveDynamicModel?.({ modelId: retiredId } as never)).toMatchObject({
+          id: retiredId,
+        });
+      } finally {
+        clearLiveCatalogCacheForTests();
+        await prepareOpencodeZenModel({
+          modelId: retiredId,
+          fetchGuard: createCatalogFetchGuard({ metadata: [], advertised: [] }),
+        });
+        clearLiveCatalogCacheForTests();
+      }
+    },
+  );
+
   it.each([
     [["claude-opus-5"], "opencode/claude-opus-5"],
     [["gpt-5.6-sol"], undefined],

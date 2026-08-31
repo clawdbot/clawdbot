@@ -2,13 +2,13 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   uiProofArtifactDir,
   waitForConfirmModal,
@@ -52,14 +52,19 @@ suite.define(() => {
       const draftStore = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
+        'import("/src/lib/chat/outbox-store.ts")',
+      );
       const owner = await page.evaluate(
-        async ({ store, sessionKeys }) => {
+        async ({ store, outbox, sessionKeys }) => {
           const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
             ?.context.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
-          const gatewayOwner = client.gatewayUrl.trim() || "default";
+          const { gatewayOwner, key: storageKey } = outbox.storageTargetForGateway(
+            client.gatewayUrl,
+          );
           const sessions = Object.fromEntries(
             sessionKeys.map((key, index) => [
               `${key}\u0000agent:main`,
@@ -72,14 +77,14 @@ suite.define(() => {
             ]),
           );
           sessionStorage.setItem(
-            `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`,
-            JSON.stringify({ version: 2, gatewayOwner, sessions }),
+            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}`,
+            JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
           const recoveryScope = client.recoveryScope;
           await Promise.all(
             sessionKeys.map((key, index) =>
               store.writeDurableComposerDraft(
-                { gatewayOwner, recoveryScope, scopeKey: `${key}\u0000agent:main` },
+                { gatewayOwner, recoveryScope, scopeKey: `chat:v3:${key}\u0000agent:main` },
                 {
                   revision: index + 1,
                   text: `durable ${key}`,
@@ -89,9 +94,9 @@ suite.define(() => {
               ),
             ),
           );
-          return { gatewayOwner, recoveryScope };
+          return { gatewayOwner, recoveryScope, storageKey };
         },
-        { store: draftStore, sessionKeys: keys },
+        { store: draftStore, outbox: outboxStore, sessionKeys: keys },
       );
       const deleteFromRuntime = (sessionKeys: string[]) =>
         page.evaluate(async (targets) => {
@@ -113,6 +118,7 @@ suite.define(() => {
       await expect(deleteFromRuntime([noOp])).resolves.toMatchObject({ deleted: false });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: retired[3],
+        sessionId: `session:${retired[3]}`,
         agentId: "main",
         reason: "delete",
       });
@@ -124,7 +130,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
@@ -136,7 +142,7 @@ suite.define(() => {
           };
           sessionStorage.setItem(storageKey, JSON.stringify(local));
           await store.writeDurableComposerDraft(
-            { ...scopeOwner, scopeKey: `${key}\u0000agent:main` },
+            { ...scopeOwner, scopeKey: `chat:v3:${key}\u0000agent:main` },
             { revision, text: "in-flight durable edit", attachments: [] },
             { expectedRevision: 7, writeId: "in-flight-edit" },
           );
@@ -154,13 +160,16 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, key, scopeOwner }) => {
-              const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
               const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
                 sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
               };
               const scopeKey = `${key}\u0000agent:main`;
               const localDraft = local.sessions?.[scopeKey];
-              const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+              const durable = await store.readDurableComposerDraft({
+                ...scopeOwner,
+                scopeKey: `chat:v3:${scopeKey}`,
+              });
               return {
                 local: Boolean(localDraft?.draft || localDraft?.queue?.length),
                 durable: durable.status === "found" ? durable.draft.text : durable.status,
@@ -173,12 +182,15 @@ suite.define(() => {
 
       await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
           const scopeKey = `${key}\u0000agent:main`;
-          const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+          const durable = await store.readDurableComposerDraft({
+            ...scopeOwner,
+            scopeKey: `chat:v3:${scopeKey}`,
+          });
           if (durable.status !== "not-found") {
             throw new Error("confirmed deletion did not leave a durable retirement fence");
           }
@@ -189,7 +201,7 @@ suite.define(() => {
           };
           sessionStorage.setItem(storageKey, JSON.stringify(local));
           const written = await store.writeDurableComposerDraft(
-            { ...scopeOwner, scopeKey },
+            { ...scopeOwner, scopeKey: `chat:v3:${scopeKey}` },
             { revision, text: "post-confirm durable replacement", attachments: [] },
             {
               expectedRevision: durable.revision ?? 0,
@@ -210,7 +222,7 @@ suite.define(() => {
             async ({ store, sessionKeys, scopeOwner }) => {
               const local = JSON.parse(
                 sessionStorage.getItem(
-                  `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
+                  `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
                 ) ?? "{}",
               ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
               return Object.fromEntries(
@@ -220,7 +232,7 @@ suite.define(() => {
                     const localDraft = local.sessions?.[scopeKey];
                     const durable = await store.readDurableComposerDraft({
                       ...scopeOwner,
-                      scopeKey,
+                      scopeKey: `chat:v3:${scopeKey}`,
                     });
                     return [
                       key,

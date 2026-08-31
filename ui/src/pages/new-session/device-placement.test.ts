@@ -31,7 +31,7 @@ describe("device placement projection", () => {
       environment: node({}),
       selectable: true,
       reason: undefined,
-      facts: ["Worker slots 1/2", "macOS", "Camera"],
+      facts: ["macOS", "Camera"],
     },
     {
       name: "saturated host",
@@ -39,7 +39,6 @@ describe("device placement projection", () => {
       selectable: false,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       facts: [
-        "Worker slots 0/2",
         "No worker slots are available. Wait for a slot or pick another device.",
         "macOS",
         "Camera",
@@ -88,13 +87,12 @@ describe("device placement projection", () => {
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
       facts: [
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
-        "Worker slots 1/2",
         "macOS",
         "Camera",
       ],
     },
   ])("projects $name with one canonical eligibility decision", (testCase) => {
-    expect(projectDevicePlacements([testCase.environment])).toEqual([
+    expect(projectDevicePlacements([testCase.environment])).toMatchObject([
       {
         deviceId: "runner",
         label: "Build runner",

@@ -164,6 +164,25 @@ Venice uses a credit-based system. Anonymized models cost roughly the same as
 direct API pricing plus a small Venice fee. See
 [venice.ai/pricing](https://venice.ai/pricing) for current rates.
 
+OpenClaw uses the Venice plugin manifest's prices for bundled models, including
+when those models appear in live discovery. Newly discovered models outside the
+manifest keep zero estimates until pricing is configured; zero does not mean the
+model is free.
+
+The bundled prices include extended-context tiers for `grok-4-5` and
+`qwen-3-7-plus`. Higher rates apply to the entire request when total prompt
+input exceeds 200,000 or 256,000 tokens, respectively. Prompt input includes
+uncached tokens, cache reads, and cache writes; output tokens do not select the
+tier. A request exactly at the threshold still uses base rates. See Venice's
+[model pricing contract](https://docs.venice.ai/api-reference/endpoint/models/list).
+
+Existing explicit model prices take precedence, including zero. Onboarding
+preserves existing model entries rather than replacing their prices. If an older
+configuration contains obsolete zero rates, back up your configuration and update
+only the affected `models.providers.venice.models[].cost` fields to current rates.
+Keep intentional custom prices. See [Token use and costs](/reference/token-use)
+for pricing units and usage reporting.
+
 ## Usage examples
 
 ```bash
@@ -188,11 +207,11 @@ openclaw agent --model venice/qwen3-coder-480b-a35b-instruct-turbo --message "Re
 <AccordionGroup>
   <Accordion title="API key not recognized">
     ```bash
-    echo $VENICE_API_KEY
-    openclaw models list | grep venice
+    openclaw models list --provider venice
     ```
 
-    Confirm the key starts with `vapi_`.
+    Confirm the API key is configured and starts with `vapi_`; do not print or
+    share its value.
 
   </Accordion>
 

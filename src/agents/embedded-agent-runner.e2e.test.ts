@@ -868,7 +868,7 @@ describe("runEmbeddedAgent", () => {
       modelSelectionLocked: true,
       provider: "anthropic",
       modelId: "retired-outer-model",
-      prompt: "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)",
+      prompt: "[redacted]",
     });
     expect("contextEngine" in attempt).toBe(false);
     expect("contextTokenBudget" in attempt).toBe(false);

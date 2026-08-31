@@ -63,6 +63,23 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
+  it("pins only Windows packaged-fresh checks to the known-good Node release", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const prepare = job(workflow, "prepare");
+    const consumer = job(workflow, "cross_os_release_checks");
+    const windowsPackagedFreshNodeVersion =
+      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}";
+
+    expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(consumer, "Setup Node.js").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+    expect(step(consumer, "Setup pnpm").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+  });
+
   it("retries only an interrupted Windows dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");
@@ -91,6 +108,34 @@ describe("cross-OS release checks workflow", () => {
       'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";',
     );
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
+  });
+
+  it("installs trusted workflow dependencies for artifact resolution and upgrade metadata", () => {
+    const prepare = job(readWorkflow(WORKFLOW_PATH), "prepare");
+    const install = step(prepare, "Install workflow validation dependencies");
+
+    expect(install).toMatchObject({
+      if: "inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'",
+      "working-directory": "workflow",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
+    expect(step(prepare, "Build candidate artifact once").if).toBe(
+      "inputs.candidate_artifact_name == ''",
+    );
+    expect(step(prepare, "Capture baseline metadata").if).toBe("${{ inputs.mode != 'fresh' }}");
+
+    const installIndex =
+      prepare.steps?.findIndex(
+        (candidate) => candidate.name === "Install workflow validation dependencies",
+      ) ?? -1;
+    for (const dependentStep of [
+      "Resolve provided candidate package",
+      "Capture baseline metadata",
+    ]) {
+      expect(installIndex, dependentStep).toBeLessThan(
+        prepare.steps?.findIndex((candidate) => candidate.name === dependentStep) ?? -1,
+      );
+    }
   });
 
   it("keeps release artifact tarball filenames local before upload paths use them", () => {
@@ -360,10 +405,6 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const resolve = step(prepare, "Resolve provided candidate package");
-    expect(step(prepare, "Install workflow validation dependencies")).toMatchObject({
-      if: "inputs.candidate_artifact_name != ''",
-      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    });
     expect(resolve.run).toContain("resolve-openclaw-package-candidate.mts");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');
