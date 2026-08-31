@@ -231,7 +231,7 @@ export function countSystemPromptChars(body: unknown): number {
   return total;
 }
 
-function countOccurrences(haystack: string, needle: string): number {
+export function countOccurrences(haystack: string, needle: string, identifierOnly = false): number {
   if (!needle) {
     return 0;
   }
@@ -242,7 +242,14 @@ function countOccurrences(haystack: string, needle: string): number {
     if (next < 0) {
       return count;
     }
-    count += 1;
+    const before = haystack[next - 1];
+    const after = haystack[next + needle.length];
+    if (
+      !identifierOnly ||
+      ((!before || !/[A-Za-z0-9_-]/u.test(before)) && (!after || !/[A-Za-z0-9_-]/u.test(after)))
+    ) {
+      count += 1;
+    }
     offset = next + needle.length;
   }
 }
@@ -352,6 +359,7 @@ async function visitSessionLogEvents(
 }
 
 export async function countSessionLogMentions(params: {
+  identifierKeys?: ReadonlySet<string>;
   sessionsDir: string;
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
@@ -362,7 +370,8 @@ export async function countSessionLogMentions(params: {
       return;
     }
     for (const [key, needle] of Object.entries(params.needles)) {
-      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      const count = countOccurrences(scanText, needle, params.identifierKeys?.has(key));
+      counts[key] = (counts[key] ?? 0) + count;
     }
   });
   return counts;

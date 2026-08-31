@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  countSessionLogMentions,
   countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
@@ -23,6 +22,10 @@ import {
 } from "./providers/shared/debug-request-cursor.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import {
+  countToolSearchSessionLogMentions,
+  throwToolSearchGatewayRequestFailure,
+} from "./tool-search-gateway-request-evidence.js";
 
 type Lane = "normal" | "code" | "tools";
 
@@ -145,18 +148,6 @@ export async function fetchJson(
     fetchImpl: options.fetchImpl,
     maxBodyBytes: options.maxBodyBytes ?? DEFAULT_FETCH_LIMITS.bodyMaxBytes,
     timeoutMs: options.timeoutMs ?? DEFAULT_FETCH_LIMITS.timeoutMs,
-  });
-}
-
-async function countToolSearchSessionLogMentions(params: { stateDir: string; targetTool: string }) {
-  return countSessionLogMentions({
-    sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
-    needles: {
-      tool_search_code: "tool_search_code",
-      tool_search: "tool_search",
-      tool_call: "tool_call",
-      [params.targetTool]: params.targetTool,
-    },
   });
 }
 
@@ -410,22 +401,25 @@ export async function runToolSearchGatewayLane(params: {
   fixture: ToolSearchGatewayFixture;
   lane: Lane;
 }): Promise<LaneResult> {
-  const providerBaseUrl = params.env.mock?.baseUrl;
+  const { env, fixture, lane } = params;
+  const { targetTool } = fixture;
+  const providerBaseUrl = env.mock?.baseUrl;
   assert(providerBaseUrl, "Tool Search gateway fixture requires mock-openai provider mode");
-  const gatewayToken = params.env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
+  const gatewayToken = env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
   assert(gatewayToken, "Tool Search gateway fixture requires QA gateway token");
   await configureLane(params);
-  const stateDir = path.join(params.env.gateway.tempRoot, "state");
+  const stateDir = path.join(env.gateway.tempRoot, "state");
   const mentionCountsBefore = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
-  const sessionKey = `tool-search-gateway-${params.lane}`;
+  const gatewayLogsBefore = env.gateway.logs?.() ?? "";
+  const sessionKey = `tool-search-gateway-${lane}`;
   const response = await fetchJson(
-    `${params.env.gateway.baseUrl}/v1/responses`,
+    `${env.gateway.baseUrl}/v1/responses`,
     {
       method: "POST",
       headers: {
@@ -444,7 +438,7 @@ export async function runToolSearchGatewayLane(params: {
             content: [
               {
                 type: "input_text",
-                text: `tool search qa check target=${params.fixture.targetTool}`,
+                text: `tool search qa check target=${targetTool}`,
               },
             ],
           },
@@ -453,7 +447,24 @@ export async function runToolSearchGatewayLane(params: {
         stream: false,
       }),
     },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
+    { timeoutMs: liveTurnTimeoutMs(env, 30_000) },
+  ).catch((cause: unknown) =>
+    throwToolSearchGatewayRequestFailure({
+      cause,
+      fetchJson,
+      gatewayLogs: (() => {
+        const current = env.gateway.logs?.() ?? "";
+        // A rolled bounded buffer cannot prove which surviving lines belong to
+        // this request, so omit Gateway facts instead of misattributing them.
+        return current.startsWith(gatewayLogsBefore) ? current.slice(gatewayLogsBefore.length) : "";
+      })(),
+      lane,
+      mentionCountsBefore,
+      providerBaseUrl,
+      requestCursorBefore,
+      stateDir,
+      targetTool,
+    }),
   );
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
@@ -492,16 +503,16 @@ export async function runToolSearchGatewayLane(params: {
     .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
   const targetToolIdentity = await readTargetToolIdentity({
-    env: params.env,
+    env,
     sessionKey,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   return {
-    lane: params.lane,
+    lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
     providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
@@ -523,7 +534,7 @@ export async function runToolSearchGatewayLane(params: {
       : [],
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
-      providerPromptText.includes(`- ${params.fixture.targetTool}`),
+      providerPromptText.includes(`- ${targetTool}`),
     providerPlannedTools: laneRequests
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
