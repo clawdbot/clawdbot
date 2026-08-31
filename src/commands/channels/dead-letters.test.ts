@@ -144,4 +144,42 @@ describe("channel dead-letter commands", () => {
       });
     });
   });
+
+  it("applies the plugin's stored account key when the operator types an alias", async () => {
+    await withTempState(async () => {
+      // Owner resolution is alias-aware; if the account half were not, an alias would
+      // address half of one key and half of another.
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "@vendor/external-chat-plugin",
+            plugin: {
+              id: "external-chat",
+              meta: { aliases: ["ext"] },
+              config: { resolveDurableAccountKey: (id: string) => `stored-${id}` },
+            },
+            source: "test",
+          },
+        ]),
+      );
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "@vendor/external-chat-plugin",
+        accountId: "stored-default",
+      });
+      await queue.enqueue("event-1", { text: "recover me" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      const runtime = createRuntime();
+
+      await channelsDeadLettersListCommand({ channel: "ext", json: true }, runtime);
+
+      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        deadLetters: Array<{ id: string }>;
+      };
+      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
+    });
+  });
 });

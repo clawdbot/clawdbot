@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
+import {
+  getRegisteredChannelOwnerPluginId,
+  normalizeAnyChannelId,
+} from "../../channels/registry.js";
 
 /**
  * Resolves the id a channel account's durable ingress rows are stored under.
@@ -64,7 +67,12 @@ export function resolveChannelIngressQueueAccountKey(params: {
   accountId: string;
   plugin?: Pick<ChannelPlugin, "config"> | undefined;
 }): string {
-  const plugin = params.plugin ?? getChannelPlugin(params.channelId);
+  // Canonicalize first. The owner half resolves through the alias-aware registry key,
+  // and `getChannelPlugin` is by canonical id only — so without this an operator typing
+  // a documented alias got the owner from one channel and the account key from no
+  // channel at all, addressing half of one key and half of another.
+  const canonicalId = normalizeAnyChannelId(params.channelId) ?? params.channelId;
+  const plugin = params.plugin ?? getChannelPlugin(canonicalId);
   const stored = plugin?.config?.resolveDurableAccountKey?.(params.accountId);
   return normalizeOptionalString(stored) ?? params.accountId;
 }
