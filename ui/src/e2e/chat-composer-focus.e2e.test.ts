@@ -37,20 +37,6 @@ suite.define(() => {
         .poll(() => option.evaluate((element) => document.activeElement === element))
         .toBe(true);
 
-      await page.keyboard.type("x");
-
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("x");
-      await page.locator(".new-session-page__message").fill("");
-      await picker.locator("wa-dropdown").evaluate((element) => {
-        element.open = false;
-      });
-      await trigger.focus();
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => option.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-
       await page.keyboard.press("Space");
 
       await expect
@@ -60,6 +46,16 @@ suite.define(() => {
       await expect
         .poll(() => picker.locator("wa-dropdown").evaluate((element) => element.open))
         .toBe(false);
+
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => option.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+
+      await page.keyboard.type("r");
+
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("r");
     });
   });
 

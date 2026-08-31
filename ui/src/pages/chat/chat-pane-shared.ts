@@ -313,7 +313,7 @@ export function focusChatComposerFromPrintableKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Focus during keydown capture so the browser delivers beforeinput/input,
-  // including the first character, through the composer's normal pipeline.
+  // Focus transfers ownership; block old-target dropdown typeahead from cancelling input.
   composer.focus({ preventScroll: true });
+  event.stopImmediatePropagation();
 }

@@ -88,7 +88,7 @@ describe("new session draft route ownership", () => {
     const summary = details.appendChild(document.createElement("summary"));
     const input = append(document.createElement("input"));
     const editable = append(document.createElement("div"));
-    editable.contentEditable = "true";
+    editable.setAttribute("contenteditable", "true");
     editable.tabIndex = 0;
     const element = ["element", "element", "element", "element", "element"] as const;
     const overlay = ["overlay", "overlay", "overlay", "overlay", "overlay"] as const;
@@ -164,11 +164,13 @@ describe("new session draft route ownership", () => {
       expect(document.activeElement).not.toBe(textarea);
     }
 
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
     for (const control of [
       document.createElement("input"),
       document.createElement("select"),
       document.createElement("textarea"),
-      Object.assign(document.createElement("div"), { contentEditable: "true" }),
+      editable,
     ]) {
       page.append(control);
       control.focus();

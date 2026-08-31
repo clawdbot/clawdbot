@@ -789,10 +789,7 @@ describe("chat pane keyboard shortcuts", () => {
     details.open = true;
     const summary = details.appendChild(document.createElement("summary"));
     summary.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-    const dialog = document.body.appendChild(document.createElement("dialog"));
-    dialog.open = true;
-    const dialogButton = dialog.appendChild(document.createElement("button"));
-    dialogButton.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+    let dialog: HTMLDialogElement | null = null;
 
     try {
       summary.focus();
@@ -802,6 +799,10 @@ describe("chat pane keyboard shortcuts", () => {
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
 
       focus.mockClear();
+      dialog = document.body.appendChild(document.createElement("dialog"));
+      dialog.open = true;
+      const dialogButton = dialog.appendChild(document.createElement("button"));
+      dialogButton.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
       dialogButton.focus();
       dialogButton.dispatchEvent(
         new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
@@ -809,7 +810,7 @@ describe("chat pane keyboard shortcuts", () => {
       expect(focus).not.toHaveBeenCalled();
     } finally {
       details.remove();
-      dialog.remove();
+      dialog?.remove();
     }
   });
 
