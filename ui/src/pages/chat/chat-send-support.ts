@@ -79,11 +79,7 @@ export function readChatInputReceipt(
   ) {
     return undefined;
   }
-  return history.pendingInputs?.items.some((input) => input.runId === item.sendRunId)
-    ? "pending"
-    : history.inputConsumptions?.some((input) => input.runId === item.sendRunId)
-      ? "consumed"
-      : undefined;
+  return history.inputReceipts?.find((input) => input.runId === item.sendRunId)?.state;
 }
 
 export function chatMessagesContainQueuedSend(

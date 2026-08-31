@@ -180,12 +180,16 @@ describe("application placement delivery recovery", () => {
     "pending-queued",
     "pending-interrupted",
     "pending-cancelled",
+    "retained-outside-page",
     "consumed",
     "assistant",
     "same-text",
     "unavailable",
   ])("delivery recovery settles only authoritative input custody (%s)", async (evidence) => {
-    const acceptedInput = evidence.startsWith("pending-") || evidence === "consumed";
+    const acceptedInput =
+      evidence.startsWith("pending-") ||
+      evidence === "retained-outside-page" ||
+      evidence === "consumed";
     const delivered = evidence === "exact-user" || acceptedInput;
     const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
       if (method === "chat.history") {
@@ -220,15 +224,30 @@ describe("application placement delivery recovery", () => {
                     },
                   },
                 ]
-              : [],
-            total: evidence.startsWith("pending-") ? 1 : 0,
+              : evidence === "retained-outside-page"
+                ? Array.from({ length: 20 }, (_, index) => ({
+                    id: `newer-${index}`,
+                    runId: `newer-${index}`,
+                    state: "interrupted",
+                    acceptedAt: 1_001 + index,
+                    message: { role: "user", content: `newer-${index}` },
+                  }))
+                : [],
+            total:
+              evidence === "retained-outside-page" ? 21 : evidence.startsWith("pending-") ? 1 : 0,
           },
-          ...(evidence === "consumed" &&
+          ...(acceptedInput &&
           Array.isArray(payload?.inputRunIds) &&
           payload.inputRunIds.includes("message-stable")
             ? {
-                inputConsumptions: [
-                  { runId: "message-stable", consumedByEventId: "aggregate-user" },
+                inputReceipts: [
+                  evidence === "consumed"
+                    ? {
+                        runId: "message-stable",
+                        state: "consumed",
+                        consumedByEventId: "aggregate-user",
+                      }
+                    : { runId: "message-stable", state: "pending" },
                 ],
               }
             : {}),

@@ -16,7 +16,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  listSessionPendingInputConsumptions,
+  listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -337,9 +337,9 @@ async function handleChatHistoryRequest({
         )
       : { items: [], total: 0 };
   // Receipts belong to the currently selected physical session, never archived history.
-  const inputConsumptions = inputRunIds
+  const inputReceipts = inputRunIds
     ? !messageId && sessionId && sessionId === entry?.sessionId
-      ? listSessionPendingInputConsumptions(
+      ? listSessionPendingInputReceipts(
           { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
           { runIds: inputRunIds },
         )
@@ -591,7 +591,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
-      ...(inputConsumptions ? { inputConsumptions } : {}),
+      ...(inputReceipts ? { inputReceipts } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -608,7 +608,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
-    ...(inputConsumptions ? { inputConsumptions } : {}),
+    ...(inputReceipts ? { inputReceipts } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),
