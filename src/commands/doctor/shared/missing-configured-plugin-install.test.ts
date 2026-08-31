@@ -2789,17 +2789,32 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       path.join(targetDir, "package.json"),
       JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
     );
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
-        pluginId: "codex",
-        npmSpec: "@openclaw/codex",
-        version: VERSION,
-        targetDir,
-        resolution: {
-          integrity: "sha512-codex-supervisor-upgrade",
-          resolvedAt: "2026-07-10T00:00:00.000Z",
-        },
-      }),
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: VERSION,
+      targetDir,
+      resolution: {
+        integrity: "sha512-codex-supervisor-upgrade",
+        resolvedAt: "2026-07-10T00:00:00.000Z",
+      },
+    });
+    const commit = vi.fn(async () => {});
+    const rollback = vi.fn(async () => {});
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        expect(isPluginInstallCommitDeferred(callbacks)).toBe(true);
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir: targetDir,
+            mode: "install",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
     );
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
@@ -2826,6 +2841,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expectedPluginId: "codex",
       trustedSourceLinkedOfficialInstall: true,
     });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
