@@ -121,6 +121,15 @@ flow:
         - set: deliveredCard
           value:
             expr: "(() => { const attachment = cardReplyActivities.flatMap((message) => message.attachments ?? []).find((entry) => entry.mimeType === config.adaptiveCardContentType); return attachment ? JSON.parse(Buffer.from(attachment.contentBase64, 'base64').toString('utf8')) : undefined; })()"
+        # Resolve before asserting: an assertion that throws would otherwise leave the
+        # question pending and the agent blocked for anything sharing this Gateway.
+        - set: resolution
+          value:
+            expr: "env.gateway.call('question.resolve', { id: pendingQuestion.id, answers: { answers: { deploy_target: ['Staging (Recommended)'] } }, resolvedBy: 'qa-lab' })"
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
         - assert:
             expr: "deliveredCard?.type === 'AdaptiveCard'"
             message:
@@ -129,13 +138,4 @@ flow:
             expr: "JSON.stringify(deliveredCard.body ?? []).includes(config.cardPromptNeedle)"
             message:
               expr: "`the delivered card lost the reply's content: ${JSON.stringify(deliveredCard)}`"
-        # Leave no pending question behind: an unresolved run keeps the agent blocked for
-        # every later scenario sharing this Gateway.
-        - set: resolution
-          value:
-            expr: "env.gateway.call('question.resolve', { id: pendingQuestion.id, answers: { answers: { deploy_target: ['Staging (Recommended)'] } }, resolvedBy: 'qa-lab' })"
-        - assert:
-            expr: "resolution.status === 'answered'"
-            message:
-              expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
       detailsExpr: "`card blocks=${(deliveredCard.body ?? []).length} actions=${(deliveredCard.actions ?? []).length}`"

@@ -718,6 +718,28 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.update).not.toHaveBeenCalled();
   });
 
+  it("keeps a progress-mode reply's controls after the stream takes its text", () => {
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress" } } as never,
+    });
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    };
+
+    // Progress mode emits the final text into the stream instead of streaming tokens,
+    // so it suppresses the payload for the same reason - and must keep the same remainder.
+    expect(ctrl.preparePayload({ text: "Deploy finished", presentation })).toEqual({
+      text: undefined,
+      presentation,
+    });
+    expect(stream.emit).toHaveBeenCalledWith("Deploy finished");
+  });
+
   it("falls back to normal delivery when progress final streaming fails", () => {
     const stream = makeStream();
     stream.emit.mockImplementation(() => {

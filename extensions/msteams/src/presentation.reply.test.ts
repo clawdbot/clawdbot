@@ -127,6 +127,20 @@ describe("msteams reply presentation", () => {
     });
   });
 
+  it("keeps the authored fallback prose when the reply also carries media", () => {
+    const prepared = prepareMSTeamsReplyPayload({
+      text: "Deploy finished\n\n[Open]",
+      presentationTextMode: "fallback",
+      mediaUrl: "https://example.com/log.png",
+      presentation: PRESENTATION,
+    });
+
+    // No card can be built next to media, so the prose the producer authored is the only
+    // rendering left; regenerating it would drop whatever wording it chose.
+    expect(cardOf(prepared)).toBeUndefined();
+    expect(prepared.text).toBe("Deploy finished\n\n[Open]");
+  });
+
   it("does not turn a silent reply into a card", () => {
     // NO_REPLY is the agent choosing to stay silent. The text path drops it; the card
     // path must not put it in front of the user as the card's first line instead.
