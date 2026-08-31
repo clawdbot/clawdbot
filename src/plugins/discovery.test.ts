@@ -1682,6 +1682,69 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
+  it.each([
+    {
+      name: "keeps standard TypeScript on JavaScript output",
+      sourceExtension: ".ts",
+      availableExtensions: [".js", ".mjs", ".cjs"],
+      expectedExtension: ".js",
+    },
+    {
+      name: "prefers ECMAScript output for ECMAScript TypeScript",
+      sourceExtension: ".mts",
+      availableExtensions: [".js", ".mjs", ".cjs"],
+      expectedExtension: ".mjs",
+    },
+    {
+      name: "prefers CommonJS output for CommonJS TypeScript",
+      sourceExtension: ".cts",
+      availableExtensions: [".js", ".mjs", ".cjs"],
+      expectedExtension: ".cjs",
+    },
+    {
+      name: "retains JavaScript fallback when ECMAScript output is absent",
+      sourceExtension: ".mts",
+      availableExtensions: [".js", ".cjs"],
+      expectedExtension: ".js",
+    },
+    {
+      name: "retains JavaScript fallback when CommonJS output is absent",
+      sourceExtension: ".cts",
+      availableExtensions: [".js", ".mjs"],
+      expectedExtension: ".js",
+    },
+  ])(
+    "matches inferred plugin and setup runtimes to source module flavor: $name",
+    async ({ sourceExtension, availableExtensions, expectedExtension }) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "runtime-flavor-pack");
+      mkdirSafe(path.join(pluginDir, "src"));
+      mkdirSafe(path.join(pluginDir, "dist"));
+
+      writePluginPackageManifest({
+        packageDir: pluginDir,
+        packageName: "@openclaw/runtime-flavor-pack",
+        extensions: [`./src/index${sourceExtension}`],
+        setupEntry: `./src/setup-entry${sourceExtension}`,
+      });
+      writePluginEntry(path.join(pluginDir, "src", `index${sourceExtension}`));
+      writePluginEntry(path.join(pluginDir, "src", `setup-entry${sourceExtension}`));
+      for (const extension of availableExtensions) {
+        writePluginEntry(path.join(pluginDir, "dist", `index${extension}`));
+        writePluginEntry(path.join(pluginDir, "dist", `setup-entry${extension}`));
+      }
+
+      const { candidates } = await discoverWithStateDir(stateDir, {});
+      const candidate = requireCandidateById(candidates, "runtime-flavor-pack");
+      expect(fs.realpathSync(candidate.source)).toBe(
+        fs.realpathSync(path.join(pluginDir, "dist", `index${expectedExtension}`)),
+      );
+      expect(fs.realpathSync(candidate.setupSource ?? "")).toBe(
+        fs.realpathSync(path.join(pluginDir, "dist", `setup-entry${expectedExtension}`)),
+      );
+    },
+  );
+
   it("uses explicit runtime extension entries for installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "runtime-pack");

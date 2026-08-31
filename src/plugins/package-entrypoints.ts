@@ -18,11 +18,9 @@ export function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
   const distWithoutExtension = normalizedRelative.startsWith("src/")
     ? `./dist/${normalizedRelative.slice("src/".length).replace(/\.[^.]+$/u, "")}`
     : `./dist/${withoutExtension.replace(/^\.\//u, "")}`;
-  const withJavaScriptExtensions = (basePath: string) => [
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-  ];
+  const preferredOutputExtension = path.extname(normalized).toLowerCase().replace("t", "j");
+  const withJavaScriptExtensions = (basePath: string) =>
+    [preferredOutputExtension, ".js", ".mjs", ".cjs"].map((extension) => `${basePath}${extension}`);
   const candidates = [
     ...withJavaScriptExtensions(distWithoutExtension),
     ...withJavaScriptExtensions(withoutExtension),
