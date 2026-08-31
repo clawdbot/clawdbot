@@ -1,13 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";

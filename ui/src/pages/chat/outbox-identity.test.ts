@@ -6,16 +6,18 @@ import {
   restoreChatOutboxRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
 import {
+  captureChatOutboxAdmission,
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { readQueuedMessageById, removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
   loadChatComposerSnapshot,
   persistChatComposerState,
-  resolveStoredChatOutboxScope,
   updateStoredChatComposerQueueItem,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
@@ -53,7 +55,7 @@ describe("outbox destination identity", () => {
       const host = { ...state, sessionKey: input };
       expect(persistChatComposerState(host)).toBe(true);
       expect(
-        admitStoredChatComposerQueueItem(host, input, {
+        admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, input), {
           id: "queued",
           text: "follow up",
           createdAt: 1,
@@ -83,11 +85,11 @@ describe("outbox destination identity", () => {
 
   it("maps main aliases to global only under configured global scope", () => {
     const host = { ...state, agentsList: { ...state.agentsList, scope: "global" } };
-    expect(resolveStoredChatOutboxScope(host, "main")).toEqual({
+    expect(resolveUiConversationIdentity(host, "main")).toEqual({
       sessionKey: "global",
       agentId: "default",
     });
-    expect(resolveStoredChatOutboxScope(host, "agent:other:workspace")).toEqual({
+    expect(resolveUiConversationIdentity(host, "agent:other:workspace")).toEqual({
       sessionKey: "global",
       agentId: "other",
     });
@@ -368,6 +370,20 @@ describe("partially preserved legacy identity", () => {
 });
 
 describe("captured outbox scope review regressions", () => {
+  it("keeps only row data when a durable row becomes a local model wait", () => {
+    const host = { ...state, hello: null };
+    const admission = captureChatOutboxAdmission(host, host.sessionKey);
+    const item = { id: "model-wait", text: "keep target", createdAt: 1 };
+    expect(admitStoredChatComposerQueueItem(host, admission, item)).toBe(true);
+    const stored = listStoredChatOutboxes(host)[0]!.queue[0]!;
+
+    updateQueuedMessage(host, item.id, (current) => ({ ...current, sendState: "waiting-model" }));
+
+    expect(readQueuedMessageById(host, item.id)).toEqual({ ...stored, sendState: "waiting-model" });
+    expect(removeQueuedMessage(host, item.id)).toBe("removed");
+    expect(host.chatQueue).toEqual([]);
+    expect(readQueuedMessageById(host, item.id)).toBeNull();
+  });
   it("verifies the admitted queue target when a notification changes defaults", () => {
     const host = { ...state, agentsList: { ...state.agentsList } };
     const unsubscribe = subscribeStoredChatOutboxChanges(() => {
@@ -375,7 +391,11 @@ describe("captured outbox scope review regressions", () => {
     });
     try {
       const item = { id: "captured-admission", text: "keep target", createdAt: 1 };
-      const admitted = admitStoredChatComposerQueueItem(host, "main", item);
+      const admitted = admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, "main"),
+        item,
+      );
       expect(listStoredChatOutboxes(host)).toEqual([
         {
           sessionKey: state.sessionKey,
@@ -395,11 +415,15 @@ describe("captured outbox scope review regressions", () => {
       agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
     };
     expect(
-      admitStoredChatComposerQueueItem(initial, initial.sessionKey, {
-        id: "captured",
-        text: "keep target",
-        createdAt: 1,
-      }),
+      admitStoredChatComposerQueueItem(
+        initial,
+        captureChatOutboxAdmission(initial, initial.sessionKey),
+        {
+          id: "captured",
+          text: "keep target",
+          createdAt: 1,
+        },
+      ),
     ).toBe(true);
     const changed = { ...initial, agentsList: { ...initial.agentsList, mainKey: "workspace" } };
     const original = listStoredChatOutboxes(changed)[0]!;
