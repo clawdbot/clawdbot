@@ -339,7 +339,7 @@ describe("resolveMessageChannelSelection", () => {
       resolve: () => {
         throw new Error("unresolved SecretRef");
       },
-      configured: () => false,
+      configured: (): boolean => false,
       expected: true,
       inspectCalls: ["default"],
       resolveCalls: 0,
@@ -355,7 +355,7 @@ describe("resolveMessageChannelSelection", () => {
       enabled: () => {
         throw new Error("runtime enablement must not receive inspection metadata");
       },
-      configured: () => true,
+      configured: (): boolean => true,
       expected: true,
       inspectCalls: ["default"],
       resolveCalls: 0,
@@ -368,7 +368,7 @@ describe("resolveMessageChannelSelection", () => {
       resolve: () => {
         throw new Error("strict resolution must not run");
       },
-      configured: () => true,
+      configured: (): boolean => true,
       expected: false,
       inspectCalls: ["default"],
       resolveCalls: 0,
