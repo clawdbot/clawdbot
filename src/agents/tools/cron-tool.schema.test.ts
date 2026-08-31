@@ -71,6 +71,7 @@ describe("createCronToolSchema", () => {
         "displayName",
         "enabled",
         "failureAlert",
+        "group",
         "name",
         "owner",
         "pacing",
@@ -78,6 +79,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "tags",
         "trigger",
         "wakeMode",
       ].toSorted(),
@@ -163,6 +165,31 @@ describe("createCronToolSchema", () => {
     ]) {
       expect(Value.Check(schema, invalid)).toBe(false);
     }
+  });
+
+  it("exposes organization metadata and list filters", () => {
+    expect(propertyAt(schemaRecord, "job.group")).toMatchObject({
+      description: expect.stringContaining("System"),
+    });
+    expect(propertyAt(schemaRecord, "job.tags")).toMatchObject({
+      description: expect.stringContaining("Repeatable"),
+    });
+    expect(propertyAt(schemaRecord, "group")).toMatchObject({
+      minLength: 1,
+      maxLength: 64,
+    });
+    expect(propertyAt(schemaRecord, "tag")).toMatchObject({
+      minLength: 1,
+      maxLength: 64,
+    });
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        jobId: "job-1",
+        job: { group: null, tags: [] },
+      }),
+    ).toBe(true);
+    expect(Value.Check(schema, { action: "list", group: "Work", tag: "reports" })).toBe(true);
   });
 
   it("job.schedule exposes interval, cron, and stream source fields", () => {

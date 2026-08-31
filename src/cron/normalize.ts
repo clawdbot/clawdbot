@@ -36,6 +36,8 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
+  /** Preserve nullable/empty group and tag values so patch callers can clear them. */
+  preservePatchClears?: boolean;
   /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
@@ -383,6 +385,8 @@ export function normalizeCronJobInput(
     const group = normalizeCronGroup(base.group);
     if (group) {
       next.group = group;
+    } else if (options.preservePatchClears && base.group === null) {
+      next.group = null;
     } else {
       delete next.group;
     }
@@ -391,6 +395,11 @@ export function normalizeCronJobInput(
     const tags = normalizeCronTags(base.tags);
     if (tags) {
       next.tags = tags;
+    } else if (
+      options.preservePatchClears &&
+      (base.tags === null || (Array.isArray(base.tags) && base.tags.length === 0))
+    ) {
+      next.tags = base.tags;
     } else {
       delete next.tags;
     }
@@ -668,6 +677,7 @@ export function normalizeCronJobPatch(
 ): CronJobPatch | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: false,
+    preservePatchClears: true,
     ...options,
   }) as CronJobPatch | null;
 }

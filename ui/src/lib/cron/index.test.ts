@@ -1136,6 +1136,7 @@ describe("cron controller", () => {
     expect(state.cronForm.name).toBe("Weekly report");
     expect(state.cronForm.group).toBe("Work");
     expect(state.cronForm.tags).toBe("reports, weekly");
+    expect(state.cronForm.metadataLocked).toBe(false);
     expect(state.cronForm.sessionKey).toBe("agent:ops:main");
     expect(state.cronForm.enabled).toBe(false);
     expect(state.cronForm.scheduleKind).toBe("every");
@@ -1229,13 +1230,18 @@ describe("cron controller", () => {
     startCronEdit(state, scriptJob);
     expect(state.cronForm.payloadKind).toBe("script");
     expect(state.cronForm.payloadLocked).toBe(true);
+    expect(state.cronForm.metadataLocked).toBe(false);
     expect(state.cronForm.payloadText).toBe(script);
 
     state.cronForm.name = "Script renamed";
+    state.cronForm.group = "Engineering";
+    state.cronForm.tags = "release, review";
     await addCronJob(state);
 
     const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
     expect(patch.name).toBe("Script renamed");
+    expect(patch.group).toBe("Engineering");
+    expect(patch.tags).toEqual(["release", "review"]);
     expect(patch).not.toHaveProperty("payload");
   });
 
@@ -1478,6 +1484,49 @@ describe("cron controller", () => {
       group: "Work",
       tags: ["reports", "github"],
     });
+  });
+
+  it("escapes comma-bearing tags and omits unchanged tags from unrelated edits", async () => {
+    const job = createCronJob({
+      id: "job-comma-tag",
+      name: "Comma tag",
+      tags: ["sales,emea", "daily"],
+    });
+    const { state, submit } = createCronEditHarness(job);
+
+    expect(state.cronForm.tags).toBe("sales\\,emea, daily");
+    state.cronForm.name = "Renamed comma tag";
+    const unchanged = await submit();
+    expect(requestPatch(unchanged)).not.toHaveProperty("tags");
+
+    const changedHarness = createCronEditHarness(job);
+    changedHarness.state.cronForm.tags = "sales\\,emea, weekly";
+    const changed = await changedHarness.submit();
+    expect(requestPatch(changed).tags).toEqual(["sales,emea", "weekly"]);
+  });
+
+  it("preserves explicit empty tag clears in cron.update patches", async () => {
+    const job = createCronJob({ id: "job-clear-tags", name: "Clear tags", tags: ["daily"] });
+    const { state, submit } = createCronEditHarness(job);
+
+    state.cronForm.tags = "";
+    const call = await submit();
+    expect(requestPatch(call).tags).toEqual([]);
+  });
+
+  it("locks metadata for declaration-owned System jobs", () => {
+    const state = createState();
+    const job = createCronJob({
+      id: "heartbeat-task",
+      name: "Heartbeat task",
+      declarationKey: "heartbeat-task:main:abc",
+      payload: { kind: "systemEvent", text: "task" },
+    });
+
+    startCronEdit(state, job);
+
+    expect(state.cronForm.metadataLocked).toBe(true);
+    expect(state.cronForm.payloadLocked).toBe(true);
   });
 
   it("includes trigger/model/thinking/stagger/bestEffort in cron.update patch", async () => {

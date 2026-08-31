@@ -47,6 +47,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
   "declarationKey",
   "displayName",
+  "group",
+  "tags",
   "owner",
   "schedule",
   "pacing",

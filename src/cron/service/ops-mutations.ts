@@ -15,6 +15,7 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { isSystemOwnedCronJob } from "../metadata.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -356,6 +357,9 @@ export async function add(
     const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
+      if (isSystemOwnedCronJob(existing) && opts?.systemOwned !== true) {
+        throw new Error("system-owned monitor jobs cannot be edited by cron clients");
+      }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
       applyDeclarativeJobSpec(nextJob, normalizedInput, {
@@ -499,7 +503,7 @@ async function updateLoadedJob(params: {
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
   // so updates are rejected outright. Removal stays allowed only to the owner.
-  if (isSystemMonitorDeclaration(job.declarationKey)) {
+  if (isSystemOwnedCronJob(job)) {
     throw new Error("system-owned monitor jobs cannot be edited by cron clients");
   }
   const now = state.deps.nowMs();
@@ -604,7 +608,7 @@ export async function remove(
     // Config is the monitor's source of truth: ad-hoc deletion would disable
     // the feature until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
+    if (isSystemOwnedCronJob(removedJob) && opts?.systemOwned !== true) {
       throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
     opts?.commitGuard?.();

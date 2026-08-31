@@ -6240,7 +6240,7 @@ export const en: TranslationMap & {
       groupHelp: "Use a primary label such as Work or GitHub.",
       groupPlaceholder: "e.g. Work",
       tags: "Tags",
-      tagsHelp: "Comma-separated labels for filtering and discovery.",
+      tagsHelp: "Comma-separated labels for filtering and discovery; escape commas with \\,.",
       tagsPlaceholder: "e.g. reports, github",
       agentId: "Agent",
       namePlaceholder: "Morning brief",

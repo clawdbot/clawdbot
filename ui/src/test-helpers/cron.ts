@@ -26,6 +26,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadLocked: false,
+  metadataLocked: false,
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",

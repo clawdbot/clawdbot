@@ -8,7 +8,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { isSystemOwnedCronJob } from "../../../../src/cron/metadata.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import type {
@@ -883,10 +883,6 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   `;
 }
 
-function isSystemOwnedCronJob(job: CronJob | null | undefined): boolean {
-  return isSystemMonitorDeclaration(job?.declarationKey);
-}
-
 function groupCronJobs(jobs: CronJob[], mode: "none" | "group" | "type") {
   if (mode === "none") {
     return [{ label: null, jobs }];
@@ -1248,7 +1244,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
   const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
   const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
-  const systemOwned = isSystemOwnedCronJob(selectedJob);
+  const systemOwned = selectedJob ? isSystemOwnedCronJob(selectedJob) : false;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
@@ -1353,7 +1349,8 @@ function renderDetailTabs(props: CronProps) {
 
 function renderEditor(props: CronProps, mode: CronPanelMode) {
   const payloadLocked = props.form.payloadLocked;
-  const systemOwned = mode === "job" && isSystemOwnedCronJob(props.editingJob);
+  const systemOwned =
+    mode === "job" && props.editingJob !== null && isSystemOwnedCronJob(props.editingJob);
   const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const supportsAnnounce =
     props.form.sessionTarget !== "main" &&
@@ -1634,13 +1631,13 @@ function renderGeneralSection(props: CronProps) {
         label: t("cron.form.group"),
         help: t("cron.form.groupHelp"),
         placeholder: t("cron.form.groupPlaceholder"),
-        disabled: props.form.payloadLocked,
+        disabled: props.form.metadataLocked,
       })}
       ${renderCronInputField(props, "tags", {
         label: t("cron.form.tags"),
         help: t("cron.form.tagsHelp"),
         placeholder: t("cron.form.tagsPlaceholder"),
-        disabled: props.form.payloadLocked,
+        disabled: props.form.metadataLocked,
       })}
       ${renderCronInputField(props, "agentId", {
         label: t("cron.form.agentId"),

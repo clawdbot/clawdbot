@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { isSystemOwnedCronJob } from "../../../../src/cron/metadata.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -71,6 +72,8 @@ export type CronFormState = {
   // displays it, never submits it.
   payloadKind: CronPayload["kind"];
   payloadLocked: boolean;
+  /** System-owned jobs cannot be assigned operator metadata. */
+  metadataLocked: boolean;
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;
@@ -133,7 +136,7 @@ export function getCronJobGroup(job: CronJob): string {
   if ("effectiveGroup" in job && typeof job.effectiveGroup === "string") {
     return job.effectiveGroup;
   }
-  return isSystemOwnedCronPayloadKind(job.payload.kind) ? "System" : (job.group ?? "Ungrouped");
+  return isSystemOwnedCronJob(job) ? "System" : (job.group ?? "Ungrouped");
 }
 
 function hasCronJobPayload(job: CronJob): boolean {
@@ -166,6 +169,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadLocked: false,
+  metadataLocked: false,
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",
@@ -966,10 +970,45 @@ function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: str
   );
 }
 
+function formatCronTagsForInput(tags: readonly string[] | undefined): string {
+  return (tags ?? []).map((tag) => tag.replaceAll("\\", "\\\\").replaceAll(",", "\\,")).join(", ");
+}
+
+function parseCronTagsInput(value: string): string[] {
+  const tags: string[] = [];
+  let current = "";
+  const append = () => {
+    const tag = current.trim();
+    if (tag) {
+      tags.push(tag);
+    }
+    current = "";
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\") {
+      const next = value[index + 1];
+      if (next === "," || next === "\\") {
+        current += next;
+        index += 1;
+      } else {
+        current += "\\";
+      }
+    } else if (character === ",") {
+      append();
+    } else {
+      current += character;
+    }
+  }
+  append();
+  return tags;
+}
+
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
-  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
+  const metadataLocked = isSystemOwnedCronJob(job);
+  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey) || metadataLocked;
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
@@ -978,7 +1017,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     name: job.name,
     description: job.description ?? "",
     group: job.group ?? "",
-    tags: job.tags?.join(", ") ?? "",
+    tags: formatCronTagsForInput(job.tags),
     agentId: job.agentId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
@@ -1000,6 +1039,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     wakeMode: job.wakeMode,
     payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
+    metadataLocked,
     payloadText:
       payload?.kind === "systemEvent"
         ? payload.text
@@ -1330,14 +1370,14 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
+    const tagsUnchanged = Boolean(
+      editingJob && form.tags === formatCronTagsForInput(editingJob.tags),
+    );
     const job: Record<string, unknown> = {
       name: form.name.trim(),
       description: form.description.trim(),
       group: form.group.trim() || (editingJob?.group ? null : undefined),
-      tags: form.tags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
+      ...(tagsUnchanged ? {} : { tags: parseCronTagsInput(form.tags) }),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
@@ -1722,6 +1762,7 @@ export function startCronClone(state: CronState, job: CronJob) {
     cloned.payloadKind = DEFAULT_CRON_FORM.payloadKind;
     cloned.payloadText = "";
   }
+  cloned.metadataLocked = false;
   state.cronForm = normalizeCronFormState(cloned, { payloadKind: cloned.payloadKind });
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }
