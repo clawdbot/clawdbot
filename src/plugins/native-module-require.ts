@@ -60,7 +60,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
-  modulePath: string,
+  moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
     aliasMap?: Record<string, string> | ((specifier: string) => string | undefined);
@@ -71,20 +71,17 @@ export function tryNativeRequireJavaScriptModule(
   if (process.platform === "win32" && options.allowWindows !== true) {
     return { ok: false };
   }
+  const modulePath = toNativeRequirePath(moduleSpecifier);
   if (!isJavaScriptModulePath(modulePath)) {
     return { ok: false };
   }
-  const nativeModulePath = toNativeRequirePath(modulePath);
   try {
-    return {
-      ok: true,
-      moduleExport: requireWithOptionalAliases(nativeModulePath, options.aliasMap),
-    };
+    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
   } catch (error) {
     const code =
       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
     if (
-      isSourceTransformFallbackError(error, nativeModulePath) ||
+      isSourceTransformFallbackError(error, modulePath) ||
       options.fallbackOnNativeError ||
       (options.fallbackOnMissingDependency === true &&
         (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
@@ -112,15 +109,12 @@ export function clearPluginModuleRequireCache(
   }
 }
 
-/** Converts file URLs only at CommonJS boundaries, which require native paths. */
-function toNativeRequirePath(modulePath: string): string {
-  if (!/^file:\/\//iu.test(modulePath)) {
-    return modulePath;
-  }
+// Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
+function toNativeRequirePath(specifier: string): string {
   try {
-    return fileURLToPath(modulePath);
+    return /^file:\/\//iu.test(specifier) ? fileURLToPath(specifier) : specifier;
   } catch {
-    return modulePath;
+    return specifier;
   }
 }
 
