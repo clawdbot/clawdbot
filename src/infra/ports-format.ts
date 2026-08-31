@@ -6,10 +6,15 @@ import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 function isSocatPortListener(command: string, commandLine: string): boolean {
-  return (
-    command === "socat" ||
-    /(?:^|[/\\])socat(?:\.exe)?$/.test(command) ||
-    /(?:^|[/\\\s"'=])socat(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)
+  // Executable identity only. A Gateway launched from a path that merely
+  // contains `/socat/` must still classify as the Gateway; matching any
+  // command-line token hid those listeners from status and restart.
+  const hasSocatCommand = command === "socat" || /(?:^|[/\\])socat(?:\.exe)?$/.test(command);
+  if (hasSocatCommand) {
+    return true;
+  }
+  return /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?socat(?:\.exe)?(?:[\s"']|$)/.test(
+    commandLine,
   );
 }
 

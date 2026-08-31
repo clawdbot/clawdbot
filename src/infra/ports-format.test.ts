@@ -43,6 +43,7 @@ describe("ports-format", () => {
     [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ command: "node", commandLine: "node /tmp/socat/openclaw/dist/index.js gateway" }, "gateway"],
     [{ command: "socat" }, "non_gateway"],
     [
       {
@@ -79,6 +80,15 @@ describe("ports-format", () => {
     );
     expect(hints).not.toContain(gatewayAlreadyRunningHint);
     expect(hints).toContain("Another process is listening on this port.");
+  });
+
+  it("keeps an OpenClaw listener whose path contains socat as the gateway", () => {
+    const listener = {
+      command: "node",
+      commandLine: "node /tmp/socat/openclaw/dist/index.js gateway",
+    };
+    expect(classifyPortListener(listener, 18789)).toBe("gateway");
+    expect(buildPortHints([listener], 18789)).toContain(gatewayAlreadyRunningHint);
   });
 
   it("does not treat a socat command line that mentions openclaw as the gateway", () => {
