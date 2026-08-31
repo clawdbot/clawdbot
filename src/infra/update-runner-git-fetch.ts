@@ -32,7 +32,20 @@ function isTagFetchRefspec(refspec: string): boolean {
     return true;
   }
   const [source = "", destination = ""] = withoutForce.split(":", 2).map((ref) => ref.trim());
-  return [source, destination].some((ref) => ref === "refs/tags" || ref.startsWith("refs/tags/"));
+  if ([source, destination].some((ref) => ref === "refs/tags" || ref.startsWith("refs/tags/"))) {
+    return true;
+  }
+
+  // A broad refs/*:refs/* mapping expands a tag source into refs/tags locally;
+  // keep it out of the preliminary refresh so the canonical tag fetch owns updates.
+  const sourceWildcard = source.indexOf("*");
+  const destinationWildcard = destination.indexOf("*");
+  return (
+    sourceWildcard >= 0 &&
+    destinationWildcard >= 0 &&
+    source.slice(0, sourceWildcard) === "refs/" &&
+    destination.slice(0, destinationWildcard) === "refs/"
+  );
 }
 
 export type StableGitFetchResult = {

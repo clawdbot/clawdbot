@@ -1039,6 +1039,24 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("refreshes recreated release tags for a mirror-style broad mapping", async () => {
+    const { localRoot, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "refs/*:refs/*");
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+  });
+
   async function runWithCommand(
     runCommand: (
       argv: string[],
