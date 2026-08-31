@@ -206,6 +206,9 @@ describe("doctor invalid config process exit", () => {
     const result = spawnSync(
       process.execPath,
       [
+        // Keep package-root discovery inside this fixture's seeded runtime assets.
+        "--preserve-symlinks",
+        "--preserve-symlinks-main",
         "--import",
         "tsx",
         path.join(runtimeRoot, "src", "entry.ts"),
