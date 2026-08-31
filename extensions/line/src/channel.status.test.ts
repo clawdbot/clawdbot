@@ -25,10 +25,10 @@ function collectIssues(accounts: ChannelAccountSnapshot[]) {
 }
 
 describe("linePlugin status.collectStatusIssues", () => {
-  // The route is published by resolveAccountSnapshot and read back by the issue
-  // collector. Every other case writes the field onto a fixture, so a rename on either
-  // side would fall back to the default in silence; this one goes through both.
-  it("carries the account's configured route from the snapshot into the warning", async () => {
+  // An operator can use an unguessable route as a weak shared secret, so neither the
+  // status issue nor the snapshot may carry it. The remedy names the config key it
+  // lives under instead, which the operator can read without being told its value.
+  it("keeps an opaque configured route out of the status issue and the snapshot", async () => {
     const snapshot = await buildSnapshot({
       accountId: "default",
       enabled: true,
@@ -41,14 +41,18 @@ describe("linePlugin status.collectStatusIssues", () => {
       config: { webhookPath: "hooks/line-primary/" },
     });
 
-    expect(collectIssues([snapshot])).toEqual([
+    const issues = collectIssues([snapshot]);
+
+    expect(JSON.stringify(issues)).not.toContain("hooks/line-primary");
+    expect(JSON.stringify(snapshot)).not.toContain("hooks/line-primary");
+    expect(issues).toEqual([
       {
         channel: "line",
         accountId: "default",
         kind: "config",
         message:
           "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-        fix: "register your gateway's public HTTPS URL ending in /hooks/line-primary in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
+        fix: "register your gateway's public HTTPS URL for the route in channels.line.webhookPath (default /line/webhook) in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
       },
     ]);
   });
@@ -86,7 +90,7 @@ describe("linePlugin status.collectStatusIssues", () => {
       name: "never registered",
       webhook: { status: "unset" },
       message: "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-      fix: "register your gateway's public HTTPS URL ending in /line/webhook in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
+      fix: "register your gateway's public HTTPS URL for the route in channels.line.webhookPath (default /line/webhook) in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
     },
   ])("reports a webhook that is $name", ({ webhook, message, fix }) => {
     expect(
@@ -106,32 +110,6 @@ describe("linePlugin status.collectStatusIssues", () => {
         kind: "config",
         message,
         fix,
-      },
-    ]);
-  });
-
-  // A warning that names a route the account does not serve leaves the bot silent
-  // while telling the operator they have fixed it.
-  it("names the account's own route when no webhook is registered", () => {
-    expect(
-      collectIssues([
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          tokenSource: "config",
-          webhookPath: "/hooks/line-primary",
-          probe: { ok: true, webhook: { status: "unset" } },
-        },
-      ]),
-    ).toEqual([
-      {
-        channel: "line",
-        accountId: "default",
-        kind: "config",
-        message:
-          "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-        fix: "register your gateway's public HTTPS URL ending in /hooks/line-primary in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
       },
     ]);
   });

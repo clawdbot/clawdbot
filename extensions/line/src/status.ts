@@ -16,7 +16,6 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasLineCredentials } from "./account-helpers.js";
 import type { LineProbeWebhookState, ResolvedLineAccount } from "./types.js";
-import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
@@ -43,16 +42,16 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
  * that logged the warning cannot describe itself differently when asked again.
  *
  * Each state names the action it needs, and only the action: a registered-but-off
- * webhook needs the console switch, an unregistered one needs the route this account's
- * monitor listens on. Naming a route the account does not serve would leave the bot
- * silent while the warning claims it is fixed; naming the registered URL would put a
- * string that can carry credentials into logs and status output for no added action.
+ * webhook needs the console switch, an unregistered one needs the route this account
+ * serves. Both name where to look rather than what is there — a registered URL, and an
+ * opaque configured route, are strings an operator may be using as a shared secret, and
+ * neither is needed to act: the console holds the first, and the operator's own config
+ * holds the second.
  */
 export function describeLineWebhookDelivery(params: {
   webhook: LineProbeWebhookState | undefined;
-  webhookPath: string;
 }): { message: string; fix: string } | undefined {
-  const { webhook, webhookPath } = params;
+  const { webhook } = params;
   if (!webhook || webhook.status === "active") {
     return undefined;
   }
@@ -66,7 +65,7 @@ export function describeLineWebhookDelivery(params: {
     : {
         message:
           "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-        fix: `register your gateway's public HTTPS URL ending in ${webhookPath} in ${consoleTab}, then turn Use webhook on`,
+        fix: `register your gateway's public HTTPS URL for the route in channels.line.webhookPath (default /line/webhook) in ${consoleTab}, then turn Use webhook on`,
       };
 }
 
@@ -81,10 +80,6 @@ function collectLineWebhookIssues(accounts: ChannelAccountSnapshot[]): ChannelSt
     collectIssues: ({ account, accountId, issues }) => {
       const delivery = describeLineWebhookDelivery({
         webhook: readProbeWebhookState(account.probe),
-        // resolveAccountSnapshot publishes the resolved route, but resolving again is
-        // what keeps a snapshot built elsewhere from naming a route the gateway would
-        // not serve — an absent, blank or unnormalized value lands on the same answer.
-        webhookPath: resolveLineWebhookPath(account.webhookPath),
       });
       if (delivery) {
         issues.push({ channel: "line", accountId, kind: "config", ...delivery });
@@ -114,7 +109,6 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
         tokenStatus: account.tokenStatus,
         signingSecretStatus: account.signingSecretStatus,
         mode: "webhook",
-        webhookPath: resolveLineWebhookPath(account.config.webhookPath),
       },
     }),
   });

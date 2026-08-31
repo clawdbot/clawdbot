@@ -92,15 +92,17 @@ describe("lineGatewayAdapter.startAccount", () => {
     },
   );
 
-  // Nothing asserted that the warning names this account's route: hardcoding the default
-  // in gateway.ts left the whole extension suite green.
-  it("names the account's own route when the webhook is unregistered", async () => {
+  // The startup warning reaches gateway logs, which are read far more widely than
+  // authenticated status. An operator using an unguessable route as a weak secret
+  // must not find it there; the remedy names the config key instead.
+  it("keeps an opaque configured route out of the startup warning", async () => {
     const warn = await startWithProbe(
       { ok: true, webhook: { status: "unset" } },
       lineAccount({ webhookPath: "/hooks/line-primary" }),
     );
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("/hooks/line-primary");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("/hooks/line-primary");
+    expect(warn.mock.calls[0]?.[0]).toContain("channels.line.webhookPath");
   });
 });
