@@ -190,6 +190,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and 96 with the GitHub or hybrid planner profile, Windows at 2, and Android
   at 2. The compact row budgets are 112 for hosted-only GitHub and 96 for
   hybrid; the higher hosted row budget does not increase concurrency.
+- Windows keeps two disjoint file inventories. Jobs requesting the existing
+  Blacksmith class admit at most two project processes with one Vitest worker
+  each; hosted fallbacks remain serial. Runtime preparation completes before
+  project readers start. Native proof must cover available CPUs/RAM, concurrent
+  fixture memory and cleanup. This adds no runner registrations.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact

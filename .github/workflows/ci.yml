@@ -3977,6 +3977,8 @@ jobs:
           node -v
           npm -v
           pnpm -v
+          # OS-visible resources at setup, not enforced job limits or peak memory.
+          node -e 'const os = require("node:os"); console.log("Native OS resources: " + JSON.stringify({ logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(), osTotalMemoryBytes: os.totalmem(), osFreeMemoryBytes: os.freemem() }));'
 
       - name: Capture node path
         run: |
@@ -4004,6 +4006,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Jobs requesting the Blacksmith Windows class admit at most two project
+          # processes with one Vitest worker each; hosted fallbacks remain serial.
+          export OPENCLAW_TEST_PROJECTS_PARALLEL=1
+          if [[ "${RUNNER_ENVIRONMENT:-}" == "self-hosted" ]]; then
+            export OPENCLAW_TEST_PROJECTS_PARALLEL=2
+          fi
           case "$TASK" in
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.

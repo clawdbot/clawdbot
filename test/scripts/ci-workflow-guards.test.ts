@@ -3079,6 +3079,52 @@ NODE
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "bounds Windows project overlap to existing self-hosted capacity",
+    () => {
+      const workflow = readCiWorkflow();
+      const job = workflow.jobs["checks-windows"];
+      const runStep = job.steps.find(
+        (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+      );
+      const cwd = tempDirs.make("windows-project-budget-");
+      const bin = path.join(cwd, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(cwd, "package.json"),
+        JSON.stringify({
+          scripts: { "test:windows:ci:1": "fixture", "test:windows:ci:2": "fixture" },
+        }),
+      );
+      const pnpm = path.join(bin, "pnpm");
+      writeFileSync(
+        pnpm,
+        '#!/bin/sh\nprintf "project_parallelism=%s\\n" "${OPENCLAW_TEST_PROJECTS_PARALLEL:-1}"\n',
+      );
+      chmodSync(pnpm, 0o755);
+      for (const task of ["test-1", "test-2"]) {
+        for (const runner of ["github-hosted", "self-hosted"]) {
+          const result = runWorkflowShellScript(runStep.run, {
+            cwd,
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+              TASK: task,
+              RUNNER_ENVIRONMENT: runner,
+              OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+            },
+          });
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          expect(result.stdout).toContain(
+            `project_parallelism=${runner === "self-hosted" ? 2 : 1}`,
+          );
+        }
+      }
+      expect(job.strategy["max-parallel"]).toBe(2);
+      expect(job.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(1);
+    },
+  );
+
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
     const releaseWorkflow = readAndroidReleaseWorkflow();
