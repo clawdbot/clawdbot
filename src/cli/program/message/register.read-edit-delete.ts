@@ -19,7 +19,6 @@ export function registerMessageReadEditDeleteCommands(
     .option("--after <id>", "Read/search after id")
     .option("--around <id>", "Read around id")
     .option("--thread-id <id>", "Thread id (Slack thread timestamp)")
-    .option("--include-thread", "Include thread replies (Discord)", false)
     .action((opts) => helpers.runMessageAction("read", opts));
 
   helpers
