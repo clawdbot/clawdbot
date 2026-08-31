@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -1253,15 +1254,14 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--limit <n>", "Maximum rows to return (default 200)")
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
       try {
-        const limitRaw = opts.limit === undefined ? undefined : Number.parseInt(opts.limit, 10);
-        const limit =
-          limitRaw !== undefined && Number.isInteger(limitRaw) && limitRaw >= 1
-            ? limitRaw
-            : undefined;
+        const limit = parseStrictPositiveInteger(opts.limit);
+        if (opts.limit !== undefined && limit === undefined) {
+          exitWithError("--limit must be a positive integer.");
+        }
         const result = (await callGatewayFromCli(
           "exec.approval.grants.list",
           opts,
-          limit ? { limit } : {},
+          limit !== undefined ? { limit } : {},
         )) as { grants: StandingGrantCliEntry[] }; // SAFETY: matches ExecApprovalGrantsListResultSchema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);

@@ -8,7 +8,7 @@ import * as commandExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
-import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
@@ -82,13 +82,14 @@ const terminationCases: Array<{
 ];
 
 describe("ManagedWorktreeService failure diagnostics", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-errors-"));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });

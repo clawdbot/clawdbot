@@ -12,15 +12,16 @@ import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
+  type UpdateInstallIdentity,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 
 /** Chooses a registry tag only after the status check has identified the install. */
-export function resolveStatusRegistryUpdateChannel(params: {
-  configChannel?: UpdateChannel | null;
-  installKind: UpdateCheckResult["installKind"];
-  git?: UpdateCheckResult["git"];
-}): UpdateChannel {
+export function resolveStatusRegistryUpdateChannel(
+  params: UpdateInstallIdentity & {
+    configChannel?: UpdateChannel | null;
+  },
+): UpdateChannel {
   return resolveEffectiveUpdateChannel({
     configChannel: params.configChannel,
     currentVersion: VERSION,

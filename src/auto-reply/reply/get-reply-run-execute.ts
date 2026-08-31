@@ -41,7 +41,6 @@ import {
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
@@ -595,9 +594,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       storePath,
       defaultModel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-      toolProgressDetail: normalizeToolProgressDetail(
-        resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
-      ),
+      toolProgressDetail: resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
       isNewSession: params.isNewSession,
       blockStreamingEnabled,
       blockReplyChunking,

@@ -19,8 +19,8 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,

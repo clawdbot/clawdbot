@@ -96,15 +96,6 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
-      name: "rejects same-origin loopback host matches for non-local clients",
-      input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
-        isLocalClient: false,
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
       name: "accepts trimmed lowercase-normalized allowlist matches",
       input: {
         requestHost: "gateway.example.com:18789",

@@ -1,11 +1,11 @@
 {
   "fallbackKeys": [],
-  "generatedAt": "2026-08-31T01:35:48.096Z",
+  "generatedAt": "2026-08-31T03:19:44.767Z",
   "locale": "fr",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "c94de4d7e42dadc8d38d294802141bd9eaaf8d910f185772756da3ee26f1281e",
-  "totalKeys": 5981,
-  "translatedKeys": 5981,
+  "sourceHash": "c87e181c99b7e1440d53176a688d04b9da66734de654997e826acf8bfd733637",
+  "totalKeys": 5987,
+  "translatedKeys": 5987,
   "workflow": 1
 }

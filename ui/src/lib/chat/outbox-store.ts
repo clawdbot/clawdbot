@@ -174,7 +174,7 @@ export function resolvePendingComposerSessions(
     if (!source) {
       continue;
     }
-    const resolved = resolveStoredChatOutboxScope(state, source.sessionKey, source.agentId);
+    const resolved = resolveUiConversationIdentity(state, source.sessionKey, source.agentId);
     const nextKey = storedChatOutboxScopeKey(resolved);
     const { awaitingDefaults: _, ...session } = pending;
     const destination = store.sessions[nextKey];
@@ -211,21 +211,13 @@ export function resolvePendingComposerSessions(
   return migrated;
 }
 
-export function resolveStoredChatOutboxScope(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): StoredChatOutboxScope {
-  return resolveUiConversationIdentity(state, sessionKey, agentIdOverride);
-}
-
 export function captureChatOutboxAdmission(
   state: ChatComposerScope,
   sessionKey: string,
   agentId?: string,
 ) {
   return {
-    scope: resolveStoredChatOutboxScope(state, sessionKey, agentId),
+    scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
   };
 }

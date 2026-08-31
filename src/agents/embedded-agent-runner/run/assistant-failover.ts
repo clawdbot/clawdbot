@@ -83,6 +83,7 @@ export async function handleAssistantFailover(params: {
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
+  agentId?: string;
   authFailure: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
@@ -332,6 +333,7 @@ function resolveAssistantFailoverErrorMessage(params: {
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
+  agentId?: string;
   activeErrorContext: { provider: string; model: string };
   providerOwner?: PreparedProviderFailoverOwner;
   terminal: AgentRunAttemptTerminal;
@@ -348,6 +350,7 @@ function resolveAssistantFailoverErrorMessage(params: {
       ? formatAssistantErrorText(params.lastAssistant, {
           cfg: params.config,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           provider: params.activeErrorContext.provider,
           providerOwner: params.providerOwner,
           model: params.activeErrorContext.model,

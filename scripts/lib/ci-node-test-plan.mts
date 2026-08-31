@@ -616,7 +616,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
-  ["src/scripts/test-projects.test.ts", 21],
+  ["test/scripts/test-projects-routing.test.ts", 21],
   ["ui/src/components/app-sidebar.test.ts", 28],
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.

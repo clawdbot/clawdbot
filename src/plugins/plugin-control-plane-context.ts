@@ -64,7 +64,8 @@ function resolvePluginControlPlaneContext(
     (params.index ? resolveInstalledManifestRegistryIndexFingerprint(params.index) : undefined);
   return {
     discovery: resolvePluginDiscoveryContext(params),
-    policyFingerprint: params.policyHash ?? resolveInstalledPluginIndexPolicyHash(params.config),
+    policyFingerprint:
+      params.policyHash ?? resolveInstalledPluginIndexPolicyHash(params.config, params.env),
     ...(inventoryFingerprint ? { inventoryFingerprint } : {}),
     ...(params.activationFingerprint
       ? { activationFingerprint: params.activationFingerprint }

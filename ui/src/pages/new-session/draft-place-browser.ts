@@ -82,7 +82,11 @@ export class DraftPlaceBrowser {
           this.gateway.connectionEpoch,
         ] as const,
       task: async ([client, advertised]) => {
-        if (!client || !advertised) {
+        // A disconnect has no catalog result and cannot retire the selected project.
+        if (!client) {
+          return initialState;
+        }
+        if (!advertised) {
           return { projects: [] } as ProjectsListResult;
         }
         return await (
@@ -99,9 +103,6 @@ export class DraftPlaceBrowser {
         this.callbacks.requestUpdate();
       },
       onError: () => {
-        this.projectsValue = [];
-        this.projectRecentsValue = undefined;
-        this.callbacks.onProjectMissing();
         this.callbacks.requestUpdate();
       },
     });

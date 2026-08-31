@@ -121,7 +121,7 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
   });
 
-  it("executes the inspected argv, cwd and file environment, rejects an old survivor, and drains restart children", async () => {
+  it("keeps the inspected service alive after the caller terminal closes and drains restart children", async () => {
     const { home, env, shell, systemctl, unit } = fixture();
     const record = join(home, "starts.jsonl");
     const program = join(home, "gateway fixture.mjs");
@@ -173,11 +173,27 @@ setInterval(() => {}, 1000);
     try {
       expect(systemctl("enable", "openclaw-gateway.service").status).toBe(0);
       expect(systemctl("is-enabled", "openclaw-gateway.service").status).toBe(0);
-      expect(
-        shell("OPENCLAW_UPDATE_IN_PROGRESS=1 systemctl --user restart openclaw-gateway.service")
-          .status,
-      ).toBe(0);
+      const restarted = spawnSync(
+        "python3",
+        [
+          "-c",
+          `import os, pty, sys
+status = pty.spawn(["bash", "-c", sys.argv[1], "fixture", sys.argv[2]], stdin_read=lambda _: b"")
+code = os.waitstatus_to_exitcode(status)
+raise SystemExit(code if code >= 0 else 128 - code)
+`,
+          'set -e; systemctl --user restart openclaw-gateway.service; for _ in {1..200}; do [ -s "$1" ] && exit 0; sleep 0.01; done; exit 1',
+          record,
+        ],
+        {
+          env: { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+          encoding: "utf8",
+          timeout: 40_000,
+        },
+      );
+      expect(restarted.status, restarted.stderr).toBe(0);
       await waitForStarts(1);
+      expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(0);
       const inspected = await readSystemdServiceExecStart(env, { requireEffective: true });
       expect(records()[0]).toEqual({
         pid: expect.any(Number),
@@ -209,7 +225,14 @@ setInterval(() => {}, 1000);
       const stopped = systemctl("stop", "openclaw-gateway.service");
       expect(stopped.status, stopped.stderr).toBe(0);
       for (const { pid } of records()) {
-        expect(() => process.kill(pid, 0)).toThrow();
+        try {
+          expect.soft(() => process.kill(pid, 0)).toThrow();
+        } finally {
+          // A broken supervisor can strand its detached child; keep failed proof isolated.
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
       }
       expect(existsSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE)).toBe(false);
     }

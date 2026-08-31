@@ -3609,6 +3609,87 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("broadcasts a writer-owned settled fallback that is already in the transcript", async () => {
+    await createTranscriptFixture("openclaw-chat-send-settled-fallback-");
+    const idempotencyKey = "run-settled:settled-finalization-fallback";
+    const text =
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+    await appendSourceReplyMirrorEntry({ idempotencyKey, text });
+    mockState.sessionEntry = {
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+    };
+    setAgentRunReplies([
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata({ text }, {
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: idempotencyKey,
+          deliverDespiteSourceReplySuppression: true,
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: "revision-a",
+            expectedSessionId: mockState.sessionId,
+            expectedWriterRunId: "run-settled",
+            sessionKey: "main",
+            storePath: mockState.storePath,
+          },
+        } as never),
+      },
+    ]);
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-settled-fallback",
+      waitFor: "dedupe",
+    });
+
+    expect(extractFirstTextBlock(lastBroadcastPayload(context))).toBe(text);
+    expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+  });
+
+  it("drops a settled fallback when its writer is replaced after transcript persistence", async () => {
+    await createTranscriptFixture("openclaw-chat-send-stale-settled-fallback-");
+    const idempotencyKey = "run-settled:settled-finalization-fallback";
+    const text =
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+    await appendSourceReplyMirrorEntry({ idempotencyKey, text });
+    mockState.sessionEntry = {
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+    };
+    mockState.onAfterAgentRunStart = () => {
+      mockState.sessionEntry = {
+        lifecycleRevision: "revision-a",
+        activeWriterRunId: "replacement-run",
+      };
+    };
+    const sourceReply = createMainSourceReply({ idempotencyKey, text });
+    setReplyPayloadMetadata(sourceReply.payload, {
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: idempotencyKey,
+      sessionWriterDeliveryAuthority: {
+        agentId: "main",
+        expectedLifecycleRevision: "revision-a",
+        expectedSessionId: mockState.sessionId,
+        expectedWriterRunId: "run-settled",
+        sessionKey: "main",
+        storePath: mockState.storePath,
+      },
+    } as never);
+    setAgentRunReplies([sourceReply]);
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-settled-fallback",
+      waitFor: "dedupe",
+    });
+
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.nodeSendToSession).not.toHaveBeenCalled();
+    expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+  });
+
   it("broadcasts agent-run status notices without source reply mirrors", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-status-notice-");
     setAgentRunReplies([
@@ -6534,6 +6615,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
       expectBroadcast: false,
     });
+
+    const { ensureSandboxWorkspaceForSession } = await import("../../agents/sandbox/context.js");
+    const { stageSandboxMedia } = await import("../../auto-reply/reply/stage-sandbox-media.js");
+    expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(stageSandboxMedia).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
 
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {

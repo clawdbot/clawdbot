@@ -1,7 +1,8 @@
 // Coverage for assembling provider-transformed embedded attempt system prompts.
 import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -9,6 +10,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
@@ -99,6 +101,62 @@ async function preparePermissionPrompt(isRawModelRun = false) {
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it.each([
+    { sandboxSessionKey: "global", mode: "off", sandboxed: false },
+    { sandboxSessionKey: "agent:main:policy", mode: "all", sandboxed: true },
+  ])(
+    "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
+    async (testCase) => {
+      const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
+      const config = {
+        agents: {
+          ownership: "explicit" as const,
+          list: [
+            { id: "main", sandbox: { mode: "all" as const } },
+            { id: "marketing", sandbox: { mode: "off" as const } },
+          ],
+        },
+      };
+      const result = await prepareEmbeddedAttemptSystemPrompt({
+        attempt: {
+          config,
+          agentId: "marketing",
+          sessionId: "global-system-prompt",
+          sessionKey: "global",
+          provider: "openai",
+          modelId: "gpt-5.5",
+          model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
+          workspaceDir,
+        } as never,
+        bootstrap: {
+          ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
+          workspaceNotes: [],
+          contextFiles: [],
+          bootstrapInjectionStats: [],
+        } as never,
+        activeContextEngine: undefined,
+        capabilityToolNames: new Set(),
+        effectiveCwd: workspaceDir,
+        effectiveTools: [],
+        effectiveWorkspace: workspaceDir,
+        getProviderRuntimeHandle: () => ({ provider: "openai" }),
+        isRawModelRun: true,
+        markStage: vi.fn(),
+        modelToolsEnabled: false,
+        proactiveSubagentOrchestration: false,
+        sandboxSessionKey: testCase.sandboxSessionKey,
+        sessionAgentId: "marketing",
+        skillsPrompt: "",
+        toolSearchDirectoryEnabled: false,
+        toolSearchRuntimeConfig: config,
+      });
+
+      expect(result.systemPromptReport?.sandbox).toEqual({
+        mode: testCase.mode,
+        sandboxed: testCase.sandboxed,
+      });
+    },
+  );
   it("replaces an intermediate permission prompt after later changes", async () => {
     const fixture = await preparePermissionPrompt();
     const { attempt, capabilityToolNames, prepared, read, refreshSystemPrompt, write } = fixture;

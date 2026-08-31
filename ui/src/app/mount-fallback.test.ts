@@ -114,6 +114,20 @@ describe("Control UI mount fallback", () => {
     ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
     ["CRT dark", { theme: "crt", themeMode: "dark" }, "crt", "rgb(9, 10, 9)"],
     ["CRT light", { theme: "crt", themeMode: "light" }, "crt-light", "rgb(245, 245, 244)"],
+    [
+      "Manuscript light",
+      { theme: "manuscript", themeMode: "light" },
+      "manuscript-light",
+      "rgb(246, 241, 228)",
+    ],
+    [
+      "Manuscript dark",
+      { theme: "manuscript", themeMode: "dark" },
+      "manuscript",
+      "rgb(33, 30, 24)",
+    ],
+    ["Ros\u00e9 dark", { theme: "rose", themeMode: "dark" }, "rose", "rgb(25, 23, 36)"],
+    ["Miami dark", { theme: "miami", themeMode: "dark" }, "miami", "rgb(20, 15, 30)"],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {

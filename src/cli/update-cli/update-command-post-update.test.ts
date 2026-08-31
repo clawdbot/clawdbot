@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
     >(),
   updatePlugins: vi.fn(),
   writeSentinel: vi.fn<
-    typeof import("./update-command-post-core.js").writeControlPlaneUpdateRestartSentinelBestEffort
+    typeof import("./update-command-result.js").writeControlPlaneUpdateRestartSentinelBestEffort
   >(async () => undefined),
 }));
 
@@ -91,8 +91,8 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
-vi.mock("./update-command-post-core.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
+vi.mock("./update-command-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-result.js")>()),
   markControlPlaneUpdateRestartSentinelFailureBestEffort: mocks.markSentinelFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));

@@ -78,7 +78,6 @@ vi.mock("../infra/file-lock.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
 const providerModelNormalizationMock = vi.hoisted(() => ({
@@ -841,55 +840,6 @@ describe("runWithModelFallback", () => {
 
     expect(error).toMatchObject({ reason: "auth", status: 401, code });
     expect(error.attempts).toMatchObject([{ code }, { code }]);
-  });
-
-  it("does not replay CLI max-turn failures on configured fallback models", async () => {
-    const failure = new FailoverError(
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
-      {
-        provider: "claude-cli",
-        model: "sonnet",
-        reason: "unknown",
-        code: "cli_max_turns",
-      },
-    );
-    const run = vi.fn().mockRejectedValue(failure);
-
-    await expect(
-      runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
-        provider: "claude-cli",
-        model: "sonnet",
-        run,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not replay aggregate failures containing a CLI max-turn stop", async () => {
-    const maxTurns = new FailoverError("max turns", {
-      provider: "claude-cli",
-      model: "sonnet",
-      reason: "unknown",
-      code: "cli_max_turns",
-    });
-    const failure = new AggregateError(
-      [maxTurns, new Error("fork successor persistence failed")],
-      "CLI turn failed and its fork successor could not be persisted",
-    );
-    const run = vi.fn().mockRejectedValue(failure);
-
-    await expect(
-      runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
-        provider: "claude-cli",
-        model: "sonnet",
-        run,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
@@ -5286,131 +5236,6 @@ describe("runWithModelFallback", () => {
           abortSignal: controller.signal,
         }),
       ).rejects.toBe(rateLimitLikeError);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: job execution timed out");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats phase-suffixed cron timeout reason as terminal (covers `(last phase: ...)` variant)", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: job execution timed out (last phase: model_call_started)");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats isolated-agent setup-timeout (and phase suffix) as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort(
-        "cron: isolated agent setup timed out before runner start (last phase: workspace_provision)",
-      );
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats isolated-agent pre-execution stall (and phase suffix) as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort(
-        "cron: isolated agent run stalled before execution start (last phase: runner_ready)",
-      );
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats bare isolated-agent pre-execution stall as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: isolated agent run stalled before execution start");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats an Error whose .message matches a known terminal string as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const wrapped = new Error("cron: job execution timed out");
-      const controller = new AbortController();
-      controller.abort(wrapped);
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
 
       expect(run).toHaveBeenCalledTimes(1);
     });

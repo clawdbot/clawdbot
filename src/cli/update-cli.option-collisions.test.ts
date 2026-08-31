@@ -28,6 +28,9 @@ const {
 
 vi.mock("./update-cli/update-command.js", () => ({
   updateCommand: (opts: unknown) => mocks.updateCommand(opts),
+}));
+
+vi.mock("./update-cli/update-command-finalize.js", () => ({
   updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
 }));
 

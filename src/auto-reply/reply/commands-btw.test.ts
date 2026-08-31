@@ -2,15 +2,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
-import {
-  expectObjectFields,
-  mockCall,
-  mockFirstObjectArg,
-} from "../../test-utils/mock-call-assertions.js";
-import {
-  resolveAgentDirMock,
-  resolveSessionAgentIdMock,
-} from "./commands-agent-scope.test-support.js";
+import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
+import { resolveAgentDirMock } from "./commands-agent-scope.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -37,8 +30,6 @@ describe("handleBtwCommand", () => {
     resolveAgentDirMock.mockImplementation(
       (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
     );
-    resolveSessionAgentIdMock.mockReset();
-    resolveSessionAgentIdMock.mockReturnValue("main");
   });
 
   it("returns usage when the side question is missing", async () => {
@@ -92,6 +83,7 @@ describe("handleBtwCommand", () => {
 
     expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
       question: "what changed?",
+      agentId: params.agentId,
       sessionEntry: params.sessionEntry,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
@@ -195,7 +187,7 @@ describe("handleBtwCommand", () => {
       senderE164: "+15550001",
       senderIsOwner: true,
     });
-    expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
+    expect(runnerArgs.agentDir).toBe(params.agentDir);
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
     expect(runnerArgs.authorityRunId).toEqual(expect.any(String));
@@ -320,23 +312,17 @@ describe("handleBtwCommand", () => {
 
   it("uses the canonical session agent when resolving a fallback agent dir", async () => {
     const params = buildParams("/btw what changed?");
-    params.agentId = "main";
+    params.agentId = "worker-1";
     params.agentDir = undefined;
     params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
     params.sessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),
     };
-    resolveSessionAgentIdMock.mockReturnValue("worker-1");
     runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
 
     const result = await handleBtwCommand(params, true);
 
-    const sessionAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
-    expect(sessionAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
-    if (!sessionAgentArgs.config || typeof sessionAgentArgs.config !== "object") {
-      throw new Error("expected session agent config");
-    }
     expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
       "/agents/worker-1/agent",
     );
@@ -346,31 +332,20 @@ describe("handleBtwCommand", () => {
     });
   });
 
-  it("uses the canonical session agent dir even when the wrapper agentDir disagrees", async () => {
+  it("reuses the prepared session agent directory", async () => {
     const params = buildParams("/btw what changed?");
-    params.agentId = "main";
-    params.agentDir = "/tmp/main-agent";
+    params.agentId = "worker-1";
+    params.agentDir = "/tmp/worker-1-agent";
     params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
     params.sessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),
     };
-    resolveSessionAgentIdMock.mockReturnValue("worker-1");
-    resolveAgentDirMock.mockReturnValue("/tmp/worker-1-agent");
     runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
 
     const result = await handleBtwCommand(params, true);
 
-    const canonicalAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
-    expect(canonicalAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
-    if (!canonicalAgentArgs.config || typeof canonicalAgentArgs.config !== "object") {
-      throw new Error("expected canonical agent config");
-    }
-    const resolveDirCall = mockCall(resolveAgentDirMock);
-    if (!resolveDirCall[0] || typeof resolveDirCall[0] !== "object") {
-      throw new Error("expected resolveAgentDir config");
-    }
-    expect(resolveDirCall[1]).toBe("worker-1");
+    expect(resolveAgentDirMock).not.toHaveBeenCalled();
     expect(mockFirstObjectArg(runBtwSideQuestionMock).agentDir).toBe("/tmp/worker-1-agent");
     expect(result).toEqual({
       shouldContinue: false,

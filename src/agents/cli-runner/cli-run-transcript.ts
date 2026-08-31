@@ -360,32 +360,43 @@ export async function finalizeCliContextEngineTurn(params: {
   }
 
   const { params: runParams } = context;
-  const prePromptMessages = params.historyMessages.filter(isAgentMessage);
-  const turnMessages: AgentMessage[] = [];
-  if (context.contextEngineTurnPrompt) {
-    turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
-  }
-  if (params.assistantText) {
-    turnMessages.push(
-      buildCliContextEngineAssistantMessage({
-        text: params.assistantText,
-        provider: runParams.provider,
-        model: context.modelId,
-        usage: params.output.usage,
-        stopReason: resolveCliAssistantStopReason(params.output),
-      }),
-    );
-  }
+  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (runParams.onContextEngineTurnCandidate) {
+    if (admission && params.terminalAnchor) {
+      runParams.onContextEngineTurnCandidate({
+        boundary: { admission, terminal: params.terminalAnchor },
+        sessionIdUsed: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        sessionTarget: runParams.sessionTarget,
+        promptError: false,
+        aborted:
+          params.output.terminalInterruption !== undefined ||
+          runParams.abortSignal?.aborted === true,
+        yieldAborted: false,
+        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+      });
+    }
+  } else {
+    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const turnMessages: AgentMessage[] = [];
+    if (context.contextEngineTurnPrompt) {
+      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+    }
+    if (params.assistantText) {
+      turnMessages.push(
+        buildCliContextEngineAssistantMessage({
+          text: params.assistantText,
+          provider: runParams.provider,
+          model: context.modelId,
+          usage: params.output.usage,
+          stopReason: resolveCliAssistantStopReason(params.output),
+        }),
+      );
+    }
 
-  const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
-    backendId: context.backendResolved.id,
-  });
-  const finalizeTurn = async (transcript: {
-    messagesSnapshot: AgentMessage[];
-    prePromptMessageCount: number;
-    sessionManager?: SessionManager;
-    withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T) => Promise<T>;
-  }) => {
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: context.backendResolved.id,
+    });
     let deferredTurnMaintenance: Promise<void> | undefined;
     const result = await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
@@ -398,9 +409,8 @@ export async function finalizeCliContextEngineTurn(params: {
       sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-      messagesSnapshot: transcript.messagesSnapshot,
-      prePromptMessageCount: transcript.prePromptMessageCount,
-      sessionManager: transcript.sessionManager,
+      messagesSnapshot: [...prePromptMessages, ...turnMessages],
+      prePromptMessageCount: prePromptMessages.length,
       config: context.contextEngineConfig,
       contextEngineHostSupport,
       providerId: runParams.provider,
@@ -408,7 +418,7 @@ export async function finalizeCliContextEngineTurn(params: {
       runMaintenance: async (maintenanceParams) =>
         await runHarnessContextEngineMaintenance({
           ...maintenanceParams,
-          withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
+          withSessionManagerRewriteLock: async (operation) => await operation(),
           onDeferredMaintenance: (promise) => {
             deferredTurnMaintenance = promise;
           },
@@ -418,33 +428,5 @@ export async function finalizeCliContextEngineTurn(params: {
     if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
       context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
     }
-  };
-  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
-  if (runParams.onContextEngineTurnCandidate) {
-    if (admission && params.terminalAnchor) {
-      runParams.onContextEngineTurnCandidate({
-        boundary: { admission, terminal: params.terminalAnchor },
-        sessionIdUsed: runParams.sessionId,
-        sessionKey: runParams.sessionKey,
-        sessionTarget: runParams.sessionTarget,
-        sessionFile: runParams.sessionFile,
-        promptError: false,
-        aborted:
-          params.output.terminalInterruption !== undefined ||
-          runParams.abortSignal?.aborted === true,
-        yieldAborted: false,
-        contextEngineHostSupport,
-        providerId: runParams.provider,
-        modelId: context.modelId,
-        config: context.contextEngineConfig,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-      });
-    }
-  } else {
-    await finalizeTurn({
-      messagesSnapshot: [...prePromptMessages, ...turnMessages],
-      prePromptMessageCount: prePromptMessages.length,
-      withSessionManagerRewriteLock: async (operation) => await operation(),
-    });
   }
 }

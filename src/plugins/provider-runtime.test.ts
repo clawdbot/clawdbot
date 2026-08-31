@@ -605,6 +605,7 @@ describe("provider-runtime", () => {
       id: DEMO_PROVIDER_ID,
       label: "Demo",
       auth: [],
+      classifyFailoverReason: () => "billing",
       prepareExtraParams: ({ extraParams }) => ({
         ...extraParams,
         fromActiveRegistry: true,
@@ -629,6 +630,13 @@ describe("provider-runtime", () => {
     ).toEqual({
       fromActiveRegistry: true,
     });
+    expect(
+      classifyProviderFailoverSignalWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        context: { provider: DEMO_PROVIDER_ID, status: 403, errorMessage: "fixture refusal" },
+      }),
+    ).toBe("billing");
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -671,6 +679,7 @@ describe("provider-runtime", () => {
       id: DEMO_PROVIDER_ID,
       label: "Prepared demo",
       auth: [],
+      classifyFailoverReason: () => "overloaded",
     };
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
@@ -686,6 +695,15 @@ describe("provider-runtime", () => {
       }),
     );
 
+    expect(
+      withPluginRuntimeRegistryScope(registry, () =>
+        classifyProviderFailoverSignalWithPlugin({
+          provider: DEMO_PROVIDER_ID,
+          workspaceDir: "/tmp/prepared-workspace",
+          context: { provider: DEMO_PROVIDER_ID, status: 403, errorMessage: "fixture refusal" },
+        }),
+      ),
+    ).toBe("overloaded");
     expect(resolved?.id).toBe(DEMO_PROVIDER_ID);
     expect(resolved?.pluginId).toBe(DEMO_PROVIDER_ID);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
@@ -1783,6 +1801,36 @@ describe("provider-runtime", () => {
       }),
     ).toBe("billing");
   });
+
+  it.each([
+    { result: "billing", expected: "billing", laterCalls: 0 },
+    { result: "context_overflow", expected: "context_overflow", laterCalls: 0 },
+    { result: "unsupported-reason", expected: undefined, laterCalls: 0 },
+    { result: {}, expected: undefined, laterCalls: 0 },
+    { result: true, expected: undefined, laterCalls: 0 },
+    { result: null, expected: "overloaded", laterCalls: 1 },
+    { result: undefined, expected: "overloaded", laterCalls: 1 },
+    { result: "", expected: "overloaded", laterCalls: 1 },
+  ])(
+    "normalizes external failover result $result without changing hook precedence",
+    ({ result, expected, laterCalls }) => {
+      const later = vi.fn(() => "overloaded" as const);
+      resolvePluginProvidersMock.mockReturnValue([
+        // External JavaScript plugins are not constrained by the TypeScript return type.
+        {
+          id: "first",
+          label: "First",
+          auth: [],
+          classifyFailoverReason: () => result,
+        } as ProviderPlugin,
+        { id: "second", label: "Second", auth: [], classifyFailoverReason: later },
+      ]);
+      expect(
+        classifyProviderFailoverSignalWithPlugin({ context: { errorMessage: "fixture failure" } }),
+      ).toBe(expected);
+      expect(later).toHaveBeenCalledTimes(laterCalls);
+    },
+  );
 
   it("falls back to all failover hooks when a provider owner cannot be resolved", () => {
     const classifyFailoverReason = vi.fn(({ errorMessage }) =>

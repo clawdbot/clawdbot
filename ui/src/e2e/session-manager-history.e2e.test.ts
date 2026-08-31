@@ -2,13 +2,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   controlUiSessionPath,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
