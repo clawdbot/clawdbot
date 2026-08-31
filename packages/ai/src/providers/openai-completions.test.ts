@@ -966,6 +966,29 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("keeps Z.AI thinking disabled for an explicit none effort even when off maps to a level", async () => {
+    const stream = streamSimpleOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+        thinkingLevelMap: { off: "low" },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoning: "none",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("enables Z.AI thinking with the documented payload when requested", async () => {
     const stream = streamSimpleOpenAICompletions(
       {

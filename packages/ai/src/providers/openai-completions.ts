@@ -490,11 +490,12 @@ function buildParams(
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    // Models that cannot disable thinking map "off" to a concrete level
-    // (e.g. GLM-5.x off -> low); honor that instead of emitting a payload the provider rejects.
+    // An omitted effort honors a concrete mapped-off level (e.g. GLM-5.x off -> low);
+    // an explicit "none" still disables thinking.
     const zaiReasoningEnabled =
       reasoningEnabled ||
-      (typeof offReasoningEffort === "string" &&
+      (options?.reasoningEffort === undefined &&
+        typeof offReasoningEffort === "string" &&
         isOpenAICompletionsThinkingEnabled(offReasoningEffort));
     params.thinking = zaiReasoningEnabled
       ? { type: "enabled", clear_thinking: false }
