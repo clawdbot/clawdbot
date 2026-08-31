@@ -4,7 +4,9 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
+import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_DESKTOP_STREAM_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
@@ -100,7 +102,10 @@ type RfbHarness = {
   port: number;
 };
 
-async function startRfbHarness(expectedStreams: number): Promise<RfbHarness> {
+async function startRfbHarness(
+  expectedStreams: number,
+  endAfterRequest?: Promise<void>,
+): Promise<RfbHarness> {
   const peers = new Set<net.Socket>();
   let connectionCount = 0;
   let completedStreams = 0;
@@ -116,17 +121,12 @@ async function startRfbHarness(expectedStreams: number): Promise<RfbHarness> {
     // Session teardown destroys client sockets; the synthetic server owns the matching resets.
     socket.on("error", handleExpectedPeerTeardownError);
     connectionCount += 1;
-    const connectionIndex = connectionCount;
     const reader = new SocketReader(socket);
     void (async () => {
       try {
         socket.write(VERSION);
         expect(await reader.readExactly(VERSION.length)).toEqual(VERSION);
         socket.write(Buffer.from([1, 2]));
-        // Every observer first probes RFB security, then opens the streaming connection.
-        if (connectionIndex % 2 === 1) {
-          return;
-        }
         expect(await reader.readExactly(1)).toEqual(Buffer.from([2]));
         socket.write(Buffer.alloc(16, 7));
         expect(await reader.readExactly(16)).toHaveLength(16);
@@ -139,6 +139,10 @@ async function startRfbHarness(expectedStreams: number): Promise<RfbHarness> {
         completedStreams += 1;
         if (completedStreams === expectedStreams) {
           resolveCompletion();
+        }
+        if (endAfterRequest) {
+          await endAfterRequest;
+          socket.end(Buffer.from("terminal-pixel-update", "ascii"));
         }
       } catch (error) {
         rejectCompletion(error instanceof Error ? error : new Error(String(error)));
@@ -235,86 +239,118 @@ async function expectObserversClosed(params: {
   await vi.waitFor(() => expect(params.peers.size).toBe(0));
 }
 
-describe("paired node desktop observe integration", () => {
-  it("relays pixels through the node attach socket and drops view-only input", async () => {
-    const rfb = await startRfbHarness(2);
-
-    const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
-    const streamBroker = createNodeDesktopStreamBroker();
-    cleanups.push(async () => desktopRegistry.stopAll());
-    let gatewayUrl = "";
-    const nodeSession = {
-      nodeId: "node-1",
-      connId: "conn-1",
-      pairingGeneration: "generation-1",
-      platform: "linux",
-      deviceFamily: "Linux",
-      commands: [NODE_DESKTOP_STREAM_COMMAND],
-    };
-    const nodeRegistry = {
-      get: () => nodeSession,
-      getForPairingGeneration: (_nodeId: string, generation: string) =>
-        generation === nodeSession.pairingGeneration ? nodeSession : undefined,
-      isConnectionCurrentPairingState: async (connId: string) => connId === nodeSession.connId,
-      invoke: async (request: {
-        params?: unknown;
-        signal?: AbortSignal;
-        onProgress?: (chunk: string) => void;
-      }) => {
-        try {
-          await invokeNodeDesktopStream({
-            paramsJSON: JSON.stringify({
-              ...(request.params as { ticket: string; attachPath: string }),
-            }),
-            gatewayUrl,
-            config: { enabled: true, port: rfb.port },
-            signal: request.signal ?? new AbortController().signal,
-            emitStatus: async (status) => request.onProgress?.(status),
-          });
-          return { ok: true };
-        } catch (error) {
-          return {
-            ok: false,
-            error: { message: error instanceof Error ? error.message : String(error) },
-          };
-        }
-      },
-    } as unknown as NodeRegistry;
-    gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
-
-    const service = createNodeDesktopService({
-      getConfig: () => ({
-        gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
-      }),
-      nodeRegistry,
-      desktopRegistry,
-      streamBroker,
-    });
-    const observed = await service.observe({
-      nodeId: nodeSession.nodeId,
-      control: false,
-      credentials: { password: "memory-only-password" },
-    });
-    expect(observed.auth).toBe("vnc-password");
-
-    const ws = await openViewOnlyObserver(gatewayUrl, observed.wsPath);
-
-    const secondObserved = await service.observe({
-      nodeId: nodeSession.nodeId,
-      control: false,
-      credentials: { password: "memory-only-password" },
-    });
-    const secondWs = await openViewOnlyObserver(gatewayUrl, secondObserved.wsPath);
-    expect(ws.readyState).toBe(WebSocket.OPEN);
-
-    await expect(rfb.completion).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(rfb.connectionCount()).toBe(4));
-    await expectObserversClosed({
-      observers: [ws, secondWs],
-      peers: rfb.peers,
-      stop: async () => service.stopNode(nodeSession.nodeId),
-    });
+async function expectPeerEof(params: {
+  observers: readonly WebSocket[];
+  completedInvocations: readonly boolean[];
+  finish: () => void;
+}): Promise<void> {
+  const terminalFrames = params.observers.map((ws) => {
+    const received: string[] = [];
+    ws.on("message", (data) => received.push(rawDataToString(data)));
+    return received;
   });
+  params.finish();
+  await vi.waitFor(() =>
+    expect(params.completedInvocations).toEqual(params.observers.map(() => true)),
+  );
+  await vi.waitFor(() =>
+    expect(params.observers.every((ws) => ws.readyState === WebSocket.CLOSED)).toBe(true),
+  );
+  expect(terminalFrames.map((frames) => frames.join(""))).toEqual(
+    params.observers.map(() => "terminal-pixel-update"),
+  );
+}
+
+describe("paired node desktop observe integration", () => {
+  it.each(["owner-stop", "peer-eof"])(
+    "relays concurrent node viewers, filters input and settles on %s",
+    async (closeMode) => {
+      const endAfterRequest = createDeferred();
+      const rfb = await startRfbHarness(
+        3,
+        closeMode === "peer-eof" ? endAfterRequest.promise : undefined,
+      );
+      const completedInvocations: boolean[] = [];
+
+      const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
+      const streamBroker = createNodeDesktopStreamBroker();
+      cleanups.push(async () => desktopRegistry.stopAll());
+      let gatewayUrl = "";
+      const nodeSession = {
+        nodeId: "node-1",
+        connId: "conn-1",
+        pairingGeneration: "generation-1",
+        platform: "linux",
+        deviceFamily: "Linux",
+        commands: [NODE_DESKTOP_STREAM_COMMAND],
+      };
+      const nodeRegistry = {
+        get: () => nodeSession,
+        getForPairingGeneration: (_nodeId: string, generation: string) =>
+          generation === nodeSession.pairingGeneration ? nodeSession : undefined,
+        isConnectionCurrentPairingState: async (connId: string) => connId === nodeSession.connId,
+        invoke: async (request: {
+          params?: unknown;
+          signal?: AbortSignal;
+          onProgress?: (chunk: string) => void;
+        }) => {
+          try {
+            await invokeNodeDesktopStream({
+              paramsJSON: JSON.stringify({
+                ...(request.params as { ticket: string; attachPath: string }),
+              }),
+              gatewayUrl,
+              config: { enabled: true, port: rfb.port },
+              signal: request.signal ?? new AbortController().signal,
+              emitStatus: async (status) => request.onProgress?.(status),
+            });
+            completedInvocations.push(true);
+            return { ok: true };
+          } catch (error) {
+            completedInvocations.push(false);
+            return {
+              ok: false,
+              error: { message: error instanceof Error ? error.message : String(error) },
+            };
+          }
+        },
+      } as unknown as NodeRegistry;
+      gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
+
+      const service = createNodeDesktopService({
+        getConfig: () => ({
+          gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+        }),
+        nodeRegistry,
+        desktopRegistry,
+        streamBroker,
+      });
+      const observers = await Promise.all(
+        Array.from({ length: 3 }, async () => {
+          const observed = await service.observe({
+            nodeId: nodeSession.nodeId,
+            control: false,
+            credentials: { password: "memory-only-password" },
+          });
+          expect(observed.auth).toBe("vnc-password");
+          return await openViewOnlyObserver(gatewayUrl, observed.wsPath);
+        }),
+      );
+      expect(observers.every((ws) => ws.readyState === WebSocket.OPEN)).toBe(true);
+
+      await expect(rfb.completion).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(rfb.connectionCount()).toBe(3));
+      if (closeMode === "peer-eof") {
+        await expectPeerEof({ observers, completedInvocations, finish: endAfterRequest.resolve });
+      } else {
+        await expectObserversClosed({
+          observers,
+          peers: rfb.peers,
+          stop: async () => service.stopNode(nodeSession.nodeId),
+        });
+      }
+    },
+  );
 });
 
 function workerNodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
@@ -350,97 +386,116 @@ async function observeEnvironmentDesktop(
 describe("worker environment node desktop observe integration", () => {
   workerSupport.setupWorkerEnvironmentServiceSuite();
 
-  it("carries an environment observer over its durable node and closes it on teardown", async () => {
-    const rfb = await startRfbHarness(1);
-    const passwordFilePath = path.join(workerSupport.testState.root, "vnc.password");
-    await fs.writeFile(passwordFilePath, "memory-only-password\n", { mode: 0o600 });
-    const record = workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
-      ...workerSupport.DESKTOP,
-      port: rfb.port,
-      passwordFilePath,
-    });
-    if (!record.nodeDeviceId) {
-      throw new Error("expected durable worker node id");
-    }
-
-    const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
-    const streamBroker = createNodeDesktopStreamBroker();
-    cleanups.push(async () => desktopRegistry.stopAll());
-    const proof = workerNodeProof(record.nodeDeviceId);
-    const pairingRegistry = {
-      getForPairingGeneration: (nodeId: string, generation: string) =>
-        nodeId === proof.nodeId && generation === proof.pairingGeneration ? proof : undefined,
-      isConnectionCurrentPairingState: async (connId: string) => connId === proof.connId,
-    } as unknown as NodeRegistry;
-    let gatewayUrl = "";
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-      if (!request.isDispatchAuthorized()) {
-        return { ok: false, error: { code: "STALE", message: "desktop owner is stale" } };
+  it.each(["owner-stop", "peer-eof"])(
+    "carries concurrent worker viewers and settles on %s",
+    async (closeMode) => {
+      const endAfterRequest = createDeferred();
+      const rfb = await startRfbHarness(
+        3,
+        closeMode === "peer-eof" ? endAfterRequest.promise : undefined,
+      );
+      const completedInvocations: boolean[] = [];
+      const passwordFilePath = path.join(workerSupport.testState.root, "vnc.password");
+      await fs.writeFile(passwordFilePath, "memory-only-password\n", { mode: 0o600 });
+      const record = workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
+        ...workerSupport.DESKTOP,
+        port: rfb.port,
+        passwordFilePath,
+      });
+      if (!record.nodeDeviceId) {
+        throw new Error("expected durable worker node id");
       }
-      try {
-        await invokeNodeWorkerDesktopStream({
-          paramsJSON: JSON.stringify(request.params),
-          gatewayUrl,
-          signal: request.signal ?? new AbortController().signal,
+
+      const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
+      const streamBroker = createNodeDesktopStreamBroker();
+      cleanups.push(async () => desktopRegistry.stopAll());
+      const proof = workerNodeProof(record.nodeDeviceId);
+      const pairingRegistry = {
+        getForPairingGeneration: (nodeId: string, generation: string) =>
+          nodeId === proof.nodeId && generation === proof.pairingGeneration ? proof : undefined,
+        isConnectionCurrentPairingState: async (connId: string) => connId === proof.connId,
+      } as unknown as NodeRegistry;
+      let gatewayUrl = "";
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        if (!request.isDispatchAuthorized()) {
+          return { ok: false, error: { code: "STALE", message: "desktop owner is stale" } };
+        }
+        try {
+          await invokeNodeWorkerDesktopStream({
+            paramsJSON: JSON.stringify(request.params),
+            gatewayUrl,
+            signal: request.signal ?? new AbortController().signal,
+          });
+          completedInvocations.push(true);
+          return { ok: true, payload: null };
+        } catch (error) {
+          completedInvocations.push(false);
+          return {
+            ok: false,
+            error: { message: error instanceof Error ? error.message : String(error) },
+          };
+        }
+      });
+      const transport: NodeWorkerSupervisorTransport = {
+        listCurrentNodes: async () => [proof],
+        hasCurrentRunner: (nodeId) => nodeId === proof.nodeId,
+        isCurrent: (candidate) =>
+          candidate.nodeId === proof.nodeId &&
+          candidate.connId === proof.connId &&
+          candidate.pairingGeneration === proof.pairingGeneration,
+        invoke,
+      };
+      const carrier = createWorkerNodeDesktopCarrier({
+        store: workerSupport.testState.store,
+        desktopRegistry,
+      });
+      carrier.bindRuntime({ transport, streamBroker });
+      const workerEnvironmentService = workerSupport.createService(workerSupport.createProvider(), {
+        nodeDesktopCarrier: carrier,
+        now: Date.now,
+      });
+      gatewayUrl = await startDesktopGateway({
+        desktopRegistry,
+        nodeRegistry: pairingRegistry,
+        streamBroker,
+      });
+
+      const observers = await Promise.all(
+        Array.from({ length: 3 }, async () => {
+          const observed = await observeEnvironmentDesktop(
+            workerEnvironmentService,
+            record.environmentId,
+          );
+          expect(observed).toMatchObject({ transport: "rfb", control: false });
+          return await openViewOnlyObserver(gatewayUrl, observed.wsPath);
+        }),
+      );
+
+      await expect(rfb.completion).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(rfb.connectionCount()).toBe(3));
+      expect(invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: NODE_WORKER_DESKTOP_STREAM_COMMAND,
+          params: {
+            ticket: expect.stringMatching(/^[a-f0-9]{48}$/u),
+            attachPath: expect.stringMatching(/^\/node-desktop\/attach\?ticket=[a-f0-9]{48}$/u),
+            port: rfb.port,
+            passwordFilePath,
+          },
+        }),
+      );
+      if (closeMode === "peer-eof") {
+        await expectPeerEof({ observers, completedInvocations, finish: endAfterRequest.resolve });
+        await workerEnvironmentService.destroy(record.environmentId);
+      } else {
+        await expectObserversClosed({
+          observers,
+          peers: rfb.peers,
+          stop: async () => workerEnvironmentService.destroy(record.environmentId),
         });
-        return { ok: true, payload: null };
-      } catch (error) {
-        return {
-          ok: false,
-          error: { message: error instanceof Error ? error.message : String(error) },
-        };
       }
-    });
-    const transport: NodeWorkerSupervisorTransport = {
-      listCurrentNodes: async () => [proof],
-      hasCurrentRunner: (nodeId) => nodeId === proof.nodeId,
-      isCurrent: (candidate) =>
-        candidate.nodeId === proof.nodeId &&
-        candidate.connId === proof.connId &&
-        candidate.pairingGeneration === proof.pairingGeneration,
-      invoke,
-    };
-    const carrier = createWorkerNodeDesktopCarrier({
-      store: workerSupport.testState.store,
-      desktopRegistry,
-    });
-    carrier.bindRuntime({ transport, streamBroker });
-    const workerEnvironmentService = workerSupport.createService(workerSupport.createProvider(), {
-      nodeDesktopCarrier: carrier,
-      now: Date.now,
-    });
-    gatewayUrl = await startDesktopGateway({
-      desktopRegistry,
-      nodeRegistry: pairingRegistry,
-      streamBroker,
-    });
-
-    const observed = await observeEnvironmentDesktop(
-      workerEnvironmentService,
-      record.environmentId,
-    );
-    expect(observed).toMatchObject({ transport: "rfb", control: false });
-    const observer = await openViewOnlyObserver(gatewayUrl, observed.wsPath);
-
-    await expect(rfb.completion).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(rfb.connectionCount()).toBe(2));
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: NODE_WORKER_DESKTOP_STREAM_COMMAND,
-        params: {
-          ticket: expect.stringMatching(/^[a-f0-9]{48}$/u),
-          attachPath: expect.stringMatching(/^\/node-desktop\/attach\?ticket=[a-f0-9]{48}$/u),
-          port: rfb.port,
-          passwordFilePath,
-        },
-      }),
-    );
-    await expectObserversClosed({
-      observers: [observer],
-      peers: rfb.peers,
-      stop: async () => workerEnvironmentService.destroy(record.environmentId),
-    });
-    expect(workerSupport.testState.store.get(record.environmentId)?.state).toBe("destroyed");
-    expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
-  });
+      expect(workerSupport.testState.store.get(record.environmentId)?.state).toBe("destroyed");
+      expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+    },
+  );
 });

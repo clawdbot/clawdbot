@@ -43,7 +43,10 @@ vi.mock("../../commands/flows.js", () => {
     flowsCancelCommand: mocks.flowsCancelCommand,
   };
 });
-vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: mocks.runtime,
+}));
 
 const ownerHandlers = [
   mocks.tasksListCommand,

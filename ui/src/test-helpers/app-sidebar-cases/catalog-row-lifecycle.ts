@@ -10,6 +10,59 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar catalog row lifecycle", () => {
+  it.each([
+    { label: undefined, expected: "Captured native title" },
+    { label: "Operator chosen label", expected: "Operator chosen label" },
+  ])(
+    "keeps the adopted session name $expected after a native rename",
+    async ({ label, expected }) => {
+      const adoptedKey = "agent:main:adopted-title";
+      const sessions = createSessionsHarness("main", ["agent:main:main", adoptedKey]);
+      const adoptedRow = sessions.sessions.state.result!.sessions.find(
+        (row) => row.key === adoptedKey,
+      )!;
+      adoptedRow.label = label;
+      adoptedRow.displayName = "Captured native title";
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessions.sessions,
+      );
+      sidebar.sessionData.sessionCatalogs = catalogPage([
+        { threadId: "thread-adopted-title", name: "Renamed upstream", sessionKey: adoptedKey },
+      ]).catalogs;
+      sidebar.sessionData.requestSessionDataUpdate();
+      await sidebar.updateComplete;
+
+      const row = sidebar.querySelector(`[data-session-key="${adoptedKey}"]`);
+      expect(row?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(expected);
+      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toContain(
+        expected,
+      );
+    },
+  );
+  it("uses catalog colors only until the live session owns the row", async () => {
+    const key = "agent:main:adopted-color";
+    const sessions = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessions.sessions,
+    );
+    const catalog = catalogPage([{ threadId: "colored", name: "CLI session", color: "cyan" }]);
+    sidebar.sessionData.sessionCatalogs = catalog.catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+    const row = () => sidebar.querySelector<HTMLElement>("[data-catalog-session-key]");
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-cyan)");
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      { threadId: "colored", name: "CLI session", color: "cyan", sessionKey: key },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("");
+  });
+
   it("retargets an open menu when its row is adopted", async () => {
     const adoptedKey = "agent:main:adopted-menu";
     const gateway = createGateway({} as GatewayBrowserClient);

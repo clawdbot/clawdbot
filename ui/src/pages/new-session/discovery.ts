@@ -20,6 +20,9 @@ export type DraftBranches = {
 
 export type DraftRepositoryState =
   | { kind: "idle" }
+  // Selected GitHub projects offer isolation before checkout exists. Local first
+  // turns prepare after admission; remote placement materializes before dispatch.
+  | { kind: "pending-clone"; cloneUrl: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -58,8 +61,6 @@ export type DraftEnvironment = {
   invocableCommands?: string[];
   issues?: RuntimeTargetIssue[];
 };
-
-export type BrowserTarget = { nodeId: string; label: string };
 
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0

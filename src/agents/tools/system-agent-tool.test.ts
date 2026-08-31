@@ -1,11 +1,12 @@
 // OpenClaw ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import {
   createSystemAgentTool,
-  hashSystemAgentOperation,
   resolveSystemAgentDirectiveTransition,
   resolveSystemAgentProposalTransition,
   type SystemAgentToolDirective,
+  type SystemAgentToolOptions,
 } from "./system-agent-tool.js";
 
 const mocks = vi.hoisted(() => ({
@@ -101,6 +102,46 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
+  it("registers delegated proposals but never instructs a chat 'yes'", async () => {
+    const proposalRef: { current?: string } = {};
+    const args = {
+      action: "config_set" as const,
+      path: "agents.defaults.subagents.thinking",
+      value: "high",
+      approved: true,
+    };
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      proposalRef,
+    });
+
+    const result = await tool.execute("t-delegated", args);
+    const text = toolText(result);
+
+    expect(text).toContain("needs-approval:");
+    expect(text).toContain("OpenClaw operator UI");
+    expect(text).toContain("cannot be applied from this chat");
+    expect(text).not.toContain("ask the user to reply yes");
+    expect(proposalRef.current).toBe(
+      hashSystemAgentOperation({
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      }),
+    );
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    // Out-of-process CLI hosts still mirror the refusal from the marker line.
+    expect(resolveSystemAgentProposalTransition({ args, resultText: text })).toEqual({
+      proposal: proposalRef.current,
+      operation: {
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      },
+    });
+  });
+
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
     const tool = createSystemAgentTool({ surface: "cli", proposalRef });
@@ -156,6 +197,37 @@ describe("openclaw tool", () => {
     });
     // One approval, one mutation.
     expect(proposalRef.current).toBeUndefined();
+  });
+
+  it("keeps the first staged config_set proposal instead of overwriting it with a second", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+
+    const first = await tool.execute("multi-a", {
+      action: "config_set",
+      path: "tts.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+    expect(toolText(first)).toContain("needs-approval");
+    const firstHash = proposalRef.current;
+    expect(firstHash).toBeDefined();
+
+    const second = await tool.execute("multi-b", {
+      action: "config_set",
+      path: "talk.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+
+    // The second, different path must not silently replace the first staged
+    // operation: only one operation can ever be approved and applied.
+    expect(toolText(second)).toContain("proposal-conflict");
+    expect(proposalRef.current).toBe(firstHash);
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set",
+      path: "tts.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
   it("binds setup approval to the exact verified model and workspace", async () => {
@@ -383,6 +455,31 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { action: "connect_channel", channel: "telegram" },
+    { action: "configure_skills" },
+    { action: "configure_search" },
+    { action: "configure_gateway" },
+    { action: "import_memory" },
+    { action: "configure_model_provider" },
+    { action: "open_agent" },
+    { action: "open_setup", target: "channels" },
+  ])("does not promise a delegated $action handoff", async (args) => {
+    const directiveRef: { current?: SystemAgentToolDirective } = {};
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      directiveRef,
+    });
+
+    const text = toolText(await tool.execute("delegated-navigation", args));
+
+    expect(text).toContain("cannot run from a delegated agent request");
+    expect(directiveRef.current).toBeUndefined();
+    expect(resolveSystemAgentDirectiveTransition({ args, resultText: text })).toBeNull();
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
   it("mirrors directive transitions for out-of-process (CLI MCP) hosts", () => {
     expect(
       resolveSystemAgentDirectiveTransition({
@@ -505,6 +602,14 @@ describe("openclaw tool", () => {
     expect(
       resolveSystemAgentProposalTransition({ args, resultText: "Default model updated." }),
     ).toEqual({ proposal: undefined });
+    // A rejected second proposal must not overwrite the mirrored first
+    // operation: the host keeps proposalRef untouched on a null transition.
+    expect(
+      resolveSystemAgentProposalTransition({
+        args: { action: "config_set", path: "talk.providers.fish-audio.model", value: "s2.1-pro" },
+        resultText: `proposal-conflict:${hash}\nA different operation is already staged and awaiting the user's approval.`,
+      }),
+    ).toBeNull();
     // Read actions and unparsable calls never touch the proposal.
     expect(
       resolveSystemAgentProposalTransition({ args: { action: "status" }, resultText: "ok" }),

@@ -391,7 +391,7 @@ describe("buildOfficialChannelCatalog", () => {
     expect(entries.some((entry) => entry.openclaw?.channel?.id === "local-only")).toBe(false);
   });
 
-  it("preserves manifest-owned fallback metadata for externalized channel packages", () => {
+  it("preserves manifest-owned metadata without duplicating channel schemas", () => {
     const entries = buildOfficialChannelCatalog({ repoRoot: process.cwd() }).entries;
     const slack = findCatalogEntry(entries, (entry) => entry.openclaw?.channel?.id === "slack");
     const raft = findCatalogEntry(entries, (entry) => entry.openclaw?.channel?.id === "raft");
@@ -400,14 +400,13 @@ describe("buildOfficialChannelCatalog", () => {
       (entry) => entry.openclaw?.channel?.id === "clickclack",
     );
 
-    expect(slack.openclaw.channelConfigs?.slack?.schema).toEqual({
-      type: "object",
-      additionalProperties: true,
-    });
-    expect(raft.openclaw.channelConfigs?.raft?.schema).toMatchObject({
-      type: "object",
-      additionalProperties: false,
-    });
+    // Channel schemas are single-sourced from the zod-derived generated bundled
+    // channel metadata (compiled into core by channelId); manifest and catalog
+    // copies drifted and silently overrode it in validation (see #131292).
+    expect(slack.openclaw.channelConfigs?.slack?.schema).toBeUndefined();
+    expect(slack.openclaw.channelConfigs?.slack?.label).toBe("Slack");
+    expect(raft.openclaw.channelConfigs?.raft?.schema).toBeUndefined();
+    expect(raft.openclaw.channelConfigs?.raft?.label).toBeTruthy();
     expect(clickclack.openclaw.contracts?.tools).toEqual(["discussion"]);
   });
 

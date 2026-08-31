@@ -352,8 +352,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("starts a fresh turn before the post-start mirror records admission", async () => {
+    const beforeMessageWrite = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_message_write", handler: beforeMessageWrite }]),
+    );
     const workspaceDir = path.join(tempDir, "workspace-fresh-admission");
     const params = await createSqliteParams(workspaceDir, "fresh-admission");
+    params.sandboxSessionKey = "agent:main:policy";
     params.contextEngine = createContextEngine();
     const recorder = params.userTurnTranscriptRecorder;
     if (!recorder) {
@@ -371,6 +376,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     expect(recorder.markSentToProvider).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(markRuntimePersisted).toHaveBeenCalledOnce());
+    expect(beforeMessageWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
+      { agentId: "main", sessionKey: params.sessionKey },
+    );
     await harness.completeTurn();
     await run;
   });

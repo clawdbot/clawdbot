@@ -1,9 +1,9 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
@@ -21,6 +21,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -37,12 +38,16 @@ export async function runCliFallbackCandidate(
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const selectedModelEntry = turn.followupRun.run.thinkingCatalog?.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
+  const selectedModelEntry = findModelInCatalog(
+    params.candidateRun.thinkingCatalog ?? [],
+    params.provider,
+    params.model,
   );
-  const modelHasVision = Boolean(selectedModelEntry?.input?.includes("image"));
+  const modelHasVision = await resolveRunModelHasVision({
+    run: params.candidateRun,
+    provider: params.provider,
+    model: params.model,
+  });
   const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
   const sessionTarget =
     sessionKey && turn.storePath
@@ -319,6 +324,7 @@ export async function runCliFallbackCandidate(
             contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
+            prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,

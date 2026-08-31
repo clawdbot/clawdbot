@@ -118,6 +118,34 @@ describe("createComputerTool v2 execution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it.each(["inspect", "accept", "dismiss"])(
+    "captures an after-image only for a dialog mutation: %s",
+    async (dialogAction) => {
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["browser_dialog"]) }),
+      ]);
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+        (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+          ? { payload: { ok: true, effect: "confirmed" } }
+          : screenshotPayload(),
+      );
+      await createVisionComputerTool().execute("dialog", {
+        action: "browser_dialog",
+        browserRef: "browser-1",
+        pageRef: "page-1",
+        dialogAction,
+        ...(dialogAction === "inspect" ? {} : { dialogRef: "dialog-1" }),
+      });
+      expect(
+        callGatewayToolMock.mock.calls.map((call) => (call[2] as ComputerActBody).command),
+      ).toEqual(
+        dialogAction === "inspect"
+          ? [COMPUTER_ACT_COMMAND]
+          : [COMPUTER_ACT_COMMAND, "screen.snapshot"],
+      );
+    },
+  );
+
   it("maps browser observations and opaque refs through the public tool", async () => {
     const actions: ComputerUseV2ActionName[] = ["get_browser_state", "browser_pointer"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);

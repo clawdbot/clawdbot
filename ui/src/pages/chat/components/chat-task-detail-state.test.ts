@@ -176,7 +176,7 @@ describe("task detail transcript state", () => {
     ).toEqual({ status: "loading" });
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main:subagent:child",
-      limit: 100,
+      limit: 800,
     });
 
     pending.resolve(history("Child transcript loaded."));

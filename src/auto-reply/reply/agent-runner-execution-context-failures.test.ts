@@ -14,6 +14,7 @@ import {
   requireRecord,
   expectRecordFields,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
@@ -49,7 +50,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -95,7 +96,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");

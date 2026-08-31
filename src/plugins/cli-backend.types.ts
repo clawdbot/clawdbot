@@ -232,6 +232,12 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Turn-only context that must not become an operator-authored native transcript row. */
+export type CliBackendPromptContext = {
+  prependContext?: string;
+  appendContext?: string;
+};
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -239,6 +245,7 @@ export type CliBackendExecuteContext = {
   cwd: string;
   env: Record<string, string>;
   prompt: string;
+  promptContext?: CliBackendPromptContext;
   modelId: string;
   systemPrompt: string;
   sessionId?: string;

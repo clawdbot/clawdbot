@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
-import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/run-state.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
+import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -24,7 +25,7 @@ import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.j
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
-import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { isAcpSessionKey, resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
@@ -103,11 +104,17 @@ function fingerprintRestartSafeChatRequest(params: {
 }
 
 export function createRestartSafeChatRequest(params: {
+  goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
 }): RestartSafeChatRequest | undefined {
+  if (params.goalRequestFingerprint) {
+    // Goal admission owns literal intent; slash-looking objectives are not commands.
+    // Its receipt fingerprints attachments, routing, and every immutable run option.
+    return { fingerprint: params.goalRequestFingerprint };
+  }
   if (!params.eligible || hasRestartUnsafeMessageSemantics(params.message, params.cfg)) {
     return undefined;
   }
@@ -234,7 +241,7 @@ function isRestartSafeChatSession(params: {
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
-    entry.agentHarnessId === undefined &&
+    (entry.agentHarnessId === undefined || entry.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID) &&
     entry.pluginOwnerId === undefined &&
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
@@ -255,9 +262,12 @@ function hasRestartUnsafeChatWork(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  entry?: SessionEntry;
 }): boolean {
   if (
-    findRestartRecoveryUnsafeChatAdmissionHook() !== undefined ||
+    findRestartRecoveryUnsafeChatAdmissionHook(
+      resolveSessionDispatchKind(params.sessionKey, params.entry),
+    ) !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
     replyRunRegistry.isActive(
       resolveChatSendActiveScopeKey({
@@ -301,6 +311,7 @@ export function resolveRestartSafeChatAdmission(params: {
   clientRunId: string;
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns">;
   entry?: SessionEntry;
+  initialSessionEntry?: SessionEntry;
   now: number;
   request?: RestartSafeChatRequest;
   requestedSessionId?: string;
@@ -309,23 +320,24 @@ export function resolveRestartSafeChatAdmission(params: {
   storePath: string;
 }): RestartSafeChatAdmission | undefined {
   const request = params.request;
-  const entry = params.entry;
+  const entry = params.entry ?? params.initialSessionEntry;
   if (
     !request ||
     !entry ||
-    !isRestartSafeChatSession(params) ||
-    resolveSessionEntryResetFreshness({
-      agentId: params.agentId,
-      now: params.now,
-      resetOverride: resolveChannelResetConfig({
+    !isRestartSafeChatSession({ ...params, entry }) ||
+    (!params.initialSessionEntry &&
+      resolveSessionEntryResetFreshness({
+        agentId: params.agentId,
+        now: params.now,
+        resetOverride: resolveChannelResetConfig({
+          sessionCfg: params.cfg.session,
+          channel: sessionDeliveryChannel(params.entry),
+        }),
+        resetType: resolveSessionResetType({ sessionKey: params.sessionKey }),
         sessionCfg: params.cfg.session,
-        channel: sessionDeliveryChannel(params.entry),
-      }),
-      resetType: resolveSessionResetType({ sessionKey: params.sessionKey }),
-      sessionCfg: params.cfg.session,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    }).state !== "fresh" ||
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }).state !== "fresh") ||
     hasRestartUnsafeChatWork(params)
   ) {
     return undefined;

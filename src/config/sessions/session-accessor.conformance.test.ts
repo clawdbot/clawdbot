@@ -1341,7 +1341,7 @@ describe("sqlite session normalization", () => {
       delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       createdVia: "channel",
-      createdActor: { type: "human", id: "telegram-sender" },
+      createdActor: { type: "human", source: "channel", id: "telegram-sender" },
       createdAt: 1_782_973_390_000,
       displayName: "telegram:g-bucephalus-+-topics",
       forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
@@ -1385,7 +1385,7 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         sessionId: newSessionId,
         createdVia: "channel",
-        createdActor: { type: "human", id: "telegram-sender" },
+        createdActor: { type: "human", source: "channel", id: "telegram-sender" },
         createdAt: 1_782_973_390_000,
         forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
         previousSessionId: oldSessionId,
@@ -2431,6 +2431,11 @@ describe("sqlite session normalization", () => {
       sessionId: "source-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "source-session",
+        maxBytes: 50_000,
+      },
     };
     await upsertSessionEntryCore(sourceEntryScope, sourceEntry);
 
@@ -2472,6 +2477,7 @@ describe("sqlite session normalization", () => {
     );
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
+    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
     await expect(loadTranscriptEvents(branchScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),
@@ -2603,6 +2609,11 @@ describe("sqlite session normalization", () => {
       sessionId: "current-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "current-session",
+        maxBytes: 50_000,
+      },
     });
 
     const result = await restoreCompactionCheckpointSession({
@@ -2631,6 +2642,7 @@ describe("sqlite session normalization", () => {
         totalTokensVersion: 1,
       }),
     );
+    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
     await expect(loadTranscriptEvents(restoredScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),

@@ -31,6 +31,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   hasLoneSurrogate,
   openSessionManager,
   placements,
@@ -72,6 +73,7 @@ describe("worker turn launcher failure recovery", () => {
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
+        measureLaunchTurn,
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launchStarted.resolve();
@@ -124,11 +126,11 @@ describe("worker turn launcher failure recovery", () => {
       });
     try {
       await launchStarted.promise;
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       finishLaunch.resolve();
       await teardownStarted.promise;
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       clock.mockReturnValue(1_030_000);
       await expect(recover()).resolves.toMatchObject({
         status: "failed",
@@ -388,6 +390,7 @@ describe("worker turn launcher failure recovery", () => {
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
@@ -508,6 +511,7 @@ describe("worker turn launcher failure recovery", () => {
         ownerEpoch: OWNER_EPOCH,
         quiesceWorkspace: vi.fn(),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -679,6 +683,7 @@ describe("worker turn launcher failure recovery", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request) => {
           if (dispatched) {
             request.onDispatchReady?.();
@@ -748,6 +753,7 @@ describe("worker turn launcher failure recovery", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           request.onDispatchReady?.();
           return {

@@ -21,6 +21,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import {
   getRuntimeAuthProfileStoreSnapshot,
+  loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
@@ -458,10 +459,10 @@ describe("secrets apply", () => {
       .run(JSON.stringify({ location: "state-db" }));
     stateDatabase
       .prepare(
-        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, 1)",
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
       )
       .run(
-        "shared",
+        "authProfiles.store",
         JSON.stringify({
           version: 1,
           profiles: {
@@ -689,6 +690,62 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("preserves relocated shared inheritance when applying an agent SecretRef", async () => {
+    const sharedDir = path.join(fixture.rootDir, "relocated-shared");
+    const agentDir = path.join(fixture.rootDir, "ops-agent");
+    fixture.env.OPENCLAW_AGENT_DIR = sharedDir;
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", sharedDir);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, fixture.env);
+    const shared: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:inherited": { type: "api_key", provider: "openai", key: "fake-inherited" },
+      },
+    };
+    const local: AuthProfileStore = {
+      version: 1,
+      profiles: { "openai:local": { type: "api_key", provider: "openai", key: "fake-local" } },
+    };
+    registerResolvedAgentDir({ agentId: "ops", agentDir });
+    await writeJsonFile(resolveAuthProfileDatabasePath(sharedDir), shared);
+    await writeJsonFile(resolveAuthProfileDatabasePath(agentDir), local);
+    await writeJsonFile(fixture.configPath, { agents: { entries: { ops: { agentDir } } } });
+    replaceRuntimeAuthProfileStoreSnapshots([
+      { agentDir, store: loadAuthProfileStoreWithoutExternalProfiles(agentDir) },
+    ]);
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:inherited"]).toEqual(
+      shared.profiles["openai:inherited"],
+    );
+    await runSecretsApply({
+      plan: createPlan({
+        targets: [
+          {
+            type: "auth-profiles.api_key.key",
+            path: "profiles.openai:local.key",
+            pathSegments: ["profiles", "openai:local", "key"],
+            agentId: "ops",
+            ref: OPENAI_API_KEY_ENV_REF,
+          },
+        ],
+        options: {
+          scrubEnv: false,
+          scrubAuthProfilesForProviderTargets: false,
+          scrubLegacyAuthJson: false,
+        },
+      }),
+      env: fixture.env,
+      write: true,
+    });
+    expect(readPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
+      profiles: { "openai:local": { keyRef: OPENAI_API_KEY_ENV_REF } },
+    });
+    expect(readPersistedAuthProfileStoreRaw(sharedDir)).toEqual(shared);
+    const runtime = getRuntimeAuthProfileStoreSnapshot(agentDir);
+    expect(runtime?.profiles["openai:inherited"]).toEqual(shared.profiles["openai:inherited"]);
+    expect(runtime?.profiles["openai:default"]).toBeUndefined();
   });
 
   it("rolls back committed auth rows when runtime publication fails", async () => {

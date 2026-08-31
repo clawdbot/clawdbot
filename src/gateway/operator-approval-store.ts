@@ -310,7 +310,11 @@ function encodeOperatorApprovalHistoryCursor(cursor: OperatorApprovalHistoryCurs
 
 function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHistoryCursor {
   try {
-    const parsed: unknown = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    const bytes = Buffer.from(raw, "base64url");
+    if (bytes.toString("base64url") !== raw) {
+      throw new OperatorApprovalHistoryCursorError();
+    }
+    const parsed: unknown = JSON.parse(bytes.toString("utf8"));
     if (
       typeof parsed !== "object" ||
       parsed === null ||
@@ -327,7 +331,11 @@ function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHisto
     ) {
       throw new OperatorApprovalHistoryCursorError();
     }
-    return { resolvedAtMs: parsed.resolvedAtMs, id: parsed.id };
+    const cursor = { resolvedAtMs: parsed.resolvedAtMs, id: parsed.id };
+    if (encodeOperatorApprovalHistoryCursor(cursor) !== raw) {
+      throw new OperatorApprovalHistoryCursorError();
+    }
+    return cursor;
   } catch (error) {
     if (error instanceof OperatorApprovalHistoryCursorError) {
       throw error;
@@ -583,6 +591,18 @@ function operatorApprovalRemediation(
         },
       ];
     case "run-aborted":
+      if (
+        record.resolver?.kind === "system" &&
+        (record.resolver.id === "permission-change" ||
+          record.resolver.id === "approval-scope-closed")
+      ) {
+        return [
+          {
+            code: "request_approval_again",
+            text: "Request the action again under the current permissions if it is still needed.",
+          },
+        ];
+      }
       return [
         {
           code: "start_new_run",
@@ -1663,7 +1683,7 @@ export function resolveOperatorApproval(params: {
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
   /** Cron-context allow-always mints this scoped grant in the same transaction. */
-  standingGrant?: CronStandingGrantMintSpec;
+  standingGrant?: CronStandingGrantMintSpec & { expiresAtMs: number | null };
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
   const resolverId = normalizeNullableString(params.resolver.id);
