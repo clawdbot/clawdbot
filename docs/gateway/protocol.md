@@ -5,6 +5,7 @@ read_when:
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
 title: "Gateway protocol"
+doc-schema-version: 1
 ---
 
 The Gateway WS protocol is the single control plane and node transport for
@@ -14,14 +15,16 @@ handshake time.
 
 ## npm packages
 
-These packages ship with OpenClaw release trains. During the initial rollout,
-npm may return `E404` until the first package-bearing release is published.
+The verified stable package release is `2026.8.1`. Follow
+[Install the packages](/gateway/clients#install-the-packages) for exact-version
+commands and compatibility guidance. Package release versions are separate from
+the wire protocol version and the root `openclaw` CLI release.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error
   helpers, and version constants. Its tarball includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
-  machine-readable contract.
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.8.1/protocol.schema.json)
+  machine-readable contract as a downloadable file, not an exported import subpath.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   publishes the reference Node client and a browser-safe entry at
   `@openclaw/gateway-client/browser`.
@@ -273,13 +276,16 @@ pairing/admin access needs a separate approved pairing or token flow. Persist
 `hello-ok.auth.deviceTokens` only when bootstrap auth ran over a trusted
 transport (`wss://` or loopback/local pairing).
 
-Trusted same-process backend clients (`client.id: "gateway-client"`,
+Trusted local backend clients (`client.id: "gateway-client"`,
 `client.mode: "backend"`) may omit `device` on direct loopback connections when
 authenticating with the shared gateway token/password. This path is reserved
 for internal control-plane RPCs (e.g. subagent session updates) and avoids
-stale CLI/device pairing baselines blocking local backend work. Remote,
-browser-origin, node, and explicit device-token/device-identity clients still
-go through normal pairing and scope-upgrade checks.
+stale CLI/device pairing baselines blocking local backend work. The exception
+also applies when that backend supplies a signed device identity: it does not
+create a pairing record, so an unpaired identity receives no device token.
+Remote, browser-origin, node, and non-backend clients follow their normal pairing
+and scope-upgrade policies. Device-token authentication still validates the
+existing token's role and scopes before any local-backend pairing exception.
 
 ### Worker role and closed protocol
 
@@ -861,6 +867,61 @@ count.
 Nodes may call `skills.bins` to fetch the current list of skill executables
 for auto-allow checks.
 
+### Node exec lifecycle events
+
+Nodes report `system.run` lifecycle through the node-role `node.event` RPC with
+`event: "exec.started"`, `"exec.finished"`, or `"exec.denied"`. These are not the
+operator `exec.approval.*` broadcasts and do not use the retired TCP bridge.
+
+The RPC accepts a JSON string in `payloadJSON` or an object in `payload`. A string
+`payloadJSON` takes precedence when both are supplied. For example:
+
+```json
+{
+  "event": "exec.finished",
+  "payload": {
+    "sessionKey": "agent:main:main",
+    "runId": "<exec-run-id>",
+    "host": "node",
+    "exitCode": 0,
+    "timedOut": false,
+    "success": true,
+    "output": "done"
+  }
+}
+```
+
+Current headless nodes include `sessionKey`, `runId`, and `host: "node"`.
+Additional fields are:
+
+| Field                  | Meaning                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `command`              | Raw or formatted command text.                               |
+| `exitCode`, `timedOut` | Process completion code and timeout flag.                    |
+| `success`              | Producer result flag, not the notification-gating predicate. |
+| `output`               | Bounded combined stdout, stderr, and error text.             |
+| `reason`               | Denial reason for `exec.denied`.                             |
+| `suppressNotifyOnExit` | Suppress this invocation's system notification.              |
+
+Echo the correlation fields forwarded with `system.run`; neither an ID nor the
+payload's `host` field grants authority. The Gateway matches the authenticated
+node and connection, run ID, and session key when the invocation binds one.
+Unmatched events return `handled: false` with `reason: "unmatched_exec_event"` and
+produce no system notification. A narrow legacy macOS-client path may match a
+missing or mismatched run ID only to one unambiguous invocation on that
+connection/session; new clients must send the issued run ID.
+
+`exec.started` retains the authorization record; `exec.finished` and
+`exec.denied` consume it before notification filtering. `tools.exec.notifyOnExit:
+false` or `suppressNotifyOnExit: true` suppresses notifications. Denied events
+never enqueue a system event or wake agent work. Finished events notify only for
+timeout, nonzero or unknown exit code, or nonempty compacted output; successful
+exit 0 with no output stays quiet. Finished notifications with a run ID are
+deduplicated by canonical session and run ID. A heartbeat wake is requested only
+after a system event is queued.
+
+Node event delivery is best-effort, not a durable completion ledger.
+
 ## Audit ledger RPC
 
 `audit.activity.list` gives operator clients a stable newest-first view of agent
@@ -1399,5 +1460,4 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 
 - [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
 - [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
-- [Bridge protocol](/gateway/bridge-protocol)
 - [Gateway runbook](/gateway)

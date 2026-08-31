@@ -9,6 +9,7 @@ import {
   buildSessionContext,
   migrateSessionEntries,
   parseSessionEntries,
+  SessionManager,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
@@ -40,9 +41,20 @@ export type CodexMirroredSessionHistoryTarget = {
 export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
   admission?: TranscriptTurnAdmission,
+  view: "native-evidence" | "model-context" = "native-evidence",
 ): Promise<AgentMessage[] | undefined> {
   try {
-    const entries = await readCodexMirroredSessionEntries(target, admission);
+    const loaded = await readCodexMirroredSessionEntries(target, admission, view);
+    if (!Array.isArray(loaded)) {
+      if (loaded.getHeader()?.id !== target.sessionId) {
+        return [];
+      }
+      return sanitizeCodexHistoryImagePayloads(
+        loaded.buildSessionContext().messages,
+        "codex mirrored model context",
+      );
+    }
+    const entries = loaded;
     if (entries.length === 0) {
       return [];
     }
@@ -87,8 +99,19 @@ export async function readCodexMirroredSessionHistoryMessages(
 
 async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
-  admission?: TranscriptTurnAdmission,
-): Promise<SessionEntry[]> {
+  admission: TranscriptTurnAdmission | undefined,
+  view: "native-evidence" | "model-context",
+): Promise<SessionEntry[] | SessionManager> {
+  const readTarget = async (
+    transcriptTarget: Required<
+      Pick<SessionTranscriptTargetParams, "agentId" | "sessionId" | "sessionKey" | "storePath">
+    >,
+  ) =>
+    view === "model-context"
+      ? SessionManager.openModelContext(transcriptTarget, { admission })
+      : ((await (admission
+          ? readCodexSessionTranscriptEventsBeforeAdmission(transcriptTarget, admission)
+          : readSessionTranscriptEvents(transcriptTarget))) as SessionEntry[]);
   if (target.sessionTarget) {
     const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
     if (
@@ -108,9 +131,7 @@ async function readCodexMirroredSessionEntries(
       sessionKey,
       storePath,
     };
-    return (await (admission
-      ? readCodexSessionTranscriptEventsBeforeAdmission(transcriptTarget, admission)
-      : readSessionTranscriptEvents(transcriptTarget))) as SessionEntry[];
+    return readTarget(transcriptTarget);
   }
   const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
   if (sqliteMarker) {
@@ -130,9 +151,7 @@ async function readCodexMirroredSessionEntries(
       sessionKey,
       storePath: sqliteMarker.storePath,
     };
-    return (await (admission
-      ? readCodexSessionTranscriptEventsBeforeAdmission(transcriptTarget, admission)
-      : readSessionTranscriptEvents(transcriptTarget))) as SessionEntry[];
+    return readTarget(transcriptTarget);
   }
   if (admission) {
     if (
@@ -142,15 +161,12 @@ async function readCodexMirroredSessionEntries(
     ) {
       return [];
     }
-    return (await readCodexSessionTranscriptEventsBeforeAdmission(
-      {
-        agentId: admission.agentId,
-        sessionId: admission.sessionId,
-        sessionKey: admission.sessionKey,
-        storePath: admission.storePath,
-      },
-      admission,
-    )) as SessionEntry[];
+    return readTarget({
+      agentId: admission.agentId,
+      sessionId: admission.sessionId,
+      sessionKey: admission.sessionKey,
+      storePath: admission.storePath,
+    });
   }
   return parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8")) as SessionEntry[];
 }

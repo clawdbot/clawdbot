@@ -1,15 +1,13 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecException } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import type { JsonTestResults } from "vitest/reporters";
 import packageJson from "../../package.json" with { type: "json" };
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -96,7 +94,7 @@ const cleanupCases = [
     { route, pool: "forks", failRun: false },
     { route, pool: "threads", failRun: true },
   ]),
-].map((testCase) => ({ ...testCase, pauseAfterAck: false }));
+].map((testCase) => Object.assign(testCase, { pauseAfterAck: false }));
 cleanupCases.push({ route: "profile-runner", pool: "forks", failRun: true, pauseAfterAck: true });
 
 posixIt.each([
@@ -120,6 +118,9 @@ posixIt.each([
       path.join(root, "package.json"),
       JSON.stringify({ private: true, type: "module", packageManager: packageJson.packageManager }),
     );
+    // pnpm records the pinned toolchain in its lockfile even for exec. Keep that
+    // dependency record with the installed modules without sharing lockfile writes.
+    fs.copyFileSync(path.join(repoRoot, "pnpm-lock.yaml"), path.join(root, "pnpm-lock.yaml"));
     fs.symlinkSync(
       path.join(repoRoot, "node_modules"),
       path.join(root, "node_modules"),
@@ -239,6 +240,7 @@ export default {
     );
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
+      COREPACK_HOME: process.env.COREPACK_HOME,
       HOME: home,
       USERPROFILE: home,
       TMPDIR: tmp,
@@ -327,15 +329,17 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
                   ...vitestArgs,
                 ];
     try {
-      const result = await execFileAsync(process.execPath, args, { cwd: root, env }).then(
-        ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
-        (error: { code: number; stdout: string; stderr: string }) => ({
-          code: error.code,
-          output: error.stdout + error.stderr,
-        }),
+      const result = await new Promise<{ code: ExecException["code"]; output: string }>(
+        (resolve) => {
+          execFile(process.execPath, args, { cwd: root, env }, (error, stdout, stderr) => {
+            resolve({ code: error ? error.code : 0, output: stdout + stderr });
+          });
+        },
       );
       expect(result.code, result.output).toBe(failRun ? 1 : 0);
-      if (failRun) expect(result.output).toContain(intentionalFailure);
+      if (failRun) {
+        expect(result.output).toContain(intentionalFailure);
+      }
       if (pauseAfterAck) {
         expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
           paused: true,
@@ -361,11 +365,12 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
           artifacts.some((file) => file.endsWith(".cpuprofile")),
           profileEvidence,
         ).toBe(true);
-        if (route === "profile-runner")
+        if (route === "profile-runner") {
           expect(
             artifacts.some((file) => file.endsWith(".heapprofile")),
             profileEvidence,
           ).toBe(true);
+        }
         for (const artifact of artifacts) {
           const profile = JSON.parse(fs.readFileSync(path.join(profileDir, artifact), "utf8"));
           if (artifact.endsWith(".cpuprofile")) {
@@ -378,8 +383,9 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
           }
         }
       }
-      if (route === "pty")
+      if (route === "pty") {
         expect(fs.readFileSync(mirrorPath, "utf8")).toContain("namespace fixture frame");
+      }
       expect(fs.existsSync(path.dirname(path.dirname(receipt.path)))).toBe(false);
       expect(sibling.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(fs.existsSync(siblingRoot)).toBe(true);
@@ -445,11 +451,15 @@ posixIt(
       ],
       options: { env: { TMPDIR: root }, stdio: "ignore" },
     });
-    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
     const nativeKill = process.kill.bind(process);
     const failure = Object.assign(new Error("injected group probe failure"), { code: "EIO" });
     const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      if (pid === -child.pid! && signal === 0) throw failure;
+      if (pid === -child.pid! && signal === 0) {
+        throw failure;
+      }
       return nativeKill(pid, signal);
     });
     try {

@@ -68,8 +68,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  let params = input.runParams;
-  let { provider, modelId } = input;
+  let { runParams: params, provider, modelId } = input;
   const {
     agentDir,
     workspaceDir: resolvedWorkspace,
@@ -116,8 +115,7 @@ export async function runPreparedEmbeddedLoop(
   // Admission is resolved once before the retry loop. Carry that exact object through every
   // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
-  provider = preparedRuntime.provider;
-  modelId = preparedRuntime.modelId;
+  ({ provider, modelId } = preparedRuntime);
   const {
     model,
     attemptAuthProfileStore,
@@ -597,6 +595,8 @@ export async function runPreparedEmbeddedLoop(
         lastRunPromptUsage,
         finalization: {
           preparedAttempt: dispatchedAttempt.preparedAttempt,
+          sessionTarget: sessionPromptState.sessionTarget,
+          sessionWriterFence: sessionPromptState.sessionWriterFence,
           harness: agentHarness,
           modelApi: effectiveModel.api,
           executionContract,

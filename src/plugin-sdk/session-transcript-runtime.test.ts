@@ -9,6 +9,10 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
@@ -478,6 +482,63 @@ describe("session transcript runtime SDK", () => {
         text: "stale assistant reply",
       }),
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
+  it("does not append an assistant mirror after cancellation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cancelled-mirror-session",
+      sessionKey: "agent:main:cancelled",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const cancellation = new Error("cancelled by user");
+    const signal = AbortSignal.abort(cancellation);
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        signal,
+        text: "must not be persisted",
+      }),
+    ).rejects.toBe(cancellation);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+  });
+
+  it("rejects an assistant mirror after its admitted writer is superseded", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "superseded-mirror-session",
+      sessionKey: "agent:main:superseded-mirror",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      activeWriterRunId: "replacement-run",
+      lifecycleRevision: "revision-a",
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    await expect(
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionKey: scope.sessionKey,
+          sessionTarget: {
+            ...scope,
+            expectedLifecycleRevision: "revision-a",
+            expectedWriterRunId: "superseded-run",
+          },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        async () =>
+          await appendAssistantMirrorMessageByIdentity({
+            ...scope,
+            idempotencyKey: "superseded:fallback",
+            text: "must not be persisted",
+          }),
+      ),
+    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {

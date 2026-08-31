@@ -236,6 +236,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.config && !options.sourceReplyOnly
       ? {
           cfg: options.config,
+          currentChatType: effectiveCurrentChannel.currentChatType,
           currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
           currentChannelId: effectiveCurrentChannel.currentChannelId,
           currentThreadTs,

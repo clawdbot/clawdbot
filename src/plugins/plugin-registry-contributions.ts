@@ -176,12 +176,15 @@ function resolveContributionPluginIds(params: {
   index: PluginRegistrySnapshot;
   includeDisabled?: boolean;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): readonly string[] {
   if (params.includeDisabled) {
     return params.index.plugins.map((plugin) => plugin.pluginId);
   }
   return params.index.plugins
-    .filter((plugin) => isInstalledPluginEnabled(params.index, plugin.pluginId, params.config))
+    .filter((plugin) =>
+      isInstalledPluginEnabled(params.index, plugin.pluginId, params.config, params.env),
+    )
     .map((plugin) => plugin.pluginId);
 }
 
@@ -200,6 +203,7 @@ function loadContributionManifestRegistry(
       index: params.index,
       includeDisabled: params.includeDisabled,
       config: params.config,
+      env: params.env,
     }),
     includeDisabled: true,
   });
@@ -217,6 +221,7 @@ function listContributionManifestPlugins(
         index: params.index,
         includeDisabled: params.includeDisabled,
         config: params.config,
+        env: params.env,
       }),
     );
     return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
@@ -280,6 +285,7 @@ export function resolvePluginContributionOwners(
         index,
         includeDisabled: params.includeDisabled,
         config: params.config,
+        env: params.env,
       }),
     );
     return normalizeSortedUniqueStringEntries(

@@ -268,6 +268,10 @@ function createPluginHandler(
   ): Promise<T> => {
     await params.onPlatformSendStart?.(route);
     await params.onDirectAdapterHandoff?.();
+    // Keep the final authority check and adapter invocation in one synchronous
+    // call stack. An awaited callback leaves a microtask gap where custody can
+    // change after validation but before recipient-visible transport code runs.
+    params.assertDirectAdapterHandoff?.();
     return await send();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
@@ -559,6 +563,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   conversationReadOrigin: params.conversationReadOrigin,
   deliveryQueueId: params.deliveryQueueId,
   preparedMessageId: params.preparedMessageId,
+  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   onPlatformSendDispatch: params.onPlatformSendDispatch,
   onDeliveryResult: params.onDeliveryResult,
 });

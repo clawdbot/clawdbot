@@ -48,6 +48,7 @@ const TOOL_CALL_INPUT_PATH_RE =
 type AssistantErrorTextOptions = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   provider?: string;
   providerOwner?: PreparedProviderFailoverOwner;
   model?: string;
@@ -92,6 +93,7 @@ export function formatAssistantErrorText(
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
+      agentId: opts?.agentId,
       toolName: unknownTool[1],
       audit,
     });

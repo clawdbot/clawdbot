@@ -31,7 +31,7 @@ import {
   removeDeliveredQueuedChatSendForRun,
   removeQueuedMessageWithoutReleasing,
   syncVisibleChatQueueProjection,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
@@ -189,7 +189,7 @@ async function readCurrentStoredChatHistory(
     if (item.sendState === targetState && item.sendError === error) {
       return "blocked";
     }
-    const parked = updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+    const parked = updateQueuedMessage(host, item.id, (entry) => ({
       ...entry,
       sendError: error,
       sendState: targetState,
@@ -331,7 +331,7 @@ async function reconcileStoredChatOutboxHead(
     if (retryUnconfirmed) {
       return "send";
     }
-    const parked = updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+    const parked = updateQueuedMessage(host, item.id, (entry) => ({
       ...entry,
       sendError: UNCONFIRMED_CHAT_SEND_ERROR,
       sendState: "unconfirmed",
@@ -404,7 +404,7 @@ async function drainStoredChatOutbox(
     const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
     if (item.localCommandName) {
       const setCommandState = (sendState: ChatQueueItem["sendState"], sendError?: string) =>
-        updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+        updateQueuedMessage(host, item.id, (entry) => ({
           ...entry,
           sendError,
           sendState,
@@ -440,7 +440,7 @@ async function drainStoredChatOutbox(
           return "blocked";
         }
         if (confirmation === "cancelled") {
-          if (!removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey)) {
+          if (!removeQueuedMessageWithoutReleasing(host, item.id)) {
             return "blocked";
           }
           continue;
@@ -541,24 +541,18 @@ async function drainStoredChatOutbox(
           const successor = currentIndex >= 0 ? currentOutbox?.queue[currentIndex + 1] : undefined;
           if (
             successor &&
-            !updateQueuedMessageForSession(
-              host,
-              outbox.sessionKey,
-              successor.id,
-              (entry) => ({
-                ...entry,
-                sendError: UNCERTAIN_CLEAR_SUCCESSOR_ERROR,
-                sendState: "unconfirmed",
-              }),
-              outbox.agentId,
-            )
+            !updateQueuedMessage(host, successor.id, (entry) => ({
+              ...entry,
+              sendError: UNCERTAIN_CLEAR_SUCCESSOR_ERROR,
+              sendState: "unconfirmed",
+            }))
           ) {
             dependencies.setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
             // Keep the claimed clear row as the reload-safe barrier.
             return "blocked";
           }
         }
-        if (!removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey)) {
+        if (!removeQueuedMessageWithoutReleasing(host, item.id)) {
           surfaceChatDeliveryFailure(
             host,
             outbox.sessionKey,

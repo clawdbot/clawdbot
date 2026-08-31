@@ -1,11 +1,15 @@
 import type { WorkerSessionsSendParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
+import {
+  callAgentToolGatewayRequest,
+  withAgentToolGatewayRuntimeIdentity,
+} from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 import { WorkerSessionToolOutcomeUnknownError } from "./worker-session-tool-result.js";
 import {
   resolveWorkerSessionToolSource as exactSource,
@@ -23,6 +27,7 @@ export async function executeWorkerSessionSend(
     request: WorkerSessionsSendParams;
     idempotencyKey: string;
     signal?: AbortSignal;
+    workerIdentity?: WorkerTurnExecutionIdentity;
   },
 ) {
   operation.signal?.throwIfAborted();
@@ -50,13 +55,33 @@ export async function executeWorkerSessionSend(
       idempotencyKey: operation.idempotencyKey,
       config,
       ...(operation.signal ? { signal: operation.signal } : {}),
-      callGateway: (request) =>
-        callAgentToolGatewayRequest({
+      callGateway: async (request) => {
+        const workerIdentity = operation.workerIdentity;
+        workerIdentity?.receiptAuthority();
+        const gatewayRequest = {
           ...request,
           ...(operation.signal ? { signal: operation.signal } : {}),
-        }),
+        };
+        return await callAgentToolGatewayRequest(
+          workerIdentity
+            ? withAgentToolGatewayRuntimeIdentity(gatewayRequest, {
+                kind: "agentRuntime",
+                agentId: workerIdentity.agentId,
+                sessionKey: workerIdentity.sessionKey,
+                operationalRunInstance: workerIdentity.operationalRunInstance,
+                delegatedAuthority: {
+                  kind: "worker",
+                  ...workerIdentity.delegatedAuthority,
+                  turnClaim: workerIdentity.turnClaim,
+                },
+                executionIdentity: workerIdentity.executionIdentityToken,
+              })
+            : gatewayRequest,
+        );
+      },
     });
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      operation.workerIdentity?.receiptAuthority();
       try {
         operation.signal?.throwIfAborted();
         exactSource({ identity: operation.identity, placements });

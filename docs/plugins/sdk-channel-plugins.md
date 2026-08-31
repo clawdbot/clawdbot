@@ -459,6 +459,10 @@ Plugin-owned targets do not require an OpenClaw agent id; use
 `openclaw/plugin-sdk/conversation-binding-runtime` to distinguish them from
 agent-owned targets before resolving an agent.
 
+For agent-owned targets with an unscoped session key such as `global`, preserve
+`metadata.agentId` so routing keeps the binding's owner. An agent-scoped target
+key remains authoritative over conflicting metadata.
+
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code. Core owns same-chat

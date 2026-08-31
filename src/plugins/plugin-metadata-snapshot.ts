@@ -174,7 +174,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
       serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
     scopeMatches &&
-    params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
+    params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, env) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
         resolvePluginControlPlaneFingerprint({

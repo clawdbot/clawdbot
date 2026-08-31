@@ -1163,8 +1163,16 @@ describe("resolveBuildAllStepCacheState", () => {
     const sourcePath = path.join(rootDir, "src/index.ts");
     const aiSourcePath = path.join(rootDir, "packages/ai/src/index.ts");
     const packageSourcePath = path.join(rootDir, "packages/net-policy/src/index.ts");
+    const buildHelpers = [
+      "scripts/lib/runtime-process-build-entries.mts",
+      "scripts/lib/vitest-worker-artifacts.mts",
+      "scripts/lib/fs-safe-native-assets.mts",
+    ];
     const fixtures = [
       ["package.json", "{}"],
+      ["scripts/lib/runtime-process-build-entries.mts", "export const entries = {};"],
+      ["scripts/lib/vitest-worker-artifacts.mts", "export const declarations = {};"],
+      ["scripts/lib/fs-safe-native-assets.mts", "export const copy = {};"],
       ["src/index.ts", "export const core = 1;"],
       ["extensions/example/index.ts", "export const extension = 1;"],
       ["packages/ai/src/index.ts", "export const ai = 1;"],
@@ -1205,6 +1213,15 @@ describe("resolveBuildAllStepCacheState", () => {
       expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(false);
       expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(false);
       expect(resolveBuildAllStepCacheState(unified, { rootDir }).fresh).toBe(false);
+
+      fs.writeFileSync(aiSourcePath, "export const ai = 1;");
+      for (const helper of buildHelpers) {
+        const signature = resolveBuildAllStepCacheState(unified, { rootDir }).signature;
+        fs.appendFileSync(path.join(rootDir, helper), "\n// changed build helper\n");
+        expect(resolveBuildAllStepCacheState(ai, { rootDir }).fresh).toBe(true);
+        expect(resolveBuildAllStepCacheState(packages, { rootDir }).fresh).toBe(true);
+        expect(resolveBuildAllStepCacheState(unified, { rootDir }).signature).not.toBe(signature);
+      }
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });
     }

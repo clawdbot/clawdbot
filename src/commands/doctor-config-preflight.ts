@@ -19,6 +19,7 @@ import type {
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -605,6 +606,19 @@ export async function runDoctorConfigPreflight(
       ) {
         throwStartupMigrationGuardRejected();
       }
+      refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+    }
+    if (
+      migrationCheckpoint &&
+      shouldPersistRefreshedPluginIndex &&
+      configSnapshotRead.pluginMetadataSnapshot?.policyHash !==
+        resolveInstalledPluginIndexPolicyHash(baseConfig, startupMigrationEnv)
+    ) {
+      // State migration can change activation policy after the initial index was derived.
+      // Persist only a generation that describes the post-migration policy.
+      configSnapshotRead = await readConfigSnapshotForPreflight(false);
+      snapshot = configSnapshotRead.snapshot;
+      baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
       refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
     }
     if (
