@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
+  type CrabboxInspect,
   defaultCommandRunner,
   inspectCrabbox,
   resolveCrabboxBin,
@@ -48,12 +48,7 @@ type MantisDesktopBrowserSmokeResult = {
 };
 
 type MantisDesktopBrowserSmokeSummary = {
-  artifacts: {
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
-  };
+  artifacts: Omit<MantisDesktopBrowserSmokeResult, "outputDir" | "status">;
   browserUrl: string;
   htmlFile?: string;
   crabbox: {
@@ -281,6 +276,33 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
   return `${lines.join("\n")}\n`;
 }
 
+function artifactFailure(results: PromiseSettledResult<unknown>[]): AggregateError | undefined {
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  return errors.length
+    ? new AggregateError(errors, errors.map(formatErrorMessage).join("; "))
+    : undefined;
+}
+
+async function inspectVisualArtifact(filePath: string): Promise<string | undefined> {
+  const [inspection] = await Promise.allSettled([fs.lstat(filePath)]);
+  if (inspection.status === "fulfilled" && inspection.value.isFile() && inspection.value.size > 0) {
+    return filePath;
+  }
+  // Failure workflows upload raw paths: remove invalid entries, never symlink targets or directories.
+  // Settle cleanup separately so a removal failure cannot replace the original inspection error.
+  const results = await Promise.allSettled([fs.rm(filePath, { force: true })]);
+  if (
+    inspection.status === "rejected" &&
+    (inspection.reason as NodeJS.ErrnoException).code !== "ENOENT"
+  ) {
+    results.unshift(inspection);
+  }
+  const error = artifactFailure(results);
+  if (error) {
+    throw error;
+  }
+}
+
 export async function runMantisDesktopBrowserSmoke(
   opts: MantisDesktopBrowserSmokeOptions = {},
 ): Promise<MantisDesktopBrowserSmokeResult> {
@@ -295,6 +317,16 @@ export async function runMantisDesktopBrowserSmoke(
   );
   const summaryPath = path.join(outputDir, "mantis-desktop-browser-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
+  const errorPath = path.join(outputDir, "error.txt");
+  const visualPaths = ["desktop-browser-smoke.png", "desktop-browser-smoke.mp4"].map((name) =>
+    path.join(outputDir, name),
+  );
+  const clearArtifacts = (paths: string[]) =>
+    Promise.allSettled(paths.map((filePath) => fs.rm(filePath, { force: true })));
+  // Retire old captures and reports before preflight can reject without publishing a new result.
+  const initialCleanupError = artifactFailure(
+    await clearArtifacts([...visualPaths, summaryPath, reportPath, errorPath]),
+  );
   const crabboxBin = await resolveCrabboxBin({
     env,
     envName: CRABBOX_BIN_ENV,
@@ -342,9 +374,19 @@ export async function runMantisDesktopBrowserSmoke(
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
   let leaseId = explicitLeaseId;
-  let summary: MantisDesktopBrowserSmokeSummary | undefined;
+  let inspected: CrabboxInspect | undefined;
+  let errorMessage: string | undefined;
+  const result: MantisDesktopBrowserSmokeResult = {
+    outputDir,
+    reportPath,
+    status: "fail",
+    summaryPath,
+  };
 
   try {
+    if (initialCleanupError) {
+      throw initialCleanupError;
+    }
     leaseId =
       leaseId ??
       (await warmupCrabbox({
@@ -357,7 +399,7 @@ export async function runMantisDesktopBrowserSmoke(
         runner,
         ttl,
       }));
-    const inspected = await inspectCrabbox({
+    inspected = await inspectCrabbox({
       crabboxBin,
       cwd: repoRoot,
       env,
@@ -392,58 +434,50 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
       stdio: "inherit",
     });
-    await copyCrabboxArtifacts({
-      cwd: repoRoot,
-      env,
-      exclude: ["chrome-profile/**"],
-      inspect: inspected,
-      outputDir,
-      remoteOutputDir,
-      runner,
-    });
-    const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
-    const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
-    if (!(await pathExists(screenshotPath))) {
-      throw new Error("Desktop browser screenshot was not copied back from Crabbox.");
+    try {
+      await copyCrabboxArtifacts({
+        cwd: repoRoot,
+        env,
+        exclude: ["chrome-profile/**"],
+        inspect: inspected,
+        outputDir,
+        remoteOutputDir,
+        runner,
+      });
+    } catch (error) {
+      const cleanupError = artifactFailure(await clearArtifacts(visualPaths));
+      throw cleanupError
+        ? new Error(
+            `${formatErrorMessage(error)}; artifact cleanup failed: ${cleanupError.message}`,
+            { cause: error },
+          )
+        : error;
     }
-    const copiedVideoPath = (await pathExists(videoPath)) ? videoPath : undefined;
-    summary = {
-      artifacts: {
-        reportPath,
-        screenshotPath,
-        summaryPath,
-        videoPath: copiedVideoPath,
-      },
-      browserUrl,
-      htmlFile,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId,
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`,
-      },
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      remoteOutputDir,
-      startedAt: startedAt.toISOString(),
-      status: "pass",
-    };
-    return {
-      outputDir,
-      reportPath,
-      screenshotPath,
-      status: "pass",
-      summaryPath,
-      videoPath: copiedVideoPath,
-    };
+    // Settle both inspections/cleanups before rejecting either capture; video is optional.
+    const inspections = await Promise.allSettled(visualPaths.map(inspectVisualArtifact));
+    const inspectionError = artifactFailure(inspections);
+    if (inspectionError) {
+      throw inspectionError;
+    }
+    const [screenshotPath, videoPath] = inspections.map((entry) =>
+      entry.status === "fulfilled" ? entry.value : undefined,
+    );
+    if (!screenshotPath) {
+      throw new Error(
+        "Desktop browser screenshot copied from Crabbox is missing, empty, or not a regular file.",
+      );
+    }
+    Object.assign(result, { screenshotPath, status: "pass", videoPath });
   } catch (error) {
-    summary = {
+    errorMessage = formatErrorMessage(error);
+    await fs.writeFile(errorPath, `${errorMessage}\n`, "utf8");
+  } finally {
+    const summary: MantisDesktopBrowserSmokeSummary = {
       artifacts: {
         reportPath,
         summaryPath,
+        screenshotPath: result.screenshotPath,
+        videoPath: result.videoPath,
       },
       browserUrl,
       htmlFile,
@@ -452,32 +486,23 @@ export async function runMantisDesktopBrowserSmoke(
         createdLease,
         id: leaseId ?? "unallocated",
         provider,
+        ...(result.status === "pass" ? { slug: inspected?.slug, state: inspected?.state } : {}),
         vncCommand: leaseId
           ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
           : "unallocated",
       },
-      error: formatErrorMessage(error),
+      error: errorMessage,
       finishedAt: new Date().toISOString(),
       outputDir,
       remoteOutputDir,
       startedAt: startedAt.toISOString(),
-      status: "fail",
+      status: result.status,
     };
-    await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
-    return {
-      outputDir,
-      reportPath,
-      status: "fail",
-      summaryPath,
-    };
-  } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
+    await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    await fs.writeFile(reportPath, renderReport(summary), "utf8");
+    if (result.status === "pass" && createdLease && leaseId && !keepLease) {
       await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
     }
   }
+  return result;
 }

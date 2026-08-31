@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
+import {
+  runMantisDesktopBrowserSmoke,
+  type MantisDesktopBrowserSmokeOptions,
+} from "./desktop-browser-smoke.runtime.js";
 
 describe("mantis desktop browser smoke runtime", () => {
   let repoRoot: string;
@@ -13,6 +16,7 @@ describe("mantis desktop browser smoke runtime", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
 
@@ -308,6 +312,248 @@ describe("mantis desktop browser smoke runtime", () => {
     ]);
     await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
       "remote chrome failed",
+    );
+  });
+
+  describe("capture artifact ownership", () => {
+    const names = ["desktop-browser-smoke.png", "desktop-browser-smoke.mp4"] as const;
+    const metadataNames = [
+      "mantis-desktop-browser-smoke-summary.json",
+      "mantis-desktop-browser-smoke-report.md",
+      "error.txt",
+    ] as const;
+    let outputDir: string;
+    let target: string;
+
+    beforeEach(async () => {
+      outputDir = path.join(repoRoot, "captures");
+      target = path.join(repoRoot, "unrelated-target");
+      await fs.mkdir(outputDir);
+      await fs.writeFile(target, "preserve target");
+      await fs.writeFile(path.join(outputDir, "unrelated.txt"), "preserve evidence");
+    });
+
+    async function capture(
+      copy: () => Promise<void> = async () => {},
+      options: Partial<MantisDesktopBrowserSmokeOptions> = {},
+    ) {
+      return runMantisDesktopBrowserSmoke({
+        crabboxBin: "/controlled-crabbox",
+        env: {},
+        leaseId: "cbx_existing",
+        outputDir: "captures",
+        repoRoot,
+        commandRunner: async (command, args) => {
+          if (command === "rsync") {
+            await copy();
+          }
+          return {
+            stdout:
+              args[0] === "inspect"
+                ? JSON.stringify({ host: "127.0.0.1", sshKey: "unused", sshUser: "fixture" })
+                : "",
+            stderr: "",
+          };
+        },
+        ...options,
+      });
+    }
+
+    async function writeCaptures(png = "current png", mp4?: string) {
+      await fs.writeFile(path.join(outputDir, names[0]), png);
+      if (mp4 !== undefined) {
+        await fs.writeFile(path.join(outputDir, names[1]), mp4);
+      }
+    }
+
+    async function expectMissing(name: string) {
+      await expect(fs.lstat(path.join(outputDir, name))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+
+    it("reuses an output directory without attributing previous captures to the next run", async () => {
+      expect((await capture(() => writeCaptures("first png", "first video"))).status).toBe("pass");
+      const second = await capture(() => writeCaptures("second png"));
+      expect(second.status).toBe("pass");
+      expect(second.videoPath).toBeUndefined();
+      await expectMissing(names[1]);
+      await expect(fs.readFile(second.screenshotPath!, "utf8")).resolves.toBe("second png");
+      const third = await capture();
+      expect(third.status).toBe("fail");
+      expect(third.screenshotPath).toBeUndefined();
+      await expectMissing(names[0]);
+      await expect(fs.readFile(third.reportPath, "utf8")).resolves.toContain("Screenshot: missing");
+      await expect(fs.readFile(path.join(outputDir, "unrelated.txt"), "utf8")).resolves.toBe(
+        "preserve evidence",
+      );
+    });
+
+    it.each([
+      { screenshot: "empty", video: "empty", expected: "fail" },
+      { screenshot: "symlink", video: "symlink", expected: "fail" },
+      { screenshot: "valid", video: "empty", expected: "pass" },
+      { screenshot: "valid", video: "symlink", expected: "pass" },
+      { screenshot: "empty", video: "valid", expected: "fail" },
+      { screenshot: "symlink", video: "valid", expected: "fail" },
+    ])(
+      "handles $screenshot screenshot and $video video without leaking invalid artifacts",
+      async ({ screenshot, video, expected }) => {
+        const kinds = [screenshot, video];
+        const result = await capture(async () => {
+          for (const [index, name] of names.entries()) {
+            const file = path.join(outputDir, name);
+            if (kinds[index] === "symlink") {
+              await fs.symlink(target, file);
+            } else {
+              await fs.writeFile(file, kinds[index] === "valid" ? `valid ${name}` : "");
+            }
+          }
+        });
+        expect(result.status).toBe(expected);
+        for (const [index, name] of names.entries()) {
+          if (kinds[index] === "valid") {
+            await expect(fs.readFile(path.join(outputDir, name), "utf8")).resolves.toBe(
+              `valid ${name}`,
+            );
+          } else {
+            await expectMissing(name);
+          }
+        }
+        expect(result.videoPath).toBeUndefined();
+        await expect(fs.readFile(target, "utf8")).resolves.toBe("preserve target");
+      },
+    );
+
+    it.each(names)(
+      "preserves a directory occupying %s while cleaning the other stale capture",
+      async (directoryName) => {
+        await writeCaptures("stale png", "stale video");
+        await fs.unlink(path.join(outputDir, directoryName));
+        await fs.mkdir(path.join(outputDir, directoryName));
+        await fs.writeFile(path.join(outputDir, directoryName, "keep"), "directory contents");
+        const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+        const result = await capture(undefined, { commandRunner });
+        expect(result.status).toBe("fail");
+        expect(commandRunner).not.toHaveBeenCalled();
+        await expectMissing(names.find((name) => name !== directoryName)!);
+        await expect(
+          fs.readFile(path.join(outputDir, directoryName, "keep"), "utf8"),
+        ).resolves.toBe("directory contents");
+        await expect(fs.readFile(result.summaryPath, "utf8")).resolves.toContain(directoryName);
+      },
+    );
+
+    it.each([
+      { htmlFile: "missing.html" },
+      { browserProfileArchiveEnv: "BAD-NAME" },
+      { browserProfileDir: "relative-profile" },
+    ])("invalidates stale artifacts before rejecting preflight options %j", async (options) => {
+      expect((await capture(() => writeCaptures("stale png", "stale video"))).status).toBe("pass");
+      await expect(capture(undefined, options)).rejects.toThrow();
+      for (const name of [...names, ...metadataNames]) await expectMissing(name);
+      await expect(fs.readFile(path.join(outputDir, "unrelated.txt"), "utf8")).resolves.toBe(
+        "preserve evidence",
+      );
+    });
+
+    it("retires a previous error when a later capture succeeds", async () => {
+      expect((await capture()).status).toBe("fail");
+      await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
+        "screenshot",
+      );
+      expect((await capture(() => writeCaptures())).status).toBe("pass");
+      await expectMissing("error.txt");
+    });
+
+    it.each(metadataNames)("preserves a directory occupying metadata %s", async (name) => {
+      await writeCaptures("stale png", "stale video");
+      await fs.mkdir(path.join(outputDir, name));
+      await fs.writeFile(path.join(outputDir, name, "keep"), "directory contents");
+      const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+      await expect(capture(undefined, { commandRunner })).rejects.toThrow();
+      expect(commandRunner).not.toHaveBeenCalled();
+      for (const visual of names) await expectMissing(visual);
+      await expect(fs.readFile(path.join(outputDir, name, "keep"), "utf8")).resolves.toBe(
+        "directory contents",
+      );
+    });
+
+    it("retires metadata symlinks without following their targets", async () => {
+      for (const name of metadataNames) await fs.symlink(target, path.join(outputDir, name));
+      expect((await capture(() => writeCaptures())).status).toBe("pass");
+      await expectMissing("error.txt");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("preserve target");
+      for (const name of metadataNames.slice(0, 2)) {
+        expect((await fs.lstat(path.join(outputDir, name))).isSymbolicLink()).toBe(false);
+      }
+    });
+
+    it("removes partially copied captures and records the original transfer failure", async () => {
+      const result = await capture(async () => {
+        await writeCaptures("partial png", "partial video");
+        throw new Error("transfer interrupted");
+      });
+      expect(result.status).toBe("fail");
+      for (const name of names) await expectMissing(name);
+      await expect(fs.readFile(result.summaryPath, "utf8")).resolves.toContain(
+        "transfer interrupted",
+      );
+    });
+
+    it("reports cleanup failure alongside the transfer failure and still cleans the other capture", async () => {
+      const remove = fs.rm.bind(fs);
+      const result = await capture(async () => {
+        await writeCaptures("partial png", "partial video");
+        vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+          if (file === path.join(outputDir, names[0])) {
+            throw Object.assign(new Error("capture removal denied"), { code: "EACCES" });
+          }
+          return remove(file, options);
+        });
+        throw new Error("transfer interrupted");
+      });
+      expect(result.status).toBe("fail");
+      await expectMissing(names[1]);
+      const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+      expect(summary.error).toContain("transfer interrupted");
+      expect(summary.error).toContain("capture removal denied");
+    });
+
+    it.each([false, true])(
+      "preserves inspection errors when removal fails: %s",
+      async (removalFails) => {
+        const inspect = fs.lstat.bind(fs);
+        const remove = fs.rm.bind(fs);
+        const result = await capture(async () => {
+          await writeCaptures("unreadable png", "");
+          if (removalFails) {
+            vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+              if (file === path.join(outputDir, names[0])) {
+                throw Object.assign(new Error("capture removal denied"), { code: "EACCES" });
+              }
+              return remove(file, options);
+            });
+          }
+          vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+            if (args[0] === path.join(outputDir, names[0])) {
+              throw Object.assign(new Error("capture inspection failed"), { code: "EIO" });
+            }
+            return inspect(...args);
+          });
+        });
+        vi.restoreAllMocks();
+        expect(result.status).toBe("fail");
+        await expectMissing(names[1]);
+        const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+        expect(summary.error).toContain("capture inspection failed");
+        if (removalFails) {
+          expect(summary.error).toContain("capture removal denied");
+          await expect(fs.readFile(path.join(outputDir, names[0]), "utf8")).resolves.toBe(
+            "unreadable png",
+          );
+        } else {
+          await expectMissing(names[0]);
+        }
+      },
     );
   });
 });

@@ -284,7 +284,9 @@ jobs:
             )
             pnpm "${args[@]}"
             cp "$desktop_dir/desktop-browser-smoke.png" "$root/$lane/discord-status-reactions-tool-only-desktop.png"
-            cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
+            if [[ -f "$desktop_dir/desktop-browser-smoke.mp4" ]]; then
+              cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
+            fi
           }
 
           capture_desktop_lane baseline
@@ -296,25 +298,22 @@ jobs:
             local output="$root/$lane/discord-status-reactions-tool-only-desktop-preview.gif"
             local clip="$root/$lane/discord-status-reactions-tool-only-desktop-change.mp4"
             local metadata="$root/$lane/discord-status-reactions-tool-only-desktop-preview.json"
-            crabbox media preview \
+            [[ -f "$input" ]] || return 0
+            if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y ffmpeg || true
+            fi
+            if ! crabbox media preview \
               --input "$input" \
               --output "$output" \
               --trimmed-video-output "$clip" \
-              --json > "$metadata"
+              --json > "$metadata"; then
+              rm -f "$output" "$clip" "$metadata"
+              echo "::warning::Could not generate ${lane} desktop preview; keeping its screenshot and full MP4."
+            fi
           }
 
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y ffmpeg || true
-          fi
-          if ! make_desktop_preview baseline || ! make_desktop_preview candidate; then
-            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif"
-            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif"
-            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4"
-            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4"
-            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.json"
-            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.json"
-            echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
-          fi
+          make_desktop_preview baseline
+          make_desktop_preview candidate
 
           read_discord_status_reaction_status() {
             local lane="$1"
@@ -362,8 +361,12 @@ jobs:
             if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
               echo "- Candidate desktop change clip: \`candidate/discord-status-reactions-tool-only-desktop-change.mp4\`"
             fi
-            echo "- Baseline desktop video: \`baseline/discord-status-reactions-tool-only-desktop.mp4\`"
-            echo "- Candidate desktop video: \`candidate/discord-status-reactions-tool-only-desktop.mp4\`"
+            if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop.mp4" ]]; then
+              echo "- Baseline desktop video: \`baseline/discord-status-reactions-tool-only-desktop.mp4\`"
+            fi
+            if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop.mp4" ]]; then
+              echo "- Candidate desktop video: \`candidate/discord-status-reactions-tool-only-desktop.mp4\`"
+            fi
           } > "$root/mantis-report.md"
 
           jq -n \
@@ -392,8 +395,8 @@ jobs:
                 { kind: "motionPreview", lane: "candidate", label: "Candidate motion preview", path: "candidate/discord-status-reactions-tool-only-desktop-preview.gif", targetPath: "candidate-desktop-preview.gif", alt: "Animated candidate desktop preview", width: 420, required: false },
                 { kind: "motionClip", lane: "baseline", label: "Baseline change MP4", path: "baseline/discord-status-reactions-tool-only-desktop-change.mp4", targetPath: "baseline-desktop-change.mp4", required: false },
                 { kind: "motionClip", lane: "candidate", label: "Candidate change MP4", path: "candidate/discord-status-reactions-tool-only-desktop-change.mp4", targetPath: "candidate-desktop-change.mp4", required: false },
-                { kind: "fullVideo", lane: "baseline", label: "Baseline desktop MP4", path: "baseline/discord-status-reactions-tool-only-desktop.mp4", targetPath: "baseline-desktop.mp4" },
-                { kind: "fullVideo", lane: "candidate", label: "Candidate desktop MP4", path: "candidate/discord-status-reactions-tool-only-desktop.mp4", targetPath: "candidate-desktop.mp4" },
+                { kind: "fullVideo", lane: "baseline", label: "Baseline desktop MP4", path: "baseline/discord-status-reactions-tool-only-desktop.mp4", targetPath: "baseline-desktop.mp4", required: false },
+                { kind: "fullVideo", lane: "candidate", label: "Candidate desktop MP4", path: "candidate/discord-status-reactions-tool-only-desktop.mp4", targetPath: "candidate-desktop.mp4", required: false },
                 { kind: "metadata", lane: "baseline", label: "Baseline preview metadata", path: "baseline/discord-status-reactions-tool-only-desktop-preview.json", targetPath: "baseline-desktop-preview.json", required: false },
                 { kind: "metadata", lane: "candidate", label: "Candidate preview metadata", path: "candidate/discord-status-reactions-tool-only-desktop-preview.json", targetPath: "candidate-desktop-preview.json", required: false },
                 { kind: "metadata", lane: "run", label: "Comparison JSON", path: "comparison.json", targetPath: "comparison.json" },
