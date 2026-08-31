@@ -1,6 +1,9 @@
 // Runtime boundary for resolving provider plugins from metadata and config.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolvePluginActivationInputs, withActivatedPluginIds } from "./activation-context.js";
+import {
+  resolveBundledCompatActivationInputs,
+  withActivatedPluginIds,
+} from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
@@ -16,6 +19,7 @@ import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
+  resolveBundledProviderCompatPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
@@ -245,13 +249,16 @@ function resolveRuntimeProviderPluginLoadState(
     config: base.rawConfig,
     pluginIds: explicitOwnerPluginIds,
   });
-  const activation = resolvePluginActivationInputs({
+  const activation = resolveBundledCompatActivationInputs({
     rawConfig: requestConfig,
     env: base.env,
     workspaceDir: base.workspaceDir,
     applyAutoEnable: params.applyAutoEnable ?? true,
     discovery: snapshot.discovery,
     manifestRegistry: snapshot.manifestRegistry,
+    onlyPluginIds: runtimeRequestedPluginIds,
+    resolveBundledPluginIds: resolveBundledProviderCompatPluginIds,
+    activation: "defaults",
   });
   const providerPluginIds = mergeExplicitOwnerPluginIds(
     resolveEnabledProviderPluginIds({

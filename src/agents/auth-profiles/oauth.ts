@@ -43,7 +43,7 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
@@ -543,7 +543,7 @@ export async function resolveApiKeyForProfile(
           if (Object.keys(snapshot.lastGood).length === 0) {
             snapshot.lastGood = undefined;
           }
-          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+          updateRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
         }
       }
       if (clearedLastGood) {

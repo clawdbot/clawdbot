@@ -91,13 +91,24 @@ describe("user turn transcript persistence", () => {
     ] as const)("normalizes owner %s for %s input", (senderIsOwner, kind, expected) => {
       const provenance = kind ? { kind, sourceTool: "test" } : undefined;
       const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "remember", senderIsOwner, ...(provenance ? { provenance } : {}) },
+        input: {
+          text: "remember",
+          senderIsOwner,
+          sender: { id: "author", identity: { type: "profile", id: "author" } },
+          ...(provenance ? { provenance } : {}),
+        },
         target: unusedRecorderTarget,
       });
       const message = recorder.message as
-        | { __openclaw?: { senderIsOwner?: boolean }; provenance?: unknown }
+        | {
+            __openclaw?: { senderIsOwner?: boolean; senderIdentity?: unknown };
+            provenance?: unknown;
+          }
         | undefined;
       expect(message?.["__openclaw"]?.senderIsOwner).toBe(expected);
+      expect(message?.["__openclaw"]?.senderIdentity).toEqual(
+        !kind || kind === "external_user" ? { type: "profile", id: "author" } : undefined,
+      );
       expect(message?.provenance).toEqual(provenance);
     });
 

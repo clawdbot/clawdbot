@@ -23,6 +23,8 @@ type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Use the bounded subagent prompt instead of the full conversation prompt. */
+  promptMode?: "minimal";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
@@ -207,3 +209,9 @@ export type CreatePluginRuntimeOptions = {
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
 };
+
+/** Checked contract for both the path-loaded factory and its implementation. */
+export type PluginRuntimeFactory = (
+  options?: CreatePluginRuntimeOptions,
+  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+) => PluginRuntime;

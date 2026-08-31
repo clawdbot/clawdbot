@@ -15,6 +15,12 @@ it("skips control-ui localization checks for test-only UI source", () => {
   );
 });
 
+it("runs control-ui localization checks for the canonical locale config", () => {
+  expect(detectChangedScope(["scripts/lib/control-ui-i18n-config.json"]).runControlUiI18n).toBe(
+    true,
+  );
+});
+
 it("runs Chromium UI tests for browser copilot extension changes", () => {
   expect(detectChangedScope(["extensions/browser/chrome-extension/sidepanel.ts"]).runUiTests).toBe(
     true,

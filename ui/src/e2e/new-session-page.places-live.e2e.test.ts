@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
@@ -153,9 +154,11 @@ suite.define(() => {
 
       await profile.waitFor();
       await expect.poll(() => profile.isDisabled()).toBe(true);
-      expect(await profile.getAttribute("title")).toBe(
-        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(profile))
+        .toBe(
+          "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+        );
       await page.keyboard.press("Escape");
 
       await model.click();
@@ -278,10 +281,11 @@ suite.define(() => {
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
         .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual([
-          "Worker slots 0/2",
-          "No worker slots are available. Wait for a slot or pick another device.",
-        ]);
+        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+      // A disabled row keeps a muted meter with no utilization claim.
+      await expect
+        .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))
+        .toBe("Slot utilization unavailable");
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

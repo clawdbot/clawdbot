@@ -42,6 +42,7 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getCoreTtsToolResultMediaUrls } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -435,6 +436,8 @@ export type CodexDynamicToolBridge = {
     messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
+    toolAutoDeliveryMediaUrls: string[];
+    coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
     acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -561,6 +564,8 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTargets: [],
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
+    toolAutoDeliveryMediaUrls: [],
+    coreTtsToolResults: [],
     toolAudioAsVoice: false,
     acceptedSessionSpawns: [],
     quarantinedTools,
@@ -871,6 +876,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
         const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+        const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
         collectToolTelemetry({
           toolName,
           args: executedArgs,
@@ -878,6 +884,8 @@ export function createCodexDynamicToolBridge(params: {
           mediaTrustResult: telemetryRawResult,
           telemetry,
           isError: resultIsError,
+          autoDeliveryTtsMediaUrls,
+          coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
@@ -1390,6 +1398,8 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  autoDeliveryTtsMediaUrls?: readonly string[];
+  coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
@@ -1414,11 +1424,28 @@ function collectToolTelemetry(params: {
         params.mediaTrustResult ?? params.result,
       );
       const seen = new Set(params.telemetry.toolMediaUrls);
+      const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
+      const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
+      let retainsCoreTtsMedia = false;
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
           seen.add(mediaUrl);
           params.telemetry.toolMediaUrls.push(mediaUrl);
         }
+        if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
+          autoDeliveryMediaUrls.add(mediaUrl);
+          retainsCoreTtsMedia = true;
+        } else {
+          autoDeliveryMediaUrls.delete(mediaUrl);
+        }
+      }
+      params.telemetry.toolAutoDeliveryMediaUrls = [...autoDeliveryMediaUrls];
+      if (
+        retainsCoreTtsMedia &&
+        params.coreTtsToolResult &&
+        !params.telemetry.coreTtsToolResults.includes(params.coreTtsToolResult)
+      ) {
+        params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
       }
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;

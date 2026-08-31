@@ -21,6 +21,7 @@ import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
+  bumpTaskRegistryRevision,
   deleteOwnerKeyIndex,
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
@@ -189,6 +190,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     return null;
   }
   tasks.set(taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(taskId);
   }
@@ -240,6 +242,7 @@ export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecor
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
   tasks.set(next.taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);
   }

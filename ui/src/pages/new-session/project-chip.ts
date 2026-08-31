@@ -9,7 +9,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { renderWorktreeFields } from "./detail-chip.ts";
-import type { BrowserTarget, DraftBranches } from "./discovery.ts";
+import type { DraftBranches } from "./discovery.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
@@ -106,7 +106,7 @@ export function renderProjectChip(params: {
   pendingPlacement: boolean;
   popoverOpen: boolean;
   popoverHiding: boolean;
-  browserTarget: BrowserTarget | null;
+  browserOpen: boolean;
   browserListing: FsListDirResult | null;
   browserLoading: boolean;
   browserError: string | null;
@@ -124,7 +124,7 @@ export function renderProjectChip(params: {
   onApplyFolder: (folder: string) => void;
   onBaseRefInput: (baseRef: string) => void;
   onWorktreeNameInput: (name: string) => void;
-  onBrowse: (target: BrowserTarget) => void;
+  onBrowse: () => void;
   onBrowserPathDraftChange: (value: string) => void;
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
@@ -134,7 +134,6 @@ export function renderProjectChip(params: {
   const folder = params.folder.trim();
   const cloneInput = projectCloneInput(params.projectQuery);
   const query = params.projectQuery.trim();
-  const browseTarget: BrowserTarget = { nodeId: "", label: params.gatewayLabel };
   const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
   const recentItems = params.state.recents;
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.displayName, [
@@ -154,7 +153,7 @@ export function renderProjectChip(params: {
       (!params.browseAvailable && !browseNeedsAdmin)}
       @click=${() => {
         if (params.browseAvailable && !params.submitting && !params.pendingPlacement) {
-          params.onBrowse(browseTarget);
+          params.onBrowse();
         }
       }}
     >
@@ -205,10 +204,10 @@ export function renderProjectChip(params: {
       @wa-hide=${params.onPopoverHide}
       @wa-after-hide=${params.onPopoverAfterHide}
     >
-      ${params.browserTarget
+      ${params.browserOpen
         ? renderPlaceBrowser({
             listing: params.browserListing,
-            target: params.browserTarget,
+            label: params.gatewayLabel,
             loading: params.browserLoading,
             error: params.browserError,
             pathDraft: params.browserPathDraft,

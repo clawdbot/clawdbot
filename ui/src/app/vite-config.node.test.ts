@@ -15,11 +15,19 @@ import {
 } from "../../vite.config.ts";
 
 const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   childProcessMocks.execFileSync.mockImplementation(actual.execFileSync);
   return { ...actual, execFileSync: childProcessMocks.execFileSync };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  fsMocks.existsSync.mockImplementation(actual.existsSync);
+  fsMocks.readFileSync.mockImplementation(actual.readFileSync);
+  return { ...actual, existsSync: fsMocks.existsSync, readFileSync: fsMocks.readFileSync };
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -480,5 +488,43 @@ describe("Control UI Vite config", () => {
     expect(catalog.common.health).toBe("Santé");
     expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
+  });
+
+  it("bootstraps only an absent locale memory from the English catalog", async () => {
+    const loadHook = controlUiLocaleModulesPlugin().load;
+    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
+    if (!load) {
+      throw new Error("Expected locale module loader");
+    }
+    const id = "\0virtual:openclaw-control-ui-locale/fr";
+    const addWatchFile = vi.fn();
+
+    await fsMocks.existsSync.withImplementation(
+      () => false,
+      async () => {
+        const result = await load.call({ addWatchFile } as never, id, {} as never);
+        if (typeof result !== "string") {
+          throw new Error("Expected locale module loader to return generated source");
+        }
+        const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+        expect(catalog.common.health).toBe("Health");
+        expect(addWatchFile).not.toHaveBeenCalled();
+      },
+    );
+
+    await fsMocks.readFileSync.withImplementation(
+      () => "",
+      async () => {
+        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(
+          "Control UI fr translation memory is missing or empty",
+        );
+      },
+    );
+    await fsMocks.readFileSync.withImplementation(
+      () => "{",
+      async () => {
+        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(SyntaxError);
+      },
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsCreateParams,
   SessionsCreateResult,
@@ -6,9 +7,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
   key: string;
+  entry?: Readonly<Record<string, unknown>>;
   initialRun:
     | { status: "idle" }
-    | { status: "started"; runId?: string; messageSeq?: number }
+    | { status: "started"; runId?: string }
     | { status: "rejected"; error: string };
 };
 
@@ -18,12 +20,13 @@ export type SessionCreateParams = SessionsCreateParams & {
 
 export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
   const normalizedSessionKey = sessionKey.trim();
+  const normalizedAgentId = agentId?.trim();
   const parentSessionKey =
     normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
       ? normalizedSessionKey
       : undefined;
   return {
-    ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
     ...(parentSessionKey
       ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
       : {}),
@@ -35,34 +38,23 @@ export async function requestSessionCreate(
   params: Omit<SessionCreateParams, "currentSessionKey"> = {},
 ): Promise<SessionCreateOutcome> {
   const result = await client.request<SessionsCreateResult>("sessions.create", params);
-  const key = typeof result?.key === "string" ? result.key.trim() : "";
+  const key = stringValue(result?.key) ?? "";
   if (!key) {
     throw new Error("sessions.create returned no key");
   }
-  if (result.runStarted === true) {
-    const runId = typeof result.runId === "string" ? result.runId.trim() : "";
-    const messageSeq = result.messageSeq;
-    return {
-      key,
-      initialRun: {
-        status: "started",
-        ...(runId ? { runId } : {}),
-        ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
-          ? { messageSeq }
-          : {}),
-      },
+  let initialRun: SessionCreateOutcome["initialRun"] = { status: "idle" };
+  if (result.runStarted) {
+    const runId = stringValue(result.runId) ?? "";
+    initialRun = {
+      status: "started",
+      ...(runId ? { runId } : {}),
+    };
+  } else if (result.runError !== undefined) {
+    const message = stringValue(result.runError?.message) ?? "";
+    initialRun = {
+      status: "rejected",
+      error: message || "The session was created, but its first message could not be sent.",
     };
   }
-  if (result.runError !== undefined) {
-    const message =
-      typeof result.runError?.message === "string" ? result.runError.message.trim() : "";
-    return {
-      key,
-      initialRun: {
-        status: "rejected",
-        error: message || "The session was created, but its first message could not be sent.",
-      },
-    };
-  }
-  return { key, initialRun: { status: "idle" } };
+  return { key, entry: result.entry, initialRun };
 }

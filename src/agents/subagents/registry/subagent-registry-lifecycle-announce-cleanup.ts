@@ -42,7 +42,6 @@ import {
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -95,10 +94,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     deliveryStatus: "failed",
     deliveryError,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry,
-    reason: deliveryError,
   });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
@@ -207,9 +202,11 @@ const finalizeSubagentCleanup = async (
     await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
     return;
   }
-  if (entry.expectsCompletionMessage === false || options?.skipRequesterDelivery) {
+  const skipRequesterDelivery =
+    options?.skipRequesterDelivery === true || entry.suppressCompletionDelivery === true;
+  if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     clearSubagentPendingDelivery(entry);
-    if (options?.skipRequesterDelivery) {
+    if (skipRequesterDelivery) {
       ensureDeliveryState(entry).status = "not_required";
       entry.suppressCompletionDelivery = undefined;
     }
@@ -226,6 +223,7 @@ const finalizeSubagentCleanup = async (
       entry,
       cleanup,
       completedAt: Date.now(),
+      skipRequesterSettleWake: skipRequesterDelivery,
     });
     if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
       await emitCompletionEndedHookIfNeeded(
@@ -399,6 +397,19 @@ export const startSubagentAnnounceCleanupFlow = (
   // still be running. `entry.cleanup` is untouched, so the run's real mode is
   // restored the moment observed stop evidence promotes the row.
   const cleanup = resolveEffectiveCleanupMode(entry);
+  const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
+  // A terminal delivery failure closes upward delivery, not live descendants.
+  // Their completion callback re-enters this same cleanup path without a timer.
+  if (
+    skipRequesterDelivery &&
+    entry.wakeOnDescendantSettle === true &&
+    params.countPendingDescendantRuns(entry.childSessionKey) > 0
+  ) {
+    entry.cleanupHandled = false;
+    params.resumedRuns.delete(runId);
+    params.persist(runId);
+    return true;
+  }
   let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
   if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
     const cleanupGeneration = beginSubagentCleanup(context, runId);
@@ -456,7 +467,6 @@ export const startSubagentAnnounceCleanupFlow = (
       !suppressSessionEffects && context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
     );
   };
-  const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
       runId,
@@ -566,6 +576,7 @@ export const startSubagentAnnounceCleanupFlow = (
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
     isCompletionDeliveryAllowed: () =>
+      entry.suppressCompletionDelivery !== true &&
       context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
     isCompletionOwnedByRequesterYield: () =>
       entry.requesterTurnYielded === true ||

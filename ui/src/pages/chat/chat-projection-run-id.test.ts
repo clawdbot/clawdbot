@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as chatThread from "./chat-thread.ts";
 import { projectChatTranscript } from "./components/chat-transcript-projection.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
-import { resolveChatProjectionRunId } from "./tool-stream.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
 describe("resolveChatProjectionRunId", () => {
   it("restores only an active run proven by the reconnecting outbox", () => {

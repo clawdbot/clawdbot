@@ -8,7 +8,7 @@ import {
   hasDeliberateSilentTerminalReply,
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
-import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,
@@ -498,7 +498,7 @@ export async function prepareReplyAgentPayloads(state: {
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
   const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(diagnosticUsage)) {
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
     const input = diagnosticUsage.input ?? 0;
     const output = diagnosticUsage.output ?? 0;
     const cacheRead = diagnosticUsage.cacheRead ?? 0;
@@ -516,14 +516,7 @@ export async function prepareReplyAgentPayloads(state: {
       config: cfg,
       agentDir: followupRun.run.agentDir,
     });
-    const hasDiagnosticBillableUsageBuckets =
-      diagnosticUsage.input !== undefined ||
-      diagnosticUsage.output !== undefined ||
-      diagnosticUsage.cacheRead !== undefined ||
-      diagnosticUsage.cacheWrite !== undefined;
-    const costUsd = hasDiagnosticBillableUsageBuckets
-      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
-      : undefined;
+    const costUsd = estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
       ...(runResult.diagnosticTrace

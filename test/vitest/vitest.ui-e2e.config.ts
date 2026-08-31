@@ -9,6 +9,7 @@ const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
 ];
 
 function createUiE2eVitestConfig(

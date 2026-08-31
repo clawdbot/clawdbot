@@ -3,6 +3,7 @@
 // Blocks host-random tmpdir usage in messaging/channel runtime sources.
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {
   collectCallExpressionLines,
   runAsScript,
@@ -81,6 +82,8 @@ export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
     sourceRoots: messagingTmpdirGuardSourceRoots,
+    skipRelativePath: (relPath) =>
+      relPath.startsWith("extensions/") && classifyBundledExtensionSourcePath(relPath).isTestLike,
     findCallLines: findMessagingTmpdirCallLines,
     header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
     footer:

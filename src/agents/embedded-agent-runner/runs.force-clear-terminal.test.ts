@@ -65,50 +65,56 @@ describe("force-clear terminal state persistence", () => {
   });
 
   it("delays stale-owner followups until the old reply owner settles", async () => {
-    const sessionKey = "agent:main:reply-stuck-followup";
-    const sessionId = "session-reply-stuck-followup";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    const handle = createRunHandle();
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-    });
-    operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    // Owner ordering must not depend on the host finishing within the drain deadline.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const sessionKey = "agent:main:reply-stuck-followup";
+      const sessionId = "session-reply-stuck-followup";
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      const handle = createRunHandle();
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: handle.abort,
+        isStreaming: handle.isStreaming,
+      });
+      operation.setPhase("running");
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
 
-    const followupObservedActiveHandle: boolean[] = [];
-    runAfterReplyOperationClear(operation, () => {
-      followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
-    });
+      const followupObservedActiveHandle: boolean[] = [];
+      runAfterReplyOperationClear(operation, () => {
+        followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
+      });
 
-    const recovery = abortAndDrainEmbeddedAgentRun({
-      sessionId,
-      sessionKey,
-      reason: "stuck_recovery",
-      forceClear: true,
-      settleMs: 100,
-    });
-    expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
-    expect(followupObservedActiveHandle).toEqual([]);
+      const recovery = abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        reason: "stuck_recovery",
+        forceClear: true,
+        settleMs: 100,
+      });
+      expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
+      expect(followupObservedActiveHandle).toEqual([]);
 
-    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-    let recoverySettled = false;
-    void recovery.then(() => {
-      recoverySettled = true;
-    });
-    await Promise.resolve();
-    expect(recoverySettled).toBe(false);
-    expect(followupObservedActiveHandle).toEqual([]);
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      let recoverySettled = false;
+      void recovery.then(() => {
+        recoverySettled = true;
+      });
+      await Promise.resolve();
+      expect(recoverySettled).toBe(false);
+      expect(followupObservedActiveHandle).toEqual([]);
 
-    operation.complete();
-    await expect(recovery).resolves.toEqual({
-      aborted: true,
-      drained: true,
-      forceCleared: false,
-    });
-    await Promise.resolve();
-    expect(followupObservedActiveHandle).toEqual([false]);
+      operation.complete();
+      await expect(recovery).resolves.toEqual({
+        aborted: true,
+        drained: true,
+        forceCleared: false,
+      });
+      await Promise.resolve();
+      expect(followupObservedActiveHandle).toEqual([false]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("force-clears exact owners before releasing followups after cancel throws", async () => {

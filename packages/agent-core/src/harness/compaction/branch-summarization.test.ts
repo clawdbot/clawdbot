@@ -60,7 +60,7 @@ function createResponseStream(model: Model, content?: AssistantMessage["content"
   return stream;
 }
 
-function createCapturingStream(model: Model) {
+function createCapturingStream(model: Model, responseContent?: AssistantMessage["content"]) {
   let prompt = "";
   let systemPrompt = "";
   let maxOutputTokens: number | undefined;
@@ -75,7 +75,7 @@ function createCapturingStream(model: Model) {
         : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
-    return createResponseStream(model);
+    return createResponseStream(model, responseContent);
   });
   return {
     streamFn,
@@ -158,16 +158,16 @@ describe("branch summarization", () => {
   it("preserves valid summary whitespace, preamble, and file metadata", async () => {
     const model = createModel(128_000);
     const summaryText = "  Branch summary body  \ncontinues ";
-    const streamFn = vi.fn<StreamFn>(() =>
-      createResponseStream(model, [
-        { type: "text", text: "  Branch summary body  " },
-        { type: "text", text: "continues " },
-      ]),
-    );
+    const capture = createCapturingStream(model, [
+      { type: "text", text: "  Branch summary body  " },
+      { type: "text", text: "continues " },
+    ]);
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
       createMessageEntry(
         createResponse(model, [
+          { type: "thinking", thinking: "PRIVATE_BRANCH_REASONING" },
+          { type: "text", text: "Visible branch answer" },
           { type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/read.ts" } },
           {
             type: "toolCall",
@@ -184,7 +184,7 @@ describe("branch summarization", () => {
       model,
       apiKey: "test-key",
       signal: new AbortController().signal,
-      streamFn,
+      streamFn: capture.streamFn,
     });
 
     expect(result.ok).toBe(true);
@@ -207,6 +207,11 @@ src/write.ts
       readFiles: ["src/read.ts"],
       modifiedFiles: ["src/write.ts"],
     });
+    expect(capture.readCapture().prompt).toContain("[Assistant]: Visible branch answer");
+    expect(capture.readCapture().prompt).toContain(
+      '[Assistant tool calls]: read(path="src/read.ts"); write(path="src/write.ts")',
+    );
+    expect(capture.readCapture().prompt).not.toContain("PRIVATE_BRANCH_REASONING");
   });
 
   it("retains failed tool results when preparing a branch", () => {

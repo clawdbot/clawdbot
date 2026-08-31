@@ -38,7 +38,6 @@ export type ExecToolArgs = Record<string, unknown> & {
   pty?: boolean;
   elevated?: boolean;
   host?: string;
-  security?: string;
   ask?: string;
   node?: string;
 };
@@ -46,9 +45,6 @@ export type ExecToolArgs = Record<string, unknown> & {
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
-};
-type DeferredResolveExecEnvPreparedState = {
-  hookContext?: HookContext;
 };
 type ResolvedExecWorkdirPreparedState = {
   host: ExecHost;
@@ -58,22 +54,12 @@ type ResolvedExecWorkdirPreparedState = {
 
 const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
-const deferredResolveExecEnvPreparedStates = new WeakMap<
-  ExecToolArgs,
-  DeferredResolveExecEnvPreparedState
->();
+const execHookContexts = new WeakMap<ExecToolArgs, HookContext | undefined>();
 const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
-  "command",
-  "workdir",
-  "host",
-  "security",
-  "ask",
-  "node",
-] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
 export function assertSupportedExecParams(args: unknown): void {
   if (isRecord(args) && Object.hasOwn(args, "timeout")) {
@@ -149,18 +135,16 @@ function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
 }
 
-function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
+function retainExecHookContext<T extends ExecToolArgs>(
   params: T,
-  state: DeferredResolveExecEnvPreparedState,
+  hookContext: HookContext | undefined,
 ): T {
-  deferredResolveExecEnvPreparedStates.set(params, state);
+  execHookContexts.set(params, hookContext);
   return params;
 }
 
-function getDeferredResolveExecEnvPreparedState(
-  params: ExecToolArgs,
-): DeferredResolveExecEnvPreparedState | undefined {
-  return deferredResolveExecEnvPreparedStates.get(params);
+function getExecHookContext(params: ExecToolArgs): HookContext | undefined {
+  return execHookContexts.get(params);
 }
 
 function markResolvedExecWorkdirPrepared<T extends ExecToolArgs>(
@@ -270,13 +254,13 @@ export function createExecRequestPreparation(params: {
     }
     const rawPluginEnv = await hookRunner.runResolveExecEnv(
       {
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
         toolName: "exec",
         host,
       },
       {
-        agentId: params.agentId ?? context?.hookContext?.agentId,
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        agentId: context?.hookContext?.agentId ?? params.agentId,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
         messageProvider: params.defaults?.messageProvider,
         channelId: params.defaults?.currentChannelId ?? context?.hookContext?.channelId,
         ...(params.defaults?.channelContext
@@ -297,34 +281,34 @@ export function createExecRequestPreparation(params: {
   ): Promise<ExecToolArgs> => {
     assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
-    const workdirState = getResolvedExecWorkdirPreparedState(execParams);
-    if (workdirState?.resolution.kind === "unavailable") {
-      return execParams;
-    }
     if (!isExecToolArgsObject(execParams)) {
       return execParams;
     }
-    if (shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)) {
-      return markDeferredResolveExecEnvPrepared(execParams, {
-        hookContext: context.hookContext as HookContext | undefined,
-      });
+    const hookContext = context.hookContext as HookContext | undefined;
+    retainExecHookContext(execParams, hookContext);
+    const workdirState = getResolvedExecWorkdirPreparedState(execParams);
+    if (
+      workdirState?.resolution.kind === "unavailable" ||
+      shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)
+    ) {
+      return execParams;
     }
-    return prepareParamsWithResolvedExecEnv(execParams, {
-      hookContext: context.hookContext as HookContext | undefined,
-    });
+    return prepareParamsWithResolvedExecEnv(execParams, { hookContext });
   };
 
   const finalizeBeforeToolCallParams = (rawParams: unknown, preparedParams: unknown) => {
     const envState = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
-    const deferredEnvState = getDeferredResolveExecEnvPreparedState(preparedParams as ExecToolArgs);
+    const hookContext = getExecHookContext(preparedParams as ExecToolArgs);
     const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
-    if (!envState && !deferredEnvState && !workdirState) {
+    if (!envState && !hookContext && !workdirState) {
       return rawParams;
     }
     if (!isExecToolArgsObject(rawParams)) {
       return rawParams;
     }
     const execParams = rawParams;
+    // Host/workdir rewrites invalidate cached facts, not the bound execution identity.
+    const invalidatePreparedParams = () => retainExecHookContext({ ...execParams }, hookContext);
     let host: ExecHost | undefined;
     const resolveFinalHost = () => {
       host ??= params.resolveHostForParams(execParams);
@@ -332,23 +316,23 @@ export function createExecRequestPreparation(params: {
     };
     try {
       if (envState?.host && execParams.command && resolveFinalHost() !== envState.host) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
       if (
         workdirState &&
         (resolveFinalHost() !== workdirState.host ||
           execParams.workdir !== workdirState.inputWorkdir)
       ) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
     } catch {
-      return { ...execParams };
+      return invalidatePreparedParams();
     }
     if (envState) {
       markResolveExecEnvPrepared(execParams, envState);
     }
-    if (deferredEnvState) {
-      markDeferredResolveExecEnvPrepared(execParams, deferredEnvState);
+    if (hookContext) {
+      retainExecHookContext(execParams, hookContext);
     }
     if (workdirState) {
       markResolvedExecWorkdirPrepared(execParams, workdirState);
@@ -362,7 +346,7 @@ export function createExecRequestPreparation(params: {
     finalizeBeforeToolCallParams,
     prepareParamsWithResolvedExecEnv,
     isResolveExecEnvPrepared,
-    getDeferredResolveExecEnvPreparedState,
+    getExecHookContext,
     getResolvedExecWorkdirPreparedState,
     getResolvedExecEnvPreparedState,
   };

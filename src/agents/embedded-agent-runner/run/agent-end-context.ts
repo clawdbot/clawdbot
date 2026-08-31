@@ -23,12 +23,17 @@ export function buildEmbeddedForegroundPromptContext(
   agentDir: string,
 ): EmbeddedForegroundPromptContext {
   const callerOrigin = run.cronCreatorAuthorityCapability?.callerOrigin;
+  const sessionKey = run.sessionKey?.trim() || run.sessionId;
+  const sandboxSessionKey = run.sandboxSessionKey?.trim() || sessionKey;
   return {
     agentId: run.agentId,
     agentDir,
     workspaceDir: run.workspaceDir,
     cwd: run.cwd,
-    sandboxSessionKey: run.sandboxSessionKey ?? run.sessionKey ?? run.sessionId,
+    sandboxSessionKey,
+    // Detached runs replace the execution key; preserve only a known policy owner.
+    sandboxAgentId:
+      run.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? run.agentId : undefined),
     promptCacheKey: run.promptCacheKey,
     reasoningLevel: run.reasoningLevel,
     messageChannel: run.messageChannel,

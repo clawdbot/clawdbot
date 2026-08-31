@@ -126,6 +126,32 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("Hello @Alice Wonderland and @bob!");
   });
 
+  it.each(["a$'b", "$&", "big$$money", "a$`b"])(
+    "preserves literal mention labels containing %s",
+    (label) => {
+      const text = resolveDiscordMessageText(
+        asMessage({
+          content: "Hello <@1> and <@!1>, meet <@2>!",
+          mentionedUsers: [
+            { id: "1", globalName: label, username: "fallback" },
+            { id: "2", username: label },
+          ],
+        }),
+      );
+      expect(text).toBe(`Hello @${label} and @${label}, meet @${label}!`);
+    },
+  );
+
+  it.each([undefined, ""])("uses the user ID when mention names are %s", (name) => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello <@1> and <@!1>!",
+        mentionedUsers: [{ id: "1", globalName: name, username: name }],
+      }),
+    );
+    expect(text).toBe("Hello @1 and @1!");
+  });
+
   it("leaves content unchanged if no mentions present", () => {
     const text = resolveDiscordMessageText(
       asMessage({ content: "Hello world", mentionedUsers: [] }),

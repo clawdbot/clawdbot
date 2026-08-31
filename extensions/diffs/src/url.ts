@@ -3,7 +3,7 @@ import {
   resolveGatewayPublicOrigin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 
 type ViewerBaseUrlFieldName = "baseUrl" | "viewerBaseUrl";
 

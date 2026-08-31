@@ -151,17 +151,18 @@ export async function dispatchDiscordNativeAgentReply(params: {
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
   });
-  const deliberateSilentTerminalReply =
-    turnResult.dispatched && turnResult.dispatchResult.deliberateSilentTerminalReply === true;
+  const shouldSettleWithoutVisibleReply =
+    params.suppressReplies ||
+    finalReplyOutcome === "suppressed" ||
+    (turnResult.dispatched &&
+      (turnResult.dispatchResult.deliberateSilentTerminalReply === true ||
+        turnResult.dispatchResult.deferredToActiveRun !== undefined));
   const dispatchResult = {
     dispatched: turnResult.dispatched,
     ...(hiddenFinalReply ? { hiddenFinalReply } : {}),
   };
 
-  if (
-    !didReply &&
-    (params.suppressReplies || finalReplyOutcome === "suppressed" || deliberateSilentTerminalReply)
-  ) {
+  if (!didReply && shouldSettleWithoutVisibleReply) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
     return dispatchResult;
   }
