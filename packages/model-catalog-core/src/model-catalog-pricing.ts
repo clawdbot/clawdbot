@@ -26,6 +26,18 @@ export const MODEL_PRICING_SOURCES = [
     url: "https://api.venice.ai/api/v1/models",
     authoritative: true,
   },
+  {
+    id: "chutes",
+    label: "Chutes",
+    url: "https://llm.chutes.ai/v1/models",
+    authoritative: true,
+  },
+  {
+    id: "cerebras",
+    label: "Cerebras",
+    url: "https://api.cerebras.ai/public/v1/models",
+    authoritative: true,
+  },
   { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL, authoritative: false },
   { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL, authoritative: false },
 ] as const;
@@ -72,6 +84,38 @@ export function normalizeModelPricingProvider(value: unknown): ModelPricingProvi
     }
   }
   return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+/** Keep unavailable prices distinct from malformed native catalogs and declared rates. */
+export function normalizeModelPricingCatalog(
+  rows: unknown,
+  normalizePricing: (value: unknown) => CompleteModelCost | undefined,
+  readPricing: (model: Record<string, unknown>) => unknown = (model) => model.pricing,
+): Map<string, CompleteModelCost> | undefined {
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  const prices = new Map<string, CompleteModelCost>();
+  const ids = new Set<string>();
+  for (const value of rows) {
+    const model = asOptionalRecord(value);
+    const id = normalizeOptionalString(model?.id);
+    if (!model || !id || ids.has(id)) {
+      return undefined;
+    }
+    ids.add(id);
+    const rawPricing = readPricing(model);
+    if (rawPricing === undefined) {
+      continue;
+    }
+    const pricing = normalizePricing(rawPricing);
+    if (!pricing) {
+      return undefined;
+    }
+    prices.set(id, pricing);
+  }
+  // An empty price feed cannot establish that every previously known price disappeared.
+  return prices.size > 0 ? prices : undefined;
 }
 
 function readPricingCost(
