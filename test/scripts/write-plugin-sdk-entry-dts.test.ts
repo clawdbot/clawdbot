@@ -28,12 +28,16 @@ const declarationInputs = [
   { file: "src/actual.cts", specifier: "../actual.cjs", name: "EmittedCts" },
 ] as const;
 
-function runFixture(root: string, args: string[], privateQa = false) {
+function runFixture(root: string, args: string[], privateQa = false, env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, args, {
     cwd: root,
     encoding: "utf8",
     env: {
       ...process.env,
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+      OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+      OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: undefined,
+      ...env,
       OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
       // Use the build owner's existing direct-tool path, without a fixture pnpm shim.
@@ -207,8 +211,8 @@ function createFixture() {
   };
 }
 
-function runWriter(root: string, privateQa = false) {
-  return runFixture(root, ["--import", loader, writer], privateQa);
+function runWriter(root: string, privateQa = false, env: NodeJS.ProcessEnv = {}) {
+  return runFixture(root, ["--import", loader, writer], privateQa, env);
 }
 
 function treeHashes(root: string) {
@@ -259,6 +263,55 @@ function expectStagingClean(root: string) {
 }
 
 describe("write-plugin-sdk-entry-dts", () => {
+  it.each<{ name: string; badPlugin: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }>(
+    [
+      {
+        name: "bounded plugins",
+        badPlugin: "broken",
+        before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" },
+        after: {},
+      },
+      {
+        name: "optional plugins",
+        badPlugin: "acpx",
+        before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" },
+        after: {},
+      },
+      {
+        name: "Docker plugins",
+        badPlugin: "external",
+        before: {},
+        after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
+      },
+    ],
+  )(
+    "rejects newly selected $name instead of restoring their previous SDK cache",
+    ({ badPlugin, before, after }) => {
+      const { root, write } = createFixture();
+      for (const id of ["plain", badPlugin]) {
+        write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
+        write(
+          `extensions/${id}/package.json`,
+          JSON.stringify({
+            name: `@openclaw/${id}`,
+            openclaw: { build: { bundledDist: id !== "external" } },
+          }),
+        );
+        if (id !== badPlugin) {
+          write(`extensions/${id}/index.ts`, "export {};\n");
+        }
+      }
+      const initial = runWriter(root, false, before);
+      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+      const published = treeHashes(path.join(root, "dist"));
+      const selected = runWriter(root, false, after);
+      expect(selected.status, selected.stdout + selected.stderr).toBeGreaterThan(0);
+      expect(selected.stdout + selected.stderr).toContain(`extensions/${badPlugin}/index.ts`);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(published);
+      expectStagingClean(root);
+    },
+  );
+
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
     expect(production).toEqual(

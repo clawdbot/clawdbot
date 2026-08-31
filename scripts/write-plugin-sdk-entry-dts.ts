@@ -9,6 +9,7 @@ import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.
 import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
+  TSDOWN_UNIFIED_CACHE_ENV,
   TSDOWN_UNIFIED_CACHE_INPUTS,
 } from "./tsdown-build.mts";
 
@@ -67,7 +68,7 @@ try {
     const step: BuildCacheStep = {
       label: "tsdown-plugin-sdk",
       cache: {
-        env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        env: TSDOWN_UNIFIED_CACHE_ENV,
         inputs: [
           ...TSDOWN_UNIFIED_CACHE_INPUTS,
           "scripts/write-plugin-sdk-entry-dts.ts",
