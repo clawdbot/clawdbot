@@ -537,7 +537,6 @@ final class OnboardingAISetupModel {
         self.prepareAvailable = false
         self.candidatePresentation = [:]
         self.clearProviderAuth()
-        self.authAttemptID = UUID()
         self.providerAuthReconciliationPending = false
         self.providerCatalogLoaded = false
         self.providerCatalogError = nil
@@ -1181,9 +1180,8 @@ extension OnboardingAISetupModel {
         self.authBusy = true
         self.providerAuthReconciliationPending = false
         let token = self.attemptToken
-        let authAttemptID = UUID()
+        let authAttemptID = self.authAttemptID
         let authSessionID = UUID().uuidString
-        self.authAttemptID = authAttemptID
         self.authSessionID = authSessionID
         let requestID = UUID()
         self.authRequestID = requestID
@@ -1284,7 +1282,6 @@ extension OnboardingAISetupModel {
         let sessionID = self.authSessionID
         let authServerLease = self.serverLease
         guard let sessionID, let authServerLease else {
-            self.authAttemptID = UUID()
             self.providerAuthReconciliationPending = false
             self.clearProviderAuth()
             return
@@ -1321,11 +1318,15 @@ extension OnboardingAISetupModel {
                 return
             }
             if cancellation == .unresolved {
+                // A late admitted commit still owns a result. Observe it without
+                // answering prompts or overlapping an existing request.
+                if self.authRequestID == nil, self.authStep == nil {
+                    self.advanceProviderAuth(stepID: nil, value: nil)
+                }
                 self.authError = Failure(
                     summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
                     detail: nil)
             } else {
-                self.authAttemptID = UUID()
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
             }
@@ -1556,6 +1557,8 @@ extension OnboardingAISetupModel {
     }
 
     private func clearProviderAuth() {
+        // Closing a wizard retires every reply captured by its generation.
+        self.authAttemptID = UUID()
         self.activeAuthOption = nil
         self.providerWizardKind = nil
         self.authSessionID = nil
