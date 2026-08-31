@@ -72,7 +72,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       ),
     ]);
   }
-  const restore = restoreSessionSqliteMigrationRun({
+  const restore = await restoreSessionSqliteMigrationRun({
     env: params.env,
     manifestPath: failedRun.manifestPath,
     trustedTargets,
