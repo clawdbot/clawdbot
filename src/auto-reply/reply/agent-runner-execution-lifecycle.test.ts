@@ -43,7 +43,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 const compactionTarget = {
   agentId: "main",
   sessionId: "session",

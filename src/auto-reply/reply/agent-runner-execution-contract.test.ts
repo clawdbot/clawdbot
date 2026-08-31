@@ -5,7 +5,7 @@ import {
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 const { executeAgentTurn } = await import("./agent-runner-execution.js");
 
 describe("executeAgentTurn contract", () => {

@@ -14,7 +14,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: session state", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {

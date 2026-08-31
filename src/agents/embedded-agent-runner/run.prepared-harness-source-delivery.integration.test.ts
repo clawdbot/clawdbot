@@ -53,7 +53,7 @@ import {
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-const runnerState = await setupAgentRunnerExecutionTestState();
+const runnerState = setupAgentRunnerExecutionTestState();
 
 type TestRouteStage = { stage: "initial" } | { stage: "fallback"; fallbackReason: FailoverReason };
 

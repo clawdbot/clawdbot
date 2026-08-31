@@ -1,20 +1,3 @@
-// Register fixture mocks before error helpers capture provider-hook bindings.
-import {
-  setupAgentRunnerExecutionTestState,
-  GENERIC_RUN_FAILURE_TEXT,
-  getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
-  createFollowupRun,
-  createMockReplyOperation,
-  requireRecord,
-  expectRecordFields,
-  requireMockCall,
-  createMinimalRunAgentTurnParams,
-  createTestFallbackSummaryError,
-} from "./agent-runner-execution.test-support.js";
-
-const state = await setupAgentRunnerExecutionTestState();
-
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
@@ -28,8 +11,23 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
+import {
+  setupAgentRunnerExecutionTestState,
+  GENERIC_RUN_FAILURE_TEXT,
+  getExecuteAgentTurnForTest,
+  createMockTypingSignaler,
+  createFollowupRun,
+  createMockReplyOperation,
+  requireRecord,
+  expectRecordFields,
+  requireMockCall,
+  createMinimalRunAgentTurnParams,
+  createTestFallbackSummaryError,
+} from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+
+const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {

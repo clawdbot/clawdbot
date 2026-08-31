@@ -1,4 +1,8 @@
-// Register fixture mocks before error helpers capture provider-hook bindings.
+import { describe, expect, it, vi } from "vitest";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
+import * as autoFallback from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -7,19 +11,13 @@ import {
   expectBlockReplyCall,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
-
-const state = await setupAgentRunnerExecutionTestState();
-
-import { describe, expect, it, vi } from "vitest";
-import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { loggingState } from "../../logging/state.js";
-import * as autoFallback from "./agent-runner-auto-fallback.js";
 import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+
+const state = setupAgentRunnerExecutionTestState();
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],

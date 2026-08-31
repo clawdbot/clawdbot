@@ -42,7 +42,7 @@ vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", asyn
   };
 });
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 
 beforeEach(() => {
   sanitizerState.sanitizeUserFacingText.mockClear();

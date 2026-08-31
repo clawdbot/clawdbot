@@ -15,7 +15,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: runtime selection", () => {
   it.each(["group", "channel"] as const)(

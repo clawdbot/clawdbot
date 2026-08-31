@@ -18,7 +18,7 @@ vi.mock("../../agents/agent-tools.js", () => ({
   }),
 }));
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 
 let execute: Awaited<ReturnType<typeof getExecuteAgentTurnForTest>>;
 let fixture: typeof import("../../gateway/worker-environments/worker-turn-launcher.test-support.js");
@@ -406,7 +406,7 @@ describe("webchat admission to plugin node duplex authority", () => {
           },
         },
       );
-      // Execution must preserve the node-policy registry and its lifecycle version.
+      // Error classification may load provider hooks, but must not replace the node-policy registry.
       expect(getActivePluginRegistry()).toBe(registry);
       expect(getActivePluginRegistryVersion()).toBe(activeRegistryVersion);
       if (mode !== "placement" && mode !== "session") {

@@ -96,12 +96,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
-// Mocked provider runs have no plugin hooks; error classification must not compile real plugins.
-// Provider-runtime and structured-signal suites cover the actual hook boundary.
-vi.mock("../../plugins/provider-failover.js", () => ({
-  classifyProviderFailoverSignalWithPlugin: () => undefined,
-}));
-
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../agents/embedded-agent-runner/run-entry.js")
@@ -677,11 +671,7 @@ export function createNonDirectFailureSessionCtx(
   } as unknown as TemplateContext;
 }
 
-export async function setupAgentRunnerExecutionTestState() {
-  // Each suite awaits collection readiness after its imported mock harnesses register.
-  // Hook timeouts cannot cancel imports; cleanup must not overtake module readiness.
-  await getExecuteAgentTurnForTest();
-
+export function setupAgentRunnerExecutionTestState() {
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();

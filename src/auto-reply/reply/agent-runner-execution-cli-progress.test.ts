@@ -17,7 +17,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = await setupAgentRunnerExecutionTestState();
+const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {

@@ -1,4 +1,8 @@
-// Register fixture mocks before error helpers capture provider-hook bindings.
+import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
@@ -12,15 +16,9 @@ import {
   createMinimalRunAgentTurnParams,
   makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
-
-const state = await setupAgentRunnerExecutionTestState();
-
-import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
+
+const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: context failures", () => {
   it("preserves the active session when embedded overflow recovery fails", async () => {
