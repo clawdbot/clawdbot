@@ -65,6 +65,35 @@ describe("release upgrade baseline resolver", () => {
     ).toBe("openclaw@2026.6.34");
   });
 
+  it("honors an explicit published predecessor from the frozen extended-stable line", () => {
+    expect(
+      resolveFrozenExtendedStableUpgradeBaseline(
+        "2026.6.35",
+        ["2026.6.33", "2026.6.34", "2026.6.35"],
+        {
+          previousVersion: "2026.6.33",
+          targetContextRef: "extended-stable/2026.6.33",
+        },
+      ),
+    ).toBe("openclaw@2026.6.33");
+  });
+
+  it.each(["2026.6.35", "2026.6.34-1", "2026.7.1", "2026.6.32", "2026.6.31"])(
+    "rejects an incompatible explicit frozen baseline %s",
+    (previousVersion) => {
+      expect(() =>
+        resolveFrozenExtendedStableUpgradeBaseline(
+          "2026.6.35",
+          ["2026.6.33", "2026.6.34", "2026.6.35"],
+          {
+            previousVersion,
+            targetContextRef: "extended-stable/2026.6.33",
+          },
+        ),
+      ).toThrow("previous_version");
+    },
+  );
+
   it.each([
     ["2026.7.1", "extended-stable/2026.6.33"],
     ["2026.6.35-beta.1", "extended-stable/2026.6.33"],

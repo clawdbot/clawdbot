@@ -691,6 +691,7 @@ jobs:
             BASELINE_SPEC="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
               --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")" \
               --target-context-ref "$INPUT_TARGET_CONTEXT_REF" \
+              --previous-version "$INPUT_PREVIOUS_VERSION" \
               --versions-json "$PUBLISHED_VERSIONS")"
           elif [[ -n "${INPUT_PREVIOUS_VERSION}" ]]; then
             BASELINE_SPEC="openclaw@${INPUT_PREVIOUS_VERSION}"

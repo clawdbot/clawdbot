@@ -29,12 +29,28 @@ function normalizePublishedVersions(publishedVersions: readonly unknown[]) {
 }
 
 type FrozenExtendedStableUpgradeContext = {
+  previousVersion?: unknown;
   targetContextRef: unknown;
 };
 
 function normalizeTargetContextRef(value: unknown) {
   const raw = normalizeStringifiedOptionalString(value) ?? "";
   return raw.replace(/^refs\/heads\//u, "");
+}
+
+function isEarlierFinalSameExtendedStableLine(params: {
+  baseline: ReturnType<typeof parseVersion>;
+  candidate: NonNullable<ReturnType<typeof parseVersion>>;
+}) {
+  const { baseline, candidate } = params;
+  return (
+    baseline?.channel === "stable" &&
+    baseline.correctionNumber === undefined &&
+    baseline.year === candidate.year &&
+    baseline.month === candidate.month &&
+    baseline.patch >= 33 &&
+    compareOpenClawVersions(baseline.version, candidate.version) < 0
+  );
 }
 
 /**
@@ -72,17 +88,28 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
     );
   }
 
-  const baseline = normalizePublishedVersions(publishedVersions).find((version) => {
-    const parsed = parseVersion(version);
-    return (
-      parsed?.channel === "stable" &&
-      parsed.correctionNumber === undefined &&
-      parsed.year === candidate.year &&
-      parsed.month === candidate.month &&
-      parsed.patch >= 33 &&
-      compareOpenClawVersions(version, candidate.version) < 0
-    );
-  });
+  const published = normalizePublishedVersions(publishedVersions);
+  const requestedBaseline = parseVersion(
+    normalizeStringifiedOptionalString(context.previousVersion) ?? "",
+  );
+  if (context.previousVersion !== undefined && !requestedBaseline) {
+    throw new Error("previous_version must be a final published extended-stable predecessor");
+  }
+  if (requestedBaseline) {
+    if (
+      !isEarlierFinalSameExtendedStableLine({ baseline: requestedBaseline, candidate }) ||
+      !published.includes(requestedBaseline.version)
+    ) {
+      throw new Error(
+        `previous_version ${requestedBaseline.version} is not a published final predecessor of ${candidate.version} on ${targetContextRef}`,
+      );
+    }
+    return `openclaw@${requestedBaseline.version}`;
+  }
+
+  const baseline = published.find((version) =>
+    isEarlierFinalSameExtendedStableLine({ baseline: parseVersion(version), candidate }),
+  );
   if (!baseline) {
     throw new Error(
       `no published final extended-stable baseline predates candidate ${candidate.version} on ${targetContextRef}`,
@@ -172,8 +199,10 @@ if (isMain) {
   }
   const publishedVersions = readPublishedVersions(args);
   const targetContextRef = args.get("target-context-ref");
+  const previousVersion = args.get("previous-version");
   const baseline = targetContextRef
     ? resolveFrozenExtendedStableUpgradeBaseline(candidateVersion, publishedVersions, {
+        ...(previousVersion ? { previousVersion } : {}),
         targetContextRef,
       })
     : resolveDefaultReleaseUpgradeBaseline(candidateVersion, publishedVersions);

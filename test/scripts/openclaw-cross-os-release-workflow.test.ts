@@ -111,12 +111,14 @@ describe("cross-OS release checks workflow", () => {
     });
     expect(baseline.env).toMatchObject({
       CANDIDATE_JSON: "${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json",
+      INPUT_PREVIOUS_VERSION: "${{ inputs.previous_version }}",
       INPUT_TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
     });
     expect(baseline.run).toContain('"$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"*');
     expect(baseline.run).toContain("npm view openclaw versions --json");
     expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
     expect(baseline.run).toContain('--target-context-ref "$INPUT_TARGET_CONTEXT_REF"');
+    expect(baseline.run).toContain('--previous-version "$INPUT_PREVIOUS_VERSION"');
     expect(baseline.run).toContain('BASELINE_VERSION="$(npm view openclaw@latest version)"');
     expect(readFileSync(WORKFLOW_PATH, "utf8")).toContain(
       "timeout --preserve-status 300s npm pack --ignore-scripts",
