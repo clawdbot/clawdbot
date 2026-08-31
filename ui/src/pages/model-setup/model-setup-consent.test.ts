@@ -72,7 +72,9 @@ describe("ModelSetupPage activation consent", () => {
             ? { done: true, status: "done", modelActivation: { modelRef: "provider/selected" } }
             : { done: true, status: "cancelled", error: "Model setup was declined." };
         }
-        if (method === "wizard.cancel") return { status: "cancelled" };
+        if (method === "wizard.cancel") {
+          return { status: "cancelled" };
+        }
         throw new Error(`Unexpected method ${method}`);
       });
       const { page } = await mountPage(context, {
@@ -110,9 +112,11 @@ describe("ModelSetupPage activation consent", () => {
           expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull(),
         );
         expect(context.navigate).not.toHaveBeenCalled();
-        if (decision === "decline")
+        if (decision === "decline") {
           expect(answers.at(-1)).toEqual({ stepId: "consent", value: false });
-        else expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: activeSession });
+        } else {
+          expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: activeSession });
+        }
       }
       expect(
         request.mock.calls.filter(([method]) => method === "openclaw.setup.activate.start"),

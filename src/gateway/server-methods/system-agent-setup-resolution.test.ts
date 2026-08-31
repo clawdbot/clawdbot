@@ -187,7 +187,9 @@ describe("openclaw.setup provider resolution", () => {
               }
             : { done: true, status: "cancelled" },
         );
-        if (answer !== true) expect(done).not.toHaveProperty("modelActivation");
+        if (answer !== true) {
+          expect(done).not.toHaveProperty("modelActivation");
+        }
       }
       expect(commit).toHaveBeenCalledTimes(answer === true ? 1 : 0);
       expect(wizardSessions.has(sessionId)).toBe(false);
