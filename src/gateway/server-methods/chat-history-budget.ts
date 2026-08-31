@@ -63,10 +63,28 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
+  const rawProvenance =
+    message && typeof message === "object"
+      ? (message as Record<string, unknown>).provenance // SAFETY: message verified as object before accessing optional provenance field
+      : undefined;
+  const provenanceRecord =
+    rawProvenance && typeof rawProvenance === "object" && !Array.isArray(rawProvenance)
+      ? (rawProvenance as Record<string, unknown>) // SAFETY: rawProvenance verified as non-array object before record projection
+      : undefined;
+  const provenance =
+    provenanceRecord?.kind === "internal_system"
+      ? {
+          kind: "internal_system" as const,
+          ...(typeof provenanceRecord.sourceTool === "string"
+            ? { sourceTool: provenanceRecord.sourceTool }
+            : {}),
+        }
+      : undefined;
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
+    ...(provenance ? { provenance } : {}),
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),

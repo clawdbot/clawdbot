@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
@@ -9,6 +10,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -20,6 +22,7 @@ import {
   readChatSessionProjectionScope,
   setChatSessionProjection,
 } from "./history-merge.ts";
+import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 
 type PendingInputView = {
   sessionKey: string;
@@ -59,7 +62,31 @@ export function buildPendingInputItems(
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
-    items.push({ kind: "message", key: `pending-input:${input.id}`, message: input.message });
+    const raw = asRecord(input.message) ?? {};
+    const provenance = asRecord(raw.provenance);
+    const role = typeof raw.role === "string" ? raw.role.toLowerCase() : "";
+    if (role === "user" && provenance?.kind === "internal_system") {
+      const noticeKind = resolveSystemNoticeKind(
+        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
+      );
+      const text = noticeKind?.summaryKey
+        ? t(noticeKind.summaryKey)
+        : extractTextCached(input.message)?.replace(/^\[System\] /u, "");
+      if (text?.trim()) {
+        items.push({
+          kind: "notice",
+          key: `pending-input:${input.id}`,
+          icon: noticeKind?.icon ?? "cpu",
+          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
+          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
+          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
+          text,
+          timestamp: input.acceptedAt,
+        });
+      }
+    } else {
+      items.push({ kind: "message", key: `pending-input:${input.id}`, message: input.message });
+    }
     items.push({
       kind: "notice",
       key: `pending-input:${input.id}:state`,
