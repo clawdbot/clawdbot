@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -5019,6 +5020,63 @@ describe("update-cli", () => {
     const logs = getLogOutput();
     expect(logs).toContain("global install verify");
     expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
+  });
+
+  it("completes a suppressed npm lifecycle before activating the staged package", async () => {
+    const tempDir = tempDirs.make("openclaw-update-staged-lifecycle-");
+    const prefix = path.join(tempDir, "prefix");
+    const nodeModules = path.join(prefix, "lib", "node_modules");
+    const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.7.1");
+    readPackageVersion.mockImplementation(async (packageRoot: string) =>
+      (await fs.readFile(path.join(packageRoot, "package.json"), "utf-8")).includes("2026.8.1")
+        ? "2026.8.1"
+        : "2026.7.1",
+    );
+    primeNpmChannelTag("latest", "2026.8.1");
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
+      path.join(pkgRoot, "dist", "index.js"),
+    );
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(postCoreConvergenceResult());
+    vi.mocked(runExec).mockResolvedValue({ stdout: "", stderr: "" });
+    mockNpmGlobalCommands(nodeModules, async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+        const stagePrefix = requireValue(argv[argv.indexOf("--prefix") + 1], "staged prefix");
+        const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+        await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
+        await fs.writeFile(
+          path.join(stageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+          "pending\n",
+        );
+      }
+      if (
+        argv[0] === process.execPath &&
+        argv[1]?.endsWith("preinstall-package-manager-warning.mjs")
+      ) {
+        await fs.rm(
+          path.join(path.dirname(path.dirname(argv[1])), "dist", "openclaw-install-guard"),
+        );
+      }
+      return undefined;
+    });
+
+    await updateCommand({ yes: true, restart: false, json: true });
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(lastWriteJsonCall()).toMatchObject({ status: "ok", after: { version: "2026.8.1" } });
+    expect(
+      commandCalls()
+        .filter(([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"))
+        .map(([argv]) => path.basename(requireValue(argv[1], "lifecycle script"))),
+    ).toEqual(["preinstall-package-manager-warning.mjs", "postinstall-bundled-plugins.mjs"]);
+    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
+      '"version":"2026.8.1"',
+    );
+    await expect(
+      fs.access(path.join(pkgRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("runs old package doctors without fix mode when service ownership is unknown", async () => {

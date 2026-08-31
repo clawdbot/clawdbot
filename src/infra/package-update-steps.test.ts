@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   markPackagePostInstallDoctorAdvisory,
@@ -785,69 +784,6 @@ describe("runGlobalPackageUpdateSteps", () => {
       } finally {
         rmSpy.mockRestore();
       }
-    });
-  });
-
-  it("completes a staged npm package lifecycle before strict dist verification", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-npm-lifecycle-" }, async (base) => {
-      const prefix = path.join(base, "prefix");
-      const globalRoot = path.join(prefix, "lib", "node_modules");
-      const packageRoot = path.join(globalRoot, "openclaw");
-      await writePackageRoot(packageRoot, "1.0.0");
-
-      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
-        if (name === "global update") {
-          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-          if (!stagePrefix) {
-            throw new Error("missing staged prefix");
-          }
-          const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-          await writePackageRoot(stagedPackageRoot, "2.0.0");
-          await fs.writeFile(
-            path.join(stagedPackageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
-            "pending\n",
-          );
-        } else {
-          if (!cwd) {
-            throw new Error("missing lifecycle package root");
-          }
-          if (name === "npm package preinstall") {
-            await fs.rm(path.join(cwd, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH));
-          }
-        }
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 0,
-        };
-      });
-
-      const result = await runGlobalPackageUpdateSteps({
-        installTarget: createNpmTarget(globalRoot),
-        installSpec: "openclaw@2.0.0",
-        packageName: "openclaw",
-        packageRoot,
-        runCommand: createRootRunner(globalRoot),
-        runStep,
-        timeoutMs: 1000,
-      });
-
-      expect(result.failedStep).toBeNull();
-      expect(result.afterVersion).toBe("2.0.0");
-      expect(result.steps.map((step) => step.name)).toEqual([
-        "global update",
-        "npm package preinstall",
-        "npm package postinstall",
-        "global install swap",
-      ]);
-      await expect(
-        fs.access(path.join(packageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"2.0.0"',
-      );
     });
   });
 
