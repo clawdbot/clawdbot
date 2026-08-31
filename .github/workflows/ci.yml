@@ -3333,11 +3333,15 @@ jobs:
                   lint_args=(--only=scripts --threads=1)
                 fi
                 export GOMAXPROCS=2
+                # Match local Go GC policy; thread limits alone leave the
+                # extension semantic graph too large for a 16GB runner.
+                export GOGC=30 GOMEMLIMIT=3GiB
               elif [ "$(nproc)" -lt 8 ]; then
                 # Fork PRs build each semantic Program once. Bound both oxlint
                 # and its Go helper within the 4-core/16GB hosted runner.
                 lint_args=(--threads=1)
                 export GOMAXPROCS=2
+                export GOGC=30 GOMEMLIMIT=3GiB
               fi
               if [[ ! -f scripts/run-oxlint-shards.mts ]]; then
                 # The candidate's older shard runner owns all three source
