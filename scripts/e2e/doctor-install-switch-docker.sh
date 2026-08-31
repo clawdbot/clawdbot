@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verifies doctor/daemon repair switches service entrypoints between package and
-# git installs. Both fixtures come from the same prepared OpenClaw npm tarball.
+# Verifies Doctor preserves service definitions and explicit gateway install
+# switches package/git entrypoints. Both fixtures use the same prepared tarball.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
