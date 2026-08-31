@@ -275,6 +275,8 @@ manual runs execute the catalog-derived selection in one job with up to four
 isolated host workers. Each worker owns its disposable homeserver, Gateway,
 state, and artifacts. Scenario membership stays catalog-owned; `--fail-fast`
 keeps execution serial and stops after the first failure.
+Use `openclaw qa matrix --concurrency <count>` to request fewer workers;
+values above the transport limit stay capped.
 
 ### Discord Mantis scenarios
 

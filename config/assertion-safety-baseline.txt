@@ -979,7 +979,6 @@ extensions/qa-lab/src/bus-state.ts	2
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
-extensions/qa-lab/src/cli.ts	1
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/confidence-report.ts	2
 extensions/qa-lab/src/crabline-transport.ts	6
