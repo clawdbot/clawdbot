@@ -56,7 +56,6 @@ import { resolvePluginSourceRoots } from "./roots.js";
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type {
-  PluginRegistryDifference,
   PluginRegistrySnapshotDiagnostic,
   PluginRegistrySnapshotSource,
 } from "./plugin-registry-snapshot.types.js";
