@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection } from "./data.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import {
   appendPage,
   createHarness,
@@ -238,6 +238,52 @@ describe("ModelProvidersPage agent scope", () => {
     const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(link?.textContent?.trim()).toBe("Learn more");
     expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
+  });
+
+  it.each([
+    {
+      access: "read-only",
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+    },
+    { access: "missing-auth", hello: null },
+    { access: "missing-scopes", hello: { auth: { role: "operator" } } },
+  ])("keeps saved account identities out of the $access page", async ({ hello }) => {
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = hello as typeof snapshot.hello;
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) => {
+      if (method === "models.authStatus") {
+        return {
+          ts: 1,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [
+                {
+                  profileId: "openai:owner@example.com",
+                  type: "oauth",
+                  status: "ok",
+                },
+              ],
+            },
+          ],
+          providerCapabilities: [],
+        };
+      }
+      return originalRequest(method);
+    });
+
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.authStatus?.providers).toHaveLength(1));
+    await page.updateComplete;
+
+    expect(page.querySelector(".model-providers__profiles")).toBeNull();
+    expect(page.textContent).not.toContain("owner@example.com");
+    expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
+      "OAuth profiles: 1",
+    );
   });
 
   it("patches thinking and fast mode through the shared config draft", async () => {
@@ -479,6 +525,301 @@ describe("ModelProvidersPage agent scope", () => {
     expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toHaveLength(1);
   });
 
+  it("keeps the latest profile order visible while saves are queued", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const originalRequest = request.getMockImplementation()!;
+    const firstSave = deferred<unknown>();
+    let orderRequests = 0;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authOrderSet") {
+        orderRequests += 1;
+        if (orderRequests === 1) {
+          return firstSave.promise;
+        }
+        return {};
+      }
+      void params;
+      return originalRequest(method);
+    });
+
+    page.setProfileOrder("openai", "openai", ["openai:two", "openai:one"]);
+    await vi.waitFor(() => expect(orderRequests).toBe(1));
+    page.setProfileOrder("openai", "openai", ["openai:one", "openai:two"]);
+
+    expect(page.profileOrders.openai).toEqual(["openai:one", "openai:two"]);
+    expect(orderRequests).toBe(1);
+    firstSave.resolve({});
+    await vi.waitFor(() => expect(orderRequests).toBe(2));
+    await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
+    expect(page.messages.openai).toBeUndefined();
+  });
+
+  it("keeps a saved auth-owner order on every alias route", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: {},
+      authStatus: {
+        ts: 1,
+        providers: [
+          {
+            provider: "claude-cli",
+            authProvider: "anthropic",
+            displayName: "Claude",
+            status: "ok",
+            profiles: [
+              { profileId: "claude:one", type: "oauth", status: "ok" },
+              { profileId: "claude:two", type: "oauth", status: "ok" },
+            ],
+            profileOrder: ["claude:one", "claude:two"],
+          },
+        ],
+      },
+      updatedAt: 1,
+    };
+
+    page.setProfileOrder("anthropic", "anthropic", ["claude:two", "claude:one"]);
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
+    await vi.waitFor(() => expect(page.profileOrders.anthropic).toBeUndefined());
+    expect(page.data.authStatus?.providers[0]?.profileOrder).toEqual(["claude:two", "claude:one"]);
+  });
+
+  it("keeps a saved profile order when an older refresh finishes afterward", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const originalRequest = request.getMockImplementation()!;
+    const staleStatus = deferred<unknown>();
+    const authStatus = {
+      ts: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok" as const,
+          profiles: [
+            { profileId: "openai:one", type: "oauth" as const, status: "ok" as const },
+            { profileId: "openai:two", type: "oauth" as const, status: "ok" as const },
+          ],
+          profileOrder: ["openai:one", "openai:two"],
+        },
+      ],
+    };
+    const refreshedStatus = {
+      ...authStatus,
+      ts: 2,
+      providers: [
+        {
+          ...authStatus.providers[0],
+          profileOrder: ["openai:two", "openai:one"],
+        },
+      ],
+    };
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: {},
+      authStatus,
+      updatedAt: 1,
+    };
+    request.mockClear();
+    let authStatusCalls = 0;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authStatus") {
+        authStatusCalls += 1;
+        return authStatusCalls === 1 ? staleStatus.promise : refreshedStatus;
+      }
+      if (method === "models.authOrderSet") {
+        return {};
+      }
+      void params;
+      return originalRequest(method);
+    });
+
+    const refreshing = page.refresh({ force: true });
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
+    page.setProfileOrder("openai", "openai", ["openai:two", "openai:one"]);
+    await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
+    await vi.waitFor(() => expect(authStatusCalls).toBe(2));
+    await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
+    expect(page.data.authStatus?.providers[0]?.profileOrder).toEqual(["openai:two", "openai:one"]);
+
+    staleStatus.resolve(authStatus);
+    await refreshing;
+
+    expect(page.data.authStatus?.providers[0]?.profileOrder).toEqual(["openai:two", "openai:one"]);
+  });
+
+  it("re-resolves a configured profile order after Reset", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authStatus") {
+        return {
+          ts: 2,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [
+                { profileId: "openai:one", type: "oauth", status: "ok" },
+                { profileId: "openai:two", type: "oauth", status: "ok" },
+              ],
+              profileOrder: ["openai:two", "openai:one"],
+            },
+          ],
+        };
+      }
+      void params;
+      return originalRequest(method);
+    });
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: {},
+      authStatus: await request("models.authStatus"),
+      updatedAt: 1,
+    } as ModelProvidersData;
+
+    page.setProfileOrder("openai", "openai", null);
+
+    await vi.waitFor(() =>
+      expect(page.data?.authStatus?.providers[0]?.profileOrder).toEqual([
+        "openai:two",
+        "openai:one",
+      ]),
+    );
+    await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
+  });
+
+  it("drains a queued profile order after switching agents during an active save", async () => {
+    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const originalRequest = request.getMockImplementation()!;
+    const firstSave = deferred<unknown>();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authOrderSet" && requestCount(request, method) === 1) {
+        return firstSave.promise;
+      }
+      void params;
+      return originalRequest(method);
+    });
+
+    page.setProfileOrder("openai", "openai", ["openai:two", "openai:one"]);
+    await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
+    agentSelection.state.selectedId = "writer";
+    agentSelection.state.scopeId = "writer";
+    notifySelection();
+    await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.setProfileOrder("openai", "openai", ["openai:one", "openai:two"]);
+
+    firstSave.resolve({});
+    await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(2));
+    const orderCalls = request.mock.calls.filter(([method]) => method === "models.authOrderSet");
+    expect(orderCalls.at(-1)).toEqual([
+      "models.authOrderSet",
+      {
+        provider: "openai",
+        profileIds: ["openai:one", "openai:two"],
+        agentId: "writer",
+      },
+    ]);
+  });
+
+  it("keeps ordering available when a same-version gateway rejects the core method", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as typeof snapshot.hello;
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: {},
+      authStatus: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok" },
+              { profileId: "openai:two", type: "oauth", status: "ok" },
+            ],
+          },
+        ],
+      },
+      updatedAt: 1,
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    request.mockRejectedValueOnce(new Error("method not found"));
+    const secondGrip = page.querySelectorAll<HTMLButtonElement>(
+      ".model-providers__profile-grip",
+    )[1];
+
+    secondGrip?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    await vi.waitFor(() => expect(page.messages.openai?.text).toContain("method not found"));
+    await page.updateComplete;
+
+    expect(
+      page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-grip")[1]?.disabled,
+    ).toBe(false);
+  });
+
+  it("confirms an account logout before removing its saved credential", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as typeof snapshot.hello;
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: {},
+      authStatus: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "openai:one",
+                type: "oauth",
+                status: "ok",
+                email: "owner@example.com",
+                logoutSupported: true,
+              },
+            ],
+          },
+        ],
+      },
+      updatedAt: 1,
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    request.mockClear();
+
+    page.querySelector<HTMLButtonElement>('[aria-label="Log out owner@example.com"]')?.click();
+    await page.updateComplete;
+
+    expect(requestCount(request, "models.authLogout")).toBe(0);
+    expect(page.querySelector(".model-providers__confirm")?.textContent).toContain(
+      "owner@example.com",
+    );
+  });
+
   it("stops queued agent-scoped logouts when route data changes the selected agent", async () => {
     const { agentSelection, context, request, snapshot } = createHarness("main");
     const page = appendPage(context);
@@ -503,7 +844,11 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "synthetic-route-provider-key";
     page.defaultsDraft = defaultsDraft;
-    page.pendingLogoutProvider = "openai";
+    page.pendingLogout = {
+      cardId: "openai",
+      label: "OpenAI",
+      targets: [{ provider: "openai", profileIds: ["openai:first"] }],
+    };
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {
       openai: { provider: "openai", status: "ok", results: [] },
@@ -520,7 +865,7 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
     expect(page.selectedAgentId).toBe("writer");
     expect(page.busy).toEqual({});
-    expect(page.pendingLogoutProvider).toBeNull();
+    expect(page.pendingLogout).toBeNull();
     expect(page.messages).toEqual({});
     expect(page.probeResults).toEqual({});
     expect(page.keyEditorProvider).toBeNull();
