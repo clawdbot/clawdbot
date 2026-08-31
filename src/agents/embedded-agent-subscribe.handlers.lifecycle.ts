@@ -149,7 +149,7 @@ export function handleAgentEnd(
   if (isError && lastAssistant) {
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
-      providerOwner: ctx.params.providerOwner,
+      providerOwner: ctx.params.providerOwner ?? null,
     });
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
@@ -161,6 +161,7 @@ export function handleAgentEnd(
     });
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
+      providerOwner: ctx.params.providerOwner,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {

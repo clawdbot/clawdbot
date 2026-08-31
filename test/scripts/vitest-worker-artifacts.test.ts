@@ -661,14 +661,17 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
+            const render = providerOwner => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const prepare = () => resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin;
             const call = () => {
-              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              const activeProviderOwner = ${scope === "scoped" ? "prepare()" : "providerOwner"};
               if (${scope === "scoped"}) {
                 assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
               }
-              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+              assert.deepEqual(render(),unprepared,'ownerless presentation must ignore loaded provider policy');
+              return render(activeProviderOwner);
             };
-            const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
+            const payloads = withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
             const records = observed();
             if (${scope === "scoped"}) {
@@ -687,20 +690,22 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry:{plugins:[],diagnostics:[]}});
               setActivePluginRegistry(registry,'fixture-active');
               try {
-                assert.deepEqual(call(),payloads,'formatting must reuse the active loaded provider');
+                assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
                 withPluginRuntimeGenerationScope({config,metadataSnapshot,pluginRegistry:registry},()=>{
-                  assert.deepEqual(call(),payloads,'formatting must use the generation provider');
+                  assert.deepEqual(call(),payloads,'preparation must select the generation provider');
                   const callsBeforeEmptyGeneration = scopedCalls;
                   withPluginRuntimeGenerationScope({config,metadataSnapshot},()=>{
                     withPluginRuntimeRegistryScope(registry,()=>{
-                      assert.deepEqual(call(),unprepared,'an empty generation must fence request and active providers');
+                      const absentOwner = prepare();
+                      assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');
+                      assert.deepEqual(render(absentOwner),unprepared);
                       assert.equal(scopedCalls,callsBeforeEmptyGeneration);
                     });
                   });
                   assert.deepEqual(call(),payloads,'the outer generation must be restored');
                 });
               } finally {await clearActivePluginRegistry();}
-              assert.deepEqual(call(),unprepared,'loaded ownership must not escape its scope');
+              assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');
               assert.deepEqual(observed(),[],'loaded lookups must not import the fixture plugin');
             }
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));

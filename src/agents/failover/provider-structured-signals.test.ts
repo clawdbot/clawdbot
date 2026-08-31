@@ -67,7 +67,7 @@ describe("provider failover hook structured signals", () => {
   );
 
   it.each(["billing", "rate_limit", "context_overflow", "model_not_found", "format"] as const)(
-    "presents prepared %s policy once with the full signal and no rediscovery",
+    "presents prepared %s policy with the full signal and no rediscovery",
     (reason) => {
       const classifyFailoverReason = vi.fn(() => reason);
       const matchesContextOverflowError = vi.fn(() => reason === "context_overflow");
@@ -96,21 +96,53 @@ describe("provider failover hook structured signals", () => {
           },
         }),
       ).toBe(copies[reason]);
-      expect(matchesContextOverflowError).toHaveBeenCalledExactlyOnceWith({
+      expect(matchesContextOverflowError).toHaveBeenCalledWith({
         provider: "prepared-owner",
         status: 403,
         code: "PROVIDER_CODE",
         errorType: "PROVIDER_TYPE",
         errorMessage: message.errorMessage,
       });
-      expect(classifyFailoverReason).toHaveBeenCalledTimes(reason === "context_overflow" ? 0 : 1);
+      if (reason === "context_overflow") {
+        expect(classifyFailoverReason).not.toHaveBeenCalled();
+      } else {
+        expect(classifyFailoverReason).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "prepared-owner",
+            status: 403,
+            code: "PROVIDER_CODE",
+            errorType: "PROVIDER_TYPE",
+          }),
+        );
+      }
       expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     { errorCode: "RESOURCE_EXHAUSTED", copy: "⚠️ API rate limit reached. Please try again later." },
+    {
+      errorMessage: '400 {"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ API rate limit reached. Please try again later.",
+    },
     { errorType: "invalid_request_error", copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT },
+    {
+      errorMessage: undefined,
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ API rate limit reached. Please try again later.",
+    },
+    {
+      errorMessage: undefined,
+      errorType: "invalid_request_error",
+      copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+    },
+    {
+      errorMessage:
+        '400 {"error":{"type":"invalid_request_error","message":"max_tokens (100) exceeds maximum output tokens (50)"}}',
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
     {
       errorBody: '{"error":{"message":"Request size exceeds model context window"}}',
       copy: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
@@ -485,9 +517,10 @@ describe("provider failover hook structured signals", () => {
 
       expect(classifyAssistantFailoverReason(message)).toBe(reason);
       const signal = { provider: "anthropic", message: "", errorType };
-      const classification = classifyFailoverSignal(signal);
-      expect(classifyProviderRuntimeFailureKind(signal, classification)).toBe(runtimeKind);
-      expect(classifyProviderRuntimeFailureKind(signal)).toBe("unclassified");
+      expect(classifyProviderRuntimeFailureKind(signal)).toBe(runtimeKind);
+      expect(classifyProviderRuntimeFailureKind(signal, { providerPlugin: null })).toBe(
+        "unclassified",
+      );
     },
   );
 

@@ -11,6 +11,7 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
+  classifyFailoverReason,
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
@@ -73,17 +74,7 @@ export function formatAssistantErrorText(
   if (msg.stopReason !== "error" && !raw) {
     return undefined;
   }
-  if (!raw) {
-    return "LLM request failed with an unknown error.";
-  }
   const formatCopy = renderFormatErrorCopy(raw);
-  const formatStatus = facts ? facts.status : extractErrorHttpStatus(raw)?.code;
-  if (
-    (formatStatus === 400 || formatStatus === 422) &&
-    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
-  ) {
-    return formatCopy;
-  }
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -175,6 +166,25 @@ export function formatAssistantErrorText(
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
+  const failoverReason = classification?.kind === "reason" ? classification.reason : undefined;
+  if (failoverReason === "billing") {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  }
+  const transientCopy =
+    failoverReason === "rate_limit" || failoverReason === "overloaded"
+      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      : undefined;
+  if (transientCopy) {
+    return transientCopy;
+  }
+
+  const formatStatus = extractErrorHttpStatus(raw)?.code;
+  if (
+    (formatStatus === 400 || formatStatus === 422) &&
+    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
+  ) {
+    return formatCopy;
+  }
   if (classification?.kind === "context_overflow") {
     return (
       "Context overflow: prompt too large for the model. " +
@@ -228,18 +238,6 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
-  const failoverReason = classification?.kind === "reason" ? classification.reason : undefined;
-  if (failoverReason === "billing") {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-  const transientCopy =
-    failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
-      : undefined;
-  if (transientCopy) {
-    return transientCopy;
-  }
-
   if (isGenericProviderInternalError(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -259,8 +257,13 @@ export function formatAssistantErrorText(
     return SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   }
 
-  if (providerRuntimeFailureKind === "schema") {
+  // Full assistant metadata can establish format rejection beyond the raw-text diagnostic.
+  if (providerRuntimeFailureKind === "schema" || failoverReason === "format") {
     return formatCopy;
+  }
+
+  if (!raw) {
+    return "LLM request failed with an unknown error.";
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
