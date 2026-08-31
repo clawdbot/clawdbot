@@ -303,7 +303,8 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress,
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
-            ? acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal)
+            ? // Probe homes outlive only the attempt client, not independent live catalog clients.
+              acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal, "static")
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains

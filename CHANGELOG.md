@@ -72,6 +72,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **AI setup cleanup:** prepare isolated inference probes from configured model facts instead of starting a separate live catalog client, so temporary Codex homes do not retain a background plugin clone after setup completes.
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Cloud session lifecycle:** prevent archive, delete, and restart recovery from deadlocking behind an earlier worker move, keep work admission closed through cleanup, and preserve the same successor for concurrent recovery requests.
