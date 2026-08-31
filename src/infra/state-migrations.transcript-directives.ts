@@ -14,6 +14,7 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import { resolveDatabasePath as resolveOpenClawStateDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -240,6 +241,22 @@ function transcriptSessionsNeedMigration(
   }
 }
 
+function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
+  const pathname = resolveOpenClawStateDatabasePath({ env });
+  const database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  try {
+    const hasLeaseTable = database
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("agent_database_leases");
+    if (!hasLeaseTable) {
+      return false;
+    }
+    return Boolean(database.prepare("SELECT 1 FROM agent_database_leases LIMIT 1").get());
+  } finally {
+    database.close();
+  }
+}
+
 async function yieldToMaintenanceHeartbeat(): Promise<void> {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -355,6 +372,7 @@ async function migrateAgentDatabase(params: {
 
 function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   agentId: string;
+  env: NodeJS.ProcessEnv;
   pathname: string;
 }): boolean {
   const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
@@ -382,9 +400,12 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get("session_transcript_archives");
     if (!hasArchiveTable) {
-      return false;
+      return !hasActiveAgentDatabaseLease(params.env);
     }
-    return Boolean(database.prepare("SELECT 1 FROM session_transcript_archives LIMIT 1").get());
+    if (database.prepare("SELECT 1 FROM session_transcript_archives LIMIT 1").get()) {
+      return true;
+    }
+    return !hasActiveAgentDatabaseLease(params.env);
   } catch {
     // The fenced migration owns validation and user-facing diagnostics.
     return true;
@@ -413,6 +434,7 @@ export async function migrateHistoricalTranscriptDirectives(
     }).filter((target) =>
       agentDatabaseNeedsTranscriptDirectiveMigration({
         agentId: target.agentId,
+        env,
         pathname: target.path,
       }),
     );
