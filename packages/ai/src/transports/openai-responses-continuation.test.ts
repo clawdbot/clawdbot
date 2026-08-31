@@ -284,12 +284,19 @@ describe("OpenAI Responses continuation", () => {
     );
   });
 
-  it("does not treat an unsafe-integer argument as equal to a same-digits string (type collision)", () => {
-    // quoteUnsafeIntegerLiterals converts an unsafe integer literal into a
-    // quoted string before JSON.parse; without a distinguishing tag that
-    // output is byte-identical to a genuine JSON string holding the same
-    // digits, so a real number-to-string argument change would otherwise
-    // compare equal and wrongly reuse the stale continuation state.
+  it("treats a cached number-typed unsafe integer as equal to its own replayed string-typed round-trip", () => {
+    // Real shape, confirmed live against a real tool-calling round: the
+    // cached side is the raw provider text (a bare, unsafe-integer number),
+    // but AssistantMessage.arguments already stores every unsafe integer as
+    // a string (parseJsonObjectPreservingUnsafeIntegers,
+    // transport-stream-shared.ts, precision-preserving), so the *unmodified*
+    // replay of this exact same historical tool call always re-serializes it
+    // back as a same-digits JSON string. This is the client's own necessary
+    // representation of the same value, not a real argument change -- an
+    // earlier revision of this fix (a distinguishing tag on the cached side
+    // only) treated this as a genuine change, permanently breaking
+    // continuation for the very next round of any real tool call carrying an
+    // out-of-range integer.
     const toolCall = {
       type: "function_call",
       id: "fc_1",
@@ -316,7 +323,38 @@ describe("OpenAI Responses continuation", () => {
     };
 
     expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
-      "history_changed",
+      "continued",
+    );
+  });
+
+  it("treats a whitespace-only re-serialization of the same unsafe integer as equal", () => {
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740993}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "continued",
     );
   });
 

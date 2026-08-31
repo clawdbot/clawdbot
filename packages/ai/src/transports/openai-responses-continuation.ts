@@ -75,20 +75,32 @@ function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesCo
 // integer literal past Number.MAX_SAFE_INTEGER, so two genuinely DIFFERENT
 // unsafe integers could otherwise parse to the same JS number and wrongly
 // compare equal, sending a stale delta instead of the real changed argument.
-// The tag distinguishes a stringified unsafe integer from a genuine JSON
-// string holding the same digits -- without it `{"n":9007199254740993}` and
-// `{"n":"9007199254740993"}` both parse to the identical JS string and wrongly
-// compare equal, hiding a real number-to-string argument change.
-const UNSAFE_INTEGER_COMPARISON_TAG = "\u0000openclaw-unsafe-integer\u0000";
-
+//
+// No distinguishing tag: an earlier revision quoted unsafe integers with a
+// tag to also catch a stringified unsafe integer colliding with a genuine
+// same-digits JSON string -- but on the *cached* side this compares against,
+// `arguments` is the raw provider text (a bare number), while the *replayed*
+// side is rebuilt from AssistantMessage.arguments, which
+// parseJsonObjectPreservingUnsafeIntegers (transport-stream-shared.ts)
+// already stores as a string for every unsafe integer, precision-preserving.
+// So a real, unmodified tool-calling round *always* replays an unsafe
+// integer as a same-digits string against a cached bare number -- tagging
+// only the cached side made every real large-integer tool call permanently
+// ineligible for continuation on its very next round (confirmed live: an
+// actual tool call with a real out-of-range integer, replayed unmodified,
+// still landed as history_changed). Plain (untagged) quoting can't tell a
+// converted integer apart from a genuine same-digit string either, but that
+// is not the risk here: both sides of this comparison replay the *same*
+// historical tool call, and the client-side "unsafe integers become
+// strings" convention already applies uniformly to how that call is cached
+// and replayed -- there is no independent second call in this comparison
+// for a same-digit string to collide with.
 function normalizeFunctionCallArguments(value: unknown): unknown {
   if (typeof value !== "string") {
     return value;
   }
   try {
-    return JSON.stringify(
-      JSON.parse(quoteUnsafeIntegerLiterals(value, UNSAFE_INTEGER_COMPARISON_TAG)),
-    );
+    return JSON.stringify(JSON.parse(quoteUnsafeIntegerLiterals(value)));
   } catch {
     return value;
   }
