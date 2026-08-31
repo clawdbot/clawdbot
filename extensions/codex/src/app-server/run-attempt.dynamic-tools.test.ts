@@ -1,4 +1,3 @@
-// Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -816,6 +815,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.messageProvider = "telegram";
     params.currentChannelId = "telegram:-100123";
     params.sandboxSessionKey = "agent:main:policy";
+    params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     dynamicToolBuildState.openClawCodingToolsFactory = () => [createRuntimeDynamicTool("echo")];
     const harness = createStartedThreadHarness();
