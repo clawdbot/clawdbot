@@ -572,13 +572,40 @@ export function resolveRunModelFallbacksOverride(params: {
 }
 
 export type ModelFallbackAvailability =
-  | { kind: "active"; models: string[] }
-  | { kind: "none_configured" }
+  // `source` records whether an explicit fallbacks override owns the ladder or the
+  // models were inherited from defaults; the run-override projection depends on it.
+  | { kind: "active"; models: string[]; source: "explicit" | "inherited" }
+  | { kind: "none_configured"; source: "explicit" | "inherited" }
   | { kind: "disabled_by_model_override" }
   | { kind: "disabled_by_model_selection_lock" };
 
-function modelFallbackAvailabilityFromModels(models: string[]): ModelFallbackAvailability {
-  return models.length > 0 ? { kind: "active", models } : { kind: "none_configured" };
+function modelFallbackAvailabilityFromModels(
+  models: string[],
+  source: "explicit" | "inherited",
+): ModelFallbackAvailability {
+  return models.length > 0
+    ? { kind: "active", models, source }
+    : { kind: "none_configured", source };
+}
+
+/**
+ * Projects availability onto the candidate-resolver override contract. Inherited
+ * availability must project to `undefined`: the resolver then owns the ladder — it
+ * re-derives the same configured fallbacks and appends the configured primary as the
+ * final candidate (see model-fallback-candidates.ts). Collapsing inherited state into
+ * an explicit list silently drops that last hop.
+ */
+export function modelFallbackOverrideFromAvailability(
+  availability: ModelFallbackAvailability,
+): string[] | undefined {
+  switch (availability.kind) {
+    case "active":
+      return availability.source === "inherited" ? undefined : availability.models;
+    case "none_configured":
+      return availability.source === "inherited" ? undefined : [];
+    default:
+      return [];
+  }
 }
 
 /**
@@ -599,12 +626,16 @@ export function resolveModelFallbackAvailability(params: {
     return { kind: "disabled_by_model_selection_lock" };
   }
   if (params.modelFallbacksOverride !== undefined) {
-    return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride);
+    return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride, "explicit");
   }
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
+    if (agentFallbacksOverride !== undefined) {
+      return modelFallbackAvailabilityFromModels(agentFallbacksOverride, "explicit");
+    }
     return modelFallbackAvailabilityFromModels(
-      agentFallbacksOverride ?? resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+      resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+      "inherited",
     );
   }
   const canUseConfiguredFallbacks =
@@ -617,10 +648,15 @@ export function resolveModelFallbackAvailability(params: {
     ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
     : undefined;
   if (subagentFallbacksOverride !== undefined) {
-    return modelFallbackAvailabilityFromModels(subagentFallbacksOverride);
+    return modelFallbackAvailabilityFromModels(subagentFallbacksOverride, "explicit");
   }
+  // Auto-provenance routes have always consumed a resolved list (no configured-primary
+  // append), so inheriting from defaults still projects as an explicit ladder here.
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  return modelFallbackAvailabilityFromModels(agentFallbacksOverride ?? defaultFallbacks);
+  return modelFallbackAvailabilityFromModels(
+    agentFallbacksOverride ?? defaultFallbacks,
+    "explicit",
+  );
 }
 
 export function resolveEffectiveModelFallbacks(params: {
@@ -631,8 +667,7 @@ export function resolveEffectiveModelFallbacks(params: {
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
 }): string[] | undefined {
-  const availability = resolveModelFallbackAvailability(params);
-  return availability.kind === "active" ? availability.models : [];
+  return modelFallbackOverrideFromAvailability(resolveModelFallbackAvailability(params));
 }
 
 export function resolveAgentIdByWorkspacePath(

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
+import type { ModelFallbackAvailability } from "./agent-scope.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -17,6 +18,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
+  modelFallbackOverrideFromAvailability,
   resolveEffectiveModelFallbacks,
   resolveModelFallbackAvailability,
   resolveAgentModelFallbacksOverride,
@@ -191,7 +193,11 @@ describe("resolveAgentConfig", () => {
           hasSessionModelOverride: true,
           modelOverrideSource: "auto" as const,
         },
-        expected: { kind: "active" as const, models: ["anthropic/claude-sonnet-4-6"] },
+        expected: {
+          kind: "active" as const,
+          models: ["anthropic/claude-sonnet-4-6"],
+          source: "explicit" as const,
+        },
       },
       {
         name: "recovers auto fallback provenance without a source marker",
@@ -199,7 +205,11 @@ describe("resolveAgentConfig", () => {
           hasSessionModelOverride: true,
           hasAutoFallbackProvenance: true,
         },
-        expected: { kind: "active" as const, models: ["anthropic/claude-sonnet-4-6"] },
+        expected: {
+          kind: "active" as const,
+          models: ["anthropic/claude-sonnet-4-6"],
+          source: "explicit" as const,
+        },
       },
       {
         name: "disables configured fallbacks for a user model override",
@@ -212,7 +222,7 @@ describe("resolveAgentConfig", () => {
       {
         name: "reports no configured fallbacks",
         params: { hasSessionModelOverride: false },
-        expected: { kind: "none_configured" as const },
+        expected: { kind: "none_configured" as const, source: "inherited" as const },
       },
     ])("$name", ({ params, expected }) => {
       const cfg =
@@ -238,6 +248,48 @@ describe("resolveAgentConfig", () => {
 
       expect(availability).toEqual({ kind: "disabled_by_model_override" });
       expect(availability.kind === "active" ? availability.models : []).toEqual([]);
+    });
+  });
+
+  describe("modelFallbackOverrideFromAvailability", () => {
+    const projectionRows: Array<{
+      name: string;
+      availability: ModelFallbackAvailability;
+      expected: string[] | undefined;
+    }> = [
+      {
+        name: "keeps an explicit ladder as the run override",
+        availability: { kind: "active", models: ["openai/gpt-5.4"], source: "explicit" },
+        expected: ["openai/gpt-5.4"],
+      },
+      {
+        name: "leaves inherited fallbacks to the candidate resolver",
+        availability: { kind: "active", models: ["openai/gpt-5.4"], source: "inherited" },
+        expected: undefined,
+      },
+      {
+        name: "pins an explicit empty ladder",
+        availability: { kind: "none_configured", source: "explicit" },
+        expected: [],
+      },
+      {
+        name: "leaves inherited empty fallbacks to the candidate resolver",
+        availability: { kind: "none_configured", source: "inherited" },
+        expected: undefined,
+      },
+      {
+        name: "disables fallbacks for a user model override",
+        availability: { kind: "disabled_by_model_override" },
+        expected: [],
+      },
+      {
+        name: "disables fallbacks under a model selection lock",
+        availability: { kind: "disabled_by_model_selection_lock" },
+        expected: [],
+      },
+    ];
+    it.each(projectionRows)("$name", ({ availability, expected }) => {
+      expect(modelFallbackOverrideFromAvailability(availability)).toEqual(expected);
     });
   });
 

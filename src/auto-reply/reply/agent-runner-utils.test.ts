@@ -13,7 +13,12 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async () => ({
+  modelFallbackOverrideFromAvailability: (
+    await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+      "../../agents/agent-scope.js",
+    )
+  ).modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability: (...args: unknown[]) =>
     hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));

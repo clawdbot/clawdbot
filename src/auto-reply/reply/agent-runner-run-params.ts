@@ -1,6 +1,9 @@
 /** Builds embedded-agent run parameters from queued follow-up run state. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelFallbackAvailability } from "../../agents/agent-scope.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability,
+} from "../../agents/agent-scope.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
@@ -44,8 +47,7 @@ export function resolveModelFallbackOptions(
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
-    fallbacksOverride:
-      modelFallbackAvailability.kind === "active" ? modelFallbackAvailability.models : [],
+    fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
   };
 }
 
@@ -126,8 +128,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: params.run.modelSelectionLocked,
   });
-  const modelFallbacksOverride =
-    modelFallbackAvailability.kind === "active" ? modelFallbackAvailability.models : [];
+  const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,

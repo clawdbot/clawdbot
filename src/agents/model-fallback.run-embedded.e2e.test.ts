@@ -450,7 +450,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         fallbacksOverride: ["groq/mock-2"],
         // Prepared by the session model selection path for
         // hasSessionModelOverride=true and modelOverrideSource="auto".
-        modelFallbackAvailability: { kind: "active", models: ["groq/mock-2"] },
+        modelFallbackAvailability: { kind: "active", models: ["groq/mock-2"], source: "explicit" },
       });
 
       expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
