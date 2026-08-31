@@ -380,6 +380,41 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
   });
 
+  it("uses the physical client owner recorded by the thread binding", async () => {
+    const owner = createFakeCodexClient();
+    const competingClient = createFakeCodexClient({ retainedThreadId: null });
+    competingClient.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "thread thread-1 already has an active writer" },
+        "thread/resume",
+      ),
+    );
+    const factory = vi.fn<CodexAppServerClientFactory>(async () => competingClient.client);
+    setCodexAppServerClientFactoryForTest(factory);
+    const sessionFile = await writeTestBinding({ clientId: "bound-client" });
+    const releaseOwner = vi.fn();
+    const sharedClientRuntime = await import("./shared-client.js");
+    const retainOwner = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: owner.client, release: releaseOwner });
+
+    try {
+      await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+        ok: true,
+        compacted: true,
+      });
+      expect(retainOwner).toHaveBeenCalledWith("bound-client");
+      expect(factory).not.toHaveBeenCalled();
+      expect(owner.request).toHaveBeenCalledWith("thread/compact/start", {
+        threadId: "thread-1",
+      });
+      expect(competingClient.request).not.toHaveBeenCalled();
+      expect(releaseOwner).toHaveBeenCalledOnce();
+    } finally {
+      retainOwner.mockRestore();
+    }
+  });
+
   it("uses the exact prepared Platform key for native compaction", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
