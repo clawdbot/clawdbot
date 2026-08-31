@@ -1991,14 +1991,11 @@ src/agents/sessions/session-manager-persistence.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
-src/agents/sessions/tools/bash.ts	3
+src/agents/sessions/tools/bash.ts	2
 src/agents/sessions/tools/edit.ts	14
-src/agents/sessions/tools/find.ts	2
-src/agents/sessions/tools/grep.ts	4
-src/agents/sessions/tools/ls.ts	2
-src/agents/sessions/tools/read.ts	2
+src/agents/sessions/tools/grep.ts	2
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
-src/agents/sessions/tools/write.ts	4
+src/agents/sessions/tools/write.ts	3
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
 src/agents/subagents/announce/subagent-announce-completion-delivery.ts	2
