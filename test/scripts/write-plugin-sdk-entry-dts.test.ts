@@ -5,9 +5,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  listCacheFiles,
+  portableRelativePath,
+  resolveBuildStepCacheState,
+} from "../../scripts/lib/build-artifact-cache.mts";
+import {
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
+import {
+  TSDOWN_DECLARATION_EXTENSIONS,
+  TSDOWN_UNIFIED_CACHE_INPUTS,
+} from "../../scripts/tsdown-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -245,6 +254,87 @@ function expectStagingClean(root: string) {
   expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(false);
 }
 
+function sdkCacheIdentity(root: string, entries: readonly string[]) {
+  // Temporary native relocation diagnostic; remove once the identity change is known.
+  // This step mirrors the standalone writer; signature policy stays in the cache owner.
+  const sourceInputs = [
+    ...TSDOWN_UNIFIED_CACHE_INPUTS,
+    "scripts/write-plugin-sdk-entry-dts.ts",
+    "scripts/lib/declaration-stage.mts",
+  ];
+  const files = listCacheFiles(root, sourceInputs, fs);
+  const inputs = new Map<string, { digest: string; occurrences: number; symlink: boolean }>();
+  for (const file of files) {
+    const relative = portableRelativePath(root, file);
+    inputs.set(relative, {
+      digest: createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+      occurrences: (inputs.get(relative)?.occurrences ?? 0) + 1,
+      symlink: fs.lstatSync(file).isSymbolicLink(),
+    });
+  }
+  const state = resolveBuildStepCacheState(
+    {
+      label: "tsdown-plugin-sdk",
+      cache: {
+        env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        inputs: sourceInputs,
+        outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }],
+        requiredOutputs: entries.map((entry) => `dist/${entry}.d.ts`),
+        restore: "always",
+      },
+    },
+    {
+      rootDir: root,
+      // An absent private stage prevents live dist from standing in for SDK output.
+      artifactRoot: path.join(root, ".artifacts/sdk-relocation-diagnostic"),
+      env: { ...process.env, OPENCLAW_BUILD_PRIVATE_QA: "0" },
+    },
+  );
+  const stamp = state.record;
+  const cached =
+    state.outputRoot && fs.existsSync(state.outputRoot) ? treeHashes(state.outputRoot) : {};
+  return {
+    inputs,
+    facts: {
+      root,
+      realpath: fs.realpathSync(root),
+      node: process.versions.node,
+      inputCount: files.length,
+      uniqueInputCount: inputs.size,
+      currentIdentity: state.signature ?? null,
+      cacheState: state.reason,
+      stampIdentity: stamp?.signature ?? null,
+      stampedOutputCount: Object.keys(stamp?.outputs ?? {}).length,
+      cachedOutputCount: Object.keys(cached).length,
+      stampedOutputsComplete: stamp
+        ? Object.entries(stamp.outputs).every(([file, digest]) => cached[file] === digest)
+        : false,
+      cacheRootOverridePresent: Boolean(process.env.BUILD_ALL_CACHE_ROOT?.trim()),
+    },
+  };
+}
+
+function changedSdkInputs(
+  before: ReturnType<typeof sdkCacheIdentity>,
+  after: ReturnType<typeof sdkCacheIdentity>,
+) {
+  const changes = [...new Set([...before.inputs.keys(), ...after.inputs.keys()])]
+    .toSorted()
+    .flatMap((file) => {
+      const previous = before.inputs.get(file) ?? null;
+      const current = after.inputs.get(file) ?? null;
+      return JSON.stringify(previous) === JSON.stringify(current)
+        ? []
+        : [{ file, before: previous, after: current }];
+    });
+  return {
+    added: changes.filter((change) => !change.before).length,
+    missing: changes.filter((change) => !change.after).length,
+    changed: changes.filter((change) => change.before && change.after).length,
+    first16: changes.slice(0, 16),
+  };
+}
+
 describe("write-plugin-sdk-entry-dts", () => {
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
@@ -268,6 +358,7 @@ describe("write-plugin-sdk-entry-dts", () => {
       write(relative, content);
     }
 
+    const beforeInitial = sdkCacheIdentity(root, production);
     const initial = runWriter(root);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
     expect(
@@ -280,12 +371,23 @@ describe("write-plugin-sdk-entry-dts", () => {
       expect(fs.existsSync(path.join(root, `dist/${entry}.d.ts`)), entry).toBe(false);
     }
 
+    const afterInitial = sdkCacheIdentity(root, production);
     const relocated = path.join(createTempDir("openclaw-sdk-relocated-"), "Moved");
     fs.cpSync(root, relocated, { recursive: true });
     fs.rmSync(path.join(relocated, "dist"), { recursive: true });
+    const afterRelocation = sdkCacheIdentity(relocated, production);
     const restored = runWriter(relocated);
     expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
+    expect(
+      restored.stdout + restored.stderr,
+      JSON.stringify({
+        beforeInitial: beforeInitial.facts,
+        afterInitial: afterInitial.facts,
+        afterRelocation: afterRelocation.facts,
+        compilerInputChanges: changedSdkInputs(beforeInitial, afterInitial),
+        relocationInputChanges: changedSdkInputs(afterInitial, afterRelocation),
+      }),
+    ).not.toContain("[tsdown-build] invocation");
     const restoredFiles = treeHashes(path.join(relocated, "dist"));
     expect(restoredFiles).toEqual(
       Object.fromEntries(
