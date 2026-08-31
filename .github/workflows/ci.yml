@@ -619,10 +619,10 @@ jobs:
               harness = os.path.join(workspace, ".ci-harness")
               os.makedirs(harness, exist_ok=True)
               if sha == os.environ["WORKFLOW_SHA"]:
-                  # Checkout just populated this index from the workflow revision. Copy its
-                  # action files without updating the index or trusting later workspace edits.
+                  # Export the workflow revision from the freshly populated index, replacing
+                  # retained platform files without updating the index or trusting later edits.
                   paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
-                  run_git(workspace, "checkout-index", f"--prefix={harness}/", "--", *paths)
+                  run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
                   run_git(harness, "init", harness)
                   run_git(harness, "remote", "add", "origin", remote)
