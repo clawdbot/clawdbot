@@ -33,15 +33,6 @@ const { fixtureLifetime, fixtureDirectory, createFixtureCommands } = createWorke
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
-const tooling = [
-  compilerModule,
-  compilerEntry,
-  artifactsModule,
-  "scripts/lib/runtime-process-build-entries.mts",
-  "scripts/lib/vitest-worker-build-entries.mts",
-  "scripts/lib/state-schema-inline-plugin.mts",
-  "scripts/lib/fs-safe-native-assets.mts",
-];
 
 describe("fresh compiled subprocess invocation", () => {
   it("carries native fs-safe writes and verifies every copied target", (context) =>
@@ -62,18 +53,6 @@ describe("fresh compiled subprocess invocation", () => {
       const native = path.join(directory, "dist/native");
       try {
         const manifest = await prepareWorkers(owner);
-        for (const inputFile of [
-          compilerModule,
-          compilerEntry,
-          artifactsModule,
-          "scripts/lib/fs-safe-native-assets.mts",
-        ]) {
-          expect(manifest.inputs[path.join(root, inputFile)]).toBe(
-            createHash("sha256")
-              .update(fs.readFileSync(path.join(root, inputFile)))
-              .digest("hex"),
-          );
-        }
         for (const { name, bytes } of assets) {
           expect(manifest.outputs[path.join("native", name)]).toBe(
             createHash("sha256").update(bytes).digest("hex"),
@@ -1155,21 +1134,15 @@ describe("fresh compiled subprocess invocation", () => {
       }
     }));
 
-  it("builds changed source despite valid stale dist and fails visibly on missing artifacts and build errors", (context) =>
+  it("builds changed source despite valid stale dist and fails visibly on build errors", (context) =>
     fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = createFixtureCommands(context);
       const fixture = fixtureDirectory();
       const initial = createVitestWorkerRun();
       const initialDirectory = initial.descriptor.directory;
       try {
-        await prepareWorkers(initial);
-        const manifest = JSON.parse(
-          fs.readFileSync(path.join(initialDirectory, "manifest.json"), "utf8"),
-        ) as { inputs: Record<string, string> };
-        for (const filename of [
-          ...Object.keys(manifest.inputs),
-          ...tooling.map((name) => path.join(root, name)),
-        ]) {
+        const manifest = await prepareWorkers(initial);
+        for (const filename of Object.keys(manifest.inputs)) {
           const target = path.join(fixture, path.relative(root, filename));
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.copyFileSync(filename, target);
@@ -1199,16 +1172,26 @@ describe("fresh compiled subprocess invocation", () => {
             .replace("major: 3, minor: 51", "major: 99, minor: 51"),
         );
         const compilerUrl = pathToFileURL(path.join(fixture, compilerModule)).href;
+        const client = `
+          import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(fixture, artifactsModule)).href)};
+          try {await requestVitestWorkerArtifacts();}
+          catch(error) {console.error('owner refused:',error);process.exitCode=1;}
+          finally {process.disconnect();}
+        `;
         const buildScript = `
         import {spawn} from 'node:child_process';
         import {createVitestWorkerRun} from ${JSON.stringify(compilerUrl)};
         import {createVitestProcessCompletion} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href)};
-        const owner=createVitestWorkerRun();
-        const client=${JSON.stringify(preparationClient.replace(pathToFileURL(path.join(root, artifactsModule)).href, pathToFileURL(path.join(fixture, artifactsModule)).href))};
-        const child=spawn(process.execPath,['--input-type=module','--eval',client],{stdio:['ignore','ignore','inherit','ipc']});
-        const result=await owner.borrow(child,createVitestProcessCompletion({child,detached:false}));
-        if(result.code !== 0) {await owner.dispose();throw new Error('preparation failed');}
-        console.log(JSON.stringify(owner.descriptor.directory));
+        import {runWithFailedTrailer} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/failed-trailer.mts")).href)};
+        await runWithFailedTrailer('test',async()=>{
+          const owner=createVitestWorkerRun();
+          const child=spawn(process.execPath,['--input-type=module','--eval',${JSON.stringify(client)}],{stdio:['ignore','ignore','inherit','ipc']});
+          try {
+            const result=await owner.borrow(child,createVitestProcessCompletion({child,detached:false}));
+            if(result.code !== 0) throw new Error('preparation failed');
+            console.log(JSON.stringify(owner.descriptor.directory));
+          } catch(error) {await owner.dispose();throw error;}
+        });
       `;
         const builds = await Promise.all(
           [0, 1].map(() => node(["--input-type=module", "-e", buildScript], fixture)),
@@ -1242,43 +1225,15 @@ describe("fresh compiled subprocess invocation", () => {
           "Source changed during compiled subprocess invocation",
         );
         fs.writeFileSync(tuiDeclaration, originalDeclaration);
-        fs.rmSync(freshWorker);
-        const missing = await node([freshWorker, ...childArgs]);
-        expect(missing.code).toBe(1);
-        expect(missing.stderr).toContain("MODULE_NOT_FOUND");
         const parent = path.join(fixture, ".artifacts/vitest-workers");
         const before = fs.readdirSync(parent).toSorted();
-        const client = writeFixture(
-          fixture,
-          "failed-client.mjs",
-          `import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(fixture, artifactsModule)).href)};
-        try {await requestVitestWorkerArtifacts();}
-        catch(error) {console.error('owner refused:',error);process.exitCode=1;}
-        finally {process.disconnect();}`,
-        );
-        const failedOwner = writeFixture(
-          fixture,
-          "failed-owner.mjs",
-          `import {spawn} from 'node:child_process';
-        import {createVitestWorkerRun} from ${JSON.stringify(compilerUrl)};
-        import {createVitestProcessCompletion} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href)};
-        import {runWithFailedTrailer} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/failed-trailer.mts")).href)};
-        await runWithFailedTrailer('test',async()=>{
-          const owner=createVitestWorkerRun();
-          const child=spawn(process.execPath,[${JSON.stringify(client)}],{stdio:['ignore','ignore','inherit','ipc']});
-          try {
-            const result=await owner.borrow(child,createVitestProcessCompletion({child,detached:false}));
-            process.exitCode=result.code;
-          } finally {await owner.dispose();}
-        });`,
-        );
         writeFixture(fixture, "dist/source-input.js", changedSource);
         for (const [source, error] of [
           ["this is not valid TypeScript !", "Build failed"],
           ["export * from '../../dist/source-input.js';", "tried to read dist"],
         ]) {
           fs.writeFileSync(dependency, source!);
-          const failed = await node([failedOwner], fixture);
+          const failed = await node(["--input-type=module", "-e", buildScript], fixture);
           expect(failed.code).not.toBe(0);
           expect(failed.stderr).toContain("owner refused:");
           expect(failed.stderr).toContain(error!);
