@@ -387,17 +387,21 @@ export async function updateGitCheckout(params: {
     if (branchFetchFailure) {
       return branchFetchFailure;
     }
-    // Tags force-fetched per configured remote (not just `origin`) so non-origin
-    // and multi-remote release checkouts still resolve a recreated upstream tag.
-    // The `+` refspec prefix scopes force to the tag-only refspec per remote,
-    // unlike a global `--all --force` that hits every configured refspec. Mirrors
-    // resolveExplicitTarget's per-remote `+refs/tags/*:refs/tags/*` fetch.
+    // Release tags come from one authoritative remote: auxiliary remotes share
+    // the local refs/tags namespace, so force-fetching tags from every configured
+    // remote would let any of them replace the auto-selected release revision.
+    // `origin` is the clone's canonical source; fork-style checkouts without one
+    // fall back to the first declared remote. resolveExplicitTarget keeps its
+    // per-remote walk because an operator-named ref is its own authorization.
+    // The `+` refspec prefix scopes force to the tag-only refspec, unlike a
+    // global `--all --force` that hits every configured refspec.
     const remoteStep = await runStep(step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot));
     const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
-    for (const remote of remotes) {
+    const tagRemote = remotes.includes("origin") ? "origin" : remotes[0];
+    if (tagRemote) {
       const tagFetchFailure = await runRequiredStep(
-        `git fetch tags ${remote}`,
-        ["git", "-C", gitRoot, "fetch", remote, "+refs/tags/*:refs/tags/*"],
+        `git fetch tags ${tagRemote}`,
+        ["git", "-C", gitRoot, "fetch", tagRemote, "+refs/tags/*:refs/tags/*"],
         "fetch-failed",
       );
       if (tagFetchFailure) {

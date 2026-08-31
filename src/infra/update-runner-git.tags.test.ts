@@ -186,4 +186,75 @@ describe("release-channel tag fetch tolerates upstream-recreated tags", () => {
     expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(forwardMain);
     expect(git(operator, ["rev-parse", "origin/main"]).stdout.trim()).toBe(forwardMain);
   });
+
+  // Two remotes: origin carries the release tag; an auxiliary remote holds a
+  // same-named tag on unrelated content. Both share the local refs/tags
+  // namespace, so only the authoritative remote may feed the auto-selected tag.
+  function setupAuxiliaryRemoteTagCollision() {
+    const root = tempDirs.make("openclaw-update-tag-authority-");
+    const origin = path.join(root, "origin.git");
+    const aux = path.join(root, "aux.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", origin], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["init", "--bare", "-q", aux], { encoding: "utf8" }).status).toBe(0);
+
+    const work = path.join(root, "work");
+    expect(spawnSync("git", ["clone", "-q", origin, work], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(work, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(work, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(work, "a.txt"), "A");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(work, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const originTag = git(work, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    const auxWork = path.join(root, "aux-work");
+    expect(spawnSync("git", ["clone", "-q", aux, auxWork], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(auxWork, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(auxWork, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(auxWork, "aux.txt"), "aux");
+    expect(gitStatus(auxWork, ["add", "-A"])).toBe(0);
+    expect(gitStatus(auxWork, ["commit", "-q", "-m", "aux"])).toBe(0);
+    expect(gitStatus(auxWork, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", auxWork, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const auxTag = git(auxWork, ["rev-parse", "v1^{}"]).stdout.trim();
+    expect(originTag).not.toBe(auxTag);
+
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", origin, operator], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+    expect(gitStatus(operator, ["remote", "add", "zfork", aux])).toBe(0);
+    // Branches only: a `--tags` fetch from both remotes would already hit the
+    // clobber conflict this fixture is built to exercise one fetch at a time.
+    expect(git(operator, ["fetch", "-q", "--all", "--prune", "--no-tags"]).status).toBe(0);
+    expect(git(operator, ["fetch", "-q", "origin", "+refs/tags/*:refs/tags/*"]).status).toBe(0);
+    return { operator, originTag, auxTag };
+  }
+
+  it("release tag selection stays bound to the authoritative remote", () => {
+    const { operator, originTag, auxTag } = setupAuxiliaryRemoteTagCollision();
+
+    // Release fetch: branches unforced, tags force-fetched from the
+    // authoritative remote only (`origin` when present).
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status, `${branchFetch.stdout}\n${branchFetch.stderr}`).toBe(0);
+    const tagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(originTag);
+
+    // Pre-fix contrast: force-fetching the auxiliary remote's tags would have
+    // replaced the authoritative release tag in the shared local namespace.
+    const auxTagFetch = git(operator, ["fetch", "zfork", "+refs/tags/*:refs/tags/*"]);
+    expect(auxTagFetch.status, `${auxTagFetch.stdout}\n${auxTagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(auxTag);
+  });
 });
