@@ -270,6 +270,16 @@ export async function defaultPersistDigest(params: {
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
+  // First check if the session entry exists
+  const existingEntry = loadSessionEntryReadOnly({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (!existingEntry) {
+    // Entry is gone - return null to signal unpersistable session
+    return null;
+  }
+
   let missingEntry = false;
   const result = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, agentId: params.agentId },
