@@ -14,6 +14,7 @@ import {
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -954,6 +955,12 @@ export async function handleSlackAction(
             path: downloaded.path,
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             media: { outbound: false },
+          },
+          imageSanitization: {
+            maxDimensionPx: resolveOptionalIntegerOption(
+              cfg.agents?.defaults?.imageMaxDimensionPx,
+              { min: 1 },
+            ),
           },
         });
       }

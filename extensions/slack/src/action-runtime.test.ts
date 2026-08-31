@@ -1,3 +1,15 @@
+const { imageResultFromFile } = vi.hoisted(() => ({
+  imageResultFromFile: vi.fn(async (_params: Record<string, unknown>) => ({
+    content: [],
+    details: { ok: true },
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-actions")>()),
+  imageResultFromFile,
+}));
+
 import { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Slack tests cover action runtime plugin behavior.
@@ -766,6 +778,40 @@ describe("handleSlackAction", () => {
       channelId: "C1",
     });
     expect(requireDetails(result).ok).toBe(false);
+  });
+
+  it("forwards the configured image downscale limit when downloading an image", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/slack-image.png",
+      contentType: "image/png",
+      placeholder: "image",
+    });
+    const cfg = slackConfig();
+    (cfg as Record<string, unknown>).agents = { defaults: { imageMaxDimensionPx: 600 } };
+
+    await handleSlackAction({ action: "downloadFile", fileId: "F123", to: "channel:C1" }, cfg);
+
+    expect(requireRecordArg(imageResultFromFile, "imageResultFromFile", 0, 0)).toMatchObject({
+      imageSanitization: { maxDimensionPx: 600 },
+    });
+  });
+
+  it("leaves the image downscale limit unset when none is configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/slack-image.png",
+      contentType: "image/png",
+      placeholder: "image",
+    });
+
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123", to: "channel:C1" },
+      slackConfig(),
+    );
+
+    const params = requireRecordArg(imageResultFromFile, "imageResultFromFile", 0, 0);
+    expect(
+      (params.imageSanitization as { maxDimensionPx?: number }).maxDimensionPx,
+    ).toBeUndefined();
   });
 
   it("passes download scope (channel/thread) to downloadSlackFile", async () => {
