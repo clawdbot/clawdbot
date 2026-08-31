@@ -97,6 +97,8 @@ overrides:
   yauzl: 3.4.0
   protobufjs: 8.7.2
   uuid: 14.0.2
+  # npm-run-path@6.0.0 imports path helpers introduced in unicorn-magic 0.4.
+  "npm-run-path@6.0.0>unicorn-magic": 0.4.0
 
 allowBuilds:
   "@google/genai": true
