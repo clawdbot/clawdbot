@@ -609,7 +609,7 @@ describe("zai provider plugin", () => {
     ).toBe(explicit);
   });
 
-  it("uses deprecated pi agent auth.json for usage auth when modern sources are empty", async () => {
+  it("uses deprecated pi auth only for unscoped usage", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-legacy-auth-"));
     try {
       const authDir = path.join(home, ".pi", "agent");
@@ -627,6 +627,14 @@ describe("zai provider plugin", () => {
           resolveApiKeyFromConfigAndStore: () => undefined,
         } as never),
       ).resolves.toEqual({ token: "legacy-zai-token" });
+
+      await expect(
+        provider.resolveUsageAuth?.({
+          authProfileId: "zai:selected",
+          env: { HOME: home },
+          resolveApiKeyFromConfigAndStore: () => undefined,
+        } as never),
+      ).resolves.toBeNull();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

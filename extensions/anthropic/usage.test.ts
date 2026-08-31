@@ -140,6 +140,24 @@ describe("Anthropic provider usage", () => {
     });
   });
 
+  it("keeps exact-profile usage on the selected OAuth account", async () => {
+    const resolveOAuthToken = vi.fn(async () => ({ token: "selected-oauth-token" }));
+    const resolveCandidates = vi.fn(async () => ["sk-ant-admin-global"]);
+    const result = await resolveAnthropicUsageAuth({
+      config: {},
+      env: { ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-global" },
+      provider: "anthropic",
+      authProfileId: "anthropic:selected",
+      resolveApiKeyFromConfigAndStore: () => "sk-ant-admin-global",
+      resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
+      resolveOAuthToken,
+    });
+
+    expect(result).toEqual({ token: "selected-oauth-token" });
+    expect(resolveOAuthToken).toHaveBeenCalledOnce();
+    expect(resolveCandidates).not.toHaveBeenCalled();
+  });
+
   it("auto-detects an Admin API key stored in the Anthropic provider profile", async () => {
     const result = await resolveAnthropicUsageAuth({
       config: {},

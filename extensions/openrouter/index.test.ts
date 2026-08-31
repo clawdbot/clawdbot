@@ -175,6 +175,23 @@ describe("openrouter provider hooks", () => {
     expect(videoModelCatalogProvider.liveCatalog).toBeTypeOf("function");
   });
 
+  it("resolves usage auth through SecretRef-aware API-key candidates", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const resolveCandidates = vi.fn().mockResolvedValue(["resolved-secret-key"]);
+
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: {},
+        env: {},
+        provider: "openrouter",
+        resolveApiKeyFromConfigAndStore: () => undefined,
+        resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
+        resolveOAuthToken: async () => null,
+      } as never),
+    ).resolves.toEqual({ token: "resolved-secret-key" });
+    expect(resolveCandidates).toHaveBeenCalledOnce();
+  });
+
   it("registers OAuth and API-key auth methods", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const manifestChoices = readManifest().providerAuthChoices?.map((choice) => ({

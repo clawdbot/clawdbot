@@ -7,6 +7,7 @@ import {
   hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -109,35 +110,56 @@ function hasProviderAuthEnvCredentialSource(params: {
   return false;
 }
 
+export function resolveProviderUsageAuthEnvCredentialProviders(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  plugins?: readonly PluginManifestRecord[];
+}): Set<string> {
+  const state: UsageAuthState = {
+    cfg: params.config,
+    env: params.env ?? process.env,
+    allowAuthProfileStore: false,
+  };
+  const providers = new Set<string>();
+  try {
+    const plugins =
+      params.plugins ??
+      loadManifestMetadataSnapshot({
+        config: state.cfg,
+        env: state.env,
+      }).plugins;
+    for (const plugin of plugins) {
+      if (!isUsageProviderManifestEligible({ plugin, state })) {
+        continue;
+      }
+      for (const [providerId, envVars] of Object.entries(plugin.providerUsageAuthEnvVars ?? {})) {
+        if (envVars.some((envVar) => Boolean(normalizeSecretInput(state.env[envVar])))) {
+          providers.add(normalizeProviderId(providerId));
+        }
+      }
+    }
+  } catch {
+    return providers;
+  }
+  return providers;
+}
+
 function hasProviderUsageAuthEnvCredentialSource(params: {
   state: UsageAuthState;
   providerIds: string[];
 }): boolean {
-  const providerIds = new Set(normalizeProviderIds(params.providerIds));
-  try {
-    const snapshot = loadManifestMetadataSnapshot({
-      config: params.state.cfg,
-      env: params.state.env,
-    });
-    return snapshot.plugins.some((plugin) => {
-      if (!isUsageProviderManifestEligible({ plugin, state: params.state })) {
-        return false;
-      }
-      return Object.entries(plugin.providerUsageAuthEnvVars ?? {}).some(
-        ([providerId, envVars]) =>
-          providerIds.has(normalizeProviderId(providerId)) &&
-          envVars.some((envVar) => Boolean(normalizeSecretInput(params.state.env[envVar]))),
-      );
-    });
-  } catch {
-    return false;
-  }
+  const providers = resolveProviderUsageAuthEnvCredentialProviders({
+    config: params.state.cfg,
+    env: params.state.env,
+  });
+  return normalizeProviderIds(params.providerIds).some((providerId) => providers.has(providerId));
 }
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
+  profileIds?: readonly string[];
 }): string | undefined {
   return resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params)[0];
 }
@@ -146,9 +168,10 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
+  profileIds?: readonly string[];
 }): string[] {
   const candidates: string[] = [];
-  const configKey = resolveProviderApiKeyFromConfig(params);
+  const configKey = params.profileIds ? undefined : resolveProviderApiKeyFromConfig(params);
   if (configKey) {
     candidates.push(configKey);
   }
@@ -162,8 +185,12 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
     ),
   );
   const store = resolveUsageAuthStore(params.state);
-  const credentials = [...normalizedProviderIds]
-    .flatMap((provider) => resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }))
+  const profileIds = params.profileIds
+    ? dedupeProfileIds([...params.profileIds])
+    : [...normalizedProviderIds].flatMap((provider) =>
+        resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
+      );
+  const credentials = profileIds
     .map((id) => store.profiles[id])
     .filter(
       (
@@ -188,9 +215,10 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
+  profileIds?: readonly string[];
 }): Promise<string[]> {
   const candidates: string[] = [];
-  const configKey = resolveProviderApiKeyFromConfig(params);
+  const configKey = params.profileIds ? undefined : resolveProviderApiKeyFromConfig(params);
   if (configKey) {
     candidates.push(configKey);
   }
@@ -199,11 +227,13 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
   }
 
   const store = resolveUsageAuthStore(params.state);
-  const profileIds = dedupeProfileIds(
-    normalizeProviderIds(params.providerIds).flatMap((provider) =>
-      resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
-    ),
-  );
+  const profileIds = params.profileIds
+    ? dedupeProfileIds([...params.profileIds])
+    : dedupeProfileIds(
+        normalizeProviderIds(params.providerIds).flatMap((provider) =>
+          resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
+        ),
+      );
   for (const profileId of profileIds) {
     const credential = store.profiles[profileId];
     if (!credential || (credential.type !== "api_key" && credential.type !== "token")) {
@@ -298,17 +328,21 @@ async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
   excludeProfileIds?: string[];
+  profileIds?: readonly string[];
+  allowProfileFallback?: boolean;
 }): Promise<ProviderAuth | null> {
   if (!params.state.allowAuthProfileStore) {
     return null;
   }
   const store = resolveUsageAuthStore(params.state);
-  const order = resolveAuthProfileOrder({
-    cfg: params.state.cfg,
-    store,
-    provider: params.provider,
-  });
-  const deduped = dedupeProfileIds(order);
+  const order =
+    params.profileIds ??
+    resolveAuthProfileOrder({
+      cfg: params.state.cfg,
+      store,
+      provider: params.provider,
+    });
+  const deduped = dedupeProfileIds([...order]);
   const excludedProfileIds = new Set(params.excludeProfileIds ?? []);
 
   for (const profileId of deduped) {
@@ -327,6 +361,7 @@ async function resolveOAuthToken(params: {
         store,
         profileId,
         agentDir: params.state.agentDir,
+        ...(params.allowProfileFallback === false ? { allowProfileFallback: false } : {}),
       });
       if (!resolved) {
         continue;
@@ -334,6 +369,7 @@ async function resolveOAuthToken(params: {
       return {
         provider: params.provider as UsageProviderId,
         token: resolved.apiKey,
+        authProfileId: profileId,
         accountId:
           cred.type === "oauth" && "accountId" in cred
             ? (cred as { accountId?: string }).accountId
@@ -351,17 +387,56 @@ async function resolveOAuthToken(params: {
         // identity for static bearer profiles whose tokens expose no claims.
         ...(cred.email ? { email: cred.email } : {}),
       };
-    } catch {
-      // ignore
+    } catch (error) {
+      if (params.allowProfileFallback === false) {
+        throw error;
+      }
     }
   }
 
   return null;
 }
 
+/** Resolve one exact saved OAuth/token profile for account-scoped usage. */
+export async function resolveProviderProfileUsageAuth(params: {
+  provider: UsageProviderId;
+  profileId: string;
+  store: AuthProfileStore;
+  agentDir?: string;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderAuth | null> {
+  const state: UsageAuthState = {
+    cfg: params.config,
+    env: params.env ?? process.env,
+    agentDir: params.agentDir,
+    allowAuthProfileStore: true,
+    store: params.store,
+  };
+  const pluginAuth = await resolveProviderUsageAuthViaPlugin({
+    state,
+    provider: params.provider,
+    authProfileId: params.profileId,
+  });
+  if (pluginAuth.auth) {
+    return pluginAuth.auth;
+  }
+  if (pluginAuth.handled) {
+    return null;
+  }
+  const auth = await resolveOAuthToken({
+    state,
+    provider: params.provider,
+    profileIds: [params.profileId],
+    allowProfileFallback: false,
+  });
+  return auth ? { ...auth, authProfileId: params.profileId } : null;
+}
+
 async function resolveProviderUsageAuthViaPlugin(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
+  authProfileId?: string;
 }): Promise<{ handled: boolean; auth: ProviderAuth | null }> {
   const resolved = await resolveProviderUsageAuthWithPlugin({
     provider: params.provider,
@@ -372,29 +447,35 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       agentDir: params.state.agentDir,
       env: params.state.env,
       provider: params.provider,
+      ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
       // Provider-owned hooks may route API keys to a different billing endpoint
       // even when generic fallback for this usage provider remains OAuth-only.
       resolveApiKeyFromConfigAndStore: (options) =>
         resolveProviderApiKeyFromConfigAndStore({
           state: params.state,
           providerIds: options?.providerIds ?? [params.provider],
-          envDirect: options?.envDirect,
+          envDirect: params.authProfileId ? undefined : options?.envDirect,
+          ...(params.authProfileId ? { profileIds: [params.authProfileId] } : {}),
         }),
       resolveApiKeyCandidatesFromConfigAndStore: (options) =>
         resolveProviderApiKeyCandidatesFromConfigAndStore({
           state: params.state,
           providerIds: options?.providerIds ?? [params.provider],
-          envDirect: options?.envDirect,
+          envDirect: params.authProfileId ? undefined : options?.envDirect,
+          ...(params.authProfileId ? { profileIds: [params.authProfileId] } : {}),
         }),
       resolveOAuthToken: async (options) => {
         const auth = await resolveOAuthToken({
           state: params.state,
           provider: options?.provider ?? params.provider,
           excludeProfileIds: options?.excludeProfileIds,
+          ...(params.authProfileId ? { profileIds: [params.authProfileId] } : {}),
+          ...(params.authProfileId ? { allowProfileFallback: false } : {}),
         });
         return auth
           ? {
               token: auth.token,
+              ...(auth.authProfileId ? { authProfileId: auth.authProfileId } : {}),
               ...(auth.accountId ? { accountId: auth.accountId } : {}),
               ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
               ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
@@ -419,6 +500,9 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       ...(resolved.subscriptionType ? { subscriptionType: resolved.subscriptionType } : {}),
       ...(resolved.rateLimitTier ? { rateLimitTier: resolved.rateLimitTier } : {}),
       ...(resolved.email ? { email: resolved.email } : {}),
+      ...(params.authProfileId || resolved.authProfileId
+        ? { authProfileId: params.authProfileId ?? resolved.authProfileId }
+        : {}),
     },
   };
 }
@@ -493,6 +577,7 @@ export async function resolveProviderAuths(params: {
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  preserveAuthProfileId?: boolean;
   onError?: (provider: UsageProviderId, error: unknown) => void;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
@@ -520,6 +605,14 @@ export async function resolveProviderAuths(params: {
     params.getStore !== undefined ||
     hasAnyAuthProfileStoreSource(params.agentDir);
   const auths: ProviderAuth[] = [];
+  const appendAuth = (auth: ProviderAuth) => {
+    if (params.preserveAuthProfileId) {
+      auths.push(auth);
+      return;
+    }
+    const { authProfileId: _authProfileId, ...publicAuth } = auth;
+    auths.push(publicAuth);
+  };
 
   for (const provider of params.providers) {
     try {
@@ -562,7 +655,7 @@ export async function resolveProviderAuths(params: {
           provider,
         });
         if (pluginAuth.auth) {
-          auths.push(pluginAuth.auth);
+          appendAuth(pluginAuth.auth);
           continue;
         }
         if (pluginAuth.handled) {
@@ -574,7 +667,7 @@ export async function resolveProviderAuths(params: {
         provider,
       });
       if (fallbackAuth) {
-        auths.push(fallbackAuth);
+        appendAuth(fallbackAuth);
       }
     } catch (error) {
       if (!params.onError) {

@@ -214,6 +214,7 @@ describe("OpenRouter usage", () => {
           request,
           timeoutMs: 1000,
           fetchFn: ambientProxyFetch as unknown as typeof fetch,
+          isAuthProfileCurrent: () => true,
         });
 
         expect(guardedFetch).toHaveBeenCalledTimes(2);
@@ -232,6 +233,72 @@ describe("OpenRouter usage", () => {
       }
     },
   );
+
+  it("does not start configured transport after the selected profile is revoked", async () => {
+    const ambientProxyFetch = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
+
+    try {
+      const snapshot = await fetchOpenRouterUsage({
+        token: "synthetic-private-key",
+        baseUrl: "https://private.example.invalid/router/v1",
+        request: {
+          tls: {
+            ca: "synthetic-private-ca",
+            cert: "synthetic-client-certificate",
+            key: "synthetic-client-key",
+          },
+        },
+        timeoutMs: 1000,
+        fetchFn: ambientProxyFetch as unknown as typeof fetch,
+        isAuthProfileCurrent: () => false,
+      });
+
+      expect(snapshot.error).toBe("Usage unavailable");
+      expect(guardedFetch).not.toHaveBeenCalled();
+      expect(ambientProxyFetch).not.toHaveBeenCalled();
+    } finally {
+      guardedFetch.mockRestore();
+    }
+  });
+
+  it("rechecks profile authority after configured transport preparation", async () => {
+    let current = true;
+    const transport = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const guardedFetch = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockImplementation(async (params) => {
+        current = false;
+        params.beforeRequest?.();
+        return {
+          response: await transport(params.url, params.init),
+          finalUrl: params.url,
+          release: async () => undefined,
+        };
+      });
+
+    try {
+      const snapshot = await fetchOpenRouterUsage({
+        token: "synthetic-private-key",
+        baseUrl: "https://private.example.invalid/router/v1",
+        request: {
+          tls: {
+            ca: "synthetic-private-ca",
+            cert: "synthetic-client-certificate",
+            key: "synthetic-client-key",
+          },
+        },
+        timeoutMs: 1000,
+        fetchFn: vi.fn() as unknown as typeof fetch,
+        isAuthProfileCurrent: () => current,
+      });
+
+      expect(snapshot.error).toBe("Usage unavailable");
+      expect(transport).not.toHaveBeenCalled();
+    } finally {
+      guardedFetch.mockRestore();
+    }
+  });
 
   it("surfaces blocked usage redirects without replaying private credentials", async () => {
     const fetchFn = vi.fn<typeof fetch>(

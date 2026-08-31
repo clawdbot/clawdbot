@@ -164,6 +164,21 @@ describe("OpenAI provider usage", () => {
     });
   });
 
+  it("keeps exact-profile usage on the selected OAuth account", async () => {
+    const resolveOAuthToken = vi.fn(async () => ({ token: "selected-oauth-token" }));
+    const result = await resolveOpenAIUsageAuth({
+      config: {},
+      env: { OPENAI_ADMIN_KEY: "sk-admin-global" },
+      provider: "openai",
+      authProfileId: "openai:selected",
+      resolveApiKeyFromConfigAndStore: () => "sk-project-global",
+      resolveOAuthToken,
+    });
+
+    expect(result).toEqual({ token: "selected-oauth-token" });
+    expect(resolveOAuthToken).toHaveBeenCalledOnce();
+  });
+
   it("attaches the ChatGPT account email from the access-token claims", async () => {
     // Assembled parts keep the fixture from reading as a real credential.
     const claims = Buffer.from(

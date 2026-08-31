@@ -1,31 +1,38 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
-type CodexUsageResponse = {
-  rate_limit?: {
-    limit_reached?: boolean;
-    primary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-    secondary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-  };
-  plan_type?: string;
-  credits?: { balance?: number | string | null };
-};
-
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readProviderNumber(value: unknown): number | undefined {
+  return typeof value === "string" ? parseStrictFiniteNumber(value) : readFiniteNumber(value);
+}
+
+function rateLimitReachedSummary(value: unknown): string | undefined {
+  const reachedType = asOptionalRecord(value)?.type;
+  switch (reachedType) {
+    case "rate_limit_reached":
+      return "Usage limit reached";
+    case "workspace_owner_credits_depleted":
+      return "Workspace credits depleted — add credits to continue";
+    case "workspace_member_credits_depleted":
+      return "Workspace credits depleted — ask an owner to refill";
+    case "workspace_owner_usage_limit_reached":
+      return "Workspace spend cap reached — increase it to continue";
+    case "workspace_member_usage_limit_reached":
+      return "Workspace spend cap reached — ask an owner to increase it";
+    default:
+      return undefined;
+  }
+}
 
 function resolveSecondaryWindowLabel(params: {
   windowHours: number;
@@ -48,6 +55,105 @@ function resolveSecondaryWindowLabel(params: {
     return "Week";
   }
   return "Day";
+}
+
+function formatWindowDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  if (minutes % 60 === 0) {
+    return `${minutes / 60}h`;
+  }
+  return `${minutes}m`;
+}
+
+type RateLimitLabels = {
+  fullLabel: string;
+  groupLabel: string;
+  windowPrefix?: string;
+};
+
+function normalizeRateLimitLabel(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return normalized || undefined;
+}
+
+function resolveAdditionalRateLimitLabels(
+  limitName: string | undefined,
+  meteredFeature: string | undefined,
+): RateLimitLabels | undefined {
+  const fullLabel = normalizeRateLimitLabel(limitName ?? meteredFeature);
+  if (!fullLabel) {
+    return undefined;
+  }
+  const featureLabel = normalizeRateLimitLabel(meteredFeature);
+  const featurePrefix = "codex ";
+  if (!featureLabel?.toLowerCase().startsWith(featurePrefix)) {
+    return { fullLabel, groupLabel: fullLabel };
+  }
+  const familyMatch = /\bcodex\b/giu.exec(fullLabel);
+  if (!familyMatch) {
+    return { fullLabel, groupLabel: fullLabel };
+  }
+  const familyEnd = familyMatch.index + familyMatch[0].length;
+  const groupLabel = fullLabel.slice(0, familyEnd).trim();
+  const windowPrefix = fullLabel.slice(familyEnd).trim();
+  // metered_feature variants are opaque (for example codex_bengalfox), so
+  // limit_name owns the display split. Bare codex_other remains one family.
+  if (!windowPrefix || groupLabel.toLowerCase() === "codex") {
+    return { fullLabel, groupLabel: fullLabel };
+  }
+  return {
+    fullLabel,
+    groupLabel,
+    windowPrefix,
+  };
+}
+
+function appendRateLimitWindows(
+  windows: UsageWindow[],
+  rawRateLimit: unknown,
+  labels?: RateLimitLabels,
+): void {
+  const rateLimit = asOptionalRecord(rawRateLimit);
+  const windowFields = (windowLabel: string) => ({
+    label: labels ? `${labels.fullLabel} · ${windowLabel}` : windowLabel,
+    ...(labels
+      ? {
+          groupLabel: labels.groupLabel,
+          windowLabel: labels.windowPrefix
+            ? `${labels.windowPrefix} · ${windowLabel}`
+            : windowLabel,
+        }
+      : {}),
+  });
+  const primary = asOptionalRecord(rateLimit?.primary_window);
+  if (primary) {
+    const limitSeconds = readFiniteNumber(primary.limit_window_seconds) ?? 10_800;
+    const resetAt = readFiniteNumber(primary.reset_at);
+    windows.push({
+      ...windowFields(formatWindowDuration(limitSeconds)),
+      usedPercent: clampPercent(readFiniteNumber(primary.used_percent) ?? 0),
+      resetAt: resetAt ? resetAt * 1000 : undefined,
+    });
+  }
+
+  const secondary = asOptionalRecord(rateLimit?.secondary_window);
+  if (secondary) {
+    const limitSeconds = readFiniteNumber(secondary.limit_window_seconds) ?? 86_400;
+    const resetAt = readFiniteNumber(secondary.reset_at);
+    const windowLabel = resolveSecondaryWindowLabel({
+      windowHours: Math.round(limitSeconds / 3600),
+      primaryResetAt: readFiniteNumber(primary?.reset_at),
+      secondaryResetAt: resetAt,
+    });
+    windows.push({
+      ...windowFields(windowLabel),
+      usedPercent: clampPercent(readFiniteNumber(secondary.used_percent) ?? 0),
+      resetAt: resetAt ? resetAt * 1000 : undefined,
+    });
+  }
 }
 
 export async function fetchCodexUsage(
@@ -87,51 +193,79 @@ export async function fetchCodexUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as CodexUsageResponse;
+  const data = asNonArrayRecord(parsed.data);
   const windows: UsageWindow[] = [];
-
-  if (data.rate_limit?.primary_window) {
-    const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
-    windows.push({
-      label: `${windowHours}h`,
-      usedPercent: clampPercent(pw.used_percent || 0),
-      resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
-    });
+  appendRateLimitWindows(windows, data.rate_limit);
+  const additionalRateLimits = Array.isArray(data.additional_rate_limits)
+    ? data.additional_rate_limits
+    : [];
+  for (const rawAdditional of additionalRateLimits) {
+    const additional = asOptionalRecord(rawAdditional);
+    if (!additional) {
+      continue;
+    }
+    const limitName = typeof additional.limit_name === "string" ? additional.limit_name : undefined;
+    const meteredFeature =
+      typeof additional.metered_feature === "string" ? additional.metered_feature : undefined;
+    appendRateLimitWindows(
+      windows,
+      additional.rate_limit,
+      resolveAdditionalRateLimitLabels(limitName, meteredFeature),
+    );
   }
 
-  if (data.rate_limit?.secondary_window) {
-    const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = resolveSecondaryWindowLabel({
-      windowHours,
-      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
-      secondaryResetAt: sw.reset_at,
-    });
-    windows.push({
-      label,
-      usedPercent: clampPercent(sw.used_percent || 0),
-      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
-    });
-  }
-
-  const plan = data.plan_type;
-  let billing: ProviderUsageSnapshot["billing"];
-  if (data.credits?.balance !== undefined && data.credits.balance !== null) {
-    const balance =
-      typeof data.credits.balance === "number"
-        ? data.credits.balance
-        : parseStrictFiniteNumber(data.credits.balance);
+  const plan = typeof data.plan_type === "string" ? data.plan_type : undefined;
+  const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
+  const balanceValue = asOptionalRecord(data.credits)?.balance;
+  if (balanceValue !== undefined && balanceValue !== null) {
+    const balance = readProviderNumber(balanceValue);
     if (balance !== undefined && balance >= 0) {
-      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+      billing.push({ type: "balance", amount: balance, unit: "credits" });
     }
   }
+
+  const spendControl = asOptionalRecord(data.spend_control);
+  const individualLimit = asOptionalRecord(spendControl?.individual_limit);
+  if (individualLimit) {
+    const reached = spendControl?.reached === true;
+    const usedPercent = readFiniteNumber(individualLimit.used_percent);
+    const remainingPercent = readFiniteNumber(individualLimit.remaining_percent);
+    const resetAtSeconds = readFiniteNumber(individualLimit.reset_at);
+    const resetAt = resetAtSeconds ? resetAtSeconds * 1000 : undefined;
+    windows.push({
+      label: "Monthly spend",
+      usedPercent: reached
+        ? 100
+        : clampPercent(
+            usedPercent ?? (remainingPercent === undefined ? 0 : 100 - remainingPercent),
+          ),
+      resetAt,
+    });
+    const used = readProviderNumber(individualLimit.used);
+    const limit = readProviderNumber(individualLimit.limit);
+    if (used !== undefined && used >= 0 && limit !== undefined && limit >= 0) {
+      billing.push({
+        type: "budget",
+        label: "Monthly spend limit",
+        used,
+        limit,
+        unit: "credits",
+        period: "monthly",
+        ...(resetAt ? { resetAt } : {}),
+      });
+    }
+  }
+
+  const summary =
+    rateLimitReachedSummary(data.rate_limit_reached_type) ??
+    (spendControl?.reached === true ? "Monthly spend limit reached" : undefined);
 
   return {
     provider: "openai",
     displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
-    ...(billing ? { billing } : {}),
+    ...(billing.length ? { billing } : {}),
+    ...(summary ? { summary } : {}),
   };
 }

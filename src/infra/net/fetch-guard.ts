@@ -97,6 +97,8 @@ export type GuardedFetchOptions = {
    */
   dangerouslyAllowEnvProxyWithoutPinnedDns?: boolean;
   auditContext?: string;
+  /** Synchronous authority check immediately before each transport dispatch. */
+  beforeRequest?: () => void;
   /** Internal opt-in for reusing freshly revalidated, direct pinned dispatchers. */
   dispatcherPool?: PinnedDispatcherPool;
 };
@@ -669,6 +671,7 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      params.beforeRequest?.();
       response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);

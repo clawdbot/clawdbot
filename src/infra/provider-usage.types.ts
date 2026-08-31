@@ -1,6 +1,10 @@
 /** One quota window reported by a provider usage endpoint. */
 export type UsageWindow = {
   label: string;
+  /** Provider-owned family label for grouped quota presentation. */
+  groupLabel?: string;
+  /** Provider-owned label for this window within its family. */
+  windowLabel?: string;
   usedPercent: number;
   resetAt?: number;
 };

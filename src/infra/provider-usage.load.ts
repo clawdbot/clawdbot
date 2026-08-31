@@ -1,4 +1,5 @@
 // Loads provider usage snapshots from built-in and plugin providers.
+import pLimit from "p-limit";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -9,7 +10,11 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
-import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
+import {
+  type ProviderAuth,
+  resolveProviderAuths,
+  resolveProviderProfileUsageAuth,
+} from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
@@ -21,6 +26,9 @@ import type {
   UsageProviderId,
   UsageSummary,
 } from "./provider-usage.types.js";
+
+const PROFILE_USAGE_REFRESH_CONCURRENCY = 3;
+const profileUsageRefreshLimit = pLimit(PROFILE_USAGE_REFRESH_CONCURRENCY);
 
 // Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
@@ -43,6 +51,9 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  authProfile?: { provider: UsageProviderId; profileId: string };
+  /** Closure-bound cache ownership check, evaluated immediately before provider I/O. */
+  isAuthProfileCurrent?: () => boolean;
   authStore?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
@@ -59,7 +70,14 @@ async function fetchProviderUsageSnapshot(params: {
   workspaceDir?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
+  isAuthProfileCurrent?: () => boolean;
 }): Promise<ProviderUsageSnapshot> {
+  const guardedFetch: typeof fetch = (input, init) => {
+    if (params.isAuthProfileCurrent?.() === false) {
+      return Promise.reject(new Error("Auth profile is no longer current"));
+    }
+    return params.fetchFn(input, init);
+  };
   const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
     provider: params.auth.hookProvider ?? params.auth.provider,
     config: params.config,
@@ -78,7 +96,8 @@ async function fetchProviderUsageSnapshot(params: {
       rateLimitTier: params.auth.rateLimitTier,
       email: params.auth.email,
       timeoutMs: params.timeoutMs,
-      fetchFn: params.fetchFn,
+      fetchFn: guardedFetch,
+      ...(params.isAuthProfileCurrent ? { isAuthProfileCurrent: params.isAuthProfileCurrent } : {}),
     },
   });
   if (pluginSnapshot) {
@@ -106,21 +125,28 @@ export async function loadProviderUsageSummary(
     throw new Error("fetch is not available");
   }
 
-  const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
-    ? opts.providers.map((provider) => ({
-        provider,
-        displayName: providerUsageLabel(provider) ?? provider,
-      }))
-    : opts.auth
-      ? opts.auth.map((auth) => ({
-          provider: auth.provider,
-          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+  const descriptors: ProviderUsagePluginDescriptor[] = opts.authProfile
+    ? [
+        {
+          provider: opts.authProfile.provider,
+          displayName: providerUsageLabel(opts.authProfile.provider) ?? opts.authProfile.provider,
+        },
+      ]
+    : opts.providers
+      ? opts.providers.map((provider) => ({
+          provider,
+          displayName: providerUsageLabel(provider) ?? provider,
         }))
-      : listProviderUsagePluginDescriptors({
-          config,
-          workspaceDir: opts.workspaceDir,
-          env,
-        });
+      : opts.auth
+        ? opts.auth.map((auth) => ({
+            provider: auth.provider,
+            displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+          }))
+        : listProviderUsagePluginDescriptors({
+            config,
+            workspaceDir: opts.workspaceDir,
+            env,
+          });
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
@@ -134,12 +160,22 @@ export async function loadProviderUsageSummary(
   let authStore = opts.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
-  const tasks = descriptors.map(({ provider }) => {
-    return raceUsageTimeout(
-      (async () => {
-        let authError: unknown;
-        const auth =
-          opts.auth?.find((candidate) => candidate.provider === provider) ??
+  const tasks = descriptors.map(async ({ provider }) => {
+    const work = async () => {
+      if (opts.authProfile && opts.isAuthProfileCurrent?.() === false) {
+        return undefined;
+      }
+      let authError: unknown;
+      const auth = opts.authProfile
+        ? await resolveProviderProfileUsageAuth({
+            provider,
+            profileId: opts.authProfile.profileId,
+            store: getAuthStore(),
+            agentDir: opts.agentDir,
+            config,
+            env,
+          })
+        : (opts.auth?.find((candidate) => candidate.provider === provider) ??
           (
             await resolveProviderAuths({
               providers: [provider],
@@ -152,30 +188,64 @@ export async function loadProviderUsageSummary(
                 authError = error;
               },
             })
-          )[0];
-        if (authError) {
-          const message = formatErrorMessage(authError);
-          return failureSnapshot(provider, message.trim() || "Auth failed");
-        }
-        if (!auth) {
+          )[0]);
+      if (authError) {
+        const message = formatErrorMessage(authError);
+        return failureSnapshot(provider, message.trim() || "Auth failed");
+      }
+      if (!auth) {
+        return undefined;
+      }
+      // Auth resolution may await secret refresh. Recheck the owning cache generation
+      // before entering the provider hook so a concurrently removed profile cannot make I/O.
+      if (opts.authProfile && opts.isAuthProfileCurrent?.() === false) {
+        return undefined;
+      }
+      return await fetchProviderUsageSnapshot({
+        auth,
+        config,
+        env,
+        agentDir: opts.agentDir,
+        workspaceDir: opts.workspaceDir,
+        timeoutMs,
+        fetchFn,
+        ...(opts.authProfile ? { isAuthProfileCurrent: opts.isAuthProfileCurrent } : {}),
+      });
+    };
+    // The timeout controls the caller's wait, not the real in-flight cap. A
+    // timed-out provider keeps its permit until its underlying work settles.
+    let workPromise: Promise<ProviderUsageSnapshot | undefined>;
+    if (opts.authProfile) {
+      let queued = true;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      workPromise = profileUsageRefreshLimit(async () => {
+        if (!queued) {
           return undefined;
         }
-        return await fetchProviderUsageSnapshot({
-          auth,
-          config,
-          env,
-          agentDir: opts.agentDir,
-          workspaceDir: opts.workspaceDir,
-          timeoutMs,
-          fetchFn,
-        });
-      })(),
-      timeoutMs,
-      failureSnapshot(provider, "Timeout"),
-    ).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      return failureSnapshot(provider, message.trim() || "Fetch failed");
-    });
+        markStarted?.();
+        return await work();
+      });
+      const acquired = await raceUsageTimeout(
+        started.then(() => true),
+        timeoutMs * 2,
+        false,
+      );
+      if (!acquired) {
+        queued = false;
+        return failureSnapshot(provider, "Refresh queue timeout");
+      }
+    } else {
+      workPromise = work();
+    }
+    return raceUsageTimeout(workPromise, timeoutMs, failureSnapshot(provider, "Timeout")).catch(
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return failureSnapshot(provider, message.trim() || "Fetch failed");
+      },
+    );
   });
 
   const snapshots = (await Promise.all(tasks))

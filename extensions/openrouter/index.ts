@@ -342,9 +342,15 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.OPENROUTER_API_KEY],
-        });
+        const apiKey = ctx.resolveApiKeyCandidatesFromConfigAndStore
+          ? (
+              await ctx.resolveApiKeyCandidatesFromConfigAndStore({
+                envDirect: [ctx.env.OPENROUTER_API_KEY],
+              })
+            )[0]
+          : ctx.resolveApiKeyFromConfigAndStore({
+              envDirect: [ctx.env.OPENROUTER_API_KEY],
+            });
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>
@@ -354,6 +360,7 @@ export default defineSingleProviderPluginEntry({
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
+          isAuthProfileCurrent: ctx.isAuthProfileCurrent,
         }),
     };
   },

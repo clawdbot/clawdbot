@@ -234,6 +234,13 @@ async function fetchAnthropicAdminUsage(params: {
 export async function resolveAnthropicUsageAuth(
   ctx: ProviderResolveUsageAuthContext,
 ): Promise<ProviderResolvedUsageAuth> {
+  if (ctx.authProfileId) {
+    return (
+      (await ctx.resolveOAuthToken({ excludeProfileIds: [CLAUDE_CLI_PROFILE_ID] })) ?? {
+        handled: true,
+      }
+    );
+  }
   const explicitAdminKey =
     cleanProviderUsageCredential(ctx.env.ANTHROPIC_ADMIN_KEY) ??
     cleanProviderUsageCredential(ctx.env.ANTHROPIC_ADMIN_API_KEY);

@@ -224,7 +224,9 @@ async function fetchOpenAIAdminUsage(params: {
 export async function resolveOpenAIUsageAuth(
   ctx: ProviderResolveUsageAuthContext,
 ): Promise<ProviderResolvedUsageAuth> {
-  const explicitAdminKey = cleanProviderUsageCredential(ctx.env.OPENAI_ADMIN_KEY);
+  const explicitAdminKey = ctx.authProfileId
+    ? undefined
+    : cleanProviderUsageCredential(ctx.env.OPENAI_ADMIN_KEY);
   if (explicitAdminKey) {
     return { token: encodeAdminToken(explicitAdminKey) };
   }
