@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import {
   identifiedClient,
   sessionSharingTestContext,
@@ -197,7 +198,7 @@ describe("worker placement dispatch authority", () => {
             ).not.toBeNull();
           }
         };
-        const node = {
+        const node: NodeWorkerSupervisorNodeProof = {
           nodeId: "device-1",
           connId: "device-connection-1",
           pairingIdentity: "device-identity-1",

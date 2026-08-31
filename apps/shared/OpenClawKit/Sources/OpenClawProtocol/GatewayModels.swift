@@ -20862,6 +20862,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
     public let pendinginputs: [String: AnyCodable]?
+    public let inputreceipts: [AnyCodable]?
     public let inputconsumptions: [[String: AnyCodable]]?
 
     public init(
@@ -20873,6 +20874,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         inflightrun: AnyCodable? = nil,
         metadata: AnyCodable? = nil,
         pendinginputs: [String: AnyCodable]? = nil,
+        inputreceipts: [AnyCodable]? = nil,
         inputconsumptions: [[String: AnyCodable]]? = nil)
     {
         self.kind = kind
@@ -20883,6 +20885,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.inflightrun = inflightrun
         self.metadata = metadata
         self.pendinginputs = pendinginputs
+        self.inputreceipts = inputreceipts
         self.inputconsumptions = inputconsumptions
     }
 
@@ -20895,6 +20898,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case inflightrun = "inFlightRun"
         case metadata
         case pendinginputs = "pendingInputs"
+        case inputreceipts = "inputReceipts"
         case inputconsumptions = "inputConsumptions"
     }
 }
