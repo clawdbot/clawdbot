@@ -1,12 +1,18 @@
 /** Channel recovery replies preserve decisions from the real account lifecycle owner. */
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import "../secrets/runtime-telegram.test-support.ts";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { writeConfigFile } from "../config/config.js";
+import {
+  readConfigFileSnapshot,
+  resetConfigRuntimeState,
+  writeConfigFile,
+} from "../config/config.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -92,7 +98,9 @@ describe("channels.start account outcomes", () => {
         setTestPluginRegistry(
           createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
         );
-        await writeConfigFile({
+        const { path: configPath } = await readConfigFileSnapshot();
+        // Startup must resolve the raw SecretRefs before the runtime config is consumed.
+        await writeJsonAtomic(configPath, {
           gateway: {
             mode: "local",
             bind: "loopback",
@@ -124,6 +132,7 @@ describe("channels.start account outcomes", () => {
             },
           },
         });
+        resetConfigRuntimeState();
         const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port, {
           auth: { mode: "none" },

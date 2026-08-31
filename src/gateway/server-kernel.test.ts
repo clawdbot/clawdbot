@@ -106,7 +106,9 @@ describe("createGatewayKernel", () => {
 
       await kernel.beginClosePrelude();
       kernel.releaseStartupAccountStarts();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(startAccount).not.toHaveBeenCalled();
       expect(kernel.channelManager.isAutoRestartScheduled("telegram", "default")).toBe(false);
