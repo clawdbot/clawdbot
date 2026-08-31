@@ -375,15 +375,16 @@ describe("ConfigPage header", () => {
 
 describe("ConfigPage moved section routes", () => {
   it.each([
-    ["channels", "channels", ""],
-    ["broadcast", "advanced", "?section=broadcast"],
-    ["talk", "talk", "?section=talk"],
-  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    ["communications", "channels", "channels", ""],
+    ["communications", "broadcast", "advanced", "?section=broadcast"],
+    ["communications", "talk", "talk", "?section=talk"],
+    ["appearance", "wizard", "advanced", "?section=wizard"],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
       context: { navigate: typeof navigate };
-      pageId: "communications";
+      pageId: string;
       routeData: {
         pathname: string;
         search: string;
@@ -396,9 +397,9 @@ describe("ConfigPage moved section routes", () => {
       syncRouteData: () => void;
     };
     state.context = { navigate };
-    state.pageId = "communications";
+    state.pageId = pageId;
     state.routeData = {
-      pathname: "/settings/communications",
+      pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
       hash: "",
       section,
