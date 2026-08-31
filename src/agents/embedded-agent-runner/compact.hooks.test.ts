@@ -6038,6 +6038,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     } as never);
 
     try {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
       await compactEmbeddedAgentSession(
         wrappedCompactionArgs({
           sessionTarget: {
@@ -6164,11 +6168,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("derives queued compaction ownership from a self-contained session target", async () => {
+    const storePath = join(defaultStoreDir, "other-sessions.json");
     await upsertSessionEntryCore(
       {
         agentId: "other",
         sessionKey: "agent:other:main",
-        storePath: join(TEST_WORKSPACE_DIR, "other-sessions.json"),
+        storePath,
       },
       { sessionId: "other-session", updatedAt: 1 },
     );
@@ -6180,7 +6185,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           agentId: "other",
           sessionId: "other-session",
           sessionKey: "agent:other:main",
-          storePath: join(defaultStoreDir, "other-sessions.json"),
+          storePath,
         },
       }),
     );
