@@ -11,7 +11,11 @@ import {
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listChatChannels } from "./chat-meta.js";
 import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
-import { formatChannelSelectionLine, normalizeAnyChannelId } from "./registry.js";
+import {
+  formatChannelSelectionLine,
+  getRegisteredChannelOwnerPluginId,
+  normalizeAnyChannelId,
+} from "./registry.js";
 
 describe("channel registry helpers", () => {
   afterEach(() => {
@@ -111,5 +115,22 @@ describe("channel registry helpers", () => {
 
     expect(normalizeAnyChannelId("a")).toBe("alpha");
     expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
+  });
+
+  it("reports the owning plugin id of a channel whose plugin id is not its channel id", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "@tencent-weixin/openclaw-weixin",
+          plugin: { id: "openclaw-weixin", meta: { aliases: [] } },
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(getRegisteredChannelOwnerPluginId("openclaw-weixin")).toBe(
+      "@tencent-weixin/openclaw-weixin",
+    );
+    expect(getRegisteredChannelOwnerPluginId("not-registered")).toBeNull();
   });
 });

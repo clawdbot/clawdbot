@@ -11,6 +11,7 @@ import {
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -44,6 +45,27 @@ function listAccountIds(
     return [];
   }
   return plugin.config.listAccountIds(cfg);
+}
+
+/**
+ * Resolves the id a channel account's durable ingress rows are stored under.
+ *
+ * The plugin runtime opens an ingress queue with the plugin's own id - see the
+ * `channelId: pluginId` it forces in `openChannelIngressQueue` - which is not the
+ * channel id whenever an installed plugin's package id differs from the channel
+ * it serves. Prefer the live registration, fall back to the catalog entry that
+ * installed the plugin when it is no longer registered, and finally to the
+ * channel id, which every bundled channel also registers as its plugin id.
+ */
+function resolveIngressQueueOwnerId(params: {
+  channelId: string;
+  catalogPluginId?: string | undefined;
+}): string {
+  return (
+    getRegisteredChannelOwnerPluginId(params.channelId) ??
+    normalizeOptionalString(params.catalogPluginId) ??
+    params.channelId
+  );
 }
 
 async function stopGatewayRuntimeBeforeRemove(params: {
@@ -236,9 +258,10 @@ export async function channelsRemoveCommand(
   // re-enabling it drains them.
   const discardedEvents = deleteConfig
     ? purgeChannelIngressQueueAccount({
-        // Rows carry the plugin's own channel id, so read it off the resolved plugin
-        // rather than the alias the operator typed.
-        channelId: plugin.id,
+        channelId: resolveIngressQueueOwnerId({
+          channelId: plugin.id,
+          catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
+        }),
         accountId: preparedRemoval.accountKey,
       })
     : undefined;

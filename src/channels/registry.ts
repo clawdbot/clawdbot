@@ -33,6 +33,22 @@ export function getRegisteredChannelPluginMeta(
 }
 
 /**
+ * Returns the plugin id that owns a registered channel, or null when the channel
+ * is not registered or its registration carries no distinct plugin id.
+ *
+ * A channel id is not interchangeable with its plugin id: the loader accepts a
+ * channel whose id differs from the plugin id whenever the manifest declares it
+ * (`channelPluginIdBelongsToManifest`), which is how an installed plugin such as
+ * `@tencent-weixin/openclaw-weixin` serves channel `openclaw-weixin`. Durable
+ * per-plugin state is keyed by the plugin id the runtime opened it with, so a
+ * caller reaching into that state must resolve the owner rather than reuse the
+ * channel id.
+ */
+export function getRegisteredChannelOwnerPluginId(id: string): string | null {
+  return normalizeOptionalString(findRegisteredChannelPluginEntryById(id)?.pluginId) ?? null;
+}
+
+/**
  * Formats a concise channel primer line for setup/status flows.
  */
 export function formatChannelPrimerLine(meta: ChannelMeta): string {
