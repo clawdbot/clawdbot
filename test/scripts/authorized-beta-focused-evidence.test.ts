@@ -1231,7 +1231,7 @@ describe("authorized beta focused evidence", () => {
       expect(source).toContain("inputs.release_evidence_mode == 'full-release-validation'");
       expect(source).toContain("validate-full-release-validation-evidence.mjs");
     }
-    const parentSource = readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8");
+    const parentSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
     expect(parentSource).toContain('proof_label="authorized beta focused validation"');
     expect(parentSource).toContain('proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"');
     expect(parentSource).toContain(
