@@ -42,6 +42,7 @@ import {
 } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   diffPluginRegistryRecords,
   isContainedPluginPath,
@@ -551,39 +552,44 @@ export function isPluginEnabled(params: GetPluginRecordParams): boolean {
 export async function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ) {
-  const inspectionParams = resolveControlPlaneRegistryParams(params);
-  const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
-  // Inspection and runtime selection share one verdict so runtime cannot reject "fresh".
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    ...inspectionParams,
-    allowCurrent: false,
-  });
-  if (!persisted) {
+  return withPluginCache(createPluginCache(), () => {
+    const inspectionParams = resolveControlPlaneRegistryParams(params);
+    const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
+    // Explicit inspection crosses the management boundary, so it must not reuse the
+    // plugin-file facts that produced the persisted snapshot it is verifying.
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      ...inspectionParams,
+      allowCurrent: false,
+    });
+    if (!persisted) {
+      return {
+        state: "missing" as const,
+        refreshReasons: ["missing"],
+        differences: [],
+        persisted: null,
+        current: result.snapshot,
+      };
+    }
+    const fresh = result.source === "persisted";
+    const differences = result.diagnostics.flatMap((diagnostic) => diagnostic.differences ?? []);
+    const refreshReasons = fresh
+      ? []
+      : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
+    if (!fresh && refreshReasons.length === 0) {
+      refreshReasons.push(
+        result.diagnostics.some(
+          (diagnostic) => diagnostic.code === "persisted-registry-stale-policy",
+        )
+          ? "policy-changed"
+          : "source-changed",
+      );
+    }
     return {
-      state: "missing" as const,
-      refreshReasons: ["missing"],
-      differences: [],
-      persisted: null,
+      state: fresh ? ("fresh" as const) : ("stale" as const),
+      refreshReasons,
+      differences,
+      persisted,
       current: result.snapshot,
     };
-  }
-  const fresh = result.source === "persisted";
-  const differences = result.diagnostics.flatMap((diagnostic) => diagnostic.differences ?? []);
-  const refreshReasons = fresh
-    ? []
-    : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
-  if (!fresh && refreshReasons.length === 0) {
-    refreshReasons.push(
-      result.diagnostics.some((diagnostic) => diagnostic.code === "persisted-registry-stale-policy")
-        ? "policy-changed"
-        : "source-changed",
-    );
-  }
-  return {
-    state: fresh ? ("fresh" as const) : ("stale" as const),
-    refreshReasons,
-    differences,
-    persisted,
-    current: result.snapshot,
-  };
+  });
 }

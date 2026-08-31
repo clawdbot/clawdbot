@@ -52,6 +52,16 @@ function createCandidate(rootDir: string): PluginCandidate {
   return { idHint: "demo", source, rootDir, origin: "global" };
 }
 
+function createPackagedCandidate(rootDir: string): PluginCandidate {
+  const candidate = createCandidate(rootDir);
+  fs.writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({ name: "demo", version: "1.0.0" }),
+    "utf8",
+  );
+  return { ...candidate, packageDir: rootDir, packageName: "demo", packageVersion: "1.0.0" };
+}
+
 function createEmptyIndex(stateDir: string): InstalledPluginIndex {
   return {
     version: 1,
@@ -184,6 +194,40 @@ describe("plugin registry inspection", () => {
       },
     ]);
     expect(inspection.current.plugins[0]?.source).toBe(builtSource);
+  });
+
+  it("inspects package changes with fresh file facts", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = makeTempDir();
+    const candidate = createPackagedCandidate(pluginDir);
+    const env = hermeticEnv();
+    await refreshPluginRegistry({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "demo", version: "2.0.0" }),
+      "utf8",
+    );
+
+    const inspection = await inspectPluginRegistry({
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    expect(inspection.state).toBe("stale");
+    expect(inspection.refreshReasons).toEqual(["stale-package"]);
+    expect(inspection.differences).toEqual([
+      {
+        pluginId: "demo",
+        persistedSource: candidate.source,
+        derivedSource: candidate.source,
+      },
+    ]);
   });
 
   it("uses the configured system-agent workspace for the freshness verdict", async () => {
