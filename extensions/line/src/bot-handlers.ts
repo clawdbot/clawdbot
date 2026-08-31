@@ -107,50 +107,6 @@ function resolveLineGroupConfig(params: {
   });
 }
 
-/**
- * The effective group admission for one room.
- *
- * Both the message gate and the join gate read this, so the answer to "does
- * this bot serve this room" cannot differ between an event that carries a
- * sender and one that does not.
- */
-function resolveLineRoomAdmission(params: {
-  context: LineHandlerContext;
-  groupConfig?: LineGroupConfig;
-}): {
-  groupPolicy: GroupPolicy;
-  groupAllowFrom: string[];
-  providerMissingFallbackApplied: boolean;
-  /** True when some sender could be admitted here; a join has none to check. */
-  servesRoom: boolean;
-} {
-  const { context, groupConfig } = params;
-  const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
-    resolveAllowlistProviderRuntimeGroupPolicy({
-      providerConfigPresent: context.cfg.channels?.line !== undefined,
-      groupPolicy: context.account.config.groupPolicy,
-      defaultGroupPolicy: resolveDefaultGroupPolicy(context.cfg),
-    });
-  const groupPolicy: GroupPolicy =
-    runtimeGroupPolicy === "disabled"
-      ? "disabled"
-      : groupConfig?.allowFrom !== undefined
-        ? "allowlist"
-        : runtimeGroupPolicy;
-  // LINE group allowlists are scoped separately from DM allowFrom.
-  // The shared ingress policy below intentionally keeps fallback disabled.
-  const groupAllowFrom = normalizeStringEntries(
-    firstDefined(groupConfig?.allowFrom, context.account.config.groupAllowFrom),
-  );
-  const servesRoom =
-    groupConfig?.enabled !== false &&
-    groupPolicy !== "disabled" &&
-    // LINE admits group senders, not rooms, so an allowlist with nobody on it
-    // is a room whose every message is rejected.
-    (groupPolicy !== "allowlist" || groupAllowFrom.length > 0);
-  return { groupPolicy, groupAllowFrom, providerMissingFallbackApplied, servesRoom };
-}
-
 async function sendLinePairingReply(params: {
   senderId: string;
   replyToken?: string;
@@ -210,8 +166,8 @@ async function sendLinePairingReply(params: {
   });
 }
 
-async function shouldProcessLineEvent(
-  event: MessageEvent | PostbackEvent,
+async function resolveLineEventAdmission(
+  event: MessageEvent | PostbackEvent | JoinEvent,
   context: LineHandlerContext,
 ): Promise<{
   access: ResolvedChannelMessageIngress;
@@ -226,10 +182,23 @@ async function shouldProcessLineEvent(
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const { groupPolicy, groupAllowFrom, providerMissingFallbackApplied } = resolveLineRoomAdmission({
-    context,
-    groupConfig,
-  });
+  const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.line !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
+    });
+  const groupPolicy: GroupPolicy =
+    runtimeGroupPolicy === "disabled"
+      ? "disabled"
+      : groupConfig?.allowFrom !== undefined
+        ? "allowlist"
+        : runtimeGroupPolicy;
+  // LINE group allowlists are scoped separately from DM allowFrom.
+  // The shared ingress policy below intentionally keeps fallback disabled.
+  const groupAllowFrom = normalizeStringEntries(
+    firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
+  );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
       return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
@@ -264,7 +233,7 @@ async function shouldProcessLineEvent(
       cfg,
       readStoreAllowFrom: async () =>
         await readChannelAllowFromStore("line", undefined, account.accountId),
-      subject: { stableId: senderId },
+      subject: event.type === "join" ? {} : { stableId: senderId },
       conversation: {
         kind: isGroup ? "group" : "direct",
         id: (groupId ?? roomId ?? senderId) || "unknown",
@@ -282,7 +251,7 @@ async function shouldProcessLineEvent(
               implicitMentionKinds: [],
             }
           : undefined,
-      event: { kind: event.type === "postback" ? "postback" : "message" },
+      event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
       policy: {
@@ -306,6 +275,16 @@ async function shouldProcessLineEvent(
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
+
+  if (event.type === "join") {
+    // Joins have no sender to match. A configured audience must still contain
+    // matchable entries after access-group expansion and LINE normalization.
+    const roomAllowed =
+      groupConfig?.enabled !== false &&
+      groupPolicy !== "disabled" &&
+      (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
+    return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
+  }
 
   if (
     access.senderAccess.decision === "allow" &&
@@ -374,7 +353,7 @@ async function shouldProcessLineEvent(
   return null;
 }
 
-function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
+function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): string {
   if (event.type === "message") {
     const msg = event.message;
     if (msg.type === "text") {
@@ -392,7 +371,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
-  const decision = await shouldProcessLineEvent(event, context);
+  const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {
     return;
   }
@@ -530,11 +509,7 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
   }
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
   const { cfg, account } = context;
-  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
-  // A join carries no sender to authorize, so this asks the room-level question
-  // instead: could any message from here be admitted? Introducing the bot in a
-  // room whose every message is rejected would speak where it may not act.
-  const { servesRoom: roomAllowed } = resolveLineRoomAdmission({ context, groupConfig });
+  const roomAllowed = Boolean(await resolveLineEventAdmission(event, context));
   await reportChannelRoomJoin({
     cfg,
     channel: "line",
@@ -575,7 +550,7 @@ async function handlePostbackEvent(
   const data = event.postback.data;
   logVerbose(`line: received postback: ${data}`);
 
-  const decision = await shouldProcessLineEvent(event, context);
+  const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {
     return;
   }
