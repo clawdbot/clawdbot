@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -88,6 +89,8 @@ export function createProviderErrorTextRedactor(params: {
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+  /** Credentials that must not appear in malformed-response diagnostics. */
+  requestHeaders?: HeadersInit;
 };
 
 function readProviderResponseBytes(
@@ -95,7 +98,6 @@ function readProviderResponseBytes(
   label: string,
   kind: string,
   opts?: ProviderResponseReadOptions,
-  onOverflow?: ProviderResponseReadOptions["onOverflow"],
 ): Promise<Uint8Array> {
   return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
     ...opts,
@@ -105,7 +107,7 @@ function readProviderResponseBytes(
       (({ chunkTimeoutMs }) =>
         new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
     onOverflow:
-      onOverflow ??
+      opts?.onOverflow ??
       (({ maxBytes: limit }) => new Error(`${label}: ${kind} response exceeds ${limit} bytes`)),
   });
 }
@@ -115,6 +117,8 @@ type ProviderHttpErrorOptions = {
   statusPrefix?: string;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
+  /** Scrub reflected request credentials before retaining response diagnostics. */
+  requestHeaders?: HeadersInit;
 };
 
 class ProviderErrorBodyTimeout extends Error {
@@ -247,37 +251,49 @@ async function extractProviderErrorInfo(
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpErrorInfo> {
   const bodyTimeoutMs = options?.bodyTimeoutMs;
-  const rawBody = trimToUndefined(
-    await readResponseTextLimited(response, 16 * 1024, {
-      timeoutMs:
-        typeof bodyTimeoutMs === "function"
-          ? () => {
-              try {
-                return bodyTimeoutMs();
-              } catch (error) {
-                throw new ProviderErrorBodyTimeout(error);
-              }
+  const prefix = await readResponseTextPrefix(response, 16 * 1024, {
+    chunkTimeoutMs: 10_000,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
+    timeoutMs:
+      typeof bodyTimeoutMs === "function"
+        ? () => {
+            try {
+              return bodyTimeoutMs();
+            } catch (error) {
+              throw new ProviderErrorBodyTimeout(error);
             }
-          : bodyTimeoutMs,
-      onTimeout: (params) =>
-        new ProviderErrorBodyTimeout(
-          options?.onBodyTimeout?.(params) ??
-            new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
-        ),
-    }).catch((error: unknown) => {
-      if (error instanceof ProviderErrorBodyTimeout) {
-        throw error.timeoutError;
-      }
-      return "";
-    }),
-  );
-  const requestId = extractProviderRequestId(response);
+          }
+        : bodyTimeoutMs,
+    onTimeout: (params) =>
+      new ProviderErrorBodyTimeout(
+        options?.onBodyTimeout?.(params) ??
+          new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
+      ),
+  }).catch((error: unknown) => {
+    if (error instanceof ProviderErrorBodyTimeout) {
+      throw error.timeoutError;
+    }
+    return undefined;
+  });
+  const rawRequestId = extractProviderRequestId(response);
+  const requestId =
+    rawRequestId && options?.requestHeaders
+      ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
+      : rawRequestId;
+  const rawBody = trimToUndefined(prefix?.text);
   if (!rawBody) {
     return requestId ? { requestId } : {};
   }
-  const body = redactProviderErrorBody(rawBody);
+  // Redact before metadata extraction or preview truncation can split a credential.
+  const safeBody = options?.requestHeaders
+    ? redactProviderResponseErrorText(rawBody, options.requestHeaders, {
+        sourceTruncated: prefix?.truncated,
+      })
+    : rawBody;
+  const body = redactProviderErrorBody(safeBody);
   try {
-    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(rawBody));
+    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(safeBody));
     return {
       ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
       ...(metadata.code ? { code: metadata.code } : {}),
@@ -419,7 +435,11 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
+    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
+    throw new Error(
+      `${label}: malformed JSON response`,
+      opts?.requestHeaders ? undefined : { cause },
+    );
   }
 }
 
@@ -491,7 +511,7 @@ export async function readProviderBinaryResponse(
     void response.body?.cancel().catch(() => undefined);
     throw error;
   }
-  const bytes = await readProviderResponseBytes(response, label, kind, opts, opts?.onOverflow);
+  const bytes = await readProviderResponseBytes(response, label, kind, opts);
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

@@ -30,7 +30,15 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.executeGitCommand>
     ): ReturnType<typeof actual.executeGitCommand> => {
       if (args[1][0] === "push" && mocks.pushDiagnostic) {
-        return { code: 1, stdout: "", stderr: mocks.pushDiagnostic };
+        return {
+          code: 1,
+          stdout: "",
+          stderr: mocks.pushDiagnostic,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
+        };
       }
       return await actual.executeGitCommand(...args);
     },
@@ -694,6 +702,9 @@ describe("Git-backed SQLite snapshots", () => {
     writeConfigMachineState("nodeHost.config", { gateway: { token: nodeSecret } }, { env });
     writeConfigMachineState("nodeHost.otherSecret", { token: nodeSecret }, { env });
     writeConfigMachineState("webPush.vapidKeys", { privateKey: pushSecret }, { env });
+    const authSecret = "synthetic-shared-auth-profile-secret";
+    writeConfigMachineState("authProfiles.store", { profiles: { openai: authSecret } }, { env });
+    writeConfigMachineState("authProfiles.state", { active: authSecret }, { env });
     writeConfigMachineState("sidebar.sectionOrder", ["first", "second"], { env });
     closeOpenClawStateDatabaseForTest();
 
@@ -711,7 +722,7 @@ describe("Git-backed SQLite snapshots", () => {
     const manifestJson = await fs.readFile(path.join(outputPath, "manifest.json"), "utf8");
 
     expect(manifest).toMatchObject({
-      excludedConfigStateKeyPrefixes: ["nodeHost.", "webPush.vapidKeys"],
+      excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
       tables: { config_machine_state: { rows: 1 } },
     });
     expect(rows).toContain("sidebar.sectionOrder");
@@ -719,9 +730,12 @@ describe("Git-backed SQLite snapshots", () => {
     expect(rows).not.toContain("nodeHost.");
     expect(rows).not.toContain("webPush.vapidKeys");
     expect(rows).not.toContain(nodeSecret);
+    expect(rows).not.toContain("authProfiles.");
+    expect(rows).not.toContain(authSecret);
     expect(rows).not.toContain(pushSecret);
     expect(manifestJson).not.toContain(nodeSecret);
     expect(manifestJson).not.toContain(pushSecret);
+    expect(manifestJson).not.toContain(authSecret);
 
     const restoredPath = path.join(root, "restored.sqlite");
     const restored = await restoreGitBackupDirectory({
@@ -731,7 +745,11 @@ describe("Git-backed SQLite snapshots", () => {
     });
     // Restore must disclose the intentionally omitted machine-state prefixes so
     // operators cannot mistake a redacted restore for a complete one.
-    expect(restored.excludedConfigStateKeyPrefixes).toEqual(["nodeHost.", "webPush.vapidKeys"]);
+    expect(restored.excludedConfigStateKeyPrefixes).toEqual([
+      "authProfiles.",
+      "nodeHost.",
+      "webPush.vapidKeys",
+    ]);
   });
 
   it("rejects a restored global database without canonical ownership metadata", async () => {

@@ -26,6 +26,7 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
+  gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
@@ -173,16 +174,22 @@ export async function confirmGatewayReachable(params: {
     });
     const reachedGateway =
       probe.ok ||
-      looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-      (params.allowDeviceIdentityRequired === true &&
-        probe.close?.code === 1008 &&
-        normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-      (probe.connectLatencyMs != null &&
-        probe.server?.version != null &&
-        probe.auth.capability === "connected_no_operator_scope");
+      (probe.gatewayReached === true &&
+        (looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+          (params.allowDeviceIdentityRequired === true &&
+            probe.close?.code === 1008 &&
+            normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
+          (probe.connectLatencyMs != null &&
+            probe.server?.version != null &&
+            probe.auth.capability === "connected_no_operator_scope")));
     return {
       reachable: reachedGateway,
       gatewayVersion: probe.server?.version ?? null,
+      gatewayBuildId:
+        probe.server?.buildId ??
+        (reachedGateway || probe.server?.version != null || probe.server?.connId != null
+          ? null
+          : undefined),
       activatedPluginErrors: readActivatedPluginErrors(probe.health),
       channelProbeErrors: readChannelProbeErrors(probe.health),
       ...(!reachedGateway && probe.error
@@ -193,6 +200,7 @@ export async function confirmGatewayReachable(params: {
     return {
       reachable: false,
       gatewayVersion: null,
+      gatewayBuildId: undefined,
       activatedPluginErrors: [],
       channelProbeErrors: [],
       probeError: formatGatewayRestartProbeError(error),

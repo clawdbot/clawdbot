@@ -40,6 +40,7 @@ const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserA
     "dmPolicy",
     "allowFrom",
     "historyLimit",
+    "mediaMaxMb",
     "groupAllowFrom",
     "groupPolicy",
     "groups",

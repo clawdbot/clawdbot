@@ -94,6 +94,34 @@ For exec requests, `allow-always` means **always allow here**: the generated
 grant is tied to the command's exact arguments and current working directory.
 The same command from another directory requires a separate approval.
 
+For approvals raised by an automation (cron) run, `allow-always` mints a
+scoped standing grant instead of a JSON allowlist entry (see
+[Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations)).
+By default the grant lives until revoked; `--expires-in-days <n>` freezes an
+explicit lifetime instead of the configured `tools.exec.grantExpiryDays`
+default:
+
+```bash
+openclaw approvals resolve <id> allow-always --expires-in-days 30
+```
+
+## Standing grants
+
+Standing grants minted by allow-always on automation approvals are listed and
+revoked from the same command group:
+
+```bash
+openclaw approvals grants list
+openclaw approvals grants list --json
+openclaw approvals grants revoke <grant-id>
+```
+
+The list shows the owning automation, the exact command, the use count, and
+each grant's state (until revoked, expires in N days, expired, or revoked).
+Revocation is idempotent and takes effect at the next occurrence's spawn
+boundary — that occurrence prompts again. Editing or deleting the automation
+invalidates its grants without needing an explicit revoke.
+
 The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.
 
 `--reason` adds a local note to the CLI confirmation. The current Gateway approval record has no free-text resolution-reason field, so this note is not persisted or sent to other approval surfaces.

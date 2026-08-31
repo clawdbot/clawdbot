@@ -6,10 +6,11 @@
  * / `--human` override.
  */
 
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import {
+  MAX_JSONC_INPUT_BYTES,
   OcEmitSentinelError,
   OcPathError,
   REDACTED_SENTINEL,
@@ -49,6 +50,15 @@ interface PathCommandOptions {
 }
 
 type OutputMode = "human" | "json";
+
+// Keep every parser behind the shipped JSONC ceiling so user-selected files
+// cannot allocate an unbounded input before format-specific validation runs.
+const MAX_OC_PATH_INPUT_BYTES = MAX_JSONC_INPUT_BYTES;
+
+type LoadedOcPathFile = {
+  readonly ast: OcAst;
+  readonly raw: string;
+};
 
 const SCRUB_PLACEHOLDER = "[REDACTED]";
 
@@ -160,14 +170,47 @@ function catchSentinel<T>(
   }
 }
 
-async function loadAst(
+async function loadOcPathFile(
   absPath: string,
   fileName: string,
   runtime: OutputRuntimeEnv,
   mode: OutputMode,
-): Promise<OcAst | null> {
-  const raw = await fs.readFile(absPath, "utf-8");
+): Promise<LoadedOcPathFile | null> {
   const kind = inferKind(fileName);
+  // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
+  // preserves regular-file and symlink reads while making that check reachable.
+  const handle = await fs.open(absPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  let raw: string;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      emitError(runtime, mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
+      runtime.exit(2);
+      return null;
+    }
+    // `end` is inclusive, so a raced growth can return at most the cap plus one byte.
+    const bytes =
+      stat.size > MAX_OC_PATH_INPUT_BYTES
+        ? null
+        : Buffer.concat(
+            await handle
+              .createReadStream({ autoClose: false, end: MAX_OC_PATH_INPUT_BYTES, start: 0 })
+              .toArray(),
+          );
+    if (bytes === null || bytes.length > MAX_OC_PATH_INPUT_BYTES) {
+      emitError(
+        runtime,
+        mode,
+        `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
+        kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
+      );
+      runtime.exit(2);
+      return null;
+    }
+    raw = bytes.toString("utf8");
+  } finally {
+    await handle.close();
+  }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
     const sizeDiagnostic = result.diagnostics.find(
@@ -178,15 +221,15 @@ async function loadAst(
       runtime.exit(2);
       return null;
     }
-    return result.ast;
+    return { ast: result.ast, raw };
   }
   if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
+    return { ast: parseJsonl(raw).ast, raw };
   }
   if (kind === "yaml") {
-    return parseYaml(raw).ast;
+    return { ast: parseYaml(raw).ast, raw };
   }
-  return parseMd(raw).ast;
+  return { ast: parseMd(raw).ast, raw };
 }
 
 function emitForKind(ast: OcAst, fileName?: string): string {
@@ -297,13 +340,13 @@ async function pathResolveCommand(
   if (ocPath === null) {
     return;
   }
-  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
-  if (ast === null) {
+  const loaded = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
+  if (loaded === null) {
     return;
   }
   let match: OcMatch | null;
   try {
-    match = resolveOcPath(ast, ocPath);
+    match = resolveOcPath(loaded.ast, ocPath);
   } catch (err) {
     if (err instanceof OcPathError) {
       // resolveOcPath throws on wildcard patterns — point at find.
@@ -349,14 +392,13 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const oldBytes = await fs.readFile(fsPath, "utf-8");
-  const ast = await loadAst(fsPath, ocPath.file, runtime, mode);
-  if (ast === null) {
+  const loaded = await loadOcPathFile(fsPath, ocPath.file, runtime, mode);
+  if (loaded === null) {
     return;
   }
 
   const result = catchSentinel("set", runtime, mode, () =>
-    setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true }),
+    setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true }),
   );
   if (result === null) {
     return;
@@ -381,7 +423,8 @@ async function pathSetCommand(
   const byteLength = Buffer.byteLength(newBytes, "utf8");
 
   if (options.dryRun === true) {
-    const diff = options.diff === true ? formatUnifiedDiff(oldBytes, newBytes, fsPath) : undefined;
+    const diff =
+      options.diff === true ? formatUnifiedDiff(loaded.raw, newBytes, fsPath) : undefined;
     emit(
       runtime,
       mode,
@@ -427,11 +470,11 @@ async function pathFindCommand(
     runtime.exit(2);
     return;
   }
-  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file, runtime, mode);
-  if (ast === null) {
+  const loaded = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, runtime, mode);
+  if (loaded === null) {
     return;
   }
-  const matches = findOcPaths(ast, pattern);
+  const matches = findOcPaths(loaded.ast, pattern);
   emit(
     runtime,
     mode,
@@ -529,16 +572,16 @@ async function pathEmitCommand(
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const ast = await loadAst(fsPath, fileName, runtime, mode);
-  if (ast === null) {
+  const loaded = await loadOcPathFile(fsPath, fileName, runtime, mode);
+  if (loaded === null) {
     return;
   }
-  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
+  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(loaded.ast, fileName));
   if (bytes === null) {
     return;
   }
   if (mode === "json") {
-    runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
+    runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: loaded.ast.kind, bytes })));
     return;
   }
   runtime.writeStdout(bytes);

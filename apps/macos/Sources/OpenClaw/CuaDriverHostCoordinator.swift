@@ -399,6 +399,10 @@ final class CuaDriverHostCoordinator {
 
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
+            let ready = await self.readinessProbe(socketDirectory.socketPath)
+            let permissions = ready ? await self.permissionSnapshot() : nil
+            // Either probe can suspend while disable or process exit retires this child.
+            // Revalidate before committing the snapshot or publishing availability.
             guard self.desiredEnabled,
                   let child = self.runningChild,
                   child.generation == generation,
@@ -407,8 +411,8 @@ final class CuaDriverHostCoordinator {
                 await self.ensureStopped()
                 return
             }
-            if await self.readinessProbe(socketDirectory.socketPath) {
-                self.lastPermissionSnapshot = await self.permissionSnapshot()
+            if let permissions {
+                self.lastPermissionSnapshot = permissions
                 self.setReadyEndpoint(CuaDriverWorkerEndpoint(
                     socketPath: socketDirectory.socketPath,
                     binaryPath: executableURL.path))

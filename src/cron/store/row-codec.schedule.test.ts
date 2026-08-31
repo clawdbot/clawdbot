@@ -1,6 +1,4 @@
-// Round-trips each CronSchedule kind through the SQLite column codec so the
-// on-exit command/cwd persistence (v1 reuses schedule_expr/schedule_tz) is
-// covered alongside the existing kinds.
+// Round-trips each CronSchedule kind through canonical SQLite job JSON.
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import type { CronSchedule } from "../types.js";
@@ -10,8 +8,8 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
   return projectCronJobThroughStorageCodec(makeCronJob({ schedule })).schedule;
 }
 
-describe("schedule column codec round-trip", () => {
-  it("round-trips the creator account through the additive job_json envelope", () => {
+describe("canonical cron schedule JSON round-trip", () => {
+  it("round-trips the creator account through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({
         owner: {
@@ -29,7 +27,7 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips scheduled authority through the additive job_json envelope", () => {
+  it("round-trips scheduled authority through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({
         owner: {
@@ -90,7 +88,7 @@ describe("schedule column codec round-trip", () => {
     expect(malformed.runtimeAuthority).toBeUndefined();
   });
 
-  it("round-trips pacing through the additive job_json envelope", () => {
+  it("round-trips pacing through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),
     );
@@ -113,7 +111,7 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips a stream schedule through job_json without new columns", () => {
+  it("round-trips a stream schedule through canonical job JSON", () => {
     expect(
       roundTrip({
         kind: "stream",
@@ -135,7 +133,7 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("keeps existing kinds intact (no cross-talk from on-exit column reuse)", () => {
+  it("keeps existing schedule kinds intact", () => {
     expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
       kind: "every",
       everyMs: 60_000,
@@ -149,10 +147,5 @@ describe("schedule column codec round-trip", () => {
       kind: "at",
       at: "2026-01-01T00:00:00.000Z",
     });
-  });
-
-  it("an on-exit row is decoded as on-exit, not cron (schedule_kind disambiguates)", () => {
-    const decoded = roundTrip({ kind: "on-exit", command: "sleep 5" });
-    expect(decoded?.kind).toBe("on-exit");
   });
 });

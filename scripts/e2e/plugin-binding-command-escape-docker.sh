@@ -5,6 +5,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_E2E_IMAGE:-openclaw-plugin-binding-command-escape-e2e}"
@@ -23,7 +24,7 @@ docker_e2e_build_or_reuse \
   "$IMAGE_NAME" \
   plugin-binding-command-escape \
   "$ROOT_DIR/scripts/e2e/plugin-binding-command-escape.Dockerfile" \
-  "$ROOT_DIR"
+  "$SOURCE_ROOT"
 
 echo "Running plugin binding command escape Docker E2E..."
 set +e

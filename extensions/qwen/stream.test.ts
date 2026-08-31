@@ -100,6 +100,93 @@ describe("createQwenThinkingWrapper", () => {
 });
 
 describe("wrapQwenProviderStream", () => {
+  it.each(
+    ["qwen", "qwen-token-plan"].flatMap((provider) =>
+      ["qwen3.8-max", "qwen3.8-flash"].flatMap((id) =>
+        (
+          [
+            ["off", undefined],
+            ["low", "low"],
+            ["medium", "medium"],
+            ["high", "xhigh"],
+            ["xhigh", "xhigh"],
+            ["max", "xhigh"],
+          ] as const
+        ).map(([level, effort]) => ({ provider, id, level, effort })),
+      ),
+    ),
+  )(
+    "maps $provider/$id $level without changing reasoning replay",
+    ({ provider, id, level, effort }) => {
+      let captured: Record<string, unknown> = {};
+      const messages = [
+        { role: "assistant", content: "done", reasoning_content: "original reasoning" },
+      ];
+      const model = {
+        api: "openai-completions",
+        provider,
+        id,
+        reasoning: true,
+      } as Model<"openai-completions">;
+      const streamFn: StreamFn = (_model, _context, options) => {
+        const payload = { messages, thinking: { type: "enabled" } };
+        options?.onPayload?.(payload, _model);
+        captured = payload;
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrapped = wrapQwenProviderStream({
+        provider,
+        modelId: id,
+        model,
+        streamFn,
+        thinkingLevel: level,
+      } as never);
+      void wrapped?.(model, { messages: [] } as Context, {});
+      expect(captured).toEqual({
+        messages,
+        enable_thinking: level !== "off",
+        ...(effort ? { reasoning_effort: effort } : {}),
+      });
+      expect(messages[0]?.reasoning_content).toBe("original reasoning");
+    },
+  );
+
+  it.each(["qwen", "qwen-token-plan"])(
+    "honors %s caller budgets and reasoning overrides after async payload replacement",
+    async (provider) => {
+      const model = {
+        api: "openai-completions",
+        provider,
+        id: "qwen3.8-max",
+        reasoning: true,
+      } as Model<"openai-completions">;
+      let captured: Record<string, unknown> = {};
+      const streamFn: StreamFn = async (_model, _context, options) => {
+        const payload = { messages: [] };
+        const replacement = await options?.onPayload?.(payload, _model);
+        captured = (replacement ?? payload) as Record<string, unknown>;
+        return {} as Awaited<ReturnType<StreamFn>>;
+      };
+      const wrapped = wrapQwenProviderStream({
+        provider,
+        modelId: model.id,
+        model,
+        streamFn,
+        thinkingLevel: "high",
+      } as never);
+      for (const [replacement, expected] of [
+        [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
+        [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
+        [{ reasoning_effort: "none" }, { enable_thinking: false }],
+      ]) {
+        await wrapped?.(model, { messages: [] } as Context, {
+          onPayload: async () => ({ ...replacement }),
+        });
+        expect(captured).toEqual(expected);
+      }
+    },
+  );
+
   it("only registers for Qwen-family OpenAI-compatible providers", () => {
     const streamFn = wrapQwenProviderStream({
       provider: "qwencloud",

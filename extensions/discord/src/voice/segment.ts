@@ -79,6 +79,10 @@ export async function processDiscordVoiceSegment(params: {
     `transcript from ${ingress.speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceLogPreview(transcript)}`,
   );
   if (params.transcripts) {
+    // Ingress and STT awaits can outlive this binding while the voice entry is reused.
+    if (entry.sessionLifecycle.status === "stopped" || entry.transcripts !== params.transcripts) {
+      return;
+    }
     await params.transcripts.onUtterance({
       sessionId: params.transcripts.sessionId,
       startedAt: new Date().toISOString(),

@@ -314,9 +314,10 @@
   min-height: 96px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: linear-gradient(90deg, var(--bg-muted) 20%, var(--bg-hover) 50%, var(--bg-muted) 80%);
-  background-size: 200% 100%;
-  animation: usage-shimmer 1.35s ease-in-out infinite;
+}
+
+.usage-skeleton-block::after {
+  animation-duration: 1.35s;
 }
 
 .usage-skeleton-block--tall {
@@ -1981,15 +1982,5 @@
 @keyframes usage-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes usage-shimmer {
-  0% {
-    background-position: 100% 0;
-  }
-
-  100% {
-    background-position: -100% 0;
   }
 }

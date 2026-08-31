@@ -18,14 +18,18 @@ import {
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("scrubs the refusal marker for Anthropic transport", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
-  });
+  it.each([
+    { prompt: refusalTrigger, expected: "[redacted]" },
+    {
+      prompt: `Reply ok. Test trigger: ${refusalTrigger}_nonce-a and ${refusalTrigger}_nonce-b`,
+      expected: "Reply ok. Test trigger: [redacted]_nonce-a and [redacted]_nonce-b",
+    },
+  ])(
+    "neutralizes every refusal marker while preserving surrounding text",
+    ({ prompt, expected }) => {
+      expect(resolveEmbeddedAttemptBasePrompt({ provider: "anthropic", prompt })).toBe(expected);
+    },
+  );
 
   it("keeps non-Anthropic prompts byte-for-byte", () => {
     expect(

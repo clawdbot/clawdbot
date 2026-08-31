@@ -28,6 +28,15 @@ portable formats, byte limits, and lazy transcoding, see
 - `--dry-run` — print the resolved payload and skip sending.
 - `--json` — print the result as JSON: `{ action, channel, dryRun, handledBy, messageId?, payload }` (`payload` carries the channel-specific send result, including any media reference).
 
+## Message tool attachment metadata
+
+For `buffer` attachments, `contentType` takes precedence over `mimeType`; a data URL's
+MIME type is used only when neither is supplied. For `reply`, `sendAttachment`,
+`upload-file`, and `setGroupIcon`, top-level MIME metadata also takes precedence over
+the selected `attachments[]` entry. Hydration carries that choice as `contentType`
+and uses it to infer a missing filename. Explicit filenames are preserved. This
+metadata precedence does not change MIME detection when media bytes are loaded or staged.
+
 ## WhatsApp Web channel behavior
 
 - Input: local file path **or** HTTP(S) URL.

@@ -1,0 +1,295 @@
+title: Internal event turns spawn real subagents
+
+scenario:
+  id: internal-event-subagent-spawn-live
+  surface: cron
+  runtimePairLane: extended
+  coverage:
+    primary:
+      - automation.wake-and-cooldown-handling
+      - agent-runtime.subagent-turns-subagents
+    secondary:
+      - automation.cron-rpcs
+      - automation.background-process-status
+      - agent-runtime.tool-fs-read
+  regressionRefs:
+    - openclaw/openclaw#132890
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        heartbeat:
+          every: 24h
+          target: qa-channel
+          to: dm:qa-operator
+          directPolicy: allow
+    tools:
+      codeMode: false
+      exec:
+        host: gateway
+        security: full
+        ask: off
+        notifyOnExit: true
+  objective: Prove real cron and process completion events start internal turns that successfully delegate work through the configured live runtime.
+  successCriteria:
+    - A naturally fired main-session systemEvent creates a successful native child through sessions_spawn.
+    - An OpenClaw background exec finishes only after its initiating model turn ends, and its completion event creates a second successful native child.
+    - Each parent transcript records a successful sessions_spawn call, and the matching child task reaches succeeded.
+    - Each child successfully reads and returns a fresh marker that was absent from every parent instruction.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/gateway/background-process.md
+    - docs/gateway/heartbeat.md
+    - docs/tools/subagents.md
+  codeRefs:
+    - src/infra/heartbeat-runner-execution.ts
+    - src/agents/bash-tools.exec-runtime.ts
+    - src/agents/subagents/spawn/subagent-spawn.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns main-session cron and background-process event turns with real child runs and an isolated QA delivery route.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 900000
+    summary: Run with --provider-mode live-frontier --runtime-pair openclaw,codex to exercise embedded and Codex app-server event turns. No provider or tool mocks are accepted.
+    config:
+      requiredProviderMode: live-frontier
+      parentSessionKey: agent:qa:main
+      fireDelayMs: 5000
+      cases:
+        - exec
+        - cron
+
+flow:
+  steps:
+    - name: real internal events delegate through their configured runtime
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && !env.mock"
+            message: This proof requires a real configured provider.
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: verdicts
+          value:
+            expr: "[]"
+        - set: execToolName
+          value:
+            expr: "env.runtimeId === 'codex' ? 'gateway_exec' : 'exec'"
+        - forEach:
+            items:
+              expr: config.cases
+            item: eventKind
+            actions:
+              - set: attemptId
+                value:
+                  expr: randomUUID()
+              - set: childLabel
+                value:
+                  expr: "`qa-event-${eventKind}-${attemptId}`"
+              - set: childFile
+                value:
+                  expr: "`qa-event-child-${attemptId}.txt`"
+              - set: expectedMarker
+                value:
+                  expr: "`QA-EVENT-CHILD-${randomUUID()}`"
+              - call: fs.writeFile
+                args:
+                  - expr: path.join(env.gateway.workspaceDir, childFile)
+                  - expr: "`${expectedMarker}\n`"
+                  - utf8
+              - set: eventInstruction
+                value:
+                  expr: |-
+                    `Act on this ${eventKind} completion by calling the OpenClaw sessions_spawn tool exactly once, with runtime subagent, cleanup keep, and label ${childLabel}.
+                    The child task is: "Use the OpenClaw filesystem read tool to read ${childFile} in the workspace. Reply with the exact single-line contents and nothing else. You must actually read the file. Do not use exec, process, or another subagent."
+                    Do not read the file yourself or guess its contents. After the spawn is accepted, finish this turn with NO_REPLY. Do not call sessions_yield. Do not spawn another child when this child's result arrives. This request explicitly authorizes the one child.`
+              - call: readSessionTranscriptSummary
+                saveAs: parentBefore
+                args:
+                  - ref: env
+                  - expr: config.parentSessionKey
+                  - allowEmpty: true
+              - set: attemptStartedAt
+                value:
+                  expr: Date.now()
+              - if:
+                  expr: "eventKind === 'cron'"
+                  then:
+                    - set: scheduledAt
+                      value:
+                        expr: "new Date(Date.now() + config.fireDelayMs).toISOString()"
+                    - call: env.gateway.call
+                      saveAs: job
+                      args:
+                        - cron.add
+                        - agentId: qa
+                          name:
+                            expr: "`qa-event-spawn-${attemptId}`"
+                          enabled: true
+                          deleteAfterRun: true
+                          schedule:
+                            kind: at
+                            at:
+                              ref: scheduledAt
+                          sessionTarget: main
+                          wakeMode: now
+                          payload:
+                            kind: systemEvent
+                            text:
+                              ref: eventInstruction
+                        - timeoutMs: 30000
+                    - assert:
+                        expr: "Boolean(job.id) && job.sessionTarget === 'main' && job.payload?.kind === 'systemEvent'"
+                        message: Cron did not retain the main-session systemEvent contract.
+                    - call: waitForCronRunCompletion
+                      saveAs: cronRun
+                      args:
+                        - callGateway:
+                            expr: env.gateway.call.bind(env.gateway)
+                          jobId:
+                            expr: job.id
+                          afterTs:
+                            ref: attemptStartedAt
+                          timeoutMs:
+                            expr: liveTurnTimeoutMs(env, 240000)
+                    - assert:
+                        expr: "cronRun.status === 'ok' && Number.isSafeInteger(cronRun.runAtMs) && cronRun.runAtMs >= Date.parse(scheduledAt)"
+                        message:
+                          expr: "`cron did not naturally fire successfully: ${JSON.stringify(cronRun)}`"
+                  else:
+                    - set: scriptFile
+                      value:
+                        expr: "`qa-event-process-${attemptId}.cjs`"
+                    - set: gateFile
+                      value:
+                        expr: "`qa-event-release-${attemptId}`"
+                    - set: completionFile
+                      value:
+                        expr: "`qa-event-completed-${attemptId}.json`"
+                    - set: completionOutput
+                      value:
+                        expr: "`DELEGATE label=${childLabel} file=${childFile}`"
+                    - assert:
+                        expr: completionOutput.length <= 180
+                        message: Completion metadata must fit the exec notification snippet.
+                    # The initiating turn cannot know the child label or file:
+                    # only this process's eventual completion output supplies them.
+                    - call: fs.writeFile
+                      args:
+                        - expr: path.join(env.gateway.workspaceDir, scriptFile)
+                        - expr: |-
+                            `const fs = require('node:fs');
+                            const deadline = Date.now() + 300000;
+                            const timer = setInterval(() => {
+                              if (Date.now() >= deadline) { clearInterval(timer); process.exitCode = 2; return; }
+                              if (!fs.existsSync(${JSON.stringify(gateFile)})) return;
+                              clearInterval(timer);
+                              fs.writeFileSync(${JSON.stringify(completionFile)}, JSON.stringify({ completedAt: Date.now() }));
+                              process.stdout.write(${JSON.stringify(completionOutput + '\n')});
+                            }, 100);
+                            `
+                        - utf8
+                    - set: execCommand
+                      value:
+                        expr: "`node ${scriptFile}`"
+                    - call: runAgentPrompt
+                      args:
+                        - ref: env
+                        - sessionKey:
+                            expr: config.parentSessionKey
+                          message:
+                            expr: |-
+                              `Start this background job using the OpenClaw ${execToolName} tool with command ${JSON.stringify(execCommand)} and background=true. Do not use the model runtime's native shell.
+                              In this initiating turn call no other tools. Do not inspect the script or any files, poll the process, wait for it, or create a subagent. After the tool reports a running session, finish this turn with exactly QA-PROCESS-STARTED-${attemptId}.
+                              Its completion will arrive later as a separate notification containing DELEGATE label=<label> file=<file>. I authorize you to act on that future completion: call sessions_spawn exactly once with runtime subagent, cleanup keep, and that label. Tell the child to use only the OpenClaw filesystem read tool to read that workspace file and return its exact single-line contents; the child must actually read it. Do not read or inspect it yourself. After spawning, finish that turn with NO_REPLY. Do not call sessions_yield. Do not spawn again when the child completes.`
+                          timeoutMs:
+                            expr: liveTurnTimeoutMs(env, 240000)
+                    - call: readSessionTranscriptSummary
+                      saveAs: initialTurn
+                      args:
+                        - ref: env
+                        - expr: config.parentSessionKey
+                        - afterEventCursor:
+                            expr: parentBefore.eventCursor
+                    - assert:
+                        expr: "initialTurn.successfulToolCallCounts[execToolName] === 1 && Object.entries(initialTurn.assistantToolCallCounts).every(([name, count]) => count === 0 || name === execToolName) && initialTurn.finalText.trim() === `QA-PROCESS-STARTED-${attemptId}`"
+                        message:
+                          expr: "`initial turn must start only one OpenClaw exec and then finish: ${JSON.stringify({ tools: initialTurn.assistantToolCallCounts, successfulTools: initialTurn.successfulToolCallCounts, finalText: initialTurn.finalText })}`"
+                    - call: env.gateway.call
+                      saveAs: initialHistory
+                      args:
+                        - chat.history
+                        - sessionKey:
+                            expr: config.parentSessionKey
+                          limit: 100
+                        - timeoutMs: 30000
+                    - assert:
+                        expr: "(initialHistory.messages ?? []).some((message) => message.role === 'assistant' && Array.isArray(message.content) && message.content.some((block) => ['toolCall', 'toolUse', 'tool_use'].includes(block.type) && block.name === execToolName && (block.arguments ?? block.input)?.command === execCommand && (block.arguments ?? block.input)?.background === true))"
+                        message: Parent did not invoke the exact OpenClaw background exec command.
+                    - set: parentBefore
+                      value:
+                        ref: initialTurn
+                    - set: releasedAt
+                      value:
+                        expr: Date.now()
+                    - call: fs.writeFile
+                      args:
+                        - expr: path.join(env.gateway.workspaceDir, gateFile)
+                        - release
+                        - utf8
+                    - call: waitForCondition
+                      saveAs: processCompletion
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "fs.readFile(path.join(env.gateway.workspaceDir, completionFile), 'utf8').then(JSON.parse).catch(() => undefined)"
+                        - 30000
+                        - 100
+                    - assert:
+                        expr: "Number.isSafeInteger(processCompletion.completedAt) && processCompletion.completedAt >= releasedAt"
+                        message: Background process completed before the initiating turn ended.
+              - call: waitForCondition
+                saveAs: completedChild
+                args:
+                  - lambda:
+                      async: true
+                      expr: |-
+                        (async () => {
+                          const result = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true });
+                          return (result.tasks ?? []).find((task) => task.label === childLabel && task.requesterSessionKey === config.parentSessionKey && task.createdAt >= attemptStartedAt && task.status === 'succeeded' && typeof task.childSessionKey === 'string' && Number.isFinite(task.endedAt));
+                        })()
+                  - expr: liveTurnTimeoutMs(env, 300000)
+                  - 1000
+              - call: readSessionTranscriptSummary
+                saveAs: parentAfter
+                args:
+                  - ref: env
+                  - expr: config.parentSessionKey
+                  - afterEventCursor:
+                      expr: parentBefore.eventCursor
+              - assert:
+                  expr: "parentAfter.successfulToolCallCounts.sessions_spawn === 1 && ['read', 'exec', 'process', 'gateway_exec', 'gateway_process'].every((name) => (parentAfter.assistantToolCallCounts[name] ?? 0) === 0)"
+                  message:
+                    expr: "`${eventKind} wake did not successfully spawn exactly once without reading the child marker itself: ${JSON.stringify(parentAfter.assistantToolCallCounts)}`"
+              - call: readSessionTranscriptSummary
+                saveAs: childTranscript
+                args:
+                  - ref: env
+                  - expr: completedChild.childSessionKey
+              - assert:
+                  expr: "(childTranscript.successfulToolCallCounts.read ?? 0) >= 1 && childTranscript.finalText.trim() === expectedMarker"
+                  message:
+                    expr: "`${eventKind} child did not read and return its hidden marker: ${JSON.stringify({ tools: childTranscript.successfulToolCallCounts, finalText: childTranscript.finalText })}`"
+              - assert:
+                  expr: "(parentAfter.successfulToolCallEvents ?? []).some((event) => event.name === 'sessions_spawn' && event.timestamp >= attemptStartedAt && event.timestamp <= completedChild.endedAt && (eventKind !== 'exec' || event.timestamp >= processCompletion.completedAt))"
+                  message: Child spawn chronology does not follow the real event producer.
+              - set: appendVerdict
+                value:
+                  expr: "verdicts.push({ source: eventKind, providerMode: env.providerMode, model: env.primaryModel, parent: config.parentSessionKey, child: completedChild.childSessionKey, spawnAccepted: true, childSucceeded: true, childReadVerified: true, heartbeatTarget: 'qa-channel' })"
+      detailsExpr: JSON.stringify(verdicts)

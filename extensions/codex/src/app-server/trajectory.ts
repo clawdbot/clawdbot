@@ -28,7 +28,14 @@ export function createCodexTrajectoryRecorder(
   const trajectory = params.trajectory;
 
   return {
-    recordEvent: trajectory.recordEvent,
+    recordEvent: (type, data) => {
+      try {
+        trajectory.recordEvent(type, data);
+      } catch {
+        // Host authority can close before transport callbacks finish during shutdown.
+        // Optional diagnostics must not interrupt the owning run lifecycle.
+      }
+    },
     flush: trajectory.flush,
   };
 }

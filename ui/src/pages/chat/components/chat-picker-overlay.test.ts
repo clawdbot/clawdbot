@@ -35,7 +35,7 @@ describe("chat picker overlay", () => {
     expect(trigger.hasAttribute("data-chat-pointer-restored-focus")).toBe(false);
   });
 
-  it("returns Escape focus to the visible mobile settings trigger", async () => {
+  it("returns Escape focus to the picker’s own trigger", () => {
     const composer = document.createElement("div");
     composer.className = "agent-chat__input";
     const settings = document.createElement("div");
@@ -46,10 +46,9 @@ describe("chat picker overlay", () => {
     modelPicker.append(modelTrigger);
     const effortPicker = document.createElement("details");
     effortPicker.className = "chat-controls__effort-picker";
-    const hiddenEffortTrigger = document.createElement("summary");
-    hiddenEffortTrigger.style.display = "none";
+    const effortTrigger = document.createElement("summary");
     const effortControl = document.createElement("input");
-    effortPicker.append(hiddenEffortTrigger, effortControl);
+    effortPicker.append(effortTrigger, effortControl);
     settings.append(modelPicker, effortPicker);
     composer.append(settings);
     document.body.append(composer);
@@ -59,11 +58,8 @@ describe("chat picker overlay", () => {
     effortPicker.dispatchEvent(new Event("toggle"));
     effortControl.focus();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
 
     expect(effortPicker.open).toBe(false);
-    expect(document.activeElement).toBe(modelTrigger);
+    expect(document.activeElement).toBe(effortTrigger);
   });
 });

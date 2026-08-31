@@ -9,15 +9,19 @@ import {
 
 function createBridge(params: {
   runAgentConsult: (request: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
+  onError?: (error: Error) => void;
+  onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
 }) {
   let socket: FakeSocket | undefined;
   const bridge = new OpenAIQuicksilverGatewayBridge({
     providerConfig: {},
-    model: "gpt-live-1-boulder-alpha",
+    model: "gpt-live-test",
     voice: "marin",
     audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
     onAudio: vi.fn(),
     onClearAudio: vi.fn(),
+    onError: params.onError,
+    onTranscript: params.onTranscript,
     runAgentConsult: params.runAgentConsult,
     logger: { debug: vi.fn(), warn: vi.fn() },
     resolveAuth: vi.fn(async () => ({
@@ -61,6 +65,35 @@ function emitDelegation(socket: FakeSocket, id: string, text: string): void {
 }
 
 describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
+  it("reports recoverable provider errors to the relay while preserving its connection", async () => {
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const harness = createBridge({
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      onError,
+      onTranscript,
+    });
+    try {
+      await harness.bridge.connect();
+      const socket = harness.getSocket();
+      emitSideband(socket, { type: "error", error: { message: "temporary voice failure" } });
+      emitSideband(socket, {
+        type: "turn.done",
+        turn: { role: "assistant", transcript: "Recovered" },
+      });
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: "OpenAI GPT-Live sideband error: temporary voice failure",
+        }),
+      );
+      expect(onTranscript).toHaveBeenCalledWith("assistant", "Recovered", true);
+      expect(harness.bridge.isConnected()).toBe(true);
+    } finally {
+      harness.bridge.close();
+    }
+  });
+
   it("aborts an accepted delegation when the bridge closes normally", async () => {
     let consultSignal: AbortSignal | undefined;
     const runAgentConsult = vi.fn(async ({ signal }: { prompt: string; signal?: AbortSignal }) => {

@@ -46,7 +46,7 @@ export function prepareInitialUserMessageHandoff(
   sessionKey: string,
   item: Pick<ChatQueueItem, "attachments" | "createdAt" | "sender" | "text">,
   owner: object,
-  identity: { runId?: string; messageSeq?: number } = {},
+  identity: { runId?: string } = {},
 ): void {
   const runId = identity.runId?.trim();
   if (!runId) {
@@ -56,19 +56,12 @@ export function prepareInitialUserMessageHandoff(
     const dataUrl = getChatAttachmentDataUrl(attachment);
     return dataUrl ? { ...attachment, dataUrl, previewUrl: dataUrl } : attachment;
   });
-  const messageSequence =
-    typeof identity.messageSeq === "number" &&
-    Number.isSafeInteger(identity.messageSeq) &&
-    identity.messageSeq > 0
-      ? identity.messageSeq
-      : undefined;
   const message = buildLocalUserMessage({
     text: item.text,
     attachments: durableAttachments,
     createdAt: item.createdAt,
     runId,
     ...(item.sender ? { sender: item.sender } : {}),
-    ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
   });
   if (!message) {
     return;

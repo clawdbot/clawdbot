@@ -1278,7 +1278,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
     expectDispatchFields({
       deliveryRequested: true,
-      skipHeartbeatDelivery: true,
+      skipDelivery: "heartbeat",
     });
   });
 
@@ -1981,31 +1981,21 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       hasFatalStructuredErrorPayload: false,
       embeddedRunError: undefined,
     });
-    dispatchCronDeliveryMock.mockImplementationOnce(
-      (params: {
-        withRunSession: (result: {
-          status: "error";
-          summary: string;
-          outputText: string;
-          error: string;
-          deliveryAttempted: true;
-        }) => unknown;
-      }) => ({
-        result: params.withRunSession({
-          status: "error",
-          summary: "Final cron report",
-          outputText: "Final cron report",
-          error: "Message failed",
-          deliveryAttempted: true,
-        }),
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "Message failed",
+      deliveryState: {
+        status: "not-delivered",
         delivered: false,
-        deliveryAttempted: true,
-        summary: "Final cron report",
-        outputText: "Final cron report",
-        synthesizedText: "Final cron report",
-        deliveryPayloads: [{ text: "Final cron report" }],
-      }),
-    );
+        error: "Message failed",
+        failureNotification: { status: "not-requested" },
+      },
+      summary: "Final cron report",
+      outputText: "Final cron report",
+      synthesizedText: "Final cron report",
+      deliveryPayloads: [{ text: "Final cron report" }],
+    });
 
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -2025,6 +2015,12 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
     // logs (#95419) without mislabeling the successful run as a failure.
     expect(result.deliveryError).toBe("Message failed");
+    expect(result.deliveryState).toEqual({
+      status: "not-delivered",
+      delivered: false,
+      error: "Message failed",
+      failureNotification: { status: "not-requested" },
+    });
     // Delivery failure metadata is preserved and decoupled from status.
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(true);

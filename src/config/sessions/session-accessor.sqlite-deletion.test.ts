@@ -15,11 +15,17 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
+  beginSessionWorkAdmission,
+  isCompetingSessionWorkAdmissionActive,
+  isSessionWorkAdmissionActive,
+} from "../../sessions/session-lifecycle-admission.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
@@ -142,14 +148,87 @@ describe("session deletion and native owner state", () => {
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
+  it("patches a case-distinct Matrix room without preparing its admitted sibling for deletion", async () => {
+    const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:main:matrix:channel:!roomabc:example.org";
+    for (const [key, id, room] of [
+      [mixedKey, "mixed-session", "!RoomAbC:example.org"],
+      [lowerKey, "lower-session", "!roomabc:example.org"],
+    ] as const) {
+      await replaceSessionEntry(
+        { sessionKey: key, storePath },
+        {
+          sessionId: id,
+          lifecycleRevision: `generation:${id}`,
+          updatedAt: Date.now(),
+          agentHarnessId: "native-test",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "matrix", to: room } }),
+        },
+      );
+      bindings.set(key, `thread:${key}`);
+    }
+    const siblingBefore = read(lowerKey);
+    const bindingsBefore = new Map(bindings);
+    const prepare = vi.fn(async () => {});
+    const owner = nativeOwner({ prepare });
+    const identities = [lowerKey, "lower-session"];
+    const onInterrupt = vi.fn();
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities,
+      assertAllowed: () => {},
+      onInterrupt,
+    });
+    try {
+      const patched = await owner.run(() =>
+        patchSessionEntryCore(
+          { sessionKey: mixedKey, storePath },
+          () => ({ label: "updated room" }),
+          { skipMaintenance: true },
+        ),
+      );
+
+      expect(patched).toMatchObject({ sessionId: "mixed-session", label: "updated room" });
+      expect(read(mixedKey)).toEqual(patched);
+      expect(read(lowerKey)).toEqual(siblingBefore);
+      expect(bindings).toEqual(bindingsBefore);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(onInterrupt).not.toHaveBeenCalled();
+      expect(isSessionWorkAdmissionActive(storePath, identities)).toBe(true);
+      expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(true);
+      await admission.run(async () => {
+        expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(false);
+      });
+    } finally {
+      admission.release();
+    }
+  });
+
   it.each(["recorded", "missing"] as const)(
-    "deletes exact-key ownership with %s harness metadata",
+    "honors identity guards before deleting %s harness ownership",
     async (metadata) => {
       await seed(sessionKey, metadata === "recorded" ? "native-test" : null);
       await seed(baseKey);
       const owner = nativeOwner();
 
-      await owner.run(() => remove());
+      await expect(
+        owner.run(() =>
+          deleteSessionEntryLifecycle({
+            archiveTranscript: false,
+            storePath,
+            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+            expectedSessionId: null,
+          }),
+        ),
+      ).resolves.toEqual({
+        archivedTranscripts: [],
+        deleted: false,
+        expectedEntryMismatch: true,
+      });
+      expect(read()).toMatchObject({ sessionId });
+      expect(bindings.has(sessionKey)).toBe(true);
+
+      await expect(owner.run(() => remove())).resolves.toMatchObject({ deleted: true });
 
       expect(read()).toBeUndefined();
       expect(bindings.has(sessionKey)).toBe(false);
@@ -373,18 +452,16 @@ describe("session deletion and native owner state", () => {
       ]),
     ).toBe(true);
     await seed();
-    const entered = createDeferred();
-    const release = createDeferred();
     const materialize = sessionArchive.materializeSessionStateDeletePlans;
+    const owner = nativeOwner();
     vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementationOnce(
       async (...args) => {
         const result = await materialize(...args);
-        entered.resolve();
-        await release.promise;
+        // Retire at the pre-commit boundary, independent of archive Worker latency.
+        markPluginRegistryRetired(owner.registry);
         return result;
       },
     );
-    const owner = nativeOwner();
     const deletion = owner.run(() =>
       deleteSessionEntryLifecycle({
         agentId: "main",
@@ -393,14 +470,7 @@ describe("session deletion and native owner state", () => {
         archiveTranscript: true,
       }),
     );
-    const rejected = expect(deletion).rejects.toThrow("harness owner changed");
-    try {
-      await withTestTimeout(entered.promise, 30_000, "history archive did not materialize");
-      markPluginRegistryRetired(owner.registry);
-    } finally {
-      release.resolve();
-    }
-    await rejected;
+    await expect(deletion).rejects.toThrow("harness owner changed");
     expect(read()?.sessionId).toBe(sessionId);
     expect(bindings.has(sessionKey)).toBe(true);
     expect(await loadTranscriptEvents({ sessionKey, sessionId: historicalId, storePath })).toEqual([

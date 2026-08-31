@@ -10,6 +10,7 @@ import type {
 import { sanitizeApprovalScope } from "./approval-scope.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-text-sanitize.js";
@@ -33,10 +34,6 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
     result.push("deny");
   }
   return result;
-}
-
-function isWithinCodePointLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length <= maxLength;
 }
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
@@ -92,8 +89,8 @@ function buildPluginApprovalPresentation(params: {
   const title = sanitizeExecApprovalDisplayText(rawTitle);
   const description = sanitizeExecApprovalWarningText(rawDescription);
   if (
-    !isWithinCodePointLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    !isWithinCodePointLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+    exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+    exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
   ) {
     return null;
   }

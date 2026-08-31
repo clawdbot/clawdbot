@@ -1,50 +1,36 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  resolveSessionStoreTargets: vi.fn(),
   resolveSessionStoreTargetsOrExit: vi.fn(),
-  resolveMaintenanceConfig: vi.fn(),
-  loadSessionStore: vi.fn(),
-  resolveSessionFilePath: vi.fn(),
-  resolveSessionFilePathOptions: vi.fn(),
-  pruneStaleEntries: vi.fn(),
-  capEntryCount: vi.fn(),
-  updateSessionStore: vi.fn(),
-  enforceSessionDiskBudget: vi.fn(),
   resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
-  serializeSessionCleanupResult: vi.fn(),
+  runLocalSessionsCleanup: vi.fn(),
   callGateway: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("./sessions-cleanup.runtime.js", () => ({
+  runLocalSessionsCleanup: mocks.runLocalSessionsCleanup,
 }));
 
 vi.mock("./session-store-targets.js", () => ({
-  resolveSessionStoreTargets: mocks.resolveSessionStoreTargets,
   resolveSessionStoreTargetsOrExit: mocks.resolveSessionStoreTargetsOrExit,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMaintenanceConfig: mocks.resolveMaintenanceConfig,
-  loadSessionStore: mocks.loadSessionStore,
-  resolveSessionFilePathCore: mocks.resolveSessionFilePath,
-  resolveSessionFilePathOptions: mocks.resolveSessionFilePathOptions,
-  pruneStaleEntries: mocks.pruneStaleEntries,
-  capEntryCount: mocks.capEntryCount,
-  updateSessionStore: mocks.updateSessionStore,
-  enforceSessionDiskBudget: mocks.enforceSessionDiskBudget,
+vi.mock("../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions.js")>()),
   resolveSessionCleanupAction: mocks.resolveSessionCleanupAction,
   runSessionsCleanup: mocks.runSessionsCleanup,
-  serializeSessionCleanupResult: mocks.serializeSessionCleanupResult,
 }));
 
 vi.mock("../gateway/call.js", async () => ({
@@ -56,15 +42,17 @@ vi.mock("../gateway/call.js", async () => ({
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
-function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
+function makeRuntime(): { runtime: RuntimeEnv; logs: string[]; errors: string[] } {
   const logs: string[] = [];
+  const errors: string[] = [];
   return {
     runtime: {
       log: (msg: unknown) => logs.push(String(msg)),
-      error: () => {},
+      error: (msg: unknown) => errors.push(String(msg)),
       exit: () => {},
     },
     logs,
+    errors,
   };
 }
 
@@ -85,51 +73,12 @@ function gatewayTransportError(kind: "closed" | "timeout", code?: number): Gatew
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.exitCode = undefined;
+    mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
-    mocks.resolveSessionStoreTargets.mockReturnValue([
+    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
-    mocks.resolveSessionStoreTargetsOrExit.mockImplementation(
-      (params: { cfg: unknown; opts: unknown; runtime: RuntimeEnv }) => {
-        try {
-          return mocks.resolveSessionStoreTargets(params.cfg, params.opts);
-        } catch (error) {
-          params.runtime.error(error instanceof Error ? error.message : String(error));
-          params.runtime.exit(1);
-          return null;
-        }
-      },
-    );
-    mocks.resolveMaintenanceConfig.mockReturnValue({
-      mode: "warn",
-      pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
-      archiveDashboardAfterMs: 7 * 24 * 60 * 60 * 1000,
-      modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
-      maxEntries: 500,
-      resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
-      maxDiskBytes: null,
-      highWaterBytes: null,
-    });
-    mocks.pruneStaleEntries.mockImplementation(
-      (
-        store: Record<string, SessionEntry>,
-        _maxAgeMs: number,
-        opts?: { onPruned?: (params: { key: string; entry: SessionEntry }) => void },
-      ) => {
-        if (store.stale) {
-          opts?.onPruned?.({ key: "stale", entry: store.stale });
-          delete store.stale;
-          return 1;
-        }
-        return 0;
-      },
-    );
-    mocks.resolveSessionFilePathOptions.mockReturnValue({});
-    mocks.resolveSessionFilePath.mockImplementation(
-      (sessionId: string) => `/missing/${sessionId}.jsonl`,
-    );
-    mocks.capEntryCount.mockImplementation(() => 0);
-    mocks.updateSessionStore.mockResolvedValue(0);
     mocks.callGateway.mockResolvedValue(null);
     mocks.resolveSessionCleanupAction.mockImplementation(
       (params: {
@@ -155,33 +104,10 @@ describe("sessionsCleanupCommand", () => {
         return "keep";
       },
     );
-    mocks.serializeSessionCleanupResult.mockImplementation(
-      (params: { mode: string; dryRun: boolean; summaries: Record<string, unknown>[] }) => {
-        if (params.summaries.length === 1) {
-          return params.summaries[0] ?? {};
-        }
-        return {
-          allAgents: true,
-          mode: params.mode,
-          dryRun: params.dryRun,
-          stores: params.summaries,
-        };
-      },
-    );
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [],
       appliedSummaries: [],
-    });
-    mocks.enforceSessionDiskBudget.mockResolvedValue({
-      totalBytesBefore: 1000,
-      totalBytesAfter: 700,
-      removedFiles: 1,
-      removedEntries: 1,
-      freedBytes: 300,
-      maxBytes: 900,
-      highWaterBytes: 700,
-      overBudget: true,
     });
   });
 
@@ -286,6 +212,7 @@ describe("sessionsCleanupCommand", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
   });
 
   it("keeps explicit offline store cleanup local", async () => {
@@ -330,7 +257,7 @@ describe("sessionsCleanupCommand", () => {
     expect(gatewayCall?.method).toBe("sessions.cleanup");
     expect(gatewayCall?.params.enforce).toBe(true);
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
-    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
@@ -349,6 +276,67 @@ describe("sessionsCleanupCommand", () => {
       applied: true,
       appliedCount: 1,
     });
+  });
+
+  it("renders rejected Gateway partial details and exits nonzero", async () => {
+    const details = {
+      allAgents: true,
+      mode: "enforce",
+      dryRun: false,
+      stores: [
+        {
+          agentId: "main",
+          storePath: "/gateway/main/openclaw-agent.sqlite",
+          mode: "enforce",
+          dryRun: false,
+          beforeCount: 1,
+          afterCount: 0,
+          missing: 1,
+          dmScopeRetired: 0,
+          modelRunPruned: 0,
+          pruned: 0,
+          capped: 0,
+          unreferencedArtifacts: {
+            scannedFiles: 0,
+            removedFiles: 0,
+            freedBytes: 0,
+            olderThanMs: 0,
+          },
+          diskBudget: null,
+          wouldMutate: true,
+          applied: true,
+          appliedCount: 0,
+        },
+      ],
+      partialError: {
+        failingAgentId: "work",
+        failingStorePath: "/gateway/work/openclaw-agent.sqlite",
+        message: "Session cleanup failed for agent 'work': injected failure",
+        lifecycleCommitted: false,
+      },
+    };
+    mocks.callGateway.mockRejectedValue(Object.assign(new Error("request failed"), { details }));
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ allAgents: true, enforce: true, json: true }, runtime);
+
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual(details);
+    expect(process.exitCode).toBe(1);
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+  });
+
+  it("does not render rejected Gateway details without a partial marker", async () => {
+    const error = Object.assign(new Error("request failed"), {
+      details: { allAgents: true, mode: "enforce", dryRun: false, stores: [] },
+    });
+    mocks.callGateway.mockRejectedValue(error);
+
+    const { runtime } = makeRuntime();
+    await expect(sessionsCleanupCommand({ allAgents: true, enforce: true }, runtime)).rejects.toBe(
+      error,
+    );
+
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("preserves a Gateway-owned store path in human output", async () => {
@@ -452,12 +440,11 @@ describe("sessionsCleanupCommand", () => {
       wouldMutate: true,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
-    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -517,7 +504,6 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("renders a dry-run action table with keep/prune actions", async () => {
-    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -568,18 +554,48 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
-    const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
-    expect(tableHeaderLines.length).toBeGreaterThan(0);
-    const freshKeepLines = logs.filter((line) => line.includes("fresh") && line.includes("keep"));
-    expect(freshKeepLines.length).toBeGreaterThan(0);
-    const stalePruneLines = logs.filter(
-      (line) => line.includes("stale") && line.includes("prune-stale"),
+    const actionKeys = logs
+      .flatMap((entry) => stripAnsi(entry).split("\n"))
+      .map((line) =>
+        line
+          .split(/[|│]/u)
+          .slice(1, 3)
+          .map((cell) => cell.trim()),
+      );
+    expect(actionKeys).toContainEqual(["Action", "Key"]);
+    expect(actionKeys).toContainEqual(["keep", "fresh"]);
+    expect(actionKeys).toContainEqual(["prune-stale", "stale"]);
+  });
+
+  it("finishes a large distinct-label preview with the normal CLI process stack", () => {
+    // A worker's larger stack can hide the argument limit in label-width spreads.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--experimental-test-module-mocks",
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        fileURLToPath(new URL("./sessions-cleanup.large-labels.test-support.ts", import.meta.url)),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      },
     );
-    expect(stalePruneLines.length).toBeGreaterThan(0);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      serviceCalls: 1,
+      gridPrinted: true,
+      summaryPrinted: true,
+      labelRows: 150_000,
+      total: "Total: 150000 kept, 0 pruned",
+    });
   });
 
   it("renders a dry-run summary grouped by session label", async () => {
-    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -676,7 +692,6 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("aligns the label summary columns for emoji and CJK labels", async () => {
-    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -745,11 +760,10 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
-    mocks.resolveSessionStoreTargets.mockReturnValue([
+    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
       { agentId: "work", storePath: "/resolved/work-sessions.json" },
     ]);
-    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [

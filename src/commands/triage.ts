@@ -35,16 +35,17 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   }
   try {
     const rpc = { timeout: "3000", json: true };
-    const health = await callGatewayFromCliWithTransport("health", rpc, undefined, {
-      defaultTimeoutMs: 3000,
-      sharedStateMode: "read-only",
-    });
     const [{ writeDiagnosticSupportExport }, { gatherDaemonStatus }] = await Promise.all([
       import("../logging/diagnostic-support-export.js"),
       import("../cli/daemon-cli/status.gather.js"),
     ]);
     const result = await writeDiagnosticSupportExport({
-      readHealthSnapshot: async () => health,
+      // The exporter records failed snapshots while preserving local diagnostics.
+      readHealthSnapshot: async () =>
+        await callGatewayFromCliWithTransport("health", rpc, undefined, {
+          defaultTimeoutMs: 3000,
+          sharedStateMode: "read-only",
+        }),
       readStatusSnapshot: async () =>
         await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
     });
@@ -91,7 +92,7 @@ export async function triageCommand(
   const quotedPath = quoteShellArgument(promptPath);
   const suggestedCommands = [
     `claude "$(cat ${quotedPath})"`,
-    `codex exec - < ${quotedPath}`,
+    `codex exec --skip-git-repo-check - < ${quotedPath}`,
     "openclaw triage --run",
   ];
   const findingCounts: Record<HealthFindingSeverity, number> = {
@@ -205,12 +206,9 @@ export async function triageCommand(
   const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
   if (!inference.ok) {
     const reason = redactSupportString(scrubDoctorErrorMessage(inference.error), redaction);
-    const message = `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`;
-    if (options.run === true) {
-      throw new Error(message);
-    }
-    runtime.log(message);
-    return;
+    throw new Error(
+      `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
+    );
   }
   const { agentExecCommand } = await import("./agent-exec.js");
   const result = await agentExecCommand(undefined, { messageFile: promptPath }, runtime);

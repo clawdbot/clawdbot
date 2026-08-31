@@ -45,8 +45,14 @@ describe("gateway worker environment startup", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
-        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPluginRegistry: () => ({
+          workerProviders: new Map(),
+          plugins: [],
+          agentHarnesses: [],
+          nodeHostCommands: [],
+        }),
         getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -106,8 +112,14 @@ describe("gateway worker environment startup", () => {
         });
 
         const runtime = await createGatewayWorkerEnvironmentRuntime({
-          getPluginRegistry: () => ({ workerProviders: new Map() }),
+          getPluginRegistry: () => ({
+            workerProviders: new Map(),
+            plugins: [],
+            agentHarnesses: [],
+            nodeHostCommands: [],
+          }),
           getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },
@@ -121,7 +133,15 @@ describe("gateway worker environment startup", () => {
             "device-environment",
           ]);
           expect(startup.store.getCredential("device-environment")).toBeUndefined();
-          expect(startup.store.get("device-environment")?.state).toBe("orphaned");
+          expect(startup.store.get("device-environment")).toMatchObject({
+            state: "failed",
+            leaseId: null,
+            nodeDeviceId: null,
+            attachedSessionIds: [],
+            destroyRequestedAtMs: expect.any(Number),
+            teardownTerminalState: "failed",
+            lastError: "Worker provider no longer recognizes the lease",
+          });
         } finally {
           await service.stop();
         }
@@ -195,8 +215,14 @@ describe("gateway worker environment startup", () => {
         },
       };
       const runtime = await createGatewayWorkerEnvironmentRuntime({
-        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPluginRegistry: () => ({
+          workerProviders: new Map(),
+          plugins: [],
+          agentHarnesses: [],
+          nodeHostCommands: [],
+        }),
         getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,

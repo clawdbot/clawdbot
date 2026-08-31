@@ -259,15 +259,15 @@ export function isBundledChannelEnabledByChannelConfig(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
 ): boolean {
-  if (!cfg) {
+  const channels = cfg?.channels as Record<string, unknown> | undefined;
+  if (!channels) {
     return false;
   }
   const channelId = normalizeChatChannelId(pluginId);
   if (!channelId) {
     return false;
   }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
+  const entry = channels[channelId];
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }
