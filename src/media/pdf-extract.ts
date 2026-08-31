@@ -20,6 +20,7 @@ export async function extractPdfContent(params: {
   password?: string;
   pageNumbers?: number[];
   config?: OpenClawConfig;
+  signal?: AbortSignal;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
   const extracted = await extractDocumentContent({
@@ -31,6 +32,7 @@ export async function extractPdfContent(params: {
     ...(params.password ? { password: params.password } : {}),
     ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
     ...(params.config ? { config: params.config } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.onImageExtractionError
       ? { onImageExtractionError: params.onImageExtractionError }
       : {}),

@@ -125,9 +125,18 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
   }
 }
 
-async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buffer> {
+async function encodeImageToJpeg(
+  buffer: Buffer,
+  operation: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
   try {
-    return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
+    return (
+      await createImageProcessor().encode(buffer, {
+        format: "jpeg",
+        ...(signal ? { signal } : {}),
+      })
+    ).data;
   } catch (error) {
     return wrapRastermillUnavailable(operation, error);
   }
@@ -139,8 +148,8 @@ export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 /** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
-export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
+export async function convertHeicToJpeg(buffer: Buffer, signal?: AbortSignal): Promise<Buffer> {
+  return await encodeImageToJpeg(buffer, "convertHeicToJpeg", signal);
 }
 
 /** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */

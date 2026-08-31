@@ -180,6 +180,8 @@ const rootEntries = [
   "src/infra/tailscale-route-owner.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Loaded through the stable source/dist URL resolved by document-extractors.runtime.ts.
+  "src/media/document-extractors.worker.ts!",
   // Spawned through computed sibling URLs by the service-child host and relay.
   "src/process/supervisor/{service-child-relay,service-child-group-anchor,service-child-windows-job-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.

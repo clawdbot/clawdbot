@@ -313,6 +313,25 @@ describe("HEIC input image normalization", () => {
     await expectResolvedImageContentCase(testCase);
   });
 
+  it("passes the caller abort signal through HEIC conversion", async () => {
+    const controller = new AbortController();
+    const sourceBytes = Buffer.from("heic-source");
+    detectMimeMock.mockResolvedValueOnce("image/heic");
+    convertHeicToJpegMock.mockResolvedValueOnce(Buffer.from("jpeg-normalized"));
+
+    await extractImageContentFromSource(
+      {
+        type: "base64",
+        data: sourceBytes.toString("base64"),
+        mediaType: "image/heic",
+      },
+      createImageSourceLimits(["image/heic", "image/jpeg"]),
+      controller.signal,
+    );
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledWith(sourceBytes, controller.signal);
+  });
+
   it.each([
     {
       name: "rejects spoofed base64 images when detected bytes are not an image",
@@ -390,6 +409,41 @@ describe("guarded input file URL fetches", () => {
       }),
     ).resolves.toEqual({ filename: "file", text: "café €" });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the caller abort signal through guarded image and file fetches", async () => {
+    const controller = new AbortController();
+    const imageSource = { type: "url", url: "https://example.com/photo.png" } as const;
+    mockUrlFetchResponse({
+      source: imageSource,
+      fetchedContentType: "image/png",
+      fetchedBody: Buffer.from("png-bytes"),
+    });
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await extractImageContentFromSource(
+      imageSource,
+      createImageSourceLimits(["image/png"], true),
+      controller.signal,
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      fetchedContentType: "text/plain",
+      fetchedBody: Buffer.from("hello"),
+    });
+    detectMimeMock.mockResolvedValueOnce("text/plain");
+    await extractFileContentFromSource({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      limits: createFileSourceLimits(["text/plain"], true),
+      signal: controller.signal,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it("cancels ignored HTTP error bodies", async () => {
@@ -638,11 +692,15 @@ describe("input file MIME sniffing", () => {
     ).rejects.toThrow("Unsupported file MIME type: application/zip");
   });
 
-  it("times out local PDF extraction with the input file timeout", async () => {
+  it("times out local PDF extraction without manufacturing a caller signal", async () => {
     vi.useFakeTimers();
     try {
+      let extractionSignal: AbortSignal | undefined;
       detectMimeMock.mockResolvedValueOnce("application/pdf");
-      extractPdfContentMock.mockReturnValueOnce(new Promise(() => {}));
+      extractPdfContentMock.mockImplementationOnce((params: { signal?: AbortSignal }) => {
+        extractionSignal = params.signal;
+        return new Promise(() => {});
+      });
 
       const pending = expect(
         extractFileContentFromSource({
@@ -657,7 +715,59 @@ describe("input file MIME sniffing", () => {
       ).rejects.toThrow("PDF extraction timed out after 1ms");
 
       await vi.advanceTimersByTimeAsync(1);
+      expect(extractionSignal).toBeUndefined();
       await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for cancellable PDF shutdown before reporting a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let extractionSignal: AbortSignal | undefined;
+      let releaseShutdown: (() => void) | undefined;
+      const shutdown = new Promise<void>((resolve) => {
+        releaseShutdown = resolve;
+      });
+      detectMimeMock.mockResolvedValueOnce("application/pdf");
+      extractPdfContentMock.mockImplementationOnce(async (params: { signal?: AbortSignal }) => {
+        extractionSignal = params.signal;
+        await new Promise<void>((resolve) => {
+          params.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await shutdown;
+        throw params.signal?.reason;
+      });
+
+      const execution = extractFileContentFromSource({
+        source: {
+          type: "base64",
+          data: Buffer.from("%PDF-1.4\n").toString("base64"),
+          mediaType: "application/pdf",
+          filename: "scan.pdf",
+        },
+        limits: createFileSourceLimits(["application/pdf"]),
+        signal: new AbortController().signal,
+      });
+      let settled = false;
+      void execution.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(extractionSignal?.aborted).toBe(true);
+      expect(extractionSignal?.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
+      expect(settled).toBe(false);
+
+      releaseShutdown?.();
+      await expect(execution).rejects.toThrow("PDF extraction timed out after 1ms");
+      expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();
     }

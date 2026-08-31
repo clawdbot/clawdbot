@@ -23,6 +23,10 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import {
+  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
+  isDocumentExtractorCapacityError,
+} from "../media/document-extractors.runtime.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -521,6 +525,11 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
+  const abortController = new AbortController();
+  let onClientDisconnect: () => void = () => undefined;
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+    onClientDisconnect();
+  });
   const prompt = buildAgentPrompt(payload.input);
 
   // Count URL sources request-wide, but replay media only from the current user turn.
@@ -559,7 +568,11 @@ export async function handleOpenResponsesHttpRequest(
                       data: source.data,
                       mediaType: source.media_type,
                     };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                imageSource,
+                limits.images,
+                abortController.signal,
+              );
               images.push(image);
               continue;
             }
@@ -576,6 +589,7 @@ export async function handleOpenResponsesHttpRequest(
                       filename: source.filename,
                     },
               limits: limits.files,
+              signal: abortController.signal,
             });
             const rawText = file.text;
             if (rawText?.trim()) {
@@ -610,8 +624,27 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    stopWatchingDisconnect();
+    if (abortController.signal.aborted) {
+      return true;
+    }
+    if (isDocumentExtractorCapacityError(err)) {
+      res.setHeader("Retry-After", "1");
+      sendJson(res, 503, {
+        error: {
+          message: "Document extraction is temporarily busy; retry shortly.",
+          type: "service_unavailable",
+          code: DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
+        },
+      });
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
+    return true;
+  }
+  if (abortController.signal.aborted) {
+    stopWatchingDisconnect();
     return true;
   }
 
@@ -628,6 +661,7 @@ export async function handleOpenResponsesHttpRequest(
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
+    stopWatchingDisconnect();
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid tool configuration");
     return true;
@@ -649,9 +683,11 @@ export async function handleOpenResponsesHttpRequest(
       isInvalidGatewayModelError(err) ||
       isGatewaySessionKeyOverrideError(err)
     ) {
+      stopWatchingDisconnect();
       sendInvalidRequest(res, err.message);
       return true;
     }
+    stopWatchingDisconnect();
     throw err;
   }
   const responseSessionScope = createResponseSessionScope({
@@ -675,6 +711,7 @@ export async function handleOpenResponsesHttpRequest(
     senderIsOwner,
   });
   if (!sessionAuth.allowed) {
+    stopWatchingDisconnect();
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
     return true;
   }
@@ -693,6 +730,7 @@ export async function handleOpenResponsesHttpRequest(
     .join("\n\n");
 
   if (!prompt.message) {
+    stopWatchingDisconnect();
     sendInvalidRequest(res, "Missing user message in `input`.");
     return true;
   }
@@ -715,7 +753,6 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const abortController = new AbortController();
   const streamMaxTokens =
     typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
   const streamTemperature =
@@ -731,7 +768,6 @@ export async function handleOpenResponsesHttpRequest(
       : undefined;
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -881,7 +917,6 @@ export async function handleOpenResponsesHttpRequest(
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
-  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
@@ -1155,11 +1190,11 @@ export async function handleOpenResponsesHttpRequest(
   res.once("finish", releaseStreamRootWork);
   res.once("close", releaseStreamRootWork);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onClientDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   void (async () => {
     try {
