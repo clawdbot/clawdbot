@@ -78,6 +78,7 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  beforeRequest?: () => void;
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
@@ -297,6 +298,7 @@ async function fetchGuardedMediaResponse(
   const {
     url,
     fetchImpl,
+    beforeRequest,
     requestInit,
     maxRedirects,
     requireHttps,
@@ -330,6 +332,7 @@ async function fetchGuardedMediaResponse(
         : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
+        ...(beforeRequest ? { beforeRequest } : {}),
         init: requestInit,
         maxRedirects,
         ...(requireHttps !== undefined ? { requireHttps } : {}),

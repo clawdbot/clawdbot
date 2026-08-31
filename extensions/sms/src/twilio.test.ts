@@ -882,6 +882,7 @@ describe("Twilio SMS helpers", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "sms-twilio-api",
+        beforeRequest: expect.any(Function),
         policy: { allowedHostnames: ["api.twilio.com"] },
         requireHttps: true,
         timeoutMs: 30_000,

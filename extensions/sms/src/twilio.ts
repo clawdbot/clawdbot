@@ -378,7 +378,6 @@ async function requestTwilioApi(params: {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TwilioApiResponse> {
-  assertSmsCredentialOwnerAvailable(params.account.accountId);
   const init = {
     ...params.init,
     headers: {
@@ -387,6 +386,7 @@ async function requestTwilioApi(params: {
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
+    assertSmsCredentialOwnerAvailable(params.account.accountId);
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
@@ -398,6 +398,7 @@ async function requestTwilioApi(params: {
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
+    beforeRequest: () => assertSmsCredentialOwnerAvailable(params.account.accountId),
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,

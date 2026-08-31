@@ -2246,14 +2246,19 @@ describe("fetchWithSsrFGuard hardening", () => {
         fetch: vi.fn(async () => okResponse()),
       };
       const fetchImpl = vi.fn(async () => okResponse());
+      const lookupFn = createPublicLookup();
+      const beforeRequest = vi.fn();
 
       const result = await fetchWithSsrFGuard({
         url: "https://public.example/resource",
         fetchImpl,
-        lookupFn: createPublicLookup(),
+        lookupFn,
+        beforeRequest,
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
       expectAgentConstructorOptions({ bodyTimeout: 1_900_000, headersTimeout: 1_900_000 });
       await result.release();
     } finally {

@@ -11,7 +11,6 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
@@ -783,11 +782,14 @@ describe("SMS inbound MMS materialization", () => {
   });
 
   it("rechecks the owner before each authenticated MMS download", async () => {
-    const saveRemoteMedia = vi.fn().mockResolvedValueOnce({
-      path: "/tmp/first.jpg",
-      size: 1024,
-      contentType: "image/jpeg",
-    });
+    let dispatches = 0;
+    const saveRemoteMedia = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+      async (options) => {
+        options.beforeRequest?.();
+        dispatches += 1;
+        return { path: "/tmp/first.jpg", size: 1024, contentType: "image/jpeg" };
+      },
+    );
     assertSmsCredentialOwnerAvailable
       .mockImplementationOnce(() => {})
       .mockImplementationOnce(() => {
@@ -801,36 +803,8 @@ describe("SMS inbound MMS materialization", () => {
       ]),
     ).rejects.toThrow("SMS credential owner became unavailable");
 
-    expect(saveRemoteMedia).toHaveBeenCalledOnce();
-  });
-
-  it("rechecks the owner before retrying an authenticated MMS download", async () => {
-    let attempts = 0;
-    const saveRemoteMedia = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
-      async (options) => {
-        if (!options.retry) {
-          throw new Error("Expected SMS media retry policy");
-        }
-        return await retryAsync(async () => {
-          attempts += 1;
-          if (attempts > 1) {
-            throw new Error("Credential-bearing retry started");
-          }
-          assertSmsCredentialOwnerAvailable.mockImplementation(() => {
-            throw new Error("SMS credential owner became unavailable");
-          });
-          throw new Error("Transient first attempt");
-        }, options.retry);
-      },
-    );
-
-    await expect(
-      materializeInboundMedia(saveRemoteMedia, [
-        { url: twilioMediaUrl(), contentType: "image/jpeg" },
-      ]),
-    ).rejects.toThrow("SMS credential owner became unavailable");
-
-    expect(attempts).toBe(1);
+    expect(saveRemoteMedia).toHaveBeenCalledTimes(2);
+    expect(dispatches).toBe(1);
   });
 
   it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
