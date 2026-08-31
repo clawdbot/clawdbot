@@ -185,7 +185,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
         : undefined,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
-    agentId: params.sessionAgentId,
+    agentId: attempt.sandboxAgentId ?? params.sessionAgentId,
     agentDir: params.agentDir,
     agentAccountId: attempt.agentAccountId,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),

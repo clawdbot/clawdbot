@@ -54,6 +54,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 type ChatSendInternalOptions = {
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
+  display?: false;
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
@@ -172,6 +173,7 @@ async function handleChatSendWithOptions(
       client,
       request: normalizedRequest.value,
       session: preparedSession.value,
+      display: options?.display,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       assertGoalCurrent: () => {
@@ -507,14 +509,6 @@ export async function handleSessionGoalResumeChat(
   await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }
 
-/** Dispatches an internally delegated turn within its caller-owned tool boundary. */
-export async function handleChatSendWithRuntimeTools(
-  options: GatewayRequestHandlerOptions,
-  toolsAllow: string[],
-): Promise<void> {
-  await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
-}
-
 /** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
 export async function handleChatSendWithSkillWorkshopProposalRevision(
   options: GatewayRequestHandlerOptions,
@@ -530,8 +524,10 @@ export async function handleChatSendWithSkillWorkshopProposalRevision(
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
+  inputOptions?: Pick<ChatSendInternalOptions, "display" | "toolsAllow">,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    ...inputOptions,
     trustedSystemInput: true,
   });
 }
