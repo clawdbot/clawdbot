@@ -787,6 +787,39 @@ describe("SMS inbound MMS materialization", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
+  it("rechecks the owner before each authenticated MMS download", async () => {
+    const saveRemoteMedia = vi.fn().mockResolvedValueOnce({
+      path: "/tmp/first.jpg",
+      size: 1024,
+      contentType: "image/jpeg",
+    });
+    assertSmsCredentialOwnerAvailable
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("SMS credential owner became unavailable");
+      });
+
+    await expect(
+      materializeSmsInboundMedia({
+        account: createAccount(),
+        msg: {
+          accountSid: ACCOUNT_SID,
+          from: "+15551234567",
+          to: "+15557654321",
+          body: "",
+          messageSid: MESSAGE_SID,
+          media: [
+            { url: twilioMediaUrl(), contentType: "image/jpeg" },
+            { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
+          ],
+        },
+        mediaRuntime: { media: { saveRemoteMedia } } as never,
+      }),
+    ).rejects.toThrow("SMS credential owner became unavailable");
+
+    expect(saveRemoteMedia).toHaveBeenCalledOnce();
+  });
+
   it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
     const saveRemoteMedia = vi.fn();
 

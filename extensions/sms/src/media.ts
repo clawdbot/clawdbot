@@ -417,8 +417,6 @@ export async function materializeSmsInboundMedia(params: {
       cleanup,
     };
   }
-  assertSmsCredentialOwnerAvailable(params.account.accountId);
-
   // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;
   let unavailableCount = declaredUnavailableCount;
@@ -434,6 +432,7 @@ export async function materializeSmsInboundMedia(params: {
         unavailableCount += 1;
         continue;
       }
+      assertSmsCredentialOwnerAvailable(params.account.accountId);
       try {
         const saved = await params.mediaRuntime.media.saveRemoteMedia({
           url: requireTwilioMediaUrl(media.url, {

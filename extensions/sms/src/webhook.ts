@@ -118,8 +118,6 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 405, "Method not allowed");
       return true;
     }
-    assertSmsCredentialOwnerAvailable(params.account.accountId);
-
     const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });
     const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(clientAddressKey);
@@ -134,6 +132,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       }
       throw error;
     }
+    assertSmsCredentialOwnerAvailable(params.account.accountId);
 
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const ok = verifyTwilioSignature({

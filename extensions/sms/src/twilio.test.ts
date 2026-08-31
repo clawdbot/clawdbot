@@ -703,6 +703,22 @@ describe("Twilio SMS helpers", () => {
     );
   });
 
+  it("rejects a cold owner before a non-send Twilio API request", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+
+    await expect(
+      listTwilioMessages({
+        account: createAccount(),
+        fetchImpl,
+      }),
+    ).rejects.toThrow("SMS credential owner unavailable");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("retrieves Twilio Messaging Service webhook settings", async () => {
     const fetchImpl = vi.fn<typeof fetch>(
       async () =>

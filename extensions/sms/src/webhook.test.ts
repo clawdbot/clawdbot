@@ -82,9 +82,19 @@ function createSignedBody(params?: {
 function createRequest(
   body: string,
   signature: string,
-  options?: { headers?: Record<string, string>; remoteAddress?: string },
+  options?: {
+    headers?: Record<string, string>;
+    remoteAddress?: string;
+    onBodyRead?: () => void;
+  },
 ): IncomingMessage {
-  const req = Readable.from([body]) as IncomingMessage;
+  const source = options?.onBodyRead
+    ? (async function* () {
+        yield body;
+        options.onBodyRead?.();
+      })()
+    : [body];
+  const req = Readable.from(source) as IncomingMessage;
   req.method = "POST";
   req.headers = {
     "content-length": String(Buffer.byteLength(body)),
@@ -217,10 +227,13 @@ describe("createSmsWebhookHandler", () => {
     activeAccountId = `test-${++testAccountSequence}`;
   });
 
-  it("rejects a cold owner before parsing or durable admission", async () => {
+  it("rechecks the owner after parsing and before authentication or durable admission", async () => {
+    let bodyRead = false;
     assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      expect(bodyRead).toBe(true);
       throw new Error("SMS credential owner unavailable");
     });
+    const { body, signature } = createSignedBody();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account: createAccount(),
@@ -228,9 +241,16 @@ describe("createSmsWebhookHandler", () => {
     });
     const res = createResponse();
 
-    await expect(handler(createRequest("ignored", "ignored"), res)).rejects.toThrow(
-      "SMS credential owner unavailable",
-    );
+    await expect(
+      handler(
+        createRequest(body, signature, {
+          onBodyRead: () => {
+            bodyRead = true;
+          },
+        }),
+        res,
+      ),
+    ).rejects.toThrow("SMS credential owner unavailable");
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
