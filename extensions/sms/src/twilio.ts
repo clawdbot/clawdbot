@@ -386,7 +386,7 @@ async function requestTwilioApi(params: {
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
-    assertSmsCredentialOwnerAvailable(params.account.accountId);
+    assertSmsCredentialOwnerAvailable(params.account);
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
@@ -398,7 +398,7 @@ async function requestTwilioApi(params: {
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
-    beforeRequest: () => assertSmsCredentialOwnerAvailable(params.account.accountId),
+    beforeRequest: () => assertSmsCredentialOwnerAvailable(params.account),
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,
@@ -572,7 +572,7 @@ export async function sendSmsViaTwilio(params: {
   fetchImpl?: typeof fetch;
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
-  assertSmsCredentialOwnerAvailable(params.account.accountId);
+  assertSmsCredentialOwnerAvailable(params.account);
   if (!params.account.fromNumber && !params.account.messagingServiceSid) {
     throw new Error("Twilio SMS send requires fromNumber or messagingServiceSid.");
   }

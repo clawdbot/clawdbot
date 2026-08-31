@@ -1,7 +1,11 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
   buildTwilioInboundMessage,
@@ -99,12 +103,10 @@ function cancelTrackedTextResponse(
 }
 
 describe("Twilio SMS helpers", () => {
-  beforeEach(() => {
-    assertSmsCredentialOwnerAvailable.mockReset();
-  });
-
   afterEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
     fetchWithSsrFGuardMock.mockReset();
+    clearRuntimeConfigSnapshot();
   });
 
   it("parses Twilio form bodies and inbound messages", async () => {
@@ -521,6 +523,19 @@ describe("Twilio SMS helpers", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects retained credentials after recovery activates a replacement", async () => {
+    const account = createAccount();
+    const current = { ...account, authToken: "replacement" };
+    setRuntimeConfigSnapshot({ channels: { sms: current } } as never);
+    const actual = await vi.importActual<typeof import("./credential-availability.js")>(
+      "./credential-availability.js",
+    );
+
+    expect(() => actual.assertSmsCredentialOwnerAvailable(account)).toThrow(
+      "SMS credentials changed for account default",
+    );
+  });
+
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {
     const fetchImpl = vi.fn<typeof fetch>(
       async () =>
@@ -684,7 +699,9 @@ describe("Twilio SMS helpers", () => {
     expect(url).toBe(
       "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
     );
-    expect(assertSmsCredentialOwnerAvailable).toHaveBeenCalledExactlyOnceWith("default");
+    expect(assertSmsCredentialOwnerAvailable).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ accountId: "default" }),
+    );
   });
 
   it("retrieves Twilio Messaging Service webhook settings", async () => {

@@ -132,7 +132,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       }
       throw error;
     }
-    assertSmsCredentialOwnerAvailable(params.account.accountId);
+    assertSmsCredentialOwnerAvailable(params.account);
 
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const ok = verifyTwilioSignature({

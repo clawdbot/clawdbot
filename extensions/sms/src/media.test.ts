@@ -91,10 +91,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   unlinkIfExists: unlinkIfExistsMock,
 }));
 
-beforeEach(() => {
-  assertSmsCredentialOwnerAvailable.mockReset();
-});
-
 const testStateEnv: NodeJS.ProcessEnv = {
   ...process.env,
   OPENCLAW_STATE_DIR: fs.mkdtempSync(
@@ -620,6 +616,7 @@ describe("SMS outbound hosted media", () => {
 
 describe("SMS inbound MMS materialization", () => {
   beforeEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
     unlinkIfExistsMock.mockClear();
   });
 
@@ -787,7 +784,7 @@ describe("SMS inbound MMS materialization", () => {
       async (options) => {
         options.beforeRequest?.();
         dispatches += 1;
-        return { path: "/tmp/first.jpg", size: 1024, contentType: "image/jpeg" };
+        return { id: "first.jpg", path: "/tmp/first.jpg", size: 1024 };
       },
     );
     assertSmsCredentialOwnerAvailable
@@ -938,12 +935,12 @@ describe("SMS inbound MMS materialization", () => {
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
-        retry: expect.objectContaining({
+        retry: {
           attempts: 2,
           minDelayMs: 500,
           maxDelayMs: 2_000,
           jitter: 0.2,
-        }),
+        },
       }),
     );
     expect(saveRemoteMedia).toHaveBeenNthCalledWith(

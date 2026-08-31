@@ -240,7 +240,7 @@ export async function prepareSmsMediaAttempt(params: {
   let hostedMedia: Pick<PreparedSmsMediaAttempt, "hostedMediaUrl" | "cleanupHostedMedia">;
   try {
     const { prepareHostedSmsMedia } = await import("./media.js");
-    assertSmsCredentialOwnerAvailable(params.account.accountId);
+    assertSmsCredentialOwnerAvailable(params.account);
     const prepared = await prepareHostedSmsMedia({
       account: params.account,
       mediaUrl: params.mediaUrl,

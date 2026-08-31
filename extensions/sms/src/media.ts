@@ -386,7 +386,7 @@ function isRetryableSmsInboundMediaError(error: unknown): boolean {
 export async function materializeSmsInboundMedia(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
-  mediaRuntime: Pick<PluginRuntime["channel"], "media">;
+  mediaRuntime: { media: Pick<PluginRuntime["channel"]["media"], "saveRemoteMedia"> };
   abortSignal?: AbortSignal;
   log?: { warn?: (message: string) => void };
 }): Promise<{ body: string; media: InboundMediaFacts[]; cleanup: () => Promise<void> }> {
@@ -443,7 +443,7 @@ export async function materializeSmsInboundMedia(params: {
           }),
           beforeRequest: () => {
             try {
-              assertSmsCredentialOwnerAvailable(params.account.accountId);
+              assertSmsCredentialOwnerAvailable(params.account);
             } catch (error) {
               credentialAbortController.abort(error);
               throw error;
