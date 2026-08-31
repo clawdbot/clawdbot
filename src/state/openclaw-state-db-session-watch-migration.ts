@@ -5,6 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import {
+  encodeSessionStateWatchTarget,
+  isLegacySessionStateWatchTarget,
+} from "../sessions/session-watch-target.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -19,15 +23,26 @@ const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
   `CHECK (provenance IN ('${SESSION_WATCH_PROVENANCE_EXPLICIT}', '${SESSION_WATCH_PROVENANCE_AMBIENT_GROUP}'))`;
 
 type SessionWatchCursorDatabase = Pick<OpenClawStateKyselyDatabase, "session_watch_cursors">;
+type LegacySessionWatchDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "session_state_heads" | "session_upstream_links" | "session_watch_cursors"
+>;
 
 type SessionWatchCursorProvenanceMigrationResult = {
   addedColumn: boolean;
+  ambiguousLegacyCursors: number;
+  legacyCursorSummary: string;
+  migratedLegacyCursors: number;
   migratedAmbientWatches: number;
   removedLegacySentinels: number;
 };
 
 function getSessionWatchCursorKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionWatchCursorDatabase>(db);
+}
+
+function getLegacySessionWatchKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<LegacySessionWatchDatabase>(db);
 }
 
 function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
@@ -46,6 +61,18 @@ function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
   );
 }
 
+function hasLegacySessionWatchCursors(db: DatabaseSync): boolean {
+  if (!tableExists(db, "session_watch_cursors")) {
+    return false;
+  }
+  return executeSqliteQuerySync(
+    db,
+    getSessionWatchCursorKysely(db)
+      .selectFrom("session_watch_cursors")
+      .select("target_session_key"),
+  ).rows.some((row) => isLegacySessionStateWatchTarget(row.target_session_key));
+}
+
 export function needsSessionWatchCursorProvenanceMigration(
   db: DatabaseSync,
   userVersion: number,
@@ -56,7 +83,8 @@ export function needsSessionWatchCursorProvenanceMigration(
   return (
     userVersion < SESSION_WATCH_PROVENANCE_SCHEMA_VERSION ||
     !tableHasColumn(db, "session_watch_cursors", "provenance") ||
-    hasLegacyAmbientWatchSentinels(db)
+    hasLegacyAmbientWatchSentinels(db) ||
+    hasLegacySessionWatchCursors(db)
   );
 }
 
@@ -78,7 +106,14 @@ export function migrateSessionWatchCursorProvenance(
   db: DatabaseSync,
 ): SessionWatchCursorProvenanceMigrationResult {
   if (!tableExists(db, "session_watch_cursors")) {
-    return { addedColumn: false, migratedAmbientWatches: 0, removedLegacySentinels: 0 };
+    return {
+      addedColumn: false,
+      ambiguousLegacyCursors: 0,
+      legacyCursorSummary: "",
+      migratedLegacyCursors: 0,
+      migratedAmbientWatches: 0,
+      removedLegacySentinels: 0,
+    };
   }
 
   const addedColumn = ensureColumn(
@@ -87,6 +122,85 @@ export function migrateSessionWatchCursorProvenance(
     SESSION_WATCH_PROVENANCE_COLUMN_SQL,
   );
   const kysely = getSessionWatchCursorKysely(db);
+  const legacyKysely = getLegacySessionWatchKysely(db);
+  let migratedLegacyCursors = 0;
+  let ambiguousLegacyCursors = 0;
+  if (tableExists(db, "session_state_heads") && tableExists(db, "session_upstream_links")) {
+    const legacyCursors = executeSqliteQuerySync(
+      db,
+      kysely.selectFrom("session_watch_cursors").selectAll(),
+    ).rows.filter((row) => isLegacySessionStateWatchTarget(row.target_session_key));
+    for (const cursor of legacyCursors) {
+      const ownerIds = new Set<string>();
+      for (const row of executeSqliteQuerySync(
+        db,
+        legacyKysely
+          .selectFrom("session_state_heads")
+          .select("agent_id")
+          .where("session_key", "=", cursor.target_session_key),
+      ).rows) {
+        ownerIds.add(row.agent_id);
+      }
+      for (const row of executeSqliteQuerySync(
+        db,
+        legacyKysely
+          .selectFrom("session_upstream_links")
+          .select("agent_id")
+          .where("session_key", "=", cursor.target_session_key),
+      ).rows) {
+        ownerIds.add(row.agent_id);
+      }
+      if (ownerIds.size !== 1) {
+        ambiguousLegacyCursors += 1;
+        continue;
+      }
+      const agentId = [...ownerIds][0]!;
+      const qualifiedTarget = encodeSessionStateWatchTarget({
+        sessionKey: cursor.target_session_key,
+        agentId,
+      });
+      const existing = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("session_watch_cursors")
+          .selectAll()
+          .where("watcher_session_key", "=", cursor.watcher_session_key)
+          .where("target_session_key", "=", qualifiedTarget),
+      );
+      if (existing) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_watch_cursors")
+            .set({
+              last_seen_sequence: Math.min(cursor.last_seen_sequence, existing.last_seen_sequence),
+              notified_sequence: Math.min(cursor.notified_sequence, existing.notified_sequence),
+              material_sequence: Math.max(cursor.material_sequence, existing.material_sequence),
+              updated_at: Math.max(cursor.updated_at, existing.updated_at),
+            })
+            .where("watcher_session_key", "=", cursor.watcher_session_key)
+            .where("target_session_key", "=", qualifiedTarget),
+        );
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom("session_watch_cursors")
+            .where("watcher_session_key", "=", cursor.watcher_session_key)
+            .where("target_session_key", "=", cursor.target_session_key),
+        );
+      } else {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_watch_cursors")
+            .set({ target_session_key: qualifiedTarget })
+            .where("watcher_session_key", "=", cursor.watcher_session_key)
+            .where("target_session_key", "=", cursor.target_session_key),
+        );
+      }
+      migratedLegacyCursors += 1;
+    }
+  }
   const legacyMarkers = executeSqliteQuerySync(
     db,
     kysely
@@ -133,6 +247,14 @@ export function migrateSessionWatchCursorProvenance(
   }
   return {
     addedColumn,
+    ambiguousLegacyCursors,
+    legacyCursorSummary:
+      ambiguousLegacyCursors > 0
+        ? `. Found ${ambiguousLegacyCursors} legacy session watch cursor(s) without a unique target agent; left untouched for explicit re-registration.`
+        : migratedLegacyCursors > 0
+          ? `. Migrated ${migratedLegacyCursors} legacy session watch cursor(s) to qualified target keys.`
+          : "",
+    migratedLegacyCursors,
     migratedAmbientWatches,
     removedLegacySentinels: legacyMarkers.length,
   };

@@ -210,7 +210,7 @@ function repairStateSchema(
         const sessionWatchResult = sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         if (needsSessionWatchMigration) {
           applied.push(
-            `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)`,
+            `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)${sessionWatchResult.legacyCursorSummary}`,
           );
         }
         assertCanonicalStateSchemaShape(db, pathname);

@@ -9,6 +9,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { migrateSessionWatchCursorProvenance } from "../state/openclaw-state-db-session-watch-migration.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -32,6 +33,7 @@ import {
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
+import { encodeSessionStateWatchTarget } from "./session-watch-target.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -542,6 +544,74 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toHaveLength(0);
     acknowledgeSessionStateNotices(watcher, ["global"], database);
     expect(readLegacyCursor()).toEqual(initialCursor);
+  });
+
+  it("migrates legacy bare cursors only when state proves one target owner", () => {
+    const database = createDatabaseOptions();
+    const stateDb = openOpenClawStateDatabase(database).db;
+    stateDb
+      .prepare(
+        `INSERT INTO session_watch_cursors
+         (watcher_session_key, target_session_key, last_seen_sequence, notified_sequence,
+          material_sequence, provenance, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(watcher, "global", 3, 4, 5, "explicit", 100);
+    stateDb
+      .prepare(
+        `INSERT INTO session_state_heads
+         (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("global", "main", 8, 0, 100);
+
+    expect(migrateSessionWatchCursorProvenance(stateDb)).toMatchObject({
+      migratedLegacyCursors: 1,
+      ambiguousLegacyCursors: 0,
+    });
+    expect(
+      stateDb
+        .prepare(
+          `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors
+           WHERE watcher_session_key = ? AND target_session_key = ?`,
+        )
+        .get(watcher, encodeSessionStateWatchTarget({ sessionKey: "global", agentId: "main" })),
+    ).toEqual({ last_seen_sequence: 3, notified_sequence: 4, material_sequence: 5 });
+  });
+
+  it("leaves ambiguous legacy bare cursors for Doctor recovery", () => {
+    const database = createDatabaseOptions();
+    const stateDb = openOpenClawStateDatabase(database).db;
+    stateDb
+      .prepare(
+        `INSERT INTO session_watch_cursors
+         (watcher_session_key, target_session_key, last_seen_sequence, notified_sequence,
+          material_sequence, provenance, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(watcher, "global", 3, 4, 5, "explicit", 100);
+    const insertHead = stateDb.prepare(
+      `INSERT INTO session_state_heads
+       (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    insertHead.run("global", "main", 8, 0, 100);
+    insertHead.run("global", "ops", 9, 0, 100);
+
+    expect(migrateSessionWatchCursorProvenance(stateDb)).toMatchObject({
+      migratedLegacyCursors: 0,
+      ambiguousLegacyCursors: 1,
+    });
+    expect(
+      stateDb
+        .prepare(
+          `SELECT target_session_key
+           FROM session_watch_cursors
+           WHERE watcher_session_key = ?`,
+        )
+        .get(watcher),
+    ).toEqual({ target_session_key: "global" });
   });
 
   it("acks only drained session-state entries and ignores ordinary events", async () => {

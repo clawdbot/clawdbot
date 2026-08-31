@@ -48,3 +48,9 @@ export function decodeSessionStateWatchTarget(value: string): SessionStateWatchT
     return undefined;
   }
 }
+
+export function isLegacySessionStateWatchTarget(value: string): boolean {
+  return (
+    !value.startsWith(ENCODED_TARGET_PREFIX) && decodeSessionStateWatchTarget(value) === undefined
+  );
+}
