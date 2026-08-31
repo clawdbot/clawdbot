@@ -57,6 +57,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     getPrePromptMessageCount: () => 4,
     getPromptCache: () => undefined,
     getPromptCacheRetention: () => "short" as const,
+    getCompactionReplayEnabled: () => false,
     getSystemPrompt: () => "system prompt",
     isOpenAIResponsesApi: false,
     repairToolUseResultPairing: false,

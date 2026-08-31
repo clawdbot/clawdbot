@@ -1,11 +1,18 @@
 // Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
+import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
 import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say, die } from "./host-command.ts";
-import { resolveHostIp, resolveHostPort, startHostServer } from "./host-server.ts";
+import { run, say, die, shellQuote } from "./host-command.ts";
+import {
+  resolveHostIp,
+  resolveHostPort,
+  startHostServer,
+  startNpmRegistryServer,
+} from "./host-server.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import {
   packageBuildCommitFromTgz,
@@ -249,13 +256,38 @@ function logSmokeRunStart(input: {
   say(`Run logs: ${input.runDir}`);
 }
 
-async function startSmokeArtifactServer(input: {
+export function npmRegistryEnv(registry?: string): Record<string, string> {
+  return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
+}
+
+export function posixStopGatewayScript(managedCommand?: string): string {
+  // Embedded turns require exclusive state ownership. Unmanaged stop sends
+  // SIGTERM without waiting; Darwin pads the run loop's process title with spaces.
+  const stop = managedCommand
+    ? `gateway_stop_args=(gateway stop)
+if ${managedCommand} gateway stop --help | grep -Eq '^[[:space:]]+--force([[:space:]]|$)'; then
+  gateway_stop_args+=(--force)
+fi
+${managedCommand} "\${gateway_stop_args[@]}"`
+    : "pkill -f '^openclaw-gateway([[:space:]]|$)' || [ \"$?\" -eq 1 ]";
+  return `${stop}
+gateway_stop_deadline=$((SECONDS + 30))
+while pgrep -f '^openclaw-gateway([[:space:]]|$)' >/dev/null; do
+  if [ "$SECONDS" -ge "$gateway_stop_deadline" ]; then
+    echo "gateway did not release state ownership before the local agent turn" >&2
+    exit 1
+  fi
+  sleep 1
+done`;
+}
+
+export async function startSmokeArtifactServer(input: {
   artifact: PackageArtifact;
   dir: string;
   hostIp: string;
   label: string;
   port: number;
-}): Promise<{ hostPort: number; server: HostServer }> {
+}): Promise<HostServer> {
   const server = await startHostServer({
     artifactPath: input.artifact.path,
     dir: input.dir,
@@ -263,7 +295,36 @@ async function startSmokeArtifactServer(input: {
     label: input.label,
     port: input.port,
   });
-  return { hostPort: server.port, server };
+  if (!input.artifact.registryPackages?.length) {
+    return server;
+  }
+  try {
+    const registry = await startNpmRegistryServer({
+      hostIp: input.hostIp,
+      packages: [
+        {
+          name: "openclaw",
+          version: await expectedPackageTargetVersion(input.artifact),
+          tarballPath: input.artifact.path,
+        },
+        ...input.artifact.registryPackages,
+      ],
+    });
+    return {
+      ...server,
+      registry: { url: registry.url, hostUrl: registry.hostUrl },
+      stop: async () => {
+        try {
+          await server.stop();
+        } finally {
+          await registry.stop();
+        }
+      },
+    };
+  } catch (error) {
+    await server.stop().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function packAndServeSmokeArtifact(
@@ -272,12 +333,18 @@ export async function packAndServeSmokeArtifact(
   hostIp: string,
   hostPort: number,
   label: string,
-  requireControlUi = false,
+  requireControlUi: boolean,
+  provider: Provider,
 ): Promise<readonly [artifact: PackageArtifact, server: HostServer, hostPort: number]> {
+  const providerConfig = resolveProviderConfig(provider);
+  if (!providerConfig) {
+    die(`missing release smoke configuration for provider: ${provider}`);
+  }
   const artifact = await packOpenClaw({
     destination: tgzDir,
     packageSpec,
     requireControlUi,
+    requiredCompanionPackages: providerConfig.requiredCompanionPackages,
   });
   const server = await startSmokeArtifactServer({
     artifact,
@@ -286,7 +353,64 @@ export async function packAndServeSmokeArtifact(
     label,
     port: hostPort,
   });
-  return [artifact, server.server, server.hostPort];
+  return [artifact, server, server.port];
+}
+
+export function ensureSmokeGuestRuntime(input: {
+  runShell: (script: string) => string;
+  bootstrap: () => void;
+}): void {
+  const nodeCheck = shellQuote(`process.exit(${PROCESS_NODE_VERSION_CHECK} ? 0 : 1)`);
+  const ready = input.runShell(`if node -e ${nodeCheck} >/dev/null 2>&1 &&
+  npm --version >/dev/null 2>&1 && git --version >/dev/null 2>&1; then
+  printf 'ready\\n'
+fi`);
+  if (ready.trim() === "ready") {
+    say("Reuse supported guest Node, npm, and Git; install candidate directly");
+    return;
+  }
+  // Older pristine snapshots have no Node/npm; retain their installer bootstrap.
+  say("Bootstrap missing or unsupported guest runtime prerequisites");
+  input.bootstrap();
+}
+
+export async function installSmokeRuntimeCompanions(input: {
+  provider: Provider;
+  readCli: (args: string[]) => string;
+  installCli: (args: string[]) => Promise<void> | void;
+}): Promise<void> {
+  const providerConfig = resolveProviderConfig(input.provider);
+  if (!providerConfig) {
+    throw new Error(`missing release smoke configuration for provider: ${input.provider}`);
+  }
+  if (providerConfig.requiredCompanionPackages.length === 0) {
+    return;
+  }
+  const help = input.readCli(["plugins", "install", "--help"]);
+  // Stable 2026.7.1-2 predates capability consent and provisions its own
+  // companion version during onboarding; it must not receive the newer flag.
+  if (!/^\s+--accept-capabilities(?:\s|$)/mu.test(help)) {
+    say("Installed CLI predates capability consent; using its onboarding contract");
+    return;
+  }
+  const version = input
+    .readCli(["--version"])
+    .match(/^OpenClaw\s+(\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)(?:\s|$)/mu)?.[1];
+  if (!version) {
+    throw new Error("could not resolve installed OpenClaw version for runtime companions");
+  }
+  // Candidate registries bind reviewed companion artifacts to the core version.
+  // Only the selected provider's required packages receive explicit consent.
+  for (const packageName of providerConfig.requiredCompanionPackages) {
+    say(`Install reviewed runtime companion: ${packageName}@${version}`);
+    await input.installCli([
+      "plugins",
+      "install",
+      `npm:${packageName}@${version}`,
+      "--pin",
+      "--accept-capabilities",
+    ]);
+  }
 }
 
 async function runRequestedSmokeLanes(input: {

@@ -155,6 +155,9 @@ describe("Periphery scope workflows", () => {
     "selects only $name scope changes",
     async ({ path: workflowPath, scopedPath }) => {
       await expect(runScope(workflowPath, { files: [scopedPath] })).resolves.toBe("true");
+      await expect(
+        runScope(workflowPath, { files: ["scripts/install-periphery.sh"] }),
+      ).resolves.toBe("true");
       await expect(runScope(workflowPath, { files: ["docs/index.md"] })).resolves.toBe("false");
       await expect(runScope(workflowPath, { draft: true, files: [scopedPath] })).resolves.toBe(
         "false",

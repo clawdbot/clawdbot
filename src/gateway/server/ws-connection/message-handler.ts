@@ -380,7 +380,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
         return;
       }
-      await authenticatedRequestDispatcher.dispatch(parsed, client);
+      await authenticatedRequestDispatcher.dispatch(parsed, client, rawDataByteLength(data));
     } catch (err) {
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);

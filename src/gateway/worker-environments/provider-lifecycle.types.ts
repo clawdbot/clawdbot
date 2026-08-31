@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type {
   WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -16,7 +17,7 @@ import type {
   WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
@@ -39,13 +40,30 @@ export type WorkerProviderLifecycleInputOptions = {
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
+  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord) => Promise<void>;
+  prepareNodeRuntime?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeRuntimePreparation>;
+  closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
+  prepareNodeEnrollment?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeEnrollment>;
+  closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
+  projectNamespace?: string;
   providerCallTimeoutMs?: number;
 };
 
 export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
-  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+  tunnelManager?: {
+    stop(
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ): Promise<void>;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,

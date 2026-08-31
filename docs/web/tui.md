@@ -136,6 +136,8 @@ Session lifecycle:
 - `/settings`
 - `/exit` (or `/quit`)
 
+When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
+
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
@@ -226,7 +228,9 @@ Tips:
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Failed assistant attachments show an actionable warning alongside any reply text. Attachment summaries use generic media kinds without exposing filenames or source URLs.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 

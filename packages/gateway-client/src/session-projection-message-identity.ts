@@ -13,6 +13,8 @@ export type SessionMessageIdentity = {
   id: string | null;
   sequence: number | null;
   idempotencyKey: string | null;
+  /** User submission identity stays stable when a queued turn acquires a new execution run. */
+  sendId: string | null;
   runId: string | null;
   isImported: boolean;
   externalSource: string | null;
@@ -76,19 +78,21 @@ export function readSessionMessageIdentity(
     metadata && Object.keys(metadata).every((key) => key === "idempotencyKey")
       ? canonicalPersistedRunId
       : null;
+  const runId =
+    role === "assistant"
+      ? (metadataRunId ??
+        envelopeRunId ??
+        (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null) ??
+        optimisticRunId)
+      : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId);
   return {
     role,
     id:
       readSessionProjectionString(metadata?.id) ?? readSessionProjectionString(envelope?.messageId),
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
-    runId:
-      role === "assistant"
-        ? (metadataRunId ??
-          envelopeRunId ??
-          (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null) ??
-          optimisticRunId)
-        : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId),
+    sendId: role === "user" ? (persistedRunId ?? runId) : null,
+    runId,
     isImported: Boolean(importedFrom || cliSessionId || externalId),
     // Imported IDs belong to their provider and CLI session, never the native ID namespace.
     externalSource:

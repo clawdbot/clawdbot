@@ -84,6 +84,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "dmPolicy",
     "allowFrom",
     "textChunkLimit",
+    "mediaMaxMb",
   ],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { build } from "tsdown";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
@@ -396,6 +395,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     return null;
   }
 
+  const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
   await build({
@@ -438,12 +438,101 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   };
 }
 
+async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
+  // Source setup is opt-in; publication and root builds must remain artifact-only.
+  const { readRootJsonObjectSync } = await import("../../src/infra/json-files.js");
+  const { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } =
+    await import("../../src/plugins/plugin-peer-link.js");
+  const { isSourceCheckoutRoot } = await import("../postinstall-bundled-plugins.mjs");
+  const repoRoot = fs.realpathSync(params.repoRoot ?? ".");
+  const hostManifest = readRootJsonObjectSync({
+    rootDir: repoRoot,
+    relativePath: "package.json",
+    boundaryLabel: "OpenClaw source checkout",
+  });
+  if (
+    !hostManifest.ok ||
+    hostManifest.value.name !== "openclaw" ||
+    !isSourceCheckoutRoot({ packageRoot: repoRoot })
+  ) {
+    throw new Error("Native-import preparation must run from an OpenClaw source checkout root.");
+  }
+  const packageDir = path.resolve(repoRoot, params.packageDir);
+  if (
+    path.dirname(packageDir) !== path.join(repoRoot, "extensions") ||
+    !fs.lstatSync(packageDir, { throwIfNoEntry: false })?.isDirectory() ||
+    fs.realpathSync(packageDir) !== packageDir
+  ) {
+    throw new Error(
+      "Select a real immediate extensions/<package> directory in this checkout; symlinked packages are not supported.",
+    );
+  }
+  const manifest = readRootJsonObjectSync({
+    rootDir: packageDir,
+    relativePath: "package.json",
+    boundaryLabel: "selected source plugin package",
+  });
+  if (!manifest.ok) {
+    throw new Error(
+      `Could not safely read ${packageDir}/package.json; use a regular file containing a JSON object.`,
+    );
+  }
+  const dependency = resolveOpenClawHostDependency(manifest.value);
+  if (!dependency) {
+    throw new Error(
+      `${params.packageDir} does not declare openclaw in peerDependencies or dependencies; no host link to prepare.`,
+    );
+  }
+  if (
+    !fs.statSync(path.join(repoRoot, "dist/plugin-sdk"), { throwIfNoEntry: false })?.isDirectory()
+  ) {
+    throw new Error("Host SDK output is missing; build OpenClaw before preparing native imports.");
+  }
+  const runtimeFormat = resolveRuntimeBuildFormat(manifest.value);
+  const outDir = path.join(packageDir, "dist");
+  for (const entry of collectPluginSourceEntries(manifest.value)) {
+    const output = path.resolve(packageDir, toPackageRuntimeEntry(entry, runtimeFormat));
+    const relative = path.relative(outDir, output);
+    if (
+      relative.startsWith(`..${path.sep}`) ||
+      relative === ".." ||
+      path.isAbsolute(relative) ||
+      !fs.statSync(output, { throwIfNoEntry: false })?.isFile()
+    ) {
+      throw new Error(
+        `Missing package-local runtime output for ${entry}; run node scripts/lib/plugin-npm-runtime-build.mjs ${params.packageDir} first.`,
+      );
+    }
+  }
+  const result = await linkOpenClawPeerDependencies({
+    installedDir: packageDir,
+    hostRoot: repoRoot,
+    peerDependencies: { openclaw: dependency.spec },
+    logger: { warn: (message) => console.error(message) },
+  });
+  if (result.skipped > 0) {
+    throw new Error(
+      `Could not prepare ${params.packageDir}: inspect node_modules/openclaw and the warning above; move conflicting paths aside and rerun --prepare-native-import.`,
+    );
+  }
+  console.error(
+    `[plugin-npm-runtime-build] prepared ${path.basename(packageDir)} host link for native imports (artifacts unchanged)`,
+  );
+}
+
 function usage() {
-  return "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>";
+  return (
+    "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir> [--prepare-native-import]\n" +
+    "  --prepare-native-import  Prepare an already-built source package without rebuilding artifacts; run from the checkout root."
+  );
 }
 
 function readPackageDirArg(argv: string[]) {
-  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const args = argv[0] === "--" ? argv.slice(1) : [...argv];
+  const prepareIndex = args.indexOf("--prepare-native-import");
+  if (prepareIndex !== -1) {
+    args.splice(prepareIndex, 1);
+  }
   const packageDir = args[0];
   if (packageDir === "--help" || packageDir === "-h") {
     return { help: true, packageDir: "" };
@@ -455,7 +544,7 @@ function readPackageDirArg(argv: string[]) {
   if (extraArg) {
     throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
-  return { packageDir };
+  return prepareIndex === -1 ? { packageDir } : { packageDir, prepareNativeImport: true };
 }
 
 /** @internal Directly tested script implementation detail. */
@@ -471,7 +560,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exit(0);
     }
     const { packageDir } = args;
-    const result = await buildPluginNpmRuntime({ packageDir });
+    const result = args.prepareNativeImport
+      ? await preparePluginNativeImport({ packageDir })
+      : await buildPluginNpmRuntime({ packageDir });
     if (result) {
       console.error(
         `[plugin-npm-runtime-build] built ${result.pluginDir} runtime (${result.sourceEntries.length} entries)`,

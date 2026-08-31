@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { DEEPSEEK_DSML_MARKERS, DEEPSEEK_DSML_MARKER_PATTERN } from "./deepseek-dsml-grammar.js";
 import { measureUtf8AppendBytes } from "./openai-transport-shared.js";
 
 export type RecoveredDeepSeekDsmlToolCall = {
@@ -10,28 +11,22 @@ export type RecoveredDeepSeekDsmlToolCall = {
 
 type DeepSeekDsmlRecoveredPart = { kind: "text"; text: string } | RecoveredDeepSeekDsmlToolCall;
 
-const DEEPSEEK_DSML_BARS = ["|", "｜"] as const;
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
-const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
-  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
+const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
+  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `<${marker}${kind}>`),
 );
-const DEEPSEEK_DSML_TOOL_CLOSE_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
-  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `</${bar}DSML${bar}${kind}>`),
+const DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES = DEEPSEEK_DSML_MARKERS.map(
+  (marker) => `<${marker}invoke`,
 );
-const DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES = DEEPSEEK_DSML_BARS.map(
-  (bar) => `<${bar}DSML${bar}invoke`,
-);
-const DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS = DEEPSEEK_DSML_BARS.map(
-  (bar) => `</${bar}DSML${bar}invoke>`,
+const DEEPSEEK_DSML_INVOKE_OPEN_TAG = new RegExp(
+  `^<${DEEPSEEK_DSML_MARKER_PATTERN}invoke\\b[^<>]*>$`,
 );
 const DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN = Math.max(
   ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
 );
 const DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN = Math.max(
-  ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
-  ...DEEPSEEK_DSML_TOOL_CLOSE_TOKENS.map((token) => token.length),
-  ...DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES.map((token) => token.length),
-  ...DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS.map((token) => token.length),
+  ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length + 1),
+  ...DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES.map((token) => token.length + 2),
 );
 
 // Match the shared Chat tool-argument and post-tool-call buffer limits.
@@ -40,8 +35,7 @@ const DEEPSEEK_DSML_SCAN_BATCH_CHARS = 64 * 1_024;
 
 type DeepSeekDsmlToolBlockScanState = {
   offset: number;
-  mode: "outer" | "invoke-open" | "invoke-body";
-  invokeOpenStart: number;
+  invoke?: { kind: "open"; start: number } | { kind: "body"; closeToken: string };
 };
 
 export function createDsmlRecoverer() {
@@ -50,15 +44,11 @@ export function createDsmlRecoverer() {
   let bufferEndsWithHighSurrogate = false;
   let pendingScanChars = 0;
   let activeOpenToken: string | null = null;
-  let blockScanState: DeepSeekDsmlToolBlockScanState = {
-    offset: 0,
-    mode: "outer",
-    invokeOpenStart: -1,
-  };
+  let blockScanState: DeepSeekDsmlToolBlockScanState = { offset: 0 };
   const resetBlockScan = () => {
     activeOpenToken = null;
     pendingScanChars = 0;
-    blockScanState = { offset: 0, mode: "outer", invokeOpenStart: -1 };
+    blockScanState = { offset: 0 };
   };
 
   const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
@@ -175,20 +165,18 @@ export function createDsmlRecoverer() {
 
 function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlToolCall[] {
   const toolCalls: RecoveredDeepSeekDsmlToolCall[] = [];
-  const invokeOpenRegex = /<[|｜]DSML[|｜]invoke\b([^<>]*)>/g;
+  const invokeOpenRegex = new RegExp(`<${DEEPSEEK_DSML_MARKER_PATTERN}invoke\\b([^<>]*)>`, "g");
   let openMatch: RegExpExecArray | null;
   while ((openMatch = invokeOpenRegex.exec(body)) !== null) {
     const invokeBodyStart = openMatch.index + openMatch[0].length;
-    const invokeClose = findEarliestStringToken(body.slice(invokeBodyStart), [
-      "</|DSML|invoke>",
-      "</｜DSML｜invoke>",
-    ]);
-    if (!invokeClose) {
+    const invokeCloseToken = `</${openMatch[1]}invoke>`;
+    const invokeCloseIndex = body.indexOf(invokeCloseToken, invokeBodyStart);
+    if (invokeCloseIndex === -1) {
       break;
     }
-    const invokeBody = body.slice(invokeBodyStart, invokeBodyStart + invokeClose.index);
-    invokeOpenRegex.lastIndex = invokeBodyStart + invokeClose.index + invokeClose.token.length;
-    const invokeName = parseXmlAttribute(openMatch[1] ?? "", "name");
+    const invokeBody = body.slice(invokeBodyStart, invokeCloseIndex);
+    invokeOpenRegex.lastIndex = invokeCloseIndex + invokeCloseToken.length;
+    const invokeName = parseXmlAttribute(openMatch[2] ?? "", "name");
     if (!invokeName) {
       continue;
     }
@@ -208,14 +196,17 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
 
 function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown> | null {
   const args: Record<string, unknown> = {};
-  const parameterRegex = /<[|｜]DSML[|｜]parameter\b([^>]*)>([\s\S]*?)<\/[|｜]DSML[|｜]parameter>/g;
+  const parameterRegex = new RegExp(
+    `<${DEEPSEEK_DSML_MARKER_PATTERN}parameter\\b([^>]*)>([\\s\\S]*?)</\\1parameter>`,
+    "g",
+  );
   let parameterMatch: RegExpExecArray | null;
   while ((parameterMatch = parameterRegex.exec(body)) !== null) {
-    const name = parseXmlAttribute(parameterMatch[1] ?? "", "name");
+    const name = parseXmlAttribute(parameterMatch[2] ?? "", "name");
     if (!name) {
       continue;
     }
-    const rawValue = parameterMatch[2] ?? "";
+    const rawValue = parameterMatch[3] ?? "";
     if (rawValue.length === 0) {
       continue;
     }
@@ -291,7 +282,7 @@ function scanDeepSeekDsmlToolBlock(
   | { kind: "nested-open"; index: number; token: string }
   | { kind: "incomplete" } {
   while (state.offset < text.length) {
-    if (state.mode === "invoke-open") {
+    if (state.invoke?.kind === "open") {
       const nextOpen = text.indexOf("<", state.offset);
       const nextClose = text.indexOf(">", state.offset);
       if (nextClose === -1 && nextOpen === -1) {
@@ -299,36 +290,31 @@ function scanDeepSeekDsmlToolBlock(
         return { kind: "incomplete" };
       }
       if (nextOpen !== -1 && (nextClose === -1 || nextOpen < nextClose)) {
-        state.mode = "outer";
+        state.invoke = undefined;
         state.offset = nextOpen;
-        state.invokeOpenStart = -1;
         continue;
       }
-      const invokeOpenTag = text.slice(state.invokeOpenStart, nextClose + 1);
-      if (!/^<[|｜]DSML[|｜]invoke\b[^<>]*>$/.test(invokeOpenTag)) {
-        state.mode = "outer";
-        state.offset = state.invokeOpenStart + 1;
-        state.invokeOpenStart = -1;
+      const invokeOpenTag = text.slice(state.invoke.start, nextClose + 1);
+      const open = DEEPSEEK_DSML_INVOKE_OPEN_TAG.exec(invokeOpenTag);
+      if (!open) {
+        state.offset = state.invoke.start + 1;
+        state.invoke = undefined;
         continue;
       }
-      state.mode = "invoke-body";
+      // Carry the exact opener across chunks; a foreign close cannot authorize a call.
+      state.invoke = { kind: "body", closeToken: `</${open[1]}invoke>` };
       state.offset = nextClose + 1;
-      state.invokeOpenStart = -1;
       continue;
     }
 
-    if (state.mode === "invoke-body") {
-      const invokeClose = findEarliestStringToken(
-        text,
-        DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS,
-        state.offset,
-      );
-      if (!invokeClose) {
+    if (state.invoke?.kind === "body") {
+      const invokeCloseIndex = text.indexOf(state.invoke.closeToken, state.offset);
+      if (invokeCloseIndex === -1) {
         state.offset = Math.max(0, text.length - DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN + 1);
         return { kind: "incomplete" };
       }
-      state.mode = "outer";
-      state.offset = invokeClose.index + invokeClose.token.length;
+      state.offset = invokeCloseIndex + state.invoke.closeToken.length;
+      state.invoke = undefined;
       continue;
     }
 
@@ -356,8 +342,7 @@ function scanDeepSeekDsmlToolBlock(
       return { kind: "incomplete" };
     }
     if (next.kind === "invoke-open") {
-      state.mode = "invoke-open";
-      state.invokeOpenStart = next.index;
+      state.invoke = { kind: "open", start: next.index };
       state.offset = next.index + next.token.length;
       continue;
     }

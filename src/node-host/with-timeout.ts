@@ -10,19 +10,30 @@ import { toErrorObject } from "../infra/errors.js";
  */
 /** Run work with an optional timeout and AbortSignal. */
 export async function runAbortableTimeout<T>(
-  work: (signal: AbortSignal | undefined) => Promise<T>,
+  work: (signal: AbortSignal | undefined, resetTimeout: () => void) => Promise<T>,
   timeoutMs?: number,
   label?: string,
 ): Promise<T> {
   const resolved = timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(timeoutMs, 1);
   if (!resolved) {
-    return await work(undefined);
+    return await work(undefined, () => {});
   }
 
   const abortCtrl = new AbortController();
   const timeoutError = new Error(`${label ?? "request"} timed out`);
-  const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
-  timer.unref?.();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const resetTimeout = () => {
+    if (settled || abortCtrl.signal.aborted) {
+      return;
+    }
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+    timer.unref?.();
+  };
+  resetTimeout();
 
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = abortCtrl.signal.aborted
@@ -34,9 +45,12 @@ export async function runAbortableTimeout<T>(
       });
 
   try {
-    return await Promise.race([work(abortCtrl.signal), abortPromise]);
+    return await Promise.race([work(abortCtrl.signal, resetTimeout), abortPromise]);
   } finally {
-    clearTimeout(timer);
+    settled = true;
+    if (timer) {
+      clearTimeout(timer);
+    }
     if (abortListener) {
       // Remove the listener even when work wins the race to avoid retaining closures.
       abortCtrl.signal.removeEventListener("abort", abortListener);

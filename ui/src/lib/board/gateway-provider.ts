@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type {
   BoardChangedEvent,
   BoardCommandEvent,
@@ -371,6 +372,17 @@ export class GatewayBoardProvider implements BoardProvider {
         this.setLoadError(formatUiError(error));
         for (const name of changedWidgets) {
           this.changedWidgets.add(name);
+        }
+        if (
+          error instanceof GatewayProtocolRequestError &&
+          error.gatewayCode === "UNAVAILABLE" &&
+          !error.retryable
+        ) {
+          // A definitive rejection consumes this refresh. Only a newer event,
+          // connection generation, or explicit refresh can request another one.
+          this.refreshRequested =
+            this.stateGeneration !== stateGeneration || this.userRefreshRequested;
+          continue;
         }
         if (!this.connected) {
           if (this.userRefreshRequested) {

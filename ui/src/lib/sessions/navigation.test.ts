@@ -282,7 +282,7 @@ describe("resolveSessionNavigation", () => {
 describe("visibleSessionMatches", () => {
   const baseHost = {
     assistantAgentId: "work",
-    agentsList: { defaultId: "main", mainKey: "workspace" },
+    agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
     hello: null,
   };
   const routeGroups: Array<{
@@ -295,7 +295,7 @@ describe("visibleSessionMatches", () => {
       hostKeys: [
         "main",
         "workspace",
-        "agent:main:global",
+
         "agent:main:main",
         "agent:main:workspace",
       ],
@@ -303,27 +303,27 @@ describe("visibleSessionMatches", () => {
         { sessionKey: "global", agentId: "main" },
         { sessionKey: "main" },
         { sessionKey: "workspace" },
-        { sessionKey: "agent:main:global" },
+
         { sessionKey: "agent:main:main" },
         { sessionKey: "agent:main:workspace" },
       ],
     },
     {
       owner: "work",
-      hostKeys: ["global", "agent:work:global", "agent:work:main", "agent:work:workspace"],
+      hostKeys: ["global", "agent:work:main", "agent:work:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "work" },
-        { sessionKey: "agent:work:global" },
+
         { sessionKey: "agent:work:main" },
         { sessionKey: "agent:work:workspace" },
       ],
     },
     {
       owner: "alpha",
-      hostKeys: ["agent:alpha:global", "agent:alpha:main", "agent:alpha:workspace"],
+      hostKeys: ["agent:alpha:main", "agent:alpha:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "alpha" },
-        { sessionKey: "agent:alpha:global" },
+
         { sessionKey: "agent:alpha:main" },
         { sessionKey: "agent:alpha:workspace" },
       ],
@@ -360,7 +360,7 @@ describe("visibleSessionMatches", () => {
       "global",
       "main",
       "workspace",
-      "agent:work:global",
+
       "agent:work:main",
       "agent:work:workspace",
     ];
@@ -372,7 +372,7 @@ describe("visibleSessionMatches", () => {
       const host = {
         ...baseHost,
         sessionKey: hostKey,
-        agentsList: { defaultId: "work", mainKey: "workspace" },
+        agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
       };
       for (const candidate of candidates) {
         expect(visibleSessionMatches(host, candidate.sessionKey, candidate.agentId)).toBe(true);

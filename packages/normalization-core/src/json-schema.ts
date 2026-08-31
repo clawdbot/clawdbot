@@ -1,5 +1,6 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
-import { Value } from "typebox/value";
+import { Guard } from "typebox/guard";
+import { Check } from "typebox/schema";
 import { isRecord } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
@@ -107,15 +108,14 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
   if (types.length === 1 && !Array.isArray(type)) {
     return schema;
   }
-  const resourceEntries = Object.entries(rest).filter(([key]) => schemaResourceKeywords.has(key));
-  const branchEntries = Object.entries(rest).filter(([key]) => !schemaResourceKeywords.has(key));
+  const entries = Object.entries(rest);
+  const resourceEntries = entries.filter(([key]) => schemaResourceKeywords.has(key));
+  const branch = Object.fromEntries(entries.filter(([key]) => !schemaResourceKeywords.has(key)));
   // Keep value-wide constraints on every branch: const, enum, and applicators
   // must still decide whether null is valid. Type-specific keywords ignore null.
   return {
     ...Object.fromEntries(resourceEntries),
-    anyOf: types.map((entry) =>
-      Object.assign({}, Object.fromEntries(branchEntries), { type: entry }),
-    ),
+    anyOf: types.map((entry) => Object.assign({}, branch, { type: entry })),
   };
 }
 
@@ -269,7 +269,7 @@ export function jsonSchemaValuesEqual(left: unknown, right: unknown): boolean {
     return false;
   }
   try {
-    return Value.Equal(left, right);
+    return Guard.IsDeepEqual(left, right);
   } catch {
     return false;
   }
@@ -281,7 +281,7 @@ export function isJsonSchemaValueValid(schema: JsonSchemaValue, value: unknown):
     return false;
   }
   try {
-    return Value.Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
+    return Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
   } catch {
     return false;
   }

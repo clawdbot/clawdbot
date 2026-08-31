@@ -64,6 +64,7 @@ import {
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
+  PluginInstallArtifactConsentHandler,
   PluginInstallLogger,
   PluginInstallPolicyRequest,
 } from "./install-types.js";
@@ -94,6 +95,7 @@ export async function installPluginFromManagedNpmRoot(
     expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -190,6 +192,7 @@ export async function installPluginFromManagedNpmRoot(
       }
     | undefined;
   let deferredTransaction = false;
+  let installSucceeded = false;
   try {
     rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({ npmRoot });
   } catch (error) {
@@ -216,27 +219,6 @@ export async function installPluginFromManagedNpmRoot(
     }
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
     rollbackPeerDependencySnapshot ??= await readManagedNpmRootPeerDependencySnapshot({ npmRoot });
-    const rollbackFailedManagedNpmInstall = async (
-      failure: Extract<InstallPluginResult, { ok: false }>,
-    ): Promise<Extract<InstallPluginResult, { ok: false }>> => {
-      await rollbackManagedNpmPluginInstall({
-        npmRoot,
-        packageName: params.packageName,
-        targetDir: installRoot,
-        timeoutMs,
-        logger,
-        peerDependencySnapshot: rollbackPeerDependencySnapshot,
-        // Once the poisoned tree has been quarantined, restoring this snapshot
-        // would recreate the crash loop that the recovery attempt is repairing.
-        snapshot: recovery ? undefined : rollbackSnapshot,
-      });
-      await rollbackManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency: prepared,
-        logger,
-      });
-      return failure;
-    };
     const quarantineForRecovery = async (
       cause: NonNullable<typeof recovery>["cause"],
     ): Promise<Extract<InstallPluginResult, { ok: false }> | null> => {
@@ -244,10 +226,10 @@ export async function installPluginFromManagedNpmRoot(
         const quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
         recovery = { cause, quarantine };
       } catch (error) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `${cause.error}, but OpenClaw could not quarantine ${npmRoot} for rebuild: ${String(error)}`,
-        });
+        };
       }
       logger.warn?.(
         `${cause.error}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
@@ -286,7 +268,7 @@ export async function installPluginFromManagedNpmRoot(
     });
     const initialPeerSync = await syncManagedPeerDependenciesForInstall();
     if (!initialPeerSync.ok) {
-      return await rollbackFailedManagedNpmInstall({ ok: false, error: initialPeerSync.error });
+      return { ok: false, error: initialPeerSync.error };
     }
     const npmInstallArgs = [
       "npm",
@@ -326,10 +308,10 @@ export async function installPluginFromManagedNpmRoot(
       });
       const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
       if (!aliasRetryPeerSync.ok) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: aliasRetryPeerSync.error,
-        });
+        };
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
@@ -348,16 +330,16 @@ export async function installPluginFromManagedNpmRoot(
       const error = recovery
         ? `npm install failed after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original ${recovery.cause.kind === "npm-corruption" ? "npm" : "verification"} error: ${recovery.cause.error}`
         : `npm install failed: ${formatNpmCommandFailureOutput(install)}`;
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error,
-      });
+      };
     }
     let settledManagedPeerDependencies = false;
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return await rollbackFailedManagedNpmInstall({ ok: false, error: peerSync.error });
+        return { ok: false, error: peerSync.error };
       }
       const syncedPeerDependencies = peerSync.changed;
       if (!syncedPeerDependencies) {
@@ -366,32 +348,32 @@ export async function installPluginFromManagedNpmRoot(
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
       if (install.code !== 0) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `npm install failed after syncing managed peer dependencies: ${formatNpmCommandFailureOutput(install)}`,
-        });
+        };
       }
     }
     if (!settledManagedPeerDependencies) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return await rollbackFailedManagedNpmInstall({ ok: false, error: peerSync.error });
+        return { ok: false, error: peerSync.error };
       }
       settledManagedPeerDependencies = !peerSync.changed;
     }
     if (!settledManagedPeerDependencies) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error:
           "npm install could not settle managed peer dependencies after 10 sync passes; refusing to leave a partially reconciled plugin dependency tree.",
-      });
+      };
     }
     const packageManifestResult = await readOptionalPackageManifest({
       runtime,
       packageDir: installRoot,
     });
     if (!packageManifestResult.ok) {
-      return await rollbackFailedManagedNpmInstall(packageManifestResult);
+      return packageManifestResult;
     }
     const requiredPlatformPackageNames = resolveRequiredPlatformPackageNames(
       packageManifestResult.manifest
@@ -399,10 +381,10 @@ export async function installPluginFromManagedNpmRoot(
         : undefined,
     );
     if (!requiredPlatformPackageNames.ok) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: requiredPlatformPackageNames.error,
-      });
+      };
     }
     let incompletePlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
     try {
@@ -411,10 +393,10 @@ export async function installPluginFromManagedNpmRoot(
         requiredPackageNames: requiredPlatformPackageNames.packageNames,
       });
     } catch (error) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: `Failed to verify platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
-      });
+      };
     }
     if (incompletePlatformPackages.length > 0) {
       const incompletePlatformPackageNames = incompletePlatformPackages.map((entry) => entry.name);
@@ -438,10 +420,10 @@ export async function installPluginFromManagedNpmRoot(
           },
         });
       } catch (error) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `Failed to repair missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${String(error)}`,
-        });
+        };
       } finally {
         if (freshCacheDir) {
           try {
@@ -454,10 +436,10 @@ export async function installPluginFromManagedNpmRoot(
         }
       }
       if (install.code !== 0) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `npm install failed while repairing missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${formatNpmCommandFailureOutput(install)}`,
-        });
+        };
       }
       let stillIncompletePlatformPackages: typeof incompletePlatformPackages;
       try {
@@ -466,16 +448,16 @@ export async function installPluginFromManagedNpmRoot(
           requiredPackageNames: requiredPlatformPackageNames.packageNames,
         });
       } catch (error) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `Failed to verify repaired platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
-        });
+        };
       }
       if (stillIncompletePlatformPackages.length > 0) {
-        return await rollbackFailedManagedNpmInstall({
+        return {
           ok: false,
           error: `npm install reported success but left required current-platform package(s) missing or incomplete: ${stillIncompletePlatformPackages.map((entry) => entry.name).join(", ")}`,
-        });
+        };
       }
     }
     if (params.packageName !== "openclaw") {
@@ -495,16 +477,16 @@ export async function installPluginFromManagedNpmRoot(
         logger,
       });
     } catch (error) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: `Failed to repair openclaw peer links after npm install: ${String(error)}`,
-      });
+      };
     }
     if (await auditDeclaredOpenClawHostDependency({ packageDir: installRoot })) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: formatUnresolvedOpenClawPeerLinkError(params.packageName),
-      });
+      };
     }
 
     let installedDependency: ManagedNpmRootInstalledDependency | null;
@@ -514,10 +496,10 @@ export async function installPluginFromManagedNpmRoot(
         packageName: params.packageName,
       });
     } catch (error) {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: `Failed to verify npm install metadata for ${params.packageName}: ${String(error)}`,
-      });
+      };
     }
     const resolutionVerification = verifyInstalledNpmResolution({
       packageName: params.packageName,
@@ -525,10 +507,10 @@ export async function installPluginFromManagedNpmRoot(
       installed: installedDependency,
     });
     if (resolutionVerification.kind === "conflict") {
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: resolutionVerification.error,
-      });
+      };
     }
     if (resolutionVerification.kind === "incomplete") {
       if (!recovery) {
@@ -541,10 +523,10 @@ export async function installPluginFromManagedNpmRoot(
         }
         return await runManagedNpmInstall(prepared);
       }
-      return await rollbackFailedManagedNpmInstall({
+      return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
-      });
+      };
     }
 
     const newRootPackageDirs = await listNewManagedNpmRootPackageDirs({
@@ -585,13 +567,47 @@ export async function installPluginFromManagedNpmRoot(
       emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
-      return await rollbackFailedManagedNpmInstall(result);
+      return result;
     }
+    await params.onBeforePluginArtifactCommit?.({
+      pluginId: result.pluginId,
+      ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
+      stagedArtifactDir: installRoot,
+      mode: policyMode,
+    });
     return {
       ...result,
       npmResolution: params.npmResolution,
       ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
+  };
+
+  const rollback = async () => {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      // Restoring a quarantined tree would recreate the corruption being repaired.
+      snapshot: recovery ? undefined : rollbackSnapshot,
+    });
+    if (preparedDependency) {
+      await rollbackManagedNpmRootPreparedDependency({
+        packageName: params.packageName,
+        preparedDependency,
+        logger,
+      });
+    }
+  };
+  const cleanup = async () => {
+    await cleanupManagedNpmRootPreparedDependency({
+      packageName: params.packageName,
+      preparedDependency,
+      logger,
+    });
+    await cleanupManagedNpmPluginInstallRollbackSnapshot({ snapshot: rollbackSnapshot, logger });
   };
 
   try {
@@ -606,22 +622,12 @@ export async function installPluginFromManagedNpmRoot(
     }
     preparedDependency = dependencyResult;
     const result = await runManagedNpmInstall(preparedDependency);
+    installSucceeded = result.ok;
     if (!result.ok || !isPluginInstallCommitDeferred(params)) {
       return result;
     }
     deferredTransaction = true;
     let settled = false;
-    const cleanup = async () => {
-      await cleanupManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency,
-        logger,
-      });
-      await cleanupManagedNpmPluginInstallRollbackSnapshot({
-        snapshot: rollbackSnapshot,
-        logger,
-      });
-    };
     return attachPluginInstallTransaction(
       { ...result },
       {
@@ -637,35 +643,18 @@ export async function installPluginFromManagedNpmRoot(
             return;
           }
           settled = true;
-          await rollbackManagedNpmPluginInstall({
-            npmRoot,
-            packageName: params.packageName,
-            targetDir: installRoot,
-            timeoutMs,
-            logger,
-            peerDependencySnapshot: rollbackPeerDependencySnapshot,
-            snapshot: recovery ? undefined : rollbackSnapshot,
-          });
-          await rollbackManagedNpmRootPreparedDependency({
-            packageName: params.packageName,
-            preparedDependency: dependencyResult,
-            logger,
-          });
+          await rollback();
           await cleanup();
         },
       },
     );
   } finally {
     if (!deferredTransaction) {
-      await cleanupManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency,
-        logger,
-      });
-      await cleanupManagedNpmPluginInstallRollbackSnapshot({
-        snapshot: rollbackSnapshot,
-        logger,
-      });
+      // Returned failures and throws must restore the snapshot before cleanup discards it.
+      if (!installSucceeded && preparedDependency) {
+        await rollback();
+      }
+      await cleanup();
     }
   }
 }

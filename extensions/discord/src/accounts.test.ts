@@ -9,6 +9,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   createDiscordActionGate,
   isDiscordAccountEnabledForRuntime,
@@ -282,6 +283,15 @@ describe("Discord duplicate-token account filtering", () => {
 
     expect(isDiscordAccountEnabledForRuntime(duplicateAccount, cfg)).toBe(false);
     expect(resolveDiscordAccountDisabledReason(duplicateAccount, cfg)).toBe(expectedReason);
+    expect(inspectDiscordAccount({ cfg, accountId: duplicateId })).toMatchObject({
+      enabled: false,
+      configured: true,
+      stateReason: expectedReason,
+    });
+    expect(inspectDiscordAccount({ cfg, accountId })).toMatchObject({
+      enabled: true,
+      configured: true,
+    });
     expect(isDiscordAccountEnabledForRuntime(enabledAccount, cfg)).toBe(true);
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
       accountId,
@@ -303,6 +313,11 @@ describe("Discord duplicate-token account filtering", () => {
     const activeAccount = resolveDiscordAccount({ cfg, accountId: "active" });
 
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
+    expect(inspectDiscordAccount({ cfg, accountId: "active" }).enabled).toBe(true);
+    expect(inspectDiscordAccount({ cfg, accountId: "disabled" })).toMatchObject({
+      enabled: false,
+      stateReason: "disabled",
+    });
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
   });
 });

@@ -105,6 +105,7 @@ export async function resetReplyRunSession(params: {
       ? undefined
       : createSessionDiffBaselineCaptureClaim(),
     compactionCount: 0,
+    transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
   };
   clearAllCliSessions(nextEntry);

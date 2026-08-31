@@ -3,7 +3,6 @@
  *
  * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -16,10 +15,8 @@ import {
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
-import {
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../../plugins/plugin-module-loader-cache.js";
+import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
@@ -50,7 +47,6 @@ type ChannelPackageStateLoadFailure = {
 };
 
 const log = createSubsystemLogger("channels");
-const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
 
 type ChannelPackageStateModuleLocation = {
   modulePath: string;
@@ -71,8 +67,8 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     // Local source checkers can run through the cached TS loader; built JS
     // paths must still load through the boundary-safe module loader above.
     const loader = getCachedPluginModuleLoader({
-      cache: sourcePackageStateLoaderCache,
       modulePath: params.modulePath,
+      rootDir: params.rootDir,
       importerUrl: import.meta.url,
       tryNative: true,
       cacheScopeKey: "channel-package-state",
@@ -137,7 +133,7 @@ function listBuiltBundledPackageStateModules(params: {
     path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
   ]) {
     const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
-    if (fs.existsSync(modulePath) && !isSourceModulePath(modulePath)) {
+    if (pluginCacheExistsSync(modulePath) && !isSourceModulePath(modulePath)) {
       locations.push({ modulePath, rootDir });
     }
   }

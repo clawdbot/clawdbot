@@ -2,14 +2,49 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
   compareSidebarSessionRowsByMode,
   resolveSidebarAgentChipSubtitle,
+  resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+
+it.each([
+  ["global before hello", "global", undefined, "global"],
+  ["advertised global casing", "global", " GLOBAL ", "GLOBAL"],
+  ["advertised key in global scope", "global", "agent:other:legacy", "agent:other:legacy"],
+  ["global advertised without a roster", undefined, " GLOBAL ", "GLOBAL"],
+  ["explicit per-sender scope", "per-sender", "global", "agent:ops:workspace"],
+  ["per-agent key without a roster", undefined, "agent:other:legacy", "agent:ops:workspace"],
+] as const)(
+  "preserves the sidebar main destination for %s",
+  (_name, scope, advertised, expected) => {
+    expect(
+      resolveSidebarMainSessionKey({
+        agentId: "ops",
+        agentsList: scope
+          ? { defaultId: "main", mainKey: "workspace", scope, agents: [] }
+          : undefined,
+        hello: advertised
+          ? {
+              ...gatewayHelloForMethods([]),
+              snapshot: {
+                sessionDefaults: {
+                  defaultAgentId: "main",
+                  mainKey: "workspace",
+                  mainSessionKey: advertised,
+                },
+              },
+            }
+          : null,
+      }),
+    ).toBe(expected);
+  },
+);
 
 function projectSidebarSession(
   row: Partial<GatewaySessionRow>,

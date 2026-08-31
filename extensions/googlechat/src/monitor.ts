@@ -293,6 +293,13 @@ async function processMessageWithPipeline(params: {
           url: attachmentData.path,
           contentType: attachmentData.contentType ?? first.contentType,
         };
+      } else {
+        const reason = first.driveDataRef
+          ? "Google Drive files are not downloadable"
+          : "unsupported attachment source";
+        const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
+        rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+        runtime.error?.(`[${account.accountId}] ${notice}`);
       }
     } catch (error) {
       if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
@@ -306,6 +313,11 @@ async function processMessageWithPipeline(params: {
         `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
       );
     }
+  }
+  const additionalCount = attachments.length - 1;
+  if (additionalCount > 0) {
+    const notice = `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`;
+    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
   }
   const media = mediaInputs.length === 0 ? [] : await toInboundMediaFactsWithMetadata(mediaInputs);
 

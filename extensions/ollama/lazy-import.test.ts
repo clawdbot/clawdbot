@@ -13,7 +13,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("ollama lazy imports", () => {
   afterEach(() => {
     for (const moduleId of [
-      "./src/embedding-provider.runtime.js",
       "./src/media-understanding-provider.js",
       "./src/memory-embedding-adapter.js",
       "./src/node-inference.js",
@@ -29,9 +28,6 @@ describe("ollama lazy imports", () => {
   });
 
   it("loads optional runtime owners only on first use", async () => {
-    let embeddingImports = 0;
-    const embeddingQueryCalls: unknown[] = [];
-    const embeddingBatchCalls: unknown[] = [];
     let mediaImports = 0;
     let memoryImports = 0;
     let nodeInferenceImports = 0;
@@ -49,28 +45,6 @@ describe("ollama lazy imports", () => {
         return false;
       },
     }));
-    vi.doMock("./src/embedding-provider.runtime.js", () => {
-      embeddingImports += 1;
-      return {
-        createOllamaEmbeddingProvider: async () => {
-          return {
-            provider: {
-              id: "ollama",
-              model: "nomic-embed-text",
-              embed: async (...args: unknown[]) => {
-                embeddingQueryCalls.push(args);
-                return [1];
-              },
-              embedBatch: async (...args: unknown[]) => {
-                embeddingBatchCalls.push(args);
-                return [[2]];
-              },
-            },
-            client: { baseUrl: "http://127.0.0.1:11434" },
-          };
-        },
-      };
-    });
     vi.doMock("./src/memory-embedding-adapter.js", () => {
       memoryImports += 1;
       return {
@@ -192,7 +166,6 @@ describe("ollama lazy imports", () => {
     await vi.waitFor(() => expect(wslChecks).toBe(1));
 
     expect({
-      embeddingImports,
       mediaImports,
       memoryImports,
       nodeInferenceImports,
@@ -201,7 +174,6 @@ describe("ollama lazy imports", () => {
       webSearchImports,
       wslImports,
     }).toEqual({
-      embeddingImports: 0,
       mediaImports: 0,
       memoryImports: 0,
       nodeInferenceImports: 0,
@@ -227,19 +199,6 @@ describe("ollama lazy imports", () => {
     });
 
     const localProvider = providers.find((provider) => provider.id === "ollama");
-    const localEmbedding = await localProvider?.createEmbeddingProvider?.({
-      config: {},
-      model: "",
-      provider: "ollama",
-    } as never);
-    expect(localEmbedding).toMatchObject({
-      id: "ollama",
-      client: { baseUrl: "http://127.0.0.1:11434" },
-    });
-    await expect(localEmbedding?.embedQuery("query")).resolves.toEqual([1]);
-    await expect(localEmbedding?.embedBatch(["document"])).resolves.toEqual([[2]]);
-    expect(embeddingQueryCalls).toEqual([["query", { inputType: "query" }]]);
-    expect(embeddingBatchCalls).toEqual([[["document"], { inputType: "document" }]]);
     await expect(
       localProvider?.auth[0]?.run({
         config: {},
@@ -279,7 +238,6 @@ describe("ollama lazy imports", () => {
     });
 
     expect({
-      embeddingImports,
       mediaImports,
       memoryImports,
       nodeInferenceImports,
@@ -288,7 +246,6 @@ describe("ollama lazy imports", () => {
       webSearchImports,
       wslImports,
     }).toEqual({
-      embeddingImports: 1,
       mediaImports: 1,
       memoryImports: 1,
       nodeInferenceImports: 1,

@@ -52,7 +52,6 @@ vi.mock("./models-config.providers.js", async () => {
   }
 
   return {
-    applyNativeStreamingUsageCompat: (providers: Record<string, ModelsProviderConfig>) => providers,
     enforceSourceManagedProviderSecrets: ({
       providers,
     }: {

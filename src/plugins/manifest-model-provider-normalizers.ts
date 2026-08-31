@@ -1,3 +1,4 @@
+import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
@@ -10,9 +11,6 @@ import type {
   PluginManifestModelIdNormalizationProvider,
   PluginManifestModelIdPrefixRule,
   PluginManifestModelPricing,
-  PluginManifestModelPricingModelIdTransform,
-  PluginManifestModelPricingProvider,
-  PluginManifestModelPricingSource,
   PluginManifestModelSupport,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequest,
@@ -42,43 +40,6 @@ export function normalizeManifestModelSupport(
   } satisfies PluginManifestModelSupport;
 
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
-}
-
-function normalizeManifestModelPricingSource(
-  value: unknown,
-): PluginManifestModelPricingSource | false | undefined {
-  if (value === false) {
-    return false;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const provider = normalizeModelCatalogProviderId(normalizeOptionalString(value.provider) ?? "");
-  const modelIdTransforms = normalizeTrimmedStringList(value.modelIdTransforms).filter(
-    (entry): entry is PluginManifestModelPricingModelIdTransform => entry === "version-dots",
-  );
-  const source = {
-    ...(provider ? { provider } : {}),
-    ...(value.passthroughProviderModel === true ? { passthroughProviderModel: true } : {}),
-    ...(modelIdTransforms.length > 0 ? { modelIdTransforms } : {}),
-  } satisfies PluginManifestModelPricingSource;
-  return Object.keys(source).length > 0 ? source : undefined;
-}
-
-function normalizeManifestModelPricingProvider(
-  value: unknown,
-): PluginManifestModelPricingProvider | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const openRouter = normalizeManifestModelPricingSource(value.openRouter);
-  const liteLLM = normalizeManifestModelPricingSource(value.liteLLM);
-  const policy = {
-    ...(typeof value.external === "boolean" ? { external: value.external } : {}),
-    ...(openRouter !== undefined ? { openRouter } : {}),
-    ...(liteLLM !== undefined ? { liteLLM } : {}),
-  } satisfies PluginManifestModelPricingProvider;
-  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function normalizeOwnedProviderMap<T>(
@@ -112,7 +73,7 @@ export function normalizeManifestModelPricing(
   const providers = normalizeOwnedProviderMap(
     value,
     params.ownedProviders,
-    normalizeManifestModelPricingProvider,
+    normalizeModelPricingProvider,
   );
   return providers ? { providers } : undefined;
 }
