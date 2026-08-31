@@ -42,6 +42,7 @@ export type AgentTurnContext = Pick<
   | "getSessionEventSubscriberConnIds"
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
+  | "loadPublishedGatewayReplyDispatchRuntime"
   | "logGateway"
   | "resolveGatewayContext"
   | "validateAgentRuntimeApprovalAuthority"

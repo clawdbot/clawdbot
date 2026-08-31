@@ -6,9 +6,13 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
+  createGatewayDispatchTimeoutError,
   type GatewayMethodDispatchResponse,
+  resolveGatewayDispatchDeadlineMs,
+  resolveRemainingGatewayDispatchTimeoutMs,
   throwIfGatewayDispatchAborted,
-  waitForGatewayDispatch,
+  throwIfGatewayDispatchDeadlineExpired,
+  waitForGatewayDispatchDeadline,
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import {
@@ -19,6 +23,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
+import { waitForAgentTerminalDedupe } from "./agent-job.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import type {
@@ -48,6 +53,68 @@ export function createInternalAgentTurnFacade(
   const isWebchatConnect = options.isWebchatConnect ?? (() => false);
   const getMethodRegistry = options.getMethodRegistry ?? createRequestGatewayMethodRegistry;
 
+  const waitUntil = async <T = unknown>(
+    params: AgentWaitParams,
+    deadlineMs?: number,
+    signal?: AbortSignal,
+    onSignalAbort?: () => Promise<void> | void,
+  ): Promise<T> => {
+    const method = "agent.wait";
+    throwIfGatewayDispatchAborted(method, signal);
+    const context = options.getContext();
+    const methodRegistry = getMethodRegistry();
+    const authorization = await waitForGatewayDispatchDeadline(
+      method,
+      authorizeGatewayRequestPreDispatch({
+        method,
+        requestParams: params,
+        client: options.client,
+        context,
+        methodRegistry,
+      }),
+      deadlineMs,
+      signal,
+      onSignalAbort,
+    );
+    throwIfGatewayDispatchDeadlineExpired(method, deadlineMs);
+    if (authorization.error) {
+      return throwEnvelopeRejection(method, authorization.error);
+    }
+    const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
+    if (validationError) {
+      return throwEnvelopeRejection(method, validationError);
+    }
+    options.assertContextCurrent?.();
+    const result = runWithGatewayRequestEnvelope(
+      method,
+      options.client,
+      () => createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params),
+      {
+        context,
+        isWebchatConnect,
+        methodRegistry,
+        reject: (error) => throwEnvelopeRejection(method, error),
+      },
+    );
+    const response = (await waitForGatewayDispatchDeadline(
+      method,
+      result,
+      deadlineMs,
+      signal,
+      onSignalAbort,
+    )) as T;
+    options.assertContextCurrent?.();
+    return response;
+  };
+
+  const wait = async <T = unknown>(
+    params: AgentWaitParams,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    onSignalAbort?: () => Promise<void> | void,
+  ): Promise<T> =>
+    await waitUntil(params, resolveGatewayDispatchDeadlineMs(timeoutMs), signal, onSignalAbort);
+
   const dispatchRaw = async (
     request: AgentRunRequest,
     dispatchOptions: InternalAgentTurnDispatchOptions = {},
@@ -55,15 +122,24 @@ export function createInternalAgentTurnFacade(
     const method = "agent";
     throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
     options.assertContextCurrent?.();
+    const deadlineMs =
+      dispatchOptions.deadlineMs ?? resolveGatewayDispatchDeadlineMs(dispatchOptions.timeoutMs);
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
-    const authorization = await authorizeGatewayRequestPreDispatch({
+    const authorization = await waitForGatewayDispatchDeadline(
       method,
-      requestParams: request,
-      client: options.client,
-      context,
-      methodRegistry,
-    });
+      authorizeGatewayRequestPreDispatch({
+        method,
+        requestParams: request,
+        client: options.client,
+        context,
+        methodRegistry,
+      }),
+      deadlineMs,
+      dispatchOptions.signal,
+      dispatchOptions.onSignalAbort,
+    );
+    throwIfGatewayDispatchDeadlineExpired(method, deadlineMs);
     if (authorization.error) {
       return { ok: false, error: authorization.error };
     }
@@ -174,26 +250,78 @@ export function createInternalAgentTurnFacade(
       },
     );
     const response = (async () => {
-      const first = acceptance ?? (await acceptancePromise);
-      if (
-        dispatchOptions.expectFinal !== true ||
-        (first.payload as { status?: unknown } | undefined)?.status !== "accepted"
-      ) {
+      const first =
+        acceptance ??
+        (await waitForGatewayDispatchDeadline(
+          method,
+          acceptancePromise,
+          deadlineMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        ));
+      const firstPayload = first.payload as { runId?: unknown; status?: unknown } | undefined;
+      if (dispatchOptions.expectFinal !== true) {
+        return first;
+      }
+      if (firstPayload?.status === "in_flight") {
+        dispatchOptions.onAccepted?.(first.payload);
+        const runId = typeof firstPayload.runId === "string" ? firstPayload.runId.trim() : "";
+        if (!runId) {
+          return first;
+        }
+        const remainingTimeoutMs = resolveRemainingGatewayDispatchTimeoutMs(deadlineMs);
+        const waitResult = await waitUntil<{ endedAt?: unknown; status?: unknown }>(
+          { runId, ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}) },
+          deadlineMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        );
+        const waitReachedNonterminalDeadline =
+          waitResult.status === "pending" ||
+          (waitResult.status === "timeout" && typeof waitResult.endedAt !== "number");
+        if (waitReachedNonterminalDeadline) {
+          return first;
+        }
+        const dedupeTimeoutMs = resolveRemainingGatewayDispatchTimeoutMs(deadlineMs) ?? 30_000;
+        const terminalDedupe = await waitForGatewayDispatchDeadline(
+          method,
+          waitForAgentTerminalDedupe({ runId, timeoutMs: dedupeTimeoutMs }),
+          deadlineMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        );
+        options.assertContextCurrent?.();
+        if (!terminalDedupe) {
+          throw createGatewayDispatchTimeoutError(method);
+        }
+        // The terminal dedupe payload retains the full result needed by callers;
+        // agent.wait is the liveness rendezvous; the owner signal above makes
+        // the terminal response atomically ready for the canonical replay.
+        return await dispatchRaw(request, {
+          deadlineMs,
+          onSignalAbort: dispatchOptions.onSignalAbort,
+          signal: dispatchOptions.signal,
+        });
+      }
+      if (firstPayload?.status !== "accepted") {
         return first;
       }
       dispatchOptions.onAccepted?.(first.payload);
       if (postAcceptanceError) {
         throw postAcceptanceError;
       }
-      return final ?? (await createFinalPromise());
+      return (
+        final ??
+        (await waitForGatewayDispatchDeadline(
+          method,
+          createFinalPromise(),
+          deadlineMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        ))
+      );
     })();
-    return await waitForGatewayDispatch(
-      method,
-      response,
-      dispatchOptions.timeoutMs,
-      dispatchOptions.signal,
-      dispatchOptions.onSignalAbort,
-    );
+    return await response;
   };
 
   const dispatch = async <T = unknown>(
@@ -206,46 +334,6 @@ export function createInternalAgentTurnFacade(
       "agent",
       await dispatchRaw(request, normalizedOptions),
     ) as T;
-  };
-
-  const wait = async <T = unknown>(
-    params: AgentWaitParams,
-    timeoutMs?: number,
-    signal?: AbortSignal,
-    onSignalAbort?: () => Promise<void> | void,
-  ): Promise<T> => {
-    const method = "agent.wait";
-    throwIfGatewayDispatchAborted(method, signal);
-    options.assertContextCurrent?.();
-    const context = options.getContext();
-    const methodRegistry = getMethodRegistry();
-    const authorization = await authorizeGatewayRequestPreDispatch({
-      method,
-      requestParams: params,
-      client: options.client,
-      context,
-      methodRegistry,
-    });
-    if (authorization.error) {
-      return throwEnvelopeRejection(method, authorization.error);
-    }
-    const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
-    if (validationError) {
-      return throwEnvelopeRejection(method, validationError);
-    }
-    options.assertContextCurrent?.();
-    const result = runWithGatewayRequestEnvelope(
-      method,
-      options.client,
-      () => createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params),
-      {
-        context,
-        isWebchatConnect,
-        methodRegistry,
-        reject: (error) => throwEnvelopeRejection(method, error),
-      },
-    );
-    return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
   };
 
   return { dispatch, dispatchRaw, wait };

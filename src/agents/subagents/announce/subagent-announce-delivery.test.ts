@@ -3798,6 +3798,110 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("does not fallback-steer an ordinary completion after an in-flight handoff owns it", async () => {
+    const callGateway = createGatewayMock({
+      runId: "subagent:child:replay",
+      status: "in_flight",
+      admitted: true,
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let activityChecks = 0;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-channel",
+        isActive: activityChecks++ > 0,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-channel-completion-replay",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: true,
+          path: "direct",
+          error: undefined,
+        },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(activityChecks).toBe(1);
+  });
+
+  it("retains a pre-admission completion replay without fallback steering", async () => {
+    const callGateway = createGatewayMock({
+      runId: "subagent:child:reservation",
+      status: "in_flight",
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let activityChecks = 0;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-channel",
+        isActive: activityChecks++ > 0,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-channel-completion-reservation",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "ambiguous",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "requester agent admission is still pending",
+        },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(activityChecks).toBe(1);
+  });
+
   it("does not fail stale channel subagent completions only because the parent stayed private", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
@@ -3995,6 +4099,131 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect(sendMessage).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      label: "native runtime",
+      continuationEvidence: { runtimeContinuationStarted: true },
+    },
+    {
+      label: "accepted sessions_spawn",
+      continuationEvidence: committedSessionSpawnEvidence,
+    },
+  ])(
+    "does not fallback-send a direct requester completion after $label continuation owns the next wave",
+    async ({ continuationEvidence }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          ...continuationEvidence,
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:yielded-next-wave";
+
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          result: "Wave one completed.",
+        }),
+      });
+
+      expectRecordFields(result, { delivered: true, path: "direct" });
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts yielded continuation before classifying a failed direct-delivery status", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        runtimeContinuationStarted: true,
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "completion agent did not produce a visible reply",
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:worker:subagent:yielded-next-wave-failed-status",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "Wave one completed.",
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a yielded continuation before enforcing message-tool-only final delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        runtimeContinuationStarted: true,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-message-tool-yield",
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a yielded continuation before classifying no-output as a permanent failure", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        ...committedSessionSpawnEvidence,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const childSessionKey = "agent:worker:subagent:yielded-no-output";
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-yielded-no-output",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 
   it("fails configured channel subagent completions when parent skips required message tool", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The subagent is done." });
@@ -4539,6 +4768,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: deliveredRequesterFinal,
     },
     {
+      name: "retains an ordinary non-yielded settle turn while it is still in flight",
+      response: { runId: "run-requester-pending", status: "in_flight" },
+      requireVisibleReply: false,
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "completion_handoff_pending",
+        disposition: "retryable",
+      },
+    },
+    {
       name: "accepts a yielded requester's visible final answer",
       routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
@@ -4718,6 +4958,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts a runtime-owned next wave followed by a successful yield",
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          runtimeContinuationStarted: true,
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn without an accepted next wave",
+      response: { result: { payloads: [], meta: { yielded: true } } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts an accepted next wave followed by a successful yield",
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
     },
     {
       name: "rejects a cron side effect without a final reply",
@@ -4909,6 +5179,51 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBe(
       requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
     );
+  });
+
+  it("retains a yielded requester wake when replay is still in flight", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connect ECONNRESET after admission"))
+      .mockResolvedValueOnce({ runId: "run-requester-replay", status: "in_flight" });
+    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
+    testing.setDepsForTest({
+      callGateway: callGateway as typeof runtimeCallGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(true),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "all spawned subagents settled",
+      steerMessage: "all spawned subagents settled",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      requireDirectDelivery: true,
+      requireVisibleReply: true,
+      directIdempotencyKey: "announce-requester-replay",
+      sourceTool: "subagent_announce",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway.mock.calls.map(([call]) => call.params?.idempotencyKey)).toEqual([
+      "announce-requester-replay",
+      "announce-requester-replay",
+    ]);
   });
 
   it.each([

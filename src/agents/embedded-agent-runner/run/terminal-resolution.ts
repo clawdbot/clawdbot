@@ -327,7 +327,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
-  const availableTerminalToolPresentation = input.readTerminalToolPresentation();
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
@@ -366,7 +365,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     !input.replayState.hadPotentialSideEffects,
   );
   const terminalToolPresentation = incompleteTurnFallbackSafe
-    ? availableTerminalToolPresentation
+    ? input.readTerminalToolPresentation()
     : undefined;
   if (
     !emptyAssistantReplyIsSilent &&
@@ -718,5 +717,6 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     heartbeatToolResponse: attempt.heartbeatToolResponse,
     successfulCronAdds: attempt.successfulCronAdds,
     acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+    runtimeContinuationStarted: attempt.runtimeContinuationStarted,
   };
 }

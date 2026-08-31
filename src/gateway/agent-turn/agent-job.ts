@@ -538,7 +538,7 @@ function getCanonicalAgentRunSnapshot(
 
 function getAgentRunSnapshot(params: {
   runId: string;
-  source?: "chat";
+  source?: "agent" | "chat";
   afterVersion: number;
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
@@ -590,7 +590,7 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
-  source?: "chat";
+  source?: "agent" | "chat";
 }): Promise<AgentJobTerminalSnapshot | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
@@ -661,6 +661,13 @@ export async function waitForAgentJob(params: {
     timeoutHandle.unref?.();
     onWake();
   });
+}
+
+export async function waitForAgentTerminalDedupe(params: {
+  runId: string;
+  timeoutMs: number;
+}): Promise<AgentJobTerminalSnapshot | null> {
+  return await waitForAgentJob({ ...params, source: "agent" });
 }
 
 ensureAgentRunListener();

@@ -43,6 +43,15 @@ import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
+/** Re-enters the command owner's typed generation after crossing the Gateway context seam. */
+export function asPreparedAgentCommandRuntimeContext(runtime: {
+  config: PreparedAgentCommandRuntimeContext["config"];
+  pluginGeneration: object;
+}): PreparedAgentCommandRuntimeContext {
+  // SAFETY: Gateway publishes this opaque generation from the same prepared-runtime contract.
+  return runtime as PreparedAgentCommandRuntimeContext;
+}
+
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,
   signal: AbortSignal,

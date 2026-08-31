@@ -809,6 +809,19 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
   });
 
+  it("preserves native continuation evidence through command delivery", async () => {
+    const delivered = await deliverAgentCommandResultForTest({
+      omitReplyTarget: true,
+      opts: { deliver: false },
+      payloads: [],
+      result: { runtimeContinuationStarted: true },
+    });
+
+    expect((delivered as { runtimeContinuationStarted?: boolean }).runtimeContinuationStarted).toBe(
+      true,
+    );
+  });
+
   it("does not automatically redeliver text and media already sent to the same target", async () => {
     const delivered = await deliverAgentCommandResultForTest({
       opts: { threadId: "171.222" },

@@ -217,6 +217,21 @@ type GatewayKernelContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
+  /**
+   * Gateway-owned prepared reply dispatch lookup. Kept on the live context so
+   * loader-local plugin module graphs cannot read a second runtime singleton.
+   */
+  loadPublishedGatewayReplyDispatchRuntime?: (params: {
+    agentId: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    | {
+        config: OpenClawConfig;
+        /** Opaque host-owned generation; decoded only at the command owner boundary. */
+        pluginGeneration: object;
+      }
+    | undefined
+  >;
   readPreparedGatewayModelCatalog?: (params?: {
     agentId?: string;
     agentDir?: string;

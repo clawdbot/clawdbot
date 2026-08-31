@@ -29,7 +29,9 @@ import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
 
-export function isGatewayAgentRunPending(response: unknown): boolean {
+export function isGatewayAgentRunPending(
+  response: unknown,
+): response is { admitted?: unknown; status: "accepted" | "in_flight" | "started" } {
   if (!response || typeof response !== "object") {
     return false;
   }

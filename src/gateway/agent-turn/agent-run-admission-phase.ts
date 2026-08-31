@@ -297,9 +297,18 @@ export async function prepareAgentRunDispatch(params: {
   const existingRunAbort = params.context.chatAbortControllers.get(params.runId);
   if (!activeRunAbort.registered && existingRunAbort) {
     activeGatewayWorkAdmission.release();
-    params.markAgentRunAccepted(existingRunAbort.kind === "agent");
+    const existingAgentRunAdmitted = existingRunAbort.kind === "agent";
+    params.markAgentRunAccepted(existingAgentRunAdmitted);
     params.io.emitAcceptance(
-      [true, { runId: params.runId, status: "in_flight" as const }, undefined],
+      [
+        true,
+        {
+          runId: params.runId,
+          status: "in_flight" as const,
+          ...(existingAgentRunAdmitted ? { admitted: true } : {}),
+        },
+        undefined,
+      ],
       {
         cached: true,
         runId: params.runId,
@@ -620,6 +629,9 @@ export async function prepareAgentRunDispatch(params: {
       ok: true,
       payload: {
         ...accepted,
+        // A reservation uses the same accepted-shaped dedupe record before this
+        // boundary. Persist the admission fact so replays transfer prompt ownership.
+        admitted: true,
         controlUiVisible: !params.suppressVisibleSessionEffects,
         dedupeKeys: params.agentDedupeKeys,
         ownerConnId: params.ownerConnId,

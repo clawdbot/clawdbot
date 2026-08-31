@@ -46,17 +46,28 @@ export function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
-function resolveDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+export function resolveGatewayDispatchDeadlineMs(timeoutMs?: number): number | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
     return undefined;
   }
   return Date.now() + resolveSafeTimeoutDelayMs(timeoutMs);
 }
 
-function resolveRemainingDispatchTimeoutMs(deadlineMs?: number): number | undefined {
+export function resolveRemainingGatewayDispatchTimeoutMs(deadlineMs?: number): number | undefined {
   return deadlineMs === undefined
     ? undefined
     : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+}
+
+export function createGatewayDispatchTimeoutError(method: string): Error {
+  return new Error(`gateway request timeout for ${method}`);
+}
+
+/** Rejects a phase that resolved at or after the shared request deadline. */
+export function throwIfGatewayDispatchDeadlineExpired(method: string, deadlineMs?: number): void {
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+    throw createGatewayDispatchTimeoutError(method);
+  }
 }
 
 function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
@@ -72,7 +83,8 @@ export function throwIfGatewayDispatchAborted(method: string, signal?: AbortSign
   }
 }
 
-async function waitForDispatch<T>(
+/** Waits within an existing request-level deadline shared across dispatch phases. */
+export async function waitForGatewayDispatchDeadline<T>(
   method: string,
   promise: Promise<T>,
   deadlineMs?: number,
@@ -85,14 +97,14 @@ async function waitForDispatch<T>(
     if (signal?.aborted) {
       throw resolveDispatchAbortError(method, signal);
     }
-    const remainingTimeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
+    const remainingTimeoutMs = resolveRemainingGatewayDispatchTimeoutMs(deadlineMs);
     if (remainingTimeoutMs === undefined && !signal) {
       return await promise;
     }
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
-          reject(new Error(`gateway request timeout for ${method}`));
+          reject(createGatewayDispatchTimeoutError(method));
         }, remainingTimeoutMs);
       }
       if (signal) {
@@ -121,23 +133,6 @@ async function waitForDispatch<T>(
   }
 }
 
-/** Applies the same non-cancelling deadline used by in-process Gateway dispatch. */
-export async function waitForGatewayDispatch<T>(
-  method: string,
-  promise: Promise<T>,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-  onSignalAbort?: () => Promise<void> | void,
-): Promise<T> {
-  return await waitForDispatch(
-    method,
-    promise,
-    resolveDispatchDeadlineMs(timeoutMs),
-    signal,
-    onSignalAbort,
-  );
-}
-
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
 export async function dispatchGatewayRequestInProcessRaw(
   method: string,
@@ -156,7 +151,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     resolveFirstResponse = resolve;
     rejectFirstResponse = reject;
   });
-  const deadlineMs = resolveDispatchDeadlineMs(options.timeoutMs);
+  const deadlineMs = resolveGatewayDispatchDeadlineMs(options.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
   void handleGatewayRequest({
     req: {
@@ -201,7 +196,7 @@ export async function dispatchGatewayRequestInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForDispatch(
+  firstResponse = await waitForGatewayDispatchDeadline(
     method,
     firstResponsePromise,
     deadlineMs,
@@ -218,7 +213,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   }
   return (
     finalResponse ??
-    (await waitForDispatch(
+    (await waitForGatewayDispatchDeadline(
       method,
       new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
         resolveFinalResponse = resolve;

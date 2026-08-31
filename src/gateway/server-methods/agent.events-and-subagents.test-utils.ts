@@ -687,6 +687,13 @@ describe("gateway agent handler", () => {
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),
           getRuntimeConfig: () => mocks.loadConfigReturn,
+          loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+            agentId,
+            agentDir: "/tmp/agent",
+            config: mocks.loadConfigReturn,
+            pluginGeneration: { pluginMetadataSnapshot: {} },
+            workspaceDir: "/tmp/workspace",
+          }),
         } as unknown as GatewayRequestContext,
       },
     );

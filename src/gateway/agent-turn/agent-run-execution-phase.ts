@@ -54,6 +54,7 @@ import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
+  asPreparedAgentCommandRuntimeContext,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
@@ -248,6 +249,22 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
+      // Resolve through the live Gateway context rather than this module's imports. Plugin
+      // loaders can host a second OpenClaw module graph; the context callback remains bound to
+      // the Gateway owner that published this generation.
+      // Direct handler contexts may not expose the optional callback, but admission already
+      // validated the prepared runtime for those callers.
+      const replyDispatchRuntime = params.context.loadPublishedGatewayReplyDispatchRuntime
+        ? await params.context.loadPublishedGatewayReplyDispatchRuntime({
+            agentId: params.activeSessionAgentId,
+            abortSignal: prepared.activeRunAbort.controller.signal,
+          })
+        : prepared.replyDispatchRuntime;
+      if (!replyDispatchRuntime?.pluginGeneration) {
+        throw new Error(
+          `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
+        );
+      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -313,10 +330,7 @@ export function startAgentRunExecution(params: {
       dispatchAdmittedAgentRun(
         withAgentRunDispatchExecutionIdentity(
           {
-            commandRuntimeContext: {
-              config: prepared.replyDispatchRuntime.config,
-              pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
-            },
+            commandRuntimeContext: asPreparedAgentCommandRuntimeContext(replyDispatchRuntime),
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
               message,

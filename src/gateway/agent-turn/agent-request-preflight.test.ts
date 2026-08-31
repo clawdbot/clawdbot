@@ -20,6 +20,7 @@ function runPreflight(
     launchPending?: boolean;
     cached?: boolean;
     admissionPending?: boolean;
+    cachedAdmitted?: boolean;
     completed?: boolean;
     ended?: boolean;
   },
@@ -74,6 +75,7 @@ function runPreflight(
                 runId: "gateway-run",
                 sessionKey,
                 ...(options.admissionPending ? { reservationId: "pending" } : {}),
+                ...(options?.cachedAdmitted ? { admitted: true } : {}),
               },
             },
           ],
@@ -306,22 +308,26 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
-  it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
+  it("preserves cached admission state without exposing its reservation", async () => {
     const replayed = runPreflight(undefined, true, {
       backend: true,
       register: true,
       launchPending: false,
       cached: true,
       admissionPending: true,
+      cachedAdmitted: true,
     });
     expect(replayed.result).toBeDefined();
+
     await replayed.replay();
+
     expect(replayed.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         runId: "gateway-run",
         status: "in_flight",
         admissionPending: true,
+        admitted: true,
       }),
       undefined,
       expect.objectContaining({ cached: true, runId: "gateway-run" }),

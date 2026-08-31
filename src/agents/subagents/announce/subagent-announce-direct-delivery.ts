@@ -21,6 +21,7 @@ import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agent-run-termi
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasAcceptedSessionSpawnEvidence,
   hasCommittedOutboundDeliveryEvidence,
   hasPayloadOutcomeSendEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
@@ -431,11 +432,41 @@ export async function sendSubagentAnnounceDirectly(params: {
       throw err;
     }
 
-    const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
-    if (directAnnounceStillPending) {
+    if (isGatewayAgentRunPending(directAnnounceResponse)) {
+      const directAnnounceStatus = directAnnounceResponse.status;
+      if (
+        !params.requireVisibleReply &&
+        params.expectsCompletionMessage &&
+        directAnnounceStatus === "in_flight" &&
+        directAnnounceResponse.admitted !== true
+      ) {
+        // A pre-admission reservation blocks duplicate dispatch but does not own
+        // delivery yet. Avoid fallback injection while retaining the durable retry.
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "requester agent admission is still pending",
+          disposition: "ambiguous",
+        };
+      }
+      // An admitted ordinary completion handoff already owns the prompt;
+      // fallback steering would inject it twice. Settle wakes still need terminal evidence on replay.
+      if (
+        !params.requireVisibleReply &&
+        (params.expectsCompletionMessage || directAnnounceStatus === "accepted")
+      ) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
       return {
-        delivered: true,
+        delivered: false,
         path: "direct",
+        reason: "completion_handoff_pending",
+        error: "requester agent run is still in flight",
+        disposition: "retryable",
       };
     }
 
@@ -444,6 +475,17 @@ export async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const hasYieldedContinuation = Boolean(
+      directAnnounceResult &&
+      directAnnounceResult.meta?.yielded === true &&
+      (directAnnounceResult.runtimeContinuationStarted === true ||
+        hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns)),
+    );
+    if (hasYieldedContinuation) {
+      // The runtime owns the accepted next wave. This wake is complete even
+      // though the resumed requester correctly withheld its terminal reply.
+      return { delivered: true, path: "direct" };
+    }
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)

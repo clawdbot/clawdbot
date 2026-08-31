@@ -12,7 +12,11 @@ import {
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
-import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
+import {
+  copyAttemptDeliveryState,
+  createTerminalToolPresentationTracker,
+  resolveEmbeddedRunTerminal,
+} from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 vi.mock("./auth-profile-success.js", () => ({
@@ -363,6 +367,48 @@ describe("terminal resolution", () => {
     expect(text).not.toContain("Couldn't sign in");
   });
 
+  it("carries presentation across retries until a newer tool outcome replaces it", () => {
+    const tracker = createTerminalToolPresentationTracker();
+    const firstOrdinal = tracker.allocateOrdinal();
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "Fetched https://example.com",
+    });
+
+    expect(tracker.read()).toBe("Fetched https://example.com");
+
+    const retryOrdinal = tracker.allocateOrdinal();
+    expect(tracker.read()).toBe("Fetched https://example.com");
+    tracker.observe({ toolCallOrdinal: retryOrdinal });
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "stale presentation",
+    });
+
+    expect(tracker.read()).toBeUndefined();
+  });
+
+  it("keeps only the bounded latest MCP App view identity", () => {
+    expect(
+      copyAttemptDeliveryState({
+        latestMcpAppChannelView: { viewId: "view-latest" },
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+      } as never).latestMcpAppChannelView,
+    ).toEqual({ viewId: "view-latest" });
+  });
+
+  it("preserves runtime-owned continuation evidence for delivery", () => {
+    expect(
+      copyAttemptDeliveryState({
+        runtimeContinuationStarted: true,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+      } as never),
+    ).toMatchObject({ runtimeContinuationStarted: true });
+  });
   it("retries a required empty reply even when deliberate silence is enabled", async () => {
     const activateInternalPrompt = vi.fn();
     const input = makeTerminalInput({

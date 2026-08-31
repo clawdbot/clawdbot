@@ -34,8 +34,10 @@ export type AgentDeliveryEvidence = {
   /** Durable recovery evidence sets this when its bounded target projection omitted entries. */
   messagingToolSentTargetsTruncated?: unknown;
   acceptedSessionSpawns?: unknown;
+  runtimeContinuationStarted?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    yielded?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -116,7 +118,7 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
-function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
+export function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
   return Array.isArray(value)
     ? value.some((entry) => {
         const spawn = asOptionalRecord(entry);
@@ -396,6 +398,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "messagingToolSentMediaUrls" in value ||
     "messagingToolSentTargets" in value ||
     "acceptedSessionSpawns" in value ||
+    "runtimeContinuationStarted" in value ||
     "successfulCronAdds" in value ||
     "meta" in value
   );

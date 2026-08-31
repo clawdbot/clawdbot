@@ -119,6 +119,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   );
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
+    const { loadPublishedGatewayReplyDispatchRuntime } =
+      await import("../agents/prepared-model-runtime.js");
     return createGatewayRequestContext({
       deps,
       configRevisionProjector,
@@ -146,6 +148,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      loadPublishedGatewayReplyDispatchRuntime,
       readPreparedGatewayModelCatalog,
       readChatMetadata: chatMetadataLifecycle.read,
       readChatStartupProjection: chatMetadataLifecycle.readStartup,

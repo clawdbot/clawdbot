@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import {
@@ -11,6 +12,7 @@ import {
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { setGatewayDedupeEntry } from "./agent-turn/agent-job.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -175,6 +177,62 @@ describe("createGatewayInstanceRuntime", () => {
     });
     expect(recoveryPrincipal?.internal?.agentRunTracking).toBeUndefined();
     expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
+  });
+
+  it.each([
+    { label: "shared-principal", dispatchOptions: {} },
+    { label: "dedicated-principal", dispatchOptions: { allowModelOverride: true } },
+  ])("rejects a $label terminal replay after the Gateway instance closes", async (testCase) => {
+    const runId = `run-retired-${testCase.label}`;
+    const context = createContext();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "accepted" },
+      },
+    });
+    const onAccepted = vi.fn();
+    const outcome = runtime.recovery
+      .dispatchAgent({ message: "test", idempotencyKey: runId }, undefined, {
+        ...testCase.dispatchOptions,
+        expectFinal: true,
+        onAccepted,
+      })
+      .then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ error, status: "rejected" as const }),
+      );
+
+    await vi.waitFor(() => expect(onAccepted).toHaveBeenCalledWith({ runId, status: "in_flight" }));
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200 },
+    });
+    await Promise.resolve();
+    runtime.close();
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok", summary: "must not replay" },
+      },
+    });
+
+    await expect(outcome).resolves.toMatchObject({
+      status: "rejected",
+      error: { message: "Gateway instance dispatch unavailable for agent turn" },
+    });
   });
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {

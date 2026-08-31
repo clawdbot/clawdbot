@@ -1196,6 +1196,13 @@ describe("gateway agent handler", () => {
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
           getRuntimeConfig: () => mocks.loadConfigReturn,
+          loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+            agentId,
+            agentDir: "/tmp/agent",
+            config: mocks.loadConfigReturn,
+            pluginGeneration: { pluginMetadataSnapshot: {} },
+            workspaceDir: "/tmp/workspace",
+          }),
         } as unknown as GatewayRequestContext,
       },
     );
@@ -1285,6 +1292,13 @@ describe("gateway agent handler", () => {
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
           getRuntimeConfig: () => mocks.loadConfigReturn,
+          loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+            agentId,
+            agentDir: "/tmp/agent",
+            config: mocks.loadConfigReturn,
+            pluginGeneration: { pluginMetadataSnapshot: {} },
+            workspaceDir: "/tmp/workspace",
+          }),
         } as unknown as GatewayRequestContext,
       },
     );

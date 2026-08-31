@@ -25,6 +25,7 @@ const webFetchProviderDiscovery = vi.hoisted(() => ({
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: vi.fn(async () => ({})),
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-chat-metadata-lifecycle.js", () => ({
