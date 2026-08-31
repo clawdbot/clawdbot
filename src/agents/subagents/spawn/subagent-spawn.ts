@@ -89,6 +89,25 @@ function sanitizeMountPathHint(value?: string): string | undefined {
   return trimmed;
 }
 
+function resolveInheritedRequesterSettleWake(
+  requesterTurnRunId: string | undefined,
+  runId: string,
+) {
+  // A child spawned by a yielded requester-settle continuation must not create
+  // an independent completion delivery. The retained requester wake owns the
+  // original user's final, including across successor child generations.
+  if (!/^announce:requester-settle:.*:yield-\d+$/u.test(requesterTurnRunId ?? "")) {
+    return undefined;
+  }
+  return {
+    status: "pending" as const,
+    attemptCount: 0,
+    batchRunIds: [runId],
+    requesterYieldBatch: true as const,
+    afterRequesterYield: true as const,
+  };
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -536,9 +555,14 @@ export async function spawnSubagentDirect(
             });
           }
         }
+        const requesterSettleWake = resolveInheritedRequesterSettleWake(
+          ctx.requesterTurnRunId,
+          runId,
+        );
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          ...(requesterSettleWake ? { requesterSettleWake } : {}),
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
@@ -725,3 +749,4 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
     testing;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

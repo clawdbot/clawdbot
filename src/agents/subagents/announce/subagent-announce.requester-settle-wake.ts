@@ -54,8 +54,8 @@ function buildRequesterSettleWakeMessage(params: {
 }): string {
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.",
+    "[Subagent Context] Do not keep waiting on this batch; no further completion events will arrive for it.",
+    "[Subagent Context] Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
     params.requireVisibleReply
       ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer."
       : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
@@ -151,6 +151,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
+  resumeWithFreshAttempt?: boolean;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
   completeBatch(
     runIds: readonly string[],
@@ -174,7 +175,7 @@ function deferRequesterSettleWakeBatch(params: {
     return;
   }
   params.transitionBatch(params.batchRunIds, {
-    status: params.state.status,
+    status: params.resumeWithFreshAttempt ? "pending" : params.state.status,
     attemptCount: params.state.attemptCount,
     ...(params.state.replayCount !== undefined ? { replayCount: params.state.replayCount } : {}),
     nextAttemptAt: Math.max(
@@ -318,6 +319,32 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
 
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const selectedState = readSharedBatchState(settledBatch);
+  const settledBatchEndedAt = Math.max(
+    ...settledBatch.map((entry) => entry.execution.endedAt ?? entry.createdAt),
+  );
+  const requesterHasSuccessorSettleWake = () => {
+    const latestRuns = listSubagentRunsForRequester(requesterSessionKey, {
+      requesterAgentId,
+    });
+    if (!Array.isArray(latestRuns)) {
+      return false;
+    }
+    return latestRuns.some((entry) => {
+      const successorState = entry.requesterSettleWake;
+      const successorBatchRunIds = successorState?.batchRunIds;
+      return (
+        // A continuation can only be created after this batch drained. Its
+        // persisted batch must also be distinct, so unrelated or overlapping
+        // yielded wakes cannot retire this obligation.
+        entry.createdAt > settledBatchEndedAt &&
+        !batchRunIds.includes(entry.runId) &&
+        successorState?.requesterYieldBatch === true &&
+        successorBatchRunIds !== undefined &&
+        successorBatchRunIds.length > 0 &&
+        successorBatchRunIds.every((runId) => !batchRunIds.includes(runId))
+      );
+    });
+  };
   if (hasUnsettledDescendants) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
       deferRequesterSettleWakeBatch({
@@ -470,7 +497,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         sourceTool: "subagent_announce",
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,
-        expectsCompletionMessage: false,
+        // A yielded requester wake is the completion turn for the original
+        // user request. Mark it accordingly so direct delivery retains the
+        // external origin and forwards its required visible final.
+        expectsCompletionMessage: requesterYieldedAfterDelivery,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
@@ -523,6 +553,30 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         delivery,
       });
       return true;
+    }
+    // A missing visible reply can mean the requester continued the workflow
+    // and yielded again. A successor may settle before this wake returns, so
+    // its own persisted settle wake is durable proof of that continuation.
+    // Retrying here would send a duplicate finalize instruction.
+    if (
+      delivery.reason === "visible_reply_missing" &&
+      (requesterHasUnsettledDescendants() || requesterHasSuccessorSettleWake())
+    ) {
+      // A successor may continue the request, but it has not proved delivery of
+      // the original user's final. Preserve this yielded batch as the durable
+      // visible-final owner until the successor settles and this wake can run
+      // again, rather than acknowledging the missing final as delivered. The
+      // gateway returned a definitive terminal result for this attempt, so the
+      // next wake must rotate its idempotency key instead of replaying the
+      // cached no-visible-reply result.
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state,
+        resumeWithFreshAttempt: true,
+        transitionBatch: params.transitionBatch,
+        completeBatch,
+      });
+      return false;
     }
     if (
       delivery.disposition === "ambiguous" ||

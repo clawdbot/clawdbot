@@ -439,8 +439,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(deliveredCallArg().requireVisibleReply).toBe(true);
+    expect(deliveredCallArg().expectsCompletionMessage).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
+    expect(message).toContain(
+      "Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
+    );
     expect(message).toContain("original user request still requires your visible final answer");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {

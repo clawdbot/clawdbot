@@ -340,6 +340,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
+    requiresVisibleTerminalReply(runParams) &&
     retryState.emptyResponseAttempts < input.maxEmptyResponseRetryAttempts
   ) {
     retryState.emptyResponseAttempts += 1;

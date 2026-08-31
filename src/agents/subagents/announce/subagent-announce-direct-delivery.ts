@@ -1,6 +1,8 @@
 /**
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import nodePath from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -92,6 +94,31 @@ async function runAnnounceAgentCall(params: {
   });
 }
 
+function appendDiagnosticCapture(capturePath: string, capture: Record<string, unknown>): void {
+  try {
+    mkdirSync(nodePath.dirname(capturePath), { recursive: true });
+    const existing = existsSync(capturePath)
+      ? (JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, unknown>)
+      : {};
+    const attempts = Array.isArray(existing.attempts) ? existing.attempts : [];
+    writeFileSync(
+      capturePath,
+      JSON.stringify(
+        {
+          ...existing,
+          schemaVersion: 2,
+          attempts: [...attempts, { attempt: attempts.length + 1, ...capture }],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+  } catch {
+    // Diagnostic capture must never break production paths.
+  }
+}
+
 export async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
@@ -116,6 +143,56 @@ export async function sendSubagentAnnounceDirectly(params: {
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  const capturePath = process.env.OPENCLAW_SUBAGENT_DIRECT_DELIVERY_CAPTURE_PATH;
+  const diagOut: Record<string, unknown> = {};
+  const result = await sendSubagentAnnounceDirectlyImpl(params, capturePath ? diagOut : undefined);
+  if (capturePath) {
+    // Capture sanitized route/state for diagnostic purposes.
+    // MUST NOT write prompt text, provider text, tokens, credentials, session IDs,
+    // user IDs, opaque message IDs, or destination addresses.
+    const capture: Record<string, unknown> = {
+      ...diagOut,
+      // Final result shape
+      delivered: result.delivered,
+      path: result.path,
+      reason: (result as Record<string, unknown>).reason ?? null,
+      disposition: (result as Record<string, unknown>).disposition ?? null,
+      errorCategory:
+        typeof (result as Record<string, unknown>).error === "string" ? "delivery_error" : null,
+      requesterVisibleFinalDelivered:
+        (result as Record<string, unknown>).requesterVisibleFinalDelivered ?? false,
+    };
+    appendDiagnosticCapture(capturePath, capture);
+  }
+  return result;
+}
+
+async function sendSubagentAnnounceDirectlyImpl(
+  params: {
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+    targetRequesterSessionKey: string;
+    triggerMessage: string;
+    internalEvents?: AgentInternalEvent[];
+    expectsCompletionMessage: boolean;
+    requireVisibleReply?: boolean;
+    bestEffortDeliver?: boolean;
+    directIdempotencyKey: string;
+    completionDirectOrigin?: DeliveryContext;
+    directOrigin?: DeliveryContext;
+    requesterSessionOrigin?: DeliveryContext;
+    sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
+    isSourceSessionEffectsAllowed?: () => boolean;
+    isCompletionOwnedByRequesterYield?: () => boolean;
+    requesterIsSubagent: boolean;
+    onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+    signal?: AbortSignal;
+    resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
+  },
+  __diagOut?: Record<string, unknown>,
+): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return {
       delivered: false,
@@ -248,13 +325,41 @@ export async function sendSubagentAnnounceDirectly(params: {
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
-    // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
-    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
-      ? "message_tool_only"
-      : params.requireVisibleReply && deliveryTarget.deliver
-        ? "automatic"
+    // A yielded requester wake owns the original user's final. It must route
+    // that final automatically even if the ambient source policy is tool-only.
+    const forceVisibleRequesterFinal =
+      params.requireVisibleReply === true && deliveryTarget.deliver;
+    const completionSourceReplyDeliveryMode = forceVisibleRequesterFinal
+      ? "automatic"
+      : requiresMessageToolDelivery
+        ? "message_tool_only"
         : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      deliveryTarget.deliver && (forceVisibleRequesterFinal || !requiresMessageToolDelivery);
+    // Diagnostic capture: populate sanitized route/state fields (no PII/credentials/session IDs)
+    if (__diagOut) {
+      const dtChannelKind =
+        "deliver" in deliveryTarget && deliveryTarget.deliver && "channel" in deliveryTarget
+          ? (deliveryTarget as Record<string, unknown>).channel
+          : null;
+      __diagOut["deliveryTargetExists"] =
+        "deliver" in deliveryTarget && Boolean((deliveryTarget as Record<string, unknown>).deliver);
+      __diagOut["deliveryTargetChannelKind"] =
+        typeof dtChannelKind === "string" ? dtChannelKind : null;
+      __diagOut["expectsCompletionMessage"] = params.expectsCompletionMessage;
+      __diagOut["requireVisibleReply"] = params.requireVisibleReply ?? false;
+      __diagOut["requesterIsSubagent"] = params.requesterIsSubagent;
+      __diagOut["sourceToolKind"] = isSubagentCompletion
+        ? "subagent_announce"
+        : sourceToolId
+          ? "other"
+          : "missing";
+      __diagOut["requiresMessageToolDelivery"] = requiresMessageToolDelivery;
+      __diagOut["shouldDeliverAgentFinal"] = shouldDeliverAgentFinal;
+      __diagOut["sourceReplyDeliveryMode"] = completionSourceReplyDeliveryMode ?? null;
+      __diagOut["activeWakeBranchTaken"] = false; // updated below if wake branch is entered
+      __diagOut["activeWakeQueued"] = null;
+    }
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -295,6 +400,11 @@ export async function sendSubagentAnnounceDirectly(params: {
         params.signal,
         isCompletionDeliveryAllowed,
       );
+      if (__diagOut) {
+        __diagOut["activeWakeBranchTaken"] = true;
+        __diagOut["activeWakeQueued"] = wakeOutcome.queued ?? false;
+        __diagOut["activeWakeSourceOwnerChanged"] = isSourceOwnerChangedWake(wakeOutcome);
+      }
       if (isSourceOwnerChangedWake(wakeOutcome)) {
         return sourceOwnerChangedResult();
       }
@@ -366,6 +476,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       ...(completionSourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),
+      // An explicitly required visible requester final must not inherit the
+      // ambient message-tool-only policy from the synthetic source session.
+      // Disabling the tool makes the automatic mode authoritative in the
+      // runner's stable-policy resolution as well as in this delivery layer.
+      ...(forceVisibleRequesterFinal ? { disableMessageTool: true } : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;
@@ -442,6 +557,10 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (__diagOut) {
+        __diagOut["gatewayResultPresent"] = false;
+        __diagOut["gatewayRunPending"] = true;
+      }
       return {
         delivered: true,
         path: "direct",
@@ -453,6 +572,17 @@ export async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    if (__diagOut) {
+      __diagOut["gatewayResultPresent"] = Boolean(directAnnounceResult);
+      __diagOut["gatewayRunPending"] = false;
+      const ds =
+        directAnnounceResult && (directAnnounceResult as Record<string, unknown>).deliveryStatus;
+      __diagOut["gatewayDeliveryStatusStatus"] =
+        ds && typeof (ds as Record<string, unknown>).status === "string"
+          ? (ds as Record<string, unknown>).status
+          : null;
+      __diagOut["hasMessagingToolDelivery"] = hasMessagingToolDelivery;
+    }
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -492,6 +622,28 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
+    if (__diagOut) {
+      __diagOut["hasVisibleGatewayPayload"] = Boolean(
+        directAnnounceResult &&
+        (hasVisibleAgentPayload(directAnnounceResult, {
+          includeErrorPayloads: false,
+          includeReasoningPayloads: false,
+          requireTerminalContent: true,
+        }) ||
+          hasMessagingToolDelivery),
+      );
+      __diagOut["hasVisibleNonSilentGatewayPayload"] = Boolean(
+        directAnnounceResult &&
+        hasVisibleAgentPayload(directAnnounceResult, {
+          includeErrorPayloads: false,
+          includeReasoningPayloads: false,
+          requireTerminalContent: true,
+          includeSilentReplyPayloads: false,
+        }),
+      );
+      __diagOut["hasIntentionalSilentCompletionReply"] = hasIntentionalSilentCompletionReply;
+      __diagOut["hasCompletionSideEffect"] = hasCompletionSideEffect;
+    }
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
@@ -531,6 +683,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
+      !forceVisibleRequesterFinal &&
       !hasMessagingToolDelivery &&
       (!hasIntentionalSilentCompletionReply ||
         subagentDirectMessageCompletionRequiresMessageTool ||
@@ -572,10 +725,14 @@ export async function sendSubagentAnnounceDirectly(params: {
             directAnnounceResult.deliveryStatus?.status !== "suppressed") ||
             (terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0)))),
     );
+    const acceptsIntentionalSilentCompletion =
+      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload)) ||
+        (hasMessagingToolDelivery ||
+          acceptsIntentionalSilentCompletion ||
+          hasVisibleNonSilentGatewayPayload)) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
       (!requiresMessageToolDelivery &&
@@ -587,16 +744,13 @@ export async function sendSubagentAnnounceDirectly(params: {
               ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
               : !origin?.to,
           )));
-    const acceptsIntentionalSilentCompletion =
-      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       !hasVisibleCompletionReply &&
       (params.requireVisibleReply ||
         (params.expectsCompletionMessage &&
           !shouldDeliverAgentFinal &&
-          !requiresMessageToolDelivery &&
           !hasCompletionSideEffect &&
-          !acceptsIntentionalSilentCompletion))
+          (requiresMessageToolDelivery || !acceptsIntentionalSilentCompletion)))
     ) {
       return {
         delivered: false,
@@ -642,3 +796,4 @@ export async function sendSubagentAnnounceDirectly(params: {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

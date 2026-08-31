@@ -110,6 +110,11 @@ import {
   QA_KILL_RESTART_PROMPT_RE,
   QA_KILL_RESTART_RECOVERED_MARKER,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
+  QA_TWO_WAVE_OBSERVED_PROMPT_RE,
+  QA_TWO_WAVE_OBSERVED_WORKER1_RE,
+  QA_TWO_WAVE_OBSERVED_WORKER2_RE,
+  QA_TWO_WAVE_OBSERVED_FINAL_MARKER,
+  QA_TWO_WAVE_SETTLE_CONTINUATION_NEEDLE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
@@ -2261,6 +2266,84 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
+  // Two-wave requester-settle scenario. Worker prompts are matched first so their
+  // session states don't enter the requester phase-machine.
+  const isSubagentTwoWavePrompt = QA_TWO_WAVE_OBSERVED_PROMPT_RE.test(allInputText);
+  // Only the current model-visible turn may be a settle wake. Historical
+  // requester context retains prior wake text after Wave 2 has been spawned.
+  const isRequesterSettleWake = prompt.includes(
+    "[Subagent Context] Every subagent spawned from this session has now settled",
+  );
+  if (QA_TWO_WAVE_OBSERVED_WORKER1_RE.test(prompt)) {
+    return buildAssistantEvents("WAVE-1-RESULT");
+  }
+  if (QA_TWO_WAVE_OBSERVED_WORKER2_RE.test(prompt)) {
+    return buildAssistantEvents("WAVE-2-RESULT");
+  }
+  // Transcript history contains the original user trigger in every descendant
+  // run. Classify requester ownership from the current turn, never all history:
+  // otherwise a bare child completion is mistaken for a requester and respawns
+  // Wave 1 indefinitely.
+  const isTwoWaveRequesterTurn =
+    isSubagentTwoWavePrompt &&
+    (QA_TWO_WAVE_OBSERVED_PROMPT_RE.test(prompt) ||
+      isRequesterSettleWake ||
+      /previous attempt did not produce a user-visible answer/i.test(prompt));
+  // Settle wakes can run under a different provider runtime session identity
+  // from the original requester turn. Classify them by the actual delivered
+  // completion result, not mutable per-session mock state.
+  if (isRequesterSettleWake && /WAVE-1-RESULT/.test(prompt)) {
+    const allowsContinuation = prompt.includes(QA_TWO_WAVE_SETTLE_CONTINUATION_NEEDLE);
+    if (scenarioState.twoWavePhase >= 2) {
+      // The original wake can be replayed after its continuation has already
+      // spawned. The successor owns the next settle obligation.
+      return buildAssistantEvents("");
+    }
+    if (allowsContinuation && canCallSessionsSpawn) {
+      scenarioState.twoWavePhase = 2;
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "two-wave qa worker wave-2",
+        label: "qa-two-wave-2",
+        thread: false,
+      });
+    }
+    scenarioState.twoWavePhase = 9;
+    return buildAssistantEvents("QA-TWO-WAVE-BASELINE-PREMATURE-FINAL");
+  }
+  if (isRequesterSettleWake && /WAVE-2-RESULT/.test(prompt)) {
+    scenarioState.twoWavePhase = 3;
+    return buildAssistantEvents(QA_TWO_WAVE_OBSERVED_FINAL_MARKER);
+  }
+  // A bare successor completion must advance the lifecycle, but it must not
+  // consume the requester-visible final. Mark the successor as settled and
+  // leave the retained requester wake to emit the terminal answer below.
+  if (scenarioState.twoWavePhase === 2 && prompt.includes("[Inter-session message]")) {
+    scenarioState.twoWavePhase = 3;
+    return buildAssistantEvents("");
+  }
+  // A retained yielded wake retries only after the Wave-2 successor has
+  // settled. Its visible-answer continuation has no child-result block, so
+  // model it as the terminal requester turn rather than another yield.
+  if (
+    scenarioState.twoWavePhase === 3 &&
+    /previous attempt did not produce a user-visible answer/i.test(prompt)
+  ) {
+    return buildAssistantEvents(QA_TWO_WAVE_OBSERVED_FINAL_MARKER);
+  }
+  if (isTwoWaveRequesterTurn && !hasCompletedToolOutput && canCallSessionsSpawn) {
+    scenarioState.twoWavePhase = 1;
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "two-wave qa worker wave-1",
+      label: "qa-two-wave-1",
+      thread: false,
+    });
+  }
+  if (isTwoWaveRequesterTurn && hasCompletedToolOutput && canCallSessionsYield) {
+    const wave = QA_TWO_WAVE_OBSERVED_WORKER2_RE.test(allInputText) ? "wave-2" : "wave-1";
+    return buildToolCallEventsWithArgs("sessions_yield", {
+      message: `Waiting for ${wave} worker to finish.`,
+    });
+  }
   const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
   const currentFanoutInstructions = extractAllRequestTexts(
     input.filter((item) => item.role === "system" || item.role === "developer"),
@@ -2535,6 +2618,7 @@ export async function startQaMockOpenAiServer(params?: {
   port?: number;
   finalOnlyMarkerPauseMs?: number;
   modelRefs?: readonly string[];
+  onBeforeRespond?: (snapshot: MockOpenAiRequestSnapshot) => Promise<void>;
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
@@ -2543,10 +2627,24 @@ export async function startQaMockOpenAiServer(params?: {
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
     const input = normalizeResponsesInput(body.input);
-    const sessionId =
+    const allInputText = extractAllRequestTexts(input, body);
+    const runtimeSessionId =
       resolveQaRuntimeSessionId(input, body) ??
       (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
-    const key = typeof sessionId === "string" ? sessionId : "";
+    // A requester wake is delivered through a transient provider runtime turn,
+    // so it need not retain the requester's client metadata. This test-only
+    // scenario has one gateway per mock server, making a server-local key both
+    // safe and necessary to retain Wave-1 to Wave-2 state across the wake.
+    const isTwoWaveObservedScenario =
+      QA_TWO_WAVE_OBSERVED_PROMPT_RE.test(allInputText) ||
+      QA_TWO_WAVE_OBSERVED_WORKER1_RE.test(allInputText) ||
+      QA_TWO_WAVE_OBSERVED_WORKER2_RE.test(allInputText) ||
+      /WAVE-[12]-RESULT/.test(allInputText);
+    const key = isTwoWaveObservedScenario
+      ? "__qa-two-wave-observed__"
+      : typeof runtimeSessionId === "string"
+        ? runtimeSessionId
+        : "";
     // Runtime session identity survives provider switches and cache-boundary changes.
     const state = scenarioStates.get(key) ?? {
       anthropicThinkingErrorScenarioKeys: new Set<string>(),
@@ -2557,6 +2655,7 @@ export async function startQaMockOpenAiServer(params?: {
       subagentHandoffSpawned: false,
       repeatedRequestRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
+      twoWavePhase: 0,
     };
     scenarioStates.set(key, state);
     return state;
@@ -2726,7 +2825,7 @@ export async function startQaMockOpenAiServer(params?: {
             message: "Service Unavailable",
           }
         : undefined);
-    recordRequest({
+    const recorded = recordRequest({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
@@ -2745,6 +2844,9 @@ export async function startQaMockOpenAiServer(params?: {
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
+    if (params?.onBeforeRespond) {
+      await params.onBeforeRespond(recorded);
+    }
     const repeatedRequestRecovery =
       QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
       !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);

@@ -419,6 +419,12 @@ const QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER = "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER
 const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
   "C3PLQA reply with only these words Matrix QA voice pre-flight OK.";
 export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
+export const QA_TWO_WAVE_OBSERVED_PROMPT_RE = /two-wave requester settle qa check/i;
+export const QA_TWO_WAVE_OBSERVED_WORKER1_RE = /two-wave qa worker wave-1/i;
+export const QA_TWO_WAVE_OBSERVED_WORKER2_RE = /two-wave qa worker wave-2/i;
+export const QA_TWO_WAVE_OBSERVED_FINAL_MARKER = "QA-TWO-WAVE-OBSERVED-OK";
+// The new fix text that allows the requester to spawn more subagents after settling.
+export const QA_TWO_WAVE_SETTLE_CONTINUATION_NEEDLE = "Spawn more subagents if needed";
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
@@ -429,6 +435,7 @@ export type MockScenarioState = {
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
   toolLoopReadAttempts: number;
+  twoWavePhase: number;
 };
 
 export function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {

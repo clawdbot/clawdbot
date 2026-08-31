@@ -4682,6 +4682,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "accepts a yielded visible final with confirmed automatic delivery",
+      response: {
+        result: {
+          payloads: [{ text: "delivered" }],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects a visible final whose delivery was suppressed",
       routes: requesterSettleRoutes,
       response: {
@@ -4933,6 +4944,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);
     expect(agentParams.sourceReplyDeliveryMode).toBe(
       requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
+    );
+    expect(agentParams.disableMessageTool).toBe(
+      requireVisibleReply && route.agentParams.deliver ? true : undefined,
     );
   });
 
