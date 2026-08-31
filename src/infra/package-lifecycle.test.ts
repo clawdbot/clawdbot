@@ -18,9 +18,14 @@ describe("package lifecycle completion", () => {
       const preinstallBlocked = new Promise<void>((resolve) => {
         releasePreinstall = resolve;
       });
+      let firstPreinstallStarted: (() => void) | undefined;
+      const firstPreinstall = new Promise<void>((resolve) => {
+        firstPreinstallStarted = resolve;
+      });
       const runScript = vi.fn(async (script: { name: string }) => {
         calls.push(script.name);
         if (script.name === "preinstall") {
+          firstPreinstallStarted?.();
           await preinstallBlocked;
         } else {
           await fs.rm(markerPath);
@@ -28,6 +33,7 @@ describe("package lifecycle completion", () => {
       });
 
       const first = completePendingPackageLifecycle({ packageRoot, runScript });
+      await firstPreinstall;
       const second = completePendingPackageLifecycle({ packageRoot, runScript });
       releasePreinstall?.();
 
