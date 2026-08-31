@@ -238,11 +238,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Live tool cards and stream segments are collected separately and merged into
-  // the stable history + queued-send rows by timestamp below. We never reorder
-  // the stable rows themselves, so optimistic user bubbles stay after the
-  // preceding assistant reply even when client and Gateway clocks disagree.
-  const timestampedProjectionItems: ChatItem[] = [];
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const timestampedProjectionItems: ChatItem[] = buildPendingInputItems(
+    pendingInputs,
+    history,
+    props.searchOpen ? props.searchQuery : undefined,
+  );
   const appendQueuedSend = (queued: ChatQueueItem, beforeMessage?: unknown) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -679,12 +681,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  items.push(
-    ...buildPendingInputItems(
-      pendingInputs,
-      history,
-      props.searchOpen ? props.searchQuery : undefined,
-    ),
-  );
   return groupMessages(coalesceToolActivityMessages(items));
 }
