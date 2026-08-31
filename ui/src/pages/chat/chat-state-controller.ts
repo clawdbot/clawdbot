@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -8,11 +9,7 @@ import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  type StoredChatOutboxScope,
-} from "./composer-persistence.ts";
+import { ChatComposerPersistence, type ChatComposerPersistResult } from "./composer-persistence.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 

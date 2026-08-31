@@ -41,12 +41,12 @@ import {
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   InvalidPluginInstallRecordStateError,
-  migratePluginRegistryForInstall,
-  preflightPluginRegistryInstallMigration,
-  type PluginRegistryInstallMigrationParams,
+  migratePluginRegistryForDoctor,
+  preflightPluginRegistryDoctorMigration,
+  type PluginRegistryDoctorMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
 
-type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParams, "config"> &
+type PluginRegistryDoctorRepairParams = Omit<PluginRegistryDoctorMigrationParams, "config"> &
   InstalledPluginIndexRecordStoreOptions & {
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
@@ -397,7 +397,7 @@ async function loadInstallRecordsWithoutPluginIds(
 export async function detectPluginRegistryHealthIssues(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryHealthIssue[]> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+  const preflight = preflightPluginRegistryDoctorMigration(params);
   const issues: PluginRegistryHealthIssue[] = [];
   if (preflight.action === "migrate") {
     issues.push({
@@ -605,9 +605,9 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
+  let preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>;
   try {
-    preflight = preflightPluginRegistryInstallMigration(params);
+    preflight = preflightPluginRegistryDoctorMigration(params);
   } catch (error) {
     if (!(error instanceof InvalidPluginInstallRecordStateError)) {
       throw error;
@@ -648,7 +648,7 @@ export async function maybeRepairPluginRegistryState(
   }
 
   if (preflight.action !== "skip-existing") {
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       ...migrationParams,
       ...(shouldPersistRepairedInstallRecords
         ? {

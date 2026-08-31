@@ -40,7 +40,7 @@ function projectLiveMessage(owner: object, message: unknown, scope: SessionProje
   return projection;
 }
 
-function createInitialHandoffFixture(messageSequence = 1) {
+function createInitialHandoffFixture() {
   const sessionKey = "agent:main:initial-image";
   const client = {};
   const initialUserMessage = createInitialUserMessageHandoff();
@@ -74,7 +74,7 @@ function createInitialHandoffFixture(messageSequence = 1) {
       },
     },
     client,
-    { runId: "initial-run", messageSeq: messageSequence },
+    { runId: "initial-run" },
   );
   return { client, initialUserMessage, owner, sessionKey };
 }
@@ -200,6 +200,35 @@ describe("pane-owned canonical session projection", () => {
       expect(owner.chatMessages).toEqual([admittedMessage]);
       owner.currentSessionId = "rebound-session";
     }
+    if (admitFirst) {
+      const previousUser = {
+        ...createHistoryMessage("user", "Earlier prompt", { id: "earlier-user", seq: 1 }),
+        timestamp: 120,
+      };
+      const previousReply = {
+        ...createHistoryMessage("assistant", "Earlier reply", { id: "earlier-reply", seq: 2 }),
+        timestamp: 121,
+      };
+      const output = {
+        ...createHistoryMessage("assistant", "Preparing the first reply", {
+          id: "early-output",
+          seq: 3,
+        }),
+        timestamp: 124,
+      };
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages: [previousUser, previousReply, output] },
+        { runActive: true },
+      );
+      expect(owner.chatMessages).toEqual([previousUser, previousReply, handoff.message, output]);
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages: [] },
+        { runActive: true },
+      );
+      expect(owner.chatMessages).toEqual([handoff.message]);
+    }
     const localContent = handoff.message.content;
     const authoritative = createAuthoritativeInitialMessage();
     const event =
@@ -227,8 +256,8 @@ describe("pane-owned canonical session projection", () => {
     if (admitFirst) {
       expect(initialUserMessage.read(sessionKey, client)).not.toBeNull();
       reduceChatSessionProjection(owner, { type: "sessionReset" });
-      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(true);
-      expect(owner.chatMessages).toEqual([handoff.message]);
+      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(false);
+      expect(owner.chatMessages).toEqual([]);
       reduceChatSessionProjection(
         owner,
         { type: "snapshotLoaded", messages: [authoritative] },
@@ -241,18 +270,22 @@ describe("pane-owned canonical session projection", () => {
     }
   });
 
-  it("requires the accepted sequence when adopting the initial run", () => {
-    const { client, initialUserMessage, owner, sessionKey } = createInitialHandoffFixture(2);
-    const authoritative = createAuthoritativeInitialMessage(1);
-    const projection = reduceChatSessionProjection(
+  it("adopts the exact submission at its actual committed position", () => {
+    const { client, initialUserMessage, owner, sessionKey } = createInitialHandoffFixture();
+    const localContent = initialUserMessage.read(sessionKey, client)!.message.content;
+    admitInitialUserMessageHandoff(owner, sessionKey);
+    const authoritative = createAuthoritativeInitialMessage(4);
+    reduceChatSessionProjection(
       owner,
       { type: "snapshotLoaded", messages: [authoritative] },
       { runActive: false },
     );
-
-    expect(projection.messages[0]).toBe(authoritative);
-    expect(owner.chatMessages[0]).toBe(authoritative);
-    expect(initialUserMessage.read(sessionKey, client)).not.toBeNull();
+    expect(owner.chatMessages).toHaveLength(1);
+    expect(owner.chatMessages[0]).toMatchObject({
+      content: localContent,
+      __openclaw: { id: "persisted-initial-user", seq: 4, runId: "initial-execution" },
+    });
+    expect(initialUserMessage.read(sessionKey, client)).toBeNull();
   });
 
   it("keeps each split pane's live projection independent", () => {

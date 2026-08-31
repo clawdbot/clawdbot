@@ -356,6 +356,44 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it.each([
+    { profile: "github", timingProfile: "github", addedSeconds: 40 },
+    { profile: "hybrid", timingProfile: "blacksmith", addedSeconds: 35 },
+  ] as const)(
+    "uses direct $profile hosted-stripe timings without changing its test partition",
+    ({ profile, timingProfile, addedSeconds }) => {
+      const shardName = "agentic-agents-support-hosted-2";
+      let measuredSeconds = 100;
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+        (runner): Readonly<Record<string, number>> =>
+          runner === timingProfile ? { [shardName]: measuredSeconds } : {},
+      );
+      const options = {
+        includeReleaseOnlyPluginShards: false,
+        compactMode: "push" as const,
+        runnerBackend: profile,
+      };
+      const baseline = createNodeTestShardBundles(options);
+      measuredSeconds = 140;
+      const updated = createNodeTestShardBundles(options);
+      const totalSeconds = (plan: typeof baseline) =>
+        plan.reduce((sum, shard) => sum + (shard.predictedSeconds ?? 0), 0);
+      const testPartition = (plan: typeof baseline) =>
+        plan
+          .flatMap((shard) => shard.groups)
+          .map((group) => ({
+            name: group.shard_name,
+            configs: group.configs,
+            includePatterns: group.includePatterns,
+          }))
+          .toSorted((a, b) => a.name.localeCompare(b.name));
+
+      expect(totalSeconds(updated) - totalSeconds(baseline)).toBe(addedSeconds);
+      expect(testPartition(updated)).toEqual(testPartition(baseline));
+      expect(updated.every((shard) => shard.planConcurrency === 1)).toBe(true);
+    },
+  );
+
   it("preserves coverage and execution policies with committed compact measurements", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
