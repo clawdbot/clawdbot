@@ -118,6 +118,8 @@ export type SettingsScope = "global" | "project";
 export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
 
 export interface SettingsStorage {
+  /** Pure scope reads; existing custom backends may serve reads through withLock. */
+  readSettingsScope?(scope: SettingsScope): string | undefined;
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
 }
 
@@ -134,6 +136,20 @@ export class FileSettingsStorage implements SettingsStorage {
       global: join(agentDir, "settings.json"),
       project: join(cwd, CONFIG_DIR_NAME, "settings.json"),
     };
+  }
+
+  readSettingsScope(scope: SettingsScope): string | undefined {
+    // Absence is a complete read: do not create and fsync a sidecar for defaults.
+    // Present files still use the writer lock so readers cannot observe partial writes.
+    if (!existsSync(this.paths[scope])) {
+      return undefined;
+    }
+    let content: string | undefined;
+    this.withLock(scope, (current) => {
+      content = current;
+      return undefined;
+    });
+    return content;
   }
 
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {

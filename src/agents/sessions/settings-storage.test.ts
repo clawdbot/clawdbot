@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { SettingsManager } from "./settings-manager.js";
 import { FileSettingsStorage } from "./settings-storage.js";
 
@@ -17,6 +18,40 @@ describe("FileSettingsStorage", () => {
     expect(existsSync(settingsDir)).toBe(false);
     expect(existsSync(join(root, ".openclaw"))).toBe(false);
   });
+
+  it.each(["global", "project"] as const)(
+    "loads absent %s settings without waiting for an uncommitted first writer",
+    (scope) => {
+      const root = tempDirs.make("openclaw-settings-absent-");
+      const agentDir = join(root, "agent");
+      const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
+      const settingsPath = join(settingsDir, "settings.json");
+      mkdirSync(settingsDir);
+      const release = acquireFileLockSyncWithRetry(settingsPath);
+      try {
+        const manager = SettingsManager.create(root, agentDir);
+        expect(manager.drainErrors()).toEqual([]);
+        expect(manager.getGlobalSettings()).toEqual({});
+        expect(manager.getProjectSettings()).toEqual({});
+        expect(existsSync(settingsPath)).toBe(false);
+      } finally {
+        release();
+      }
+
+      const storage = new FileSettingsStorage(root, agentDir);
+      storage.withLock(scope, () => JSON.stringify({ theme: "newly-created" }));
+      expect(SettingsManager.create(root, agentDir).getTheme()).toBe("newly-created");
+
+      const releaseExisting = acquireFileLockSyncWithRetry(settingsPath);
+      try {
+        expect(SettingsManager.create(root, agentDir).drainErrors()).toEqual([
+          { scope, error: expect.objectContaining({ code: "file_lock_timeout" }) },
+        ]);
+      } finally {
+        releaseExisting();
+      }
+    },
+  );
 
   it("locks before reading when the settings directory exists", () => {
     const root = tempDirs.make("openclaw-settings-lock-");
