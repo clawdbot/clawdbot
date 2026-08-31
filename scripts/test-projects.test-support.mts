@@ -2235,8 +2235,17 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/run.sh",
+    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
+    ["upgrade-survivor-recovery-cleanup"],
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",

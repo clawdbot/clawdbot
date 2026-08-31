@@ -1,8 +1,14 @@
 // Control UI tests cover GitHub link hover card behavior.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+
+let artifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  artifactDir = parent ? createControlUiE2eArtifactDir("github-link-hovercard", parent) : undefined;
+});
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -40,11 +46,9 @@ async function expectText(locator: Locator, text: string): Promise<void> {
 }
 
 async function captureArtifact(page: Page, name: string): Promise<void> {
-  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
-  await mkdir(artifactDir, { recursive: true });
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`) });
 }
 
@@ -277,9 +281,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.goto(`${server.baseUrl}chat`);
 
     const message = page.locator(".chat-text").filter({ hasText: "Review" });
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
       await message.screenshot({ path: path.join(artifactDir, "github-references-light.png") });
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");

@@ -12,15 +12,17 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const SESSION_KEY = "agent:main:transition-proof-0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "new-session-transition");
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (!captureProofEnabled) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
+  await mkdir(path.join(suite.artifactDir, "new-session-transition"), { recursive: true });
+  await page.screenshot({
+    fullPage: true,
+    path: path.join(path.join(suite.artifactDir, "new-session-transition"), fileName),
+  });
 }
 
 suite.define(() => {

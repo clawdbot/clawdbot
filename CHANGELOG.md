@@ -33,8 +33,11 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Restart recovery:** preserve resumed channel delivery routes when an older reply finishes cleanup during Gateway restart, including ownership changes immediately before the database write.
+- **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
 - Matrix lifecycle: drain in-flight monitor tasks without deadlocking shared-client retirement, and reject late acquisitions after their owning task closes.
 - Provider error handling: reuse prepared or already loaded provider hooks instead of cold-loading plugins during error classification, avoiding long stalls in failure reporting and model fallback.
+- **Session settings:** restore merging of concurrent first writes after a startup optimization regressed lock ordering, preserving both global and project settings without adding filesystem side effects to missing-settings reads. Thanks @MrSwagatRathod, @obviyus, and @yetval for the original fix.
+- **Control UI startup and history:** reduce configuration-schema construction and skip full-text duplicate comparisons for distinct transcript messages, preserving plugin hints, redaction, and message identity.
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Cloud session lifecycle:** prevent archive, delete, and restart recovery from deadlocking behind an earlier worker move, keep work admission closed through cleanup, and preserve the same successor for concurrent recovery requests.

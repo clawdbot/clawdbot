@@ -427,6 +427,7 @@ jobs:
       - name: Validate release publish approval run
         env:
           ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
@@ -436,12 +437,12 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
-              echo "Plugin ClawHub publish dispatched by another workflow must include release_publish_run_id." >&2
-              exit 1
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Validation-only ClawHub package preparation; no publication authority requested."
+              exit 0
             fi
-            echo "Direct Plugin ClawHub Release dispatch; relying on this workflow's clawhub-plugin-release environment approval."
-            exit 0
+            echo "ClawHub OIDC publication requires a release parent with an exact transaction authorization receipt. Use the release parent workflow, or the separately authenticated manual ClawHub owner route." >&2
+            exit 1
           fi
           direct_recovery=false
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
@@ -534,9 +535,59 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  approve_plugins_clawhub_release:
+  seal_clawhub_transactions:
+    name: Seal ClawHub package transactions
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      identity: ${{ steps.seal.outputs.identity }}
+    steps:
+      - name: Checkout trusted transaction tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Download exact packed transactions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: clawhub-package-*
+          path: ${{ runner.temp }}/clawhub-transactions/packages
+      - name: Seal actual packed inventories
+        id: seal
+        env:
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PACKAGE_MATRIX: ${{ needs.preview_plugins_clawhub.outputs.matrix }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          RELEASE_PUBLISH_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PACKAGE_MATRIX" > "$RUNNER_TEMP/clawhub-transactions/matrix.json"
+          node scripts/clawhub-parent-authorization.mjs seal \
+            --matrix "$RUNNER_TEMP/clawhub-transactions/matrix.json" \
+            --directory "$RUNNER_TEMP/clawhub-transactions/packages" \
+            --output "$RUNNER_TEMP/clawhub-transactions/transactions.json"
+      - name: Upload exact transaction identity
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ runner.temp }}/clawhub-transactions/transactions.json
+          if-no-files-found: error
+          retention-days: 30
+
+  approve_plugins_clawhub_release:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, seal_clawhub_transactions]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
@@ -548,9 +599,14 @@ jobs:
 
   publish_plugins_clawhub:
     needs:
-      [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugins_clawhub_release]
+      [
+        preview_plugins_clawhub,
+        pack_plugins_clawhub_artifacts,
+        seal_clawhub_transactions,
+        approve_plugins_clawhub_release,
+      ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@87ca030c30f3cfb78ab15c8e66b5ff1469c8f9c8 # v0.23.3
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@db2a12c4625ffa162910a3e6aa2cb786ced89e2f # reviewed parent receipt contract
     permissions:
       actions: read
       contents: read
@@ -561,6 +617,8 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     with:
+      trusted_tooling_identity_json: ${{ needs.seal_clawhub_transactions.outputs.identity }}
+      wait_for_publication: false
       package_artifact_name: ${{ matrix.plugin.artifactName }}
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
@@ -574,52 +632,5 @@ jobs:
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
-  verify_published_clawhub_package:
-    needs: [preview_plugins_clawhub, publish_plugins_clawhub]
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 32
-      matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
-    steps:
-      - name: Checkout verification tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: off
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-          install-deps: "false"
-
-      - name: Download published package input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ matrix.plugin.artifactName }}
-          path: ${{ runner.temp }}/clawhub-package-artifact
-
-      - name: Verify published ClawHub package
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-        run: |
-          set -euo pipefail
-          node scripts/verify-clawhub-published-artifact.mjs \
-            --expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact" \
-            --package-name "${PACKAGE_NAME}" \
-            --package-version "${PACKAGE_VERSION}" \
-            --publish-tag "${PACKAGE_TAG}" \
-            --registry "${CLAWHUB_REGISTRY}"
+  # Exact public artifact verification runs in plugin-clawhub-postpublish.yml
+  # after the authorizing parent succeeds. Waiting here would deadlock staging.

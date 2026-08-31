@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -16,7 +16,13 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("chat-session-companion-clear", artifactRoot)
+    : undefined;
+});
 const answer = "Keep this companion answer visible until the reset succeeds.";
 const initiatingSessionKey = "agent:main:companion-clear";
 const nextSessionKey = "agent:main:companion-next";
@@ -30,9 +36,6 @@ type CompanionSurface = {
 };
 
 async function withCompanion(run: (surface: CompanionSurface) => Promise<void>): Promise<void> {
-  if (artifactDir) {
-    await mkdir(artifactDir, { recursive: true });
-  }
   await suite.withPage(
     {
       locale: "en-US",

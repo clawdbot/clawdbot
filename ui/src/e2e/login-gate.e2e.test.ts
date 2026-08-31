@@ -1,9 +1,9 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,7 +13,10 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
-const RECOVERY_ARTIFACT_DIR = path.resolve(".artifacts/control-ui-e2e/zombie-reload");
+let RECOVERY_ARTIFACT_DIR: string;
+beforeEach(() => {
+  RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
+});
 
 async function renderLoginGate(page: Page): Promise<void> {
   const response = await page.goto(suite.server.baseUrl);
@@ -154,7 +157,6 @@ suite.define(() => {
       await page.getByRole("button", { name: /Server updated/u }).waitFor({ timeout: 10_000 });
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).not.toBeNull();
-      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "01-reload-required.png"),
         fullPage: true,
@@ -292,7 +294,6 @@ suite.define(() => {
       expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
       expect(bounds.noticeLeft).toBe(bounds.navRight);
       expect(bounds.noticeRight).toBe(bounds.mainRight);
-      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
         fullPage: true,

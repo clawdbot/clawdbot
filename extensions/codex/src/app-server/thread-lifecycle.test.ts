@@ -2615,7 +2615,11 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map()),
+      },
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2665,7 +2669,13 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const bindingStore = Object.assign(
       createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
-      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+      {
+        managedThreads: {
+          has: vi.fn(async () => false),
+          mark,
+          snapshot: vi.fn(async () => new Map()),
+        },
+      },
     );
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2709,6 +2719,7 @@ describe("Codex plugin binding recovery", () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => {
           throw new Error("managed ownership unavailable");
         }),

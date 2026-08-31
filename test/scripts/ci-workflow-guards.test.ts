@@ -6519,17 +6519,17 @@ server.listen(0, "127.0.0.1", () => {
       [
         ".github/workflows/ci-check-testbox.yml",
         "1",
-        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "${{ steps.testbox-base.outputs.sha || 'HEAD' }}",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
     ] as const;
 
@@ -6562,7 +6562,7 @@ server.listen(0, "127.0.0.1", () => {
       expect(ensureBaseStep?.if, workflowPath).toBe("github.event_name == 'pull_request'");
       expect(ensureBaseStep?.uses, workflowPath).toBe("./.github/actions/ensure-base-commit");
       expect(ensureBaseStep?.with, workflowPath).toEqual({
-        "base-sha": "${{ github.event.pull_request.base.sha }}",
+        "base-sha": "${{ steps.testbox-base.outputs.sha }}",
         "fetch-ref": "${{ github.event.pull_request.base.ref }}",
       });
       expect(JSON.stringify(job.steps), workflowPath).not.toContain(
@@ -6928,20 +6928,26 @@ exit 1
       key: expect.stringContaining(nativeCachePrefix),
       "restore-keys": `${nativeCachePrefix}\n`,
     });
-    expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
-    );
+    expect(macosSwift.env).not.toHaveProperty("SWIFT_TEST_EXECUTION");
     expect(testStep.id).toBe("swift-test");
     expect(renderStep.if).toBe(
       "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
     );
+    const currentTargetBranch = testStep.run.split('elif [[ "$HISTORICAL_TARGET" == "true" ]]')[0];
+    expect(currentTargetBranch).toContain('logical_cpu="$(sysctl -n hw.logicalcpu)"');
+    expect(currentTargetBranch).toContain('[[ ! "$logical_cpu" =~ ^[1-9][0-9]*$ ]]');
+    expect(currentTargetBranch).toContain(
+      "swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))",
+    );
+    expect(currentTargetBranch).toContain(
+      'swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")',
+    );
+    expect(currentTargetBranch).not.toContain("swift_test_args+=(--parallel)");
+    expect(currentTargetBranch).not.toContain("--no-parallel");
+    expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const { execution, buildExitCode } of [
-      { execution: "parallel", buildExitCode: 0 },
-      { execution: "serial", buildExitCode: 0 },
-      { execution: "parallel", buildExitCode: 23 },
-    ]) {
-      const root = tempDirs.make(`openclaw-swift-test-${execution}-${buildExitCode}-`);
+    for (const buildExitCode of [0, 23]) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
@@ -6965,6 +6971,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         "utf8",
       );
       chmodSync(path.join(binDir, "swift"), 0o755);
+      writeFileSync(path.join(binDir, "sysctl"), "#!/usr/bin/env bash\nprintf '4\\n'\n", {
+        mode: 0o755,
+      });
       // This fixture executes the real launcher: never fall through to host Security.
       writeFileSync(
         path.join(binDir, "security"),
@@ -6991,7 +7000,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           HOME: root,
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          SWIFT_TEST_EXECUTION: execution,
+          SWIFT_TEST_EXECUTION: "serial",
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -7000,9 +7009,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         "build --package-path apps/macos --build-system native --enable-code-coverage --build-tests",
         ...(buildExitCode === 0
           ? [
-              `test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --${
-                execution === "parallel" ? "parallel" : "no-parallel"
-              } --skip AppStateIsolationTests`,
+              "test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests",
             ]
           : []),
       ]);

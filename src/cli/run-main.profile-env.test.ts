@@ -2,6 +2,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
+const startup = vi.hoisted(() => ({
+  readConfig: vi.fn(async () => ({ proxy: { selected: "synthetic" } })),
+  startProxy: vi.fn(async () => null),
+  ensurePath: vi.fn(),
+  ensureDispatcher: vi.fn(),
+  route: vi.fn(async () => true),
+}));
+
+vi.mock("../config/io.js", () => ({
+  readSourceConfigBestEffort: startup.readConfig,
+  readBestEffortConfig: startup.readConfig,
+}));
+
+vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
+  startProxy: startup.startProxy,
+}));
+
+vi.mock("../infra/net/proxy-env.js", () => ({
+  hasEnvHttpProxyAgentConfigured: () => true,
+}));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: startup.ensureDispatcher,
+}));
+
 const fileState = vi.hoisted(() => ({
   hasCliDotEnv: false,
 }));
@@ -52,11 +77,11 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
+  ensureOpenClawCliOnPath: startup.ensurePath,
 }));
 
 vi.mock("./route.js", () => ({
-  tryRouteCli: vi.fn(async () => true),
+  tryRouteCli: startup.route,
 }));
 
 vi.mock("./windows-argv.js", () => ({
@@ -74,7 +99,7 @@ vi.mock("./container-target.js", async () => {
 
 import { runCli } from "./run-main.js";
 
-describe("runCli profile env bootstrap", () => {
+describe("runCli environment and passive startup", () => {
   const envSnapshot = captureEnv([
     "OPENCLAW_PROFILE",
     "OPENCLAW_STATE_DIR",
@@ -87,6 +112,7 @@ describe("runCli profile env bootstrap", () => {
   ]);
 
   beforeEach(() => {
+    vi.clearAllMocks();
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
@@ -105,6 +131,45 @@ describe("runCli profile env bootstrap", () => {
   afterEach(() => {
     envSnapshot.restore();
   });
+
+  it.each([
+    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
+      ["beta", "", "--", "--no-restart"].flatMap((value) => [
+        [flag, value, "cleanup"],
+        [`${flag}=${value}`, "cleanup"],
+      ]),
+    ),
+    ["--no-restart", "cleanup"],
+    ["--accept-capabilities", "cleanup"],
+    ["--", "cleanup"],
+    ["--channel", "beta", "--", "cleanup"],
+    ["--dry-run", "--json", "--yes", "cleanup"],
+    ["cleanup", "--dry-run", "--json", "--yes"],
+    ["cleanup", "--channel", "beta"],
+    ["cleanup", "--version"],
+  ])("keeps cleanup passive before dispatch: %j", async (...args) => {
+    const argv = ["node", "openclaw", "update", ...args];
+    await runCli(argv);
+
+    expect(startup.route).toHaveBeenCalledWith(argv);
+    expect({
+      configReads: startup.readConfig.mock.calls.length,
+      proxyStarts: startup.startProxy.mock.calls.length,
+      pathEnsures: startup.ensurePath.mock.calls.length,
+      dispatcherEnsures: startup.ensureDispatcher.mock.calls.length,
+    }).toEqual({ configReads: 0, proxyStarts: 0, pathEnsures: 0, dispatcherEnsures: 0 });
+  });
+
+  it.each(["--channel", "--tag", "--timeout"])(
+    "retains update startup when cleanup is the value of %s",
+    async (flag) => {
+      await runCli(["node", "openclaw", "update", flag, "cleanup"]);
+      expect(startup.readConfig).toHaveBeenCalledOnce();
+      expect(startup.startProxy).toHaveBeenCalledWith({ selected: "synthetic" });
+      expect(startup.ensurePath).toHaveBeenCalledOnce();
+      expect(startup.ensureDispatcher).toHaveBeenCalledOnce();
+    },
+  );
 
   it("applies --profile before dotenv loading", async () => {
     fileState.hasCliDotEnv = true;

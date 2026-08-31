@@ -61,7 +61,7 @@ suite.define(() => {
           .poll(() => alert.textContent())
           .toContain("Session list temporarily unavailable");
         if (statusFilter === "Archived") {
-          await captureUiProof(page, "filtered-session-error-recovery-before.png");
+          await captureUiProof(suite, page, "filtered-session-error-recovery-before.png");
         }
 
         await gateway.setMethodResponse("sessions.list", healthy);
@@ -69,7 +69,7 @@ suite.define(() => {
         await expect.poll(() => alert.count()).toBe(0);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();
         if (statusFilter === "Archived") {
-          await captureUiProof(page, "filtered-session-error-recovery-after.png");
+          await captureUiProof(suite, page, "filtered-session-error-recovery-after.png");
         }
 
         await gateway.setMethodResponse("sessions.list", failure);

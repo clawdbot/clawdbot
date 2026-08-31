@@ -301,7 +301,8 @@ if (args.includes('push')) {
 const result = spawnSync(git, args, { stdio: 'inherit' });
 if (mainFetch && result.status === 0) {
   const prefix = args.slice(0, args.indexOf('fetch'));
-  const fetched = runGit([...prefix, 'rev-parse', 'FETCH_HEAD']);
+  const destination = args.at(-1).split(':')[1] || 'FETCH_HEAD';
+  const fetched = runGit([...prefix, 'rev-parse', destination]);
   if (control.moveSharedAfterFetch) {
     runGit(['-C', canonical, 'update-ref', 'refs/remotes/origin/main', movedMain]);
   }
@@ -313,7 +314,8 @@ if (mainFetch && result.status === 0) {
   event({
     kind: 'fetched',
     sha: fetched,
-    shared: runGit(['-C', canonical, 'rev-parse', 'refs/remotes/origin/main']),
+    shared: spawnSync(git, ['-C', canonical, 'rev-parse', '--verify', 'refs/remotes/origin/main'],
+      { encoding: 'utf8' }).stdout.trim(),
   });
 }
 process.exit(result.status ?? 1);

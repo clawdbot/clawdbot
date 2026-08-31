@@ -1,10 +1,10 @@
 // Real browser flow with a mocked Gateway; no Ollama server or model is used.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -15,7 +15,13 @@ const suite = createControlUiE2eSuite({
   name: "Model Setup activation feedback mocked Gateway E2E",
   startServerBeforeBrowser: true,
 });
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-activation-feedback", artifactRoot)
+    : undefined;
+});
 
 async function viewportIntersection(target: Locator): Promise<number> {
   return target.evaluate(
@@ -124,7 +130,6 @@ suite.define(() => {
         await connectionOwner.dispose();
         expect(pageErrors).toEqual([]);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, "setup-back-to-chat.png") });
         }
       },
@@ -204,7 +209,6 @@ suite.define(() => {
             ),
           ).toBe(false);
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               path: path.join(artifactDir, `${entry}-viewport-pending.png`),
             });
@@ -340,7 +344,6 @@ suite.define(() => {
           await progress.waitFor();
           expect.soft(await viewportIntersection(progress)).toBeGreaterThan(0.99);
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({ path: path.join(artifactDir, `${outcome}-pending.png`) });
           }
           expect.soft(await progress.count()).toBe(1);
