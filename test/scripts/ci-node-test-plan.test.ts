@@ -364,8 +364,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ({ profile, timingProfile, addedSeconds }) => {
       const shardName = "agentic-agents-support-hosted-2";
       let measuredSeconds = 100;
-      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((runner) =>
-        runner === timingProfile ? { [shardName]: measuredSeconds } : {},
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+        (runner): Readonly<Record<string, number>> =>
+          runner === timingProfile ? { [shardName]: measuredSeconds } : {},
       );
       const options = {
         includeReleaseOnlyPluginShards: false,
