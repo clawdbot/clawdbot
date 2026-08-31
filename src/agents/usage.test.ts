@@ -611,4 +611,12 @@ describe("deriveSessionTotalTokens", () => {
     });
     expect(totalTokens).toBe(2500);
   });
+
+  it("keeps a derived total unclamped even when it exceeds contextTokens (#15114/#125333)", () => {
+    const totalTokens = deriveSessionTotalTokens({
+      lastCallUsage: { input: 150_000, output: 66, total: 150_066 },
+      contextTokens: 100_000,
+    });
+    expect(totalTokens).toBe(150_000);
+  });
 });

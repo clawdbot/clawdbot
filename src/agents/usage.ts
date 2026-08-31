@@ -410,9 +410,34 @@ export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
   promptTokens?: number;
   usage?: NormalizedUsage;
+  /**
+   * The model's context window, when known. A derived prompt-token count larger than
+   * the window is physically impossible for a genuine context snapshot — it is a sign
+   * that `lastCallUsage`/`usage` actually carries cumulative multi-call usage rather
+   * than a true final-call fact (#125333). Bounding here, at the single choke point
+   * both the live-run and transcript-persistence write paths pass through, rejects
+   * that case instead of persisting or ratcheting on an impossible value.
+   */
+  contextWindowTokens?: number;
 }): number | undefined {
+  const windowTokens =
+    typeof params.contextWindowTokens === "number" &&
+    Number.isFinite(params.contextWindowTokens) &&
+    params.contextWindowTokens > 0
+      ? params.contextWindowTokens
+      : undefined;
+  const withinWindow = (value: number | undefined): value is number =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    (windowTokens === undefined || value <= windowTokens);
+
   const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
+  if (
+    typeof promptOverride === "number" &&
+    Number.isFinite(promptOverride) &&
+    promptOverride > 0 &&
+    withinWindow(promptOverride)
+  ) {
     return promptOverride;
   }
 
@@ -420,19 +445,27 @@ export function deriveContextPromptTokens(params: {
     return undefined;
   }
   if (params.lastCallUsage?.contextUsage?.state === "available") {
-    return params.lastCallUsage.contextUsage.promptTokens;
+    return withinWindow(params.lastCallUsage.contextUsage.promptTokens)
+      ? params.lastCallUsage.contextUsage.promptTokens
+      : undefined;
   }
   const lastCallPromptTokens =
     derivePromptTokens(params.lastCallUsage) ?? derivePromptTokensFromTotal(params.lastCallUsage);
   if (lastCallPromptTokens !== undefined) {
-    return lastCallPromptTokens;
+    return withinWindow(lastCallPromptTokens) ? lastCallPromptTokens : undefined;
   }
   if (params.usage?.contextUsage?.state === "unavailable") {
     return undefined;
   }
   if (params.usage?.contextUsage?.state === "available") {
-    return params.usage.contextUsage.promptTokens;
+    return withinWindow(params.usage.contextUsage.promptTokens)
+      ? params.usage.contextUsage.promptTokens
+      : undefined;
   }
+  // Raw input+cache-token summation from aggregate/cumulative usage is a different
+  // accounting concept than a single-call context snapshot (cache tokens can legitimately
+  // exceed the window across a session), so it is intentionally left unbounded here —
+  // matching the pre-existing contract this branch has always had.
   return derivePromptTokens(params.usage);
 }
 
@@ -454,6 +487,14 @@ export function deriveSessionTotalTokens(params: {
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
+  //
+  // Do NOT forward params.contextTokens as a window bound here: this is the
+  // live /status-facing accounting path, and (#15114/#15133) explicitly
+  // established that this stored total must stay unclamped even when it
+  // exceeds the window, since clamping hides real overflow from display and
+  // compaction. The physically-impossible-value guard in
+  // deriveContextPromptTokens is reserved for the transcript-derived
+  // memory-flush read path (#125333), which calls it directly.
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,

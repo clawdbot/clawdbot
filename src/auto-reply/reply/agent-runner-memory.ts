@@ -424,12 +424,13 @@ function deriveTranscriptUsageSnapshot(
         trailingMessages: AgentMessage[];
       }
     | undefined,
+  contextWindowTokens?: number,
 ): SessionTranscriptUsageSnapshot | undefined {
   const usage = snapshot?.usage;
   if (!usage) {
     return undefined;
   }
-  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
+  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage, contextWindowTokens });
   const outputRaw = usage.output;
   const outputTokens =
     typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
@@ -521,6 +522,7 @@ function readSqliteSessionLogSnapshot(
     includeTurnTaint?: boolean;
     includeUsage: boolean;
     usageEventLimit?: number;
+    contextWindowTokens?: number;
   },
 ): SessionLogSnapshot {
   const snapshot: SessionLogSnapshot = {};
@@ -538,6 +540,7 @@ function readSqliteSessionLogSnapshot(
       if (options.includeUsage) {
         snapshot.usage = deriveTranscriptUsageSnapshot(
           readLatestNonzeroUsageSnapshotFromTranscriptEvents(events),
+          options.contextWindowTokens,
         );
       }
       if (options.includeTurnTaint) {
@@ -593,6 +596,7 @@ function readSessionLogSnapshot(params: {
   includeTurnTaint?: boolean;
   includeUsage: boolean;
   usageEventLimit?: number;
+  contextWindowTokens?: number;
 }): SessionLogSnapshot {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.sessionId && params.storePath && agentId) {
@@ -660,6 +664,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       storePath: params.storePath,
       includeByteSize: true,
       includeUsage: true,
+      contextWindowTokens: params.contextWindowTokens,
     });
     let usage = snapshot.usage;
     if (
@@ -675,6 +680,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         includeByteSize: false,
         includeUsage: true,
         usageEventLimit: snapshot.eventCount,
+        contextWindowTokens: params.contextWindowTokens,
       }).usage;
     }
     const normalizedOutputTokens =
@@ -1359,6 +1365,7 @@ export async function runMemoryFlushIfNeeded(params: {
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
+        contextWindowTokens,
       })
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
@@ -1417,18 +1424,53 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
+  // When the transcript read happened but produced no reliable prompt-token count
+  // (e.g. the raw provider usage was rejected as out-of-window, per #125333) and
+  // there is no fresh persisted total to fall back on either, estimate from the
+  // full message list instead — the same full-message fallback preflight
+  // compaction already uses. Without this, a rejected provider value silently
+  // turns a needed flush into a skip rather than a decision based on a real
+  // (if approximate) estimate.
+  let fallbackPromptTokens: number | undefined;
+  let fallbackOutputTokens: number | undefined;
+  if (
+    shouldReadTranscript &&
+    !hasReliableTranscriptPromptTokens &&
+    !hasFreshPersistedPromptTokens
+  ) {
+    const fallbackEstimate = await estimatePromptTokensFromSessionTranscript({
+      agentId: params.followupRun.run.agentId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+      storePath: params.storePath,
+      contextWindowTokens,
+    });
+    if (
+      typeof fallbackEstimate?.promptTokens === "number" &&
+      Number.isFinite(fallbackEstimate.promptTokens) &&
+      fallbackEstimate.promptTokens > 0
+    ) {
+      fallbackPromptTokens = fallbackEstimate.promptTokens;
+      fallbackOutputTokens = fallbackEstimate.promptIncludesOutput
+        ? undefined
+        : fallbackEstimate.outputTokens;
+    }
+  }
+  const hasFallbackPromptTokens = fallbackPromptTokens !== undefined;
+
   const promptTokensSnapshot = Math.max(
     hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
     hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
+    fallbackPromptTokens ?? 0,
   );
   const hasFreshPromptTokensSnapshot =
     promptTokensSnapshot > 0 &&
-    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
+    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens || hasFallbackPromptTokens);
 
   const projectedTokenCount = hasFreshPromptTokensSnapshot
     ? resolveEffectivePromptTokens(
         promptTokensSnapshot,
-        transcriptOutputTokens,
+        hasFallbackPromptTokens ? fallbackOutputTokens : transcriptOutputTokens,
         promptTokenEstimate,
       )
     : undefined;
