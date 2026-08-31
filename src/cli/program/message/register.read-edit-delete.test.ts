@@ -35,12 +35,18 @@ describe("registerMessageReadEditDeleteCommands", () => {
     );
   });
 
-  it("rejects --include-thread, which no channel reads", async () => {
+  it("keeps --include-thread accepted as a compatibility spelling", async () => {
     const { message, runMessageAction } = createMessageProgram();
 
-    await expect(
-      message.parseAsync(["read", "-t", "discord:123", "--include-thread"], { from: "user" }),
-    ).rejects.toThrow(/unknown option/i);
-    expect(runMessageAction).not.toHaveBeenCalled();
+    await message.parseAsync(["read", "-t", "discord:123", "--include-thread"], { from: "user" });
+
+    expect(runMessageAction).toHaveBeenCalledWith("read", expect.any(Object));
+  });
+
+  it("no longer advertises --include-thread in help", () => {
+    const { message } = createMessageProgram();
+    const read = message.commands.find((command) => command.name() === "read");
+
+    expect(read?.helpInformation()).not.toContain("--include-thread");
   });
 });
