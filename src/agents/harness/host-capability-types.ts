@@ -19,6 +19,8 @@ type AgentHarnessHostApprovalResult = Readonly<{
 type AgentHarnessPreparedEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
   localIdentityEnv: Readonly<Record<string, string>>;
+  /** Local child destination facts; must not be projected into a remote or sandbox process. */
+  localProcessEnv?: Readonly<Record<string, string>>;
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
 }>;

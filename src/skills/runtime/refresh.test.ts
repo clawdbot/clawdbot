@@ -1,7 +1,9 @@
 // Skill refresh tests cover runtime reload events and refresh-state updates.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MockInstance } from "vitest";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -75,6 +77,74 @@ describe("ensureSkillsWatcher", () => {
     vi.useRealTimers();
     await refreshTestSupport.resetSkillsRefreshForTest();
   });
+
+  it.each(["existing", "missing", "untrusted-link", "trusted-link"] as const)(
+    "expands Windows short watch paths without changing %s root behavior",
+    async (scenario) => {
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "skills-short-path-")),
+      );
+      const shortRoot = path.join(root, "SHORT~1");
+      const longRoot = path.join(root, "Expanded directory");
+      const workspaceDir = path.join(shortRoot, "workspace");
+      const repoDir = path.join(shortRoot, "repo");
+      const outsideDir = path.join(root, "outside");
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const nativeRealpath = fsSync.realpathSync.native;
+      let realpathSpy: MockInstance<typeof fsSync.realpathSync.native> | undefined;
+      try {
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(repoDir);
+        await fs.mkdir(outsideDir);
+        if (scenario === "existing") {
+          await fs.mkdir(path.join(workspaceDir, "skills"));
+        }
+        if (scenario.endsWith("link")) {
+          await fs.symlink(outsideDir, path.join(repoDir, "skills"), "junction");
+        }
+        Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+        realpathSpy = vi.spyOn(fsSync.realpathSync, "native").mockImplementation((input) => {
+          const resolved = nativeRealpath(input);
+          return typeof resolved === "string" &&
+            (resolved === shortRoot || resolved.startsWith(`${shortRoot}${path.sep}`))
+            ? `${longRoot}${resolved.slice(shortRoot.length)}`
+            : resolved;
+        });
+        refreshModule.ensureSkillsWatcher({
+          workspaceDir,
+          config: {
+            skills: {
+              load: {
+                extraDirs: [repoDir],
+                ...(scenario === "trusted-link" ? { allowSymlinkTargets: [outsideDir] } : {}),
+              },
+            },
+          },
+        });
+        const calls = watchMock.mock.calls as unknown as Array<
+          [string, { depth: number; followSymlinks: boolean }]
+        >;
+        const normalized = (value: string) => value.replaceAll("\\", "/");
+        const skillsWatch = calls.find(
+          ([target]) => target === normalized(path.join(longRoot, "workspace", "skills")),
+        );
+        expect(skillsWatch?.[1]).toMatchObject({
+          depth: scenario === "existing" ? 6 : 7,
+          followSymlinks: false,
+        });
+        expect(calls.map(([target]) => target)).toContain(
+          normalized(path.join(longRoot, "repo", "skills")),
+        );
+        expect(calls.some(([target]) => target === normalized(outsideDir))).toBe(
+          scenario === "trusted-link",
+        );
+      } finally {
+        realpathSpy?.mockRestore();
+        Object.defineProperty(process, "platform", platform);
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("watches skill roots and filters non-skill churn", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-root-"));

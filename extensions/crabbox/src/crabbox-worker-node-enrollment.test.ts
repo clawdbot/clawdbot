@@ -7,7 +7,7 @@ import https from "node:https";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
@@ -248,7 +248,23 @@ echo 123
 
 async function readLaunch(stateDir: string) {
   const target = path.join(stateDir, "launch.json");
-  await vi.waitFor(() => expect(fs.existsSync(target)).toBe(true));
+  // Child startup follows the test deadline, not waitFor's shorter polling deadline.
+  const watcher = fs.watch(stateDir, { persistent: false });
+  cleanups.push(() => watcher.close());
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const inspect = () => {
+        if (fs.existsSync(target)) {
+          resolve();
+        }
+      };
+      watcher.on("change", inspect);
+      watcher.once("error", reject);
+      inspect();
+    });
+  } finally {
+    watcher.close();
+  }
   return JSON.parse(fs.readFileSync(target, "utf8")) as {
     build: string;
     cli: string;

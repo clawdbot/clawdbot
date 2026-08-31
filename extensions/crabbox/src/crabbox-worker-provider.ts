@@ -45,6 +45,7 @@ import {
   isNonRunnableState,
   leaseRunArgs,
   remainingProvisionTimeout,
+  runProvisionSetup,
   runProvisionSetupAndWaitReady,
   waitForProvisionReady,
   type InspectCommandResult,
@@ -365,7 +366,7 @@ export function createCrabboxWorkerProvider(
         }
       }
 
-      await warmImages.allocate({
+      const allocationChoice = await warmImages.allocate({
         ...context,
         id: leaseId,
         profile: parsed,
@@ -453,6 +454,9 @@ export function createCrabboxWorkerProvider(
               profile: parsed,
               signal: project.signal,
               assertCurrent: project.assertCurrent,
+              ...(allocationChoice.kind === "checkpoint"
+                ? { forkedCheckpointId: allocationChoice.checkpointId }
+                : {}),
             },
             async () => {
               if (!options?.prepareNodeRuntime) {
@@ -465,19 +469,16 @@ export function createCrabboxWorkerProvider(
                 leaseId,
               });
               try {
-                inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+                await runProvisionSetup({
                   ...inspectedParams,
                   phase: "node runtime preparation",
                   setup: setup.command,
                   forwardedEnv: setup.forwardedEnv,
                   timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
                   signal: runtime.signal,
-                  sleep,
                 });
-                runtime.signal?.throwIfAborted();
               } catch (error) {
-                // Setup already owns cleanup; an indeterminate readiness error deliberately
-                // keeps the lease for replay. Neither outcome permits a second stop here.
+                // The command owner settles setup failure and cleanup; do not stop it twice.
                 preparationFailed = true;
                 throw error;
               }
@@ -521,7 +522,8 @@ export function createCrabboxWorkerProvider(
         desktop: parsed.desktop,
         leaseId,
       });
-      inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+      // These owned scripts do not restart SSH; authenticated enrollment proves node readiness.
+      await runProvisionSetup({
         ...inspectedParams,
         phase: "node enrollment setup",
         signal: enrollment.signal,
@@ -530,7 +532,6 @@ export function createCrabboxWorkerProvider(
         ...(nodeEnrollmentSetup.forwardedEnv
           ? { forwardedEnv: nodeEnrollmentSetup.forwardedEnv }
           : {}),
-        sleep,
       });
       let deviceId: string;
       try {

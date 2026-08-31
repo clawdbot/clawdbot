@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
+import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -496,6 +497,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
+vi.mock("../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
+}));
+
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({
   gatherDaemonStatus: mocks.gatherDaemonStatus,
 }));
@@ -813,6 +818,7 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
     mocks.gatherDaemonStatus.mockReset().mockResolvedValue({});
+    vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     mocks.noteWorkspaceStatus.mockReset();
     mocks.resolveGatewayService
       .mockReset()
@@ -1613,7 +1619,7 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("passes daemon-context plugin drift into the workspace status note", async () => {
+  it("resolves pinned drift targets for ordinary Doctor before rendering its note", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.6.1",
@@ -1623,6 +1629,7 @@ describe("doctor health contributions", () => {
           installedVersion: "2026.5.30-beta.1",
           gatewayVersion: "2026.6.1",
           source: "npm",
+          spec: "@openclaw/codex@2026.5.30-beta.1",
         },
       ],
     };
@@ -1632,6 +1639,12 @@ describe("doctor health contributions", () => {
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.6.1",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
     await contribution.run(
       createDoctorHealthFlowContext({
         cfg,
@@ -1649,7 +1662,23 @@ describe("doctor health contributions", () => {
       deep: false,
       allowExecSecretRefs: false,
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      packageName: "@openclaw/codex",
+      target: "2026.6.1",
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: {
+        ...pluginVersionDrift,
+        drifts: [
+          expect.objectContaining({
+            targetResolution: expect.objectContaining({
+              status: "unresolved",
+              error: expect.stringContaining("HTTP 404"),
+            }),
+          }),
+        ],
+      },
+    });
   });
 
   it("omits daemon-context plugin drift when gateway version used the fallback", async () => {

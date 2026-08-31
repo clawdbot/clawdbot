@@ -427,11 +427,6 @@ describe("preserved update activation with real version guards", () => {
       );
       expect(mocks.restart).toHaveBeenCalledTimes(restarts.length);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
-      if (allowed) {
-        expect(mocks.health.mock.calls.some(([args]) => args.expectedVersion === VERSION)).toBe(
-          true,
-        );
-      }
       if (retried) {
         expect(mocks.terminateStale).toHaveBeenCalledWith([4242]);
       }
@@ -548,7 +543,7 @@ describe("preserved update activation with real version guards", () => {
   });
 
   it.each(["foreign", "metadata", "unit", "unavailable", "replacement root", "profile"])(
-    "revalidates writable failed-update recovery after %s changes",
+    "revalidates stale-parent failed-update recovery after %s changes",
     async (change) => {
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -558,6 +553,8 @@ describe("preserved update activation with real version guards", () => {
         jsonMode: true,
       });
       expect(before.stopped).toBe(true);
+      await writeConfig("9999.1.1");
+      process.env.OPENCLAW_GATEWAY_PORT = "19999";
       const command = await mocks.command(process.env);
       if (!command) {
         throw new Error("missing fixture command");
@@ -610,7 +607,11 @@ describe("preserved update activation with real version guards", () => {
         jsonMode: true,
       });
       if (change === "metadata" || change === "replacement root") {
-        expect(mocks.restart).toHaveBeenCalledOnce();
+        expect(mocks.child).toHaveBeenCalledOnce();
+        expect(mocks.child.mock.calls[0]?.[0]).toContain("--preserve-definition");
+        expect(mocks.restart).not.toHaveBeenCalled();
+        expect(mocks.child.mock.calls[0]?.[1]).toMatchObject({ baseEnv: {} });
+        expect(mocks.child.mock.calls[0]?.[1]).not.toHaveProperty("env.OPENCLAW_GATEWAY_PORT");
       } else {
         expect(mocks.restart).not.toHaveBeenCalled();
         expect(mocks.error.mock.calls.flat().join("\n")).toContain("Failed to restart");

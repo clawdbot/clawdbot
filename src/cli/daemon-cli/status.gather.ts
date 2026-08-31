@@ -774,6 +774,8 @@ export async function gatherDaemonStatus(
   // profile/state dir, so remote/explicit URL probes need remote-owned
   // diagnostics instead.
   // Best-effort: unreadable install records omit this advisory report.
+  // Registry repair lookups belong to deep-status and Doctor command owners;
+  // readiness, support, and triage must not wait for the public registry.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
   if (shouldInspectLocalGateway) {
     try {

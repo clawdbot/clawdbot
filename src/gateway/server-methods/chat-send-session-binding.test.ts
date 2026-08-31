@@ -26,6 +26,19 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
       const runId = "retained-preparation";
       const sessionKey = "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated-session", updatedAt: Date.now() },
+      );
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const unrelatedCloneCount = () =>
+        clone.mock.calls.filter(
+          ([entry]) =>
+            entry &&
+            typeof entry === "object" &&
+            "sessionId" in entry &&
+            entry.sessionId === "unrelated-session",
+        ).length;
       const entered = createDeferred<DispatchOptions>();
       const release = createDeferred();
       const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
@@ -78,9 +91,12 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         options = await entered.promise;
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         const prepared = options.replyOptions?.onSessionPrepared;
-        if (!owned || !prepared) {
+        const runStarted = options.replyOptions?.onAgentRunStart;
+        if (!owned || !prepared || !runStarted) {
           throw new Error("chat.send did not hand off its prepared-session callback");
         }
+        // Initial resolution needs detached entries; later admission must not clone unrelated rows.
+        expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
         expect(original?.sessionId).toBe(runId);
@@ -101,6 +117,9 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         prepared(binding);
         prepared(binding);
         prepared({ ...binding, sessionKey: "agent:main:unrelated", sessionId: "foreign" });
+        clone.mockClear();
+        runStarted(runId);
+        expect.soft(unrelatedCloneCount()).toBe(0);
 
         if (closure === "queued") {
           expect(original?.sessionId).toBe(binding.sessionId);
@@ -169,6 +188,7 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         }
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
+        clone.mockRestore();
       }
     });
   },

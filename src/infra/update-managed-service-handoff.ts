@@ -28,6 +28,7 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
@@ -1056,7 +1057,10 @@ async function restoreGatewayService(reason) {
           (exit && exit.signal ? exit.signal : "null"),
       );
       if (exit && (exit.signal || (typeof exit.code === "number" && exit.code !== 0))) {
-        if (params.serviceRecovery) await restoreGatewayService("managed-service-handoff-failed");
+        if (!exit.signal && exit.code === ${MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE}) {
+          appendLog("managed update reported unsafe recovery; keep the gateway stopped until the installation is repaired and update succeeds");
+          markUpdateSentinelFailureIfPending("managed-service-handoff-unsafe-recovery");
+        } else if (params.serviceRecovery) await restoreGatewayService("managed-service-handoff-failed");
         else markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
         process.exitCode = exit.code || 1;
       }

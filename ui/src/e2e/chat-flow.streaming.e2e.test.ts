@@ -127,12 +127,41 @@ suite.define(() => {
         stream: "tool",
         ts: Date.now(),
       });
+      // The working indicator predates the tool event; wait for its deferred projection
+      // before scrolling a bubble that the stream-to-tool render may replace.
+      await page.locator('[data-message-id^="tool:assistant:footer-read"]').waitFor();
       await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
-      await reveal();
+      const heldTouch = mobile ? await context.newCDPSession(page) : null;
+      if (heldTouch) {
+        // A touch can begin during work and disclose the row when released after completion.
+        const bubble = activeGroup.locator(".chat-bubble").last();
+        await bubble.scrollIntoViewIfNeeded();
+        const point = await bubble.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        });
+        await heldTouch.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [point],
+        });
+      } else {
+        await reveal();
+      }
       expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
 
       await gateway.emitChatFinal({ runId, text: "The turn is complete." });
       await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
+      if (heldTouch) {
+        await heldTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await expect
+          .poll(() => footerPresentation(activeGroup))
+          .toEqual({
+            opacity: "1",
+            pointerEvents: "auto",
+          });
+        // Mouse movement cannot clear touch disclosure; select another row before testing rest.
+        await earlierAssistant.locator(".chat-bubble").last().tap();
+      }
       await page.mouse.move(0, 0);
       const footer = activeGroup.locator(".chat-group-footer");
       await expect
