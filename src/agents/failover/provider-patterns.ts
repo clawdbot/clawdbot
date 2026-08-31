@@ -48,7 +48,7 @@ type ProviderSpecificErrorContext = {
   status?: number;
   code?: string;
   errorType?: string;
-  providerPlugin?: PreparedProviderFailoverOwner;
+  providerPlugin?: PreparedProviderFailoverOwner | null;
 };
 export type PreparedProviderFailoverOwner = {
   id: string;
@@ -60,6 +60,10 @@ export function classifyProviderPluginError(
   context: ProviderSpecificErrorContext,
 ): FailoverReason | null {
   const { providerPlugin, ...providerContext } = context;
+  // Presentation has no provider owner; explicit absence must not trigger discovery.
+  if (providerPlugin === null) {
+    return null;
+  }
   if (providerPlugin) {
     const ownedContext = { ...providerContext, provider: providerPlugin.id };
     if (providerPlugin.matchesContextOverflowError?.(ownedContext)) {
