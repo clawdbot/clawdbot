@@ -241,6 +241,9 @@ function repairPublishedArchiveFile(params: {
       if (stagedHash !== params.planned.nextSha256) {
         throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
       }
+      // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
+      // at the atomic publication boundary so an expired owner cannot rename.
+      assertAgentDatabaseMaintenanceAuthority();
     },
     content: params.planned.nextBytes,
     filePath: archivePath,
