@@ -7,7 +7,22 @@ import {
   normalizeAnyChannelId,
 } from "../../channels/registry.js";
 
+/** Both halves of the queue name a channel account's durable rows are stored under. */
+type ChannelIngressQueueKey = {
+  channelId: string;
+  accountId: string;
+};
+
 /**
+ * Resolves the whole queue name, never one half of it.
+ *
+ * The two halves used to be two functions, and a caller resolved one and forgot the
+ * other within a day: the owner half went through the alias-aware registry key while
+ * the account half did not, so an operator typing a documented alias addressed half of
+ * one key and half of another. Returning the pair is what keeps them together — a
+ * caller that passes the result whole cannot substitute one field. Spreading it can,
+ * so the one production caller passes it directly.
+ *
  * Resolves the id a channel account's durable ingress rows are stored under.
  *
  * The plugin runtime opens an ingress queue with the plugin's own id - see the
@@ -40,21 +55,7 @@ import {
  *   (`plugins/doctor-contract-module.ts:42`) while the queue underneath is one per
  *   plugin, so re-keying it would make N lanes alias a single queue. That is a
  *   contract decision, not a call-site fix.
- */
-/** Both halves of the queue name a channel account's durable rows are stored under. */
-export type ChannelIngressQueueKey = {
-  channelId: string;
-  accountId: string;
-};
-
-/**
- * Resolves the whole queue name, never one half of it.
- *
- * The two halves used to be two functions, and a caller resolved one and forgot the
- * other within a day: the owner half went through the alias-aware registry key while
- * the account half did not, so an operator typing a documented alias addressed half of
- * one key and half of another. Returning the pair makes that a compile error rather
- * than a silent miss, which is the only reason this is one function.
+ 
  */
 export function resolveChannelIngressQueueKey(params: {
   channelId: string;

@@ -268,14 +268,17 @@ export async function channelsRemoveCommand(
   // still configured if that write fails. A disabled account keeps its rows because
   // re-enabling it drains them.
   const discard = deleteConfig
-    ? discardRemovedAccountIngressRows({
-        ...resolveChannelIngressQueueKey({
+    ? discardRemovedAccountIngressRows(
+        // Passed whole, not spread: spreading would let a later property override one
+        // half of the resolved key and compile clean, which is the mistake this
+        // function exists to prevent.
+        resolveChannelIngressQueueKey({
           channelId: plugin.id,
           accountId: preparedRemoval.accountKey,
           catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
           plugin,
         }),
-      })
+      )
     : undefined;
   const summary = [
     deleteConfig

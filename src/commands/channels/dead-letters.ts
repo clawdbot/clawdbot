@@ -19,16 +19,16 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
+  const accountId = options.account?.trim() || "default";
   return {
     channelId,
-    accountId: options.account?.trim() || "default",
-    // The operator names a channel; the rows are stored under the id of the plugin
-    // that owns it, so resolve the owner before opening the queue. Opening it under
-    // the channel id would also create an empty queue nothing ever writes to.
-    // Both halves of the key are the plugin's, resolved together so neither is missed.
+    accountId,
+    // The operator names a channel; the rows are stored under ids the PLUGIN composes -
+    // both halves of them - so resolve the whole key before opening the queue. Opening
+    // it under what the operator typed would also create an empty queue nothing writes to.
     queueKey: resolveChannelIngressQueueKey({
       channelId,
-      accountId: options.account?.trim() || "default",
+      accountId,
     }),
   };
 }

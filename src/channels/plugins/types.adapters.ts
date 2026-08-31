@@ -98,6 +98,15 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
    * addresses those rows by the configured id selects nothing. The host cannot derive
    * the transform, and the plugin cannot be asked at removal time because the removal
    * runs after its runtime is stopped — so the plugin declares it.
+   *
+   * The host passes the NORMALIZED account id (`normalizeAccountId`), which is what
+   * `channels add` writes. A plugin whose own account listing returns raw config keys
+   * therefore agrees with the host only for already-canonical keys: WhatsApp does not
+   * pass `normalizeAccountId` to `createAccountListHelpers` the way twitch, signal and
+   * telegram do, so a hand-written config key like `Work` is stored under a hash of
+   * `Work` while removal computes a hash of `work`. Aligning that is a change to the
+   * plugin's account identity with a migration behind it, not something this seam can
+   * paper over — the seam's contract is "transform the id the host gives you".
    */
   resolveDurableAccountKey?: (accountId: string) => string;
   isEnabled?: ChannelAdapterCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
