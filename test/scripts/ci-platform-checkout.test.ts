@@ -1,5 +1,16 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -212,6 +223,110 @@ it.each([
   },
   55_000,
 );
+
+it("copies same-revision harness actions without fetching again or mutating the candidate index", async () => {
+  const linux = process.platform !== "win32";
+  const action = ".github/actions/setup-node-env/action.yml";
+  const executable = ".github/actions/tool/line\nbreak.sh";
+  const link = ".github/actions/tool/link";
+  const files = {
+    [action]: "name: trusted $Format:%H$\n",
+    ".github/actions/tool/with space.txt": "literal action bytes\n",
+    ...(linux ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
+  };
+  let revision = "";
+  await withCiCheckoutFixture(
+    `${linux ? "linux:" : ""}configured`,
+    (root) => {
+      const source = path.join(root, "source");
+      mkdirSync(source);
+      const git = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], {
+        encoding: "utf8",
+      })
+        .trim()
+        .split(/\r?\n/u)[0];
+      const gitConfig = path.join(root, "gitconfig");
+      writeFileSync(gitConfig, "");
+      const gitEnv = {
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: gitConfig,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_AUTHOR_NAME: "Checkout fixture",
+        GIT_AUTHOR_EMAIL: "checkout@example.invalid",
+        GIT_COMMITTER_NAME: "Checkout fixture",
+        GIT_COMMITTER_EMAIL: "checkout@example.invalid",
+      };
+      const run = (...args: string[]) =>
+        execFileSync(expectDefined(git, "real Git executable"), ["-C", source, ...args], {
+          env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
+          encoding: "utf8",
+        }).trim();
+      run("init");
+      for (const [name, contents] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
+        writeFileSync(path.join(source, name), contents);
+      }
+      // Archive export would omit or rewrite these trusted action bytes.
+      writeFileSync(path.join(source, ".gitattributes"), "* -text export-ignore export-subst\n");
+      writeFileSync(path.join(source, "candidate-only.txt"), "candidate stays intact\n");
+      if (linux) {
+        chmodSync(path.join(source, executable), 0o755);
+        symlinkSync("line\nbreak.sh", path.join(source, link));
+      }
+      run("add", "--all");
+      run("commit", "--no-gpg-sign", "-m", "fixture revision");
+      revision = run("rev-parse", "HEAD");
+      writeFileSync(
+        path.join(root, "fixture-options.json"),
+        JSON.stringify({
+          localGit: { git, remote: source },
+          fetchResults: [0, 0],
+          cooperativeTrees: true,
+          env: {
+            ...gitEnv,
+            CHECKOUT_KIND: linux ? "linux-node" : "platform",
+            CHECKOUT_SHA: revision,
+            WORKFLOW_SHA: revision,
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(root, "checkout.sh"),
+        renderGitTestClock(readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run, {
+          realClock: true,
+        }),
+      );
+    },
+    (report, result, stderr, root) => {
+      expect(result, `${stderr}\n${report.output}`).toEqual({ code: 0, signal: null });
+      expect(report.error, report.output).toBeUndefined();
+      expectCiCheckoutCleanup(report);
+      expect(report.code, report.output).toBe(0);
+      expect(report.commands.filter(({ args }) => args[0] === "fetch")).toHaveLength(1);
+      const workspace = path.join(root, "workspace");
+      const harness = path.join(workspace, ".ci-harness");
+      expect(existsSync(path.join(harness, ".git"))).toBe(false);
+      expect(readFileSync(path.join(workspace, ".git/index"))).toEqual(
+        readFileSync(path.join(root, "candidate-index")),
+      );
+      expect(readFileSync(path.join(workspace, ".git/HEAD"), "utf8").trim()).toBe(revision);
+      expect(readFileSync(path.join(workspace, "candidate-only.txt"), "utf8")).toBe(
+        "candidate stays intact\n",
+      );
+      expect(existsSync(path.join(harness, "candidate-only.txt"))).toBe(false);
+      for (const [name, contents] of Object.entries(files)) {
+        expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+        expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+      }
+      if (linux) {
+        expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);
+        expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
+      }
+      writeFileSync(path.join(workspace, action), "later candidate edit\n");
+      expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
+    },
+  );
+}, 55_000);
 
 it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
   await withCiCheckoutFixture(
