@@ -5701,10 +5701,8 @@ describe("update-cli", () => {
   it("uses an explicit service wrapper when openclaw is absent from PATH", async () => {
     const wrapperDir = createCaseDir("openclaw-update-wrapper-service");
     const wrapperPath = path.join(wrapperDir, "gateway-wrapper");
-    const runtimePath = path.join(wrapperDir, "node");
     await fs.mkdir(wrapperDir, { recursive: true });
     await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    await fs.writeFile(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const stateDir = profileStateDir("wrapper-service");
     tempDirsToCleanup.add(stateDir);
     await fs.mkdir(stateDir, { recursive: true });
@@ -5712,12 +5710,11 @@ describe("update-cli", () => {
     await fs.writeFile(configPath, JSON.stringify(baseSnapshot.config));
     const serviceEnv = {
       ...process.env,
-      HOME: wrapperDir,
       OPENCLAW_PROFILE: "wrapper-service",
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_WRAPPER: wrapperPath,
-      PATH: wrapperDir,
+      PATH: path.dirname(process.execPath),
     };
     const { buildGatewayInstallPlan } = await import("../commands/daemon-install-helpers.js");
     const initialPlan = await buildGatewayInstallPlan({
@@ -5725,7 +5722,7 @@ describe("update-cli", () => {
       config: baseSnapshot.config,
       port: 18789,
       runtime: "node",
-      runtimePath,
+      runtimePath: process.execPath,
       wrapperPath,
     });
     const existingEnvironment = Object.fromEntries(
@@ -5737,8 +5734,7 @@ describe("update-cli", () => {
       await import("./update-cli/update-command-service-env.js");
     const { mergeInstallInvocationEnv } = await import("./daemon-cli/install.js");
     const ownedEnv = resolveOwnedManagedUpdateEnv({
-      processEnv: {},
-      serviceEnv: existingEnvironment,
+      serviceEnv: { ...process.env, ...existingEnvironment },
       serviceDefinitionEnv: existingEnvironment,
       invocationCwd: process.cwd(),
     });
