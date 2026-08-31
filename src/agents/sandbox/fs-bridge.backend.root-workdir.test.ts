@@ -1,9 +1,9 @@
 // Proves a slash-root container workspace through a real local backend.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createSandboxedReadTool,
@@ -77,10 +77,12 @@ async function runRootMountedShellCommand(
 }
 
 describe("sandbox fs bridge slash-root backend", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it.runIf(process.platform !== "win32")(
     "reads a slash-root container path through the real guard and bridge",
     async () => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-root-test-"));
+      const stateDir = tempDirs.make("openclaw-fsbridge-root-test-");
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(path.join(workspaceDir, "docs"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "docs", "readme.md"), "from-real-bridge");
@@ -152,7 +154,6 @@ describe("sandbox fs bridge slash-root backend", () => {
         );
       } finally {
         restore();
-        await fs.rm(stateDir, { recursive: true, force: true });
       }
     },
   );
